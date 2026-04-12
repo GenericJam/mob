@@ -1,7 +1,6 @@
 // mob_beam.m — Mob BEAM launcher for iOS.
 // Extracted from the per-app beam_main.m stub so app code stays minimal.
 
-#import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,15 +8,14 @@
 
 #define OTP_ROOT   "/tmp/otp-ios-sim"
 #define ERTS_VSN   "erts-16.3"
-#define BEAMS_DIR  OTP_ROOT "/beamhello"
 #define ELIXIR_DIR OTP_ROOT "/lib/elixir/ebin"
 #define LOGGER_DIR OTP_ROOT "/lib/logger/ebin"
 
-UIViewController* g_root_vc = nil;
-
-void mob_init_ui(UIViewController* root_vc) {
-    g_root_vc = root_vc;
-    NSLog(@"[MobBeam] mob_init_ui: root_vc=%@", root_vc);
+void mob_init_ui(void) {
+    // SwiftUI: the UI is driven by MobViewModel (Swift ObservableObject).
+    // No UIViewController reference needed here; the hosting controller is
+    // created by MobUIFactory in AppDelegate.m.
+    NSLog(@"[MobBeam] mob_init_ui: SwiftUI mode ready");
 }
 
 void mob_start_beam(const char* app_module) {
@@ -29,11 +27,22 @@ void mob_start_beam(const char* app_module) {
     setenv("ERL_CRASH_DUMP", "/tmp/mob_erl_crash.dump", 1);
     setenv("ERL_CRASH_DUMP_SECONDS", "30", 1);
 
-    // Build "-eval Module:start()." dynamically from app_module.
-    // Using -eval avoids the -s path in init which has a version mismatch
-    // in OTP 29 RC2's preloaded init.beam.
+    // Read dist port from MOB_DIST_PORT env var (set by mob_dev via xcrun simctl launch --setenv).
+    // Defaults to 9100 if not set (standalone launch without mob_dev).
+    const char *env_port = getenv("MOB_DIST_PORT");
+    static char dist_port_min[16], dist_port_max[16];
+    snprintf(dist_port_min, sizeof(dist_port_min), "%s", env_port ? env_port : "9100");
+    snprintf(dist_port_max, sizeof(dist_port_max), "%s", env_port ? env_port : "9100");
+
+    // Build dynamic strings from app_module.
     char eval_expr[280];
     snprintf(eval_expr, sizeof(eval_expr), "%s:start().", app_module);
+
+    char node_name[128];
+    snprintf(node_name, sizeof(node_name), "%s_ios@127.0.0.1", app_module);
+
+    char beams_dir[256];
+    snprintf(beams_dir, sizeof(beams_dir), OTP_ROOT "/%s", app_module);
 
     const char* args[] = {
         "beam",
@@ -43,11 +52,15 @@ void mob_start_beam(const char* app_module) {
         "-bindir",   OTP_ROOT "/" ERTS_VSN "/bin",
         "-progname", "erl",
         "--",
+        "-name",     node_name,
+        "-setcookie", "mob_secret",
+        "-kernel", "inet_dist_listen_min", dist_port_min,
+        "-kernel", "inet_dist_listen_max", dist_port_max,
         "-noshell", "-noinput",
         "-boot",   OTP_ROOT "/releases/29/start_clean",
         "-pa",     ELIXIR_DIR,
         "-pa",     LOGGER_DIR,
-        "-pa",     BEAMS_DIR,
+        "-pa",     beams_dir,
         "-eval",   eval_expr,
         NULL
     };

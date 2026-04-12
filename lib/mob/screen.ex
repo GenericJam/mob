@@ -84,7 +84,7 @@ defmodule Mob.Screen do
   """
   @spec start_link(module(), map(), keyword()) :: GenServer.on_start()
   def start_link(screen_module, params, opts \\ []) do
-    GenServer.start_link(__MODULE__, {screen_module, params, :no_render}, opts)
+    GenServer.start_link(__MODULE__, {screen_module, params, :no_render, :android}, opts)
   end
 
   @doc """
@@ -96,7 +96,8 @@ defmodule Mob.Screen do
   """
   @spec start_root(module(), map(), keyword()) :: GenServer.on_start()
   def start_root(screen_module, params \\ %{}, opts \\ []) do
-    GenServer.start_link(__MODULE__, {screen_module, params, :render}, opts)
+    platform = :mob_nif.platform()
+    GenServer.start_link(__MODULE__, {screen_module, params, :render, platform}, opts)
   end
 
   @doc """
@@ -120,8 +121,8 @@ defmodule Mob.Screen do
   # ── GenServer callbacks ───────────────────────────────────────────────────
 
   @impl GenServer
-  def init({screen_module, params, render_mode}) do
-    socket = Mob.Socket.new(screen_module)
+  def init({screen_module, params, render_mode, platform}) do
+    socket = Mob.Socket.new(screen_module, platform: platform)
 
     case screen_module.mount(params, %{}, socket) do
       {:ok, mounted_socket} ->

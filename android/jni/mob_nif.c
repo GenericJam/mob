@@ -94,10 +94,9 @@ void mob_native_on_tap(JNIEnv* jenv, jclass cls, jlong ptr) {
     if (!res || !res->has_tap_pid) return;
 
     ErlNifEnv* msg_env = enif_alloc_env();
-    ERL_NIF_TERM view_term = enif_make_resource(msg_env, res);
     ERL_NIF_TERM msg = enif_make_tuple2(msg_env,
         enif_make_atom(msg_env, "tap"),
-        view_term);
+        enif_make_atom(msg_env, "ok"));
     enif_send(NULL, &res->tap_pid, msg_env, msg);
     enif_free_env(msg_env);
 }
@@ -383,9 +382,14 @@ static ERL_NIF_TERM nif_log(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     return enif_make_atom(env, "ok");
 }
 
+static ERL_NIF_TERM nif_platform(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    return enif_make_atom(env, "android");
+}
+
 // ── NIF table & load ─────────────────────────────────────────────────────────
 
 static ErlNifFunc nif_funcs[] = {
+    {"platform",              0, nif_platform,             0},
     {"log",                  1, nif_log,                  0},
     {"create_column",        0, nif_create_column,        0},
     {"create_row",           0, nif_create_row,           0},
