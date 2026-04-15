@@ -136,19 +136,14 @@ USB is only required for first deploy. After that, Erlang distribution is the tr
 
 ## Next up
 
-### 5. Per-edge padding
-**Goal:** Support `padding: {top, right, bottom, left}` (or `padding_top` / `padding_bottom` etc.) so developers can use `safe_area.top` as header top padding without wrapping in a column + spacer.
+### 5. ~~Per-edge padding~~ ✅ Done
 
-Currently only uniform padding (a single integer) is supported. The workaround — a colored column with a spacer child — works but is verbose.
-
-Options:
-- 4-tuple prop: `padding: {safe_top + 16, 16, 16, 16}`
-- Named keys: `padding: %{top: safe_top + 16, right: 16, bottom: 16, left: 16}`
-- Separate props: `padding_top: safe_top + 16, padding: 16` (padding is default; edges override)
-
-The third option is the least surprising for users already familiar with `padding: 16`.
-
-NIF side: `mob_nif.m` and `mob_nif.c` parse the padding JSON field; need to handle both integer and object forms.
+**Shipped (2026-04-15):**
+- `padding_top`, `padding_right`, `padding_bottom`, `padding_left` props on all layout nodes
+- Any missing edge falls back to the uniform `padding` value; all absent → no padding
+- iOS: `paddingEdgeInsets` computed property on `MobNode` returns `EdgeInsets`; all `.padding(node.padding)` calls in `MobRootView.swift` replaced with `.padding(node.paddingEdgeInsets)`
+- Android: `nodeModifier` updated to detect edge props; uses `Modifier.padding(top=, end=, bottom=, start=)` when any edge is present, uniform `.padding()` otherwise
+- Usage: `padding_top: trunc(assigns.safe_area.top) + 16, padding: 16` — top clears the status bar; sides and bottom get uniform 16dp padding
 
 ### 6. Typography
 

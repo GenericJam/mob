@@ -31,7 +31,11 @@ NS_ASSUME_NONNULL_BEGIN
 // Layout
 @property (nonatomic) MobNodeType               nodeType;
 @property (nonatomic, strong, nullable) UIColor* backgroundColor;
-@property (nonatomic)                  CGFloat   padding;
+@property (nonatomic)                  CGFloat   padding;           // uniform; -1 if unset
+@property (nonatomic)                  CGFloat   paddingTop;        // -1 = use uniform padding
+@property (nonatomic)                  CGFloat   paddingRight;      // -1 = use uniform padding
+@property (nonatomic)                  CGFloat   paddingBottom;     // -1 = use uniform padding
+@property (nonatomic)                  CGFloat   paddingLeft;       // -1 = use uniform padding
 
 // Text / Button
 @property (nonatomic, copy,   nullable) NSString* text;

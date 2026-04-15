@@ -182,6 +182,15 @@ static MobNode* mob_node_from_dict(NSDictionary* dict) {
         id padding = props[@"padding"];
         if (padding) node.padding = [padding doubleValue];
 
+        id paddingTop = props[@"padding_top"];
+        if (paddingTop) node.paddingTop = [paddingTop doubleValue];
+        id paddingRight = props[@"padding_right"];
+        if (paddingRight) node.paddingRight = [paddingRight doubleValue];
+        id paddingBottom = props[@"padding_bottom"];
+        if (paddingBottom) node.paddingBottom = [paddingBottom doubleValue];
+        id paddingLeft = props[@"padding_left"];
+        if (paddingLeft) node.paddingLeft = [paddingLeft doubleValue];
+
         id textSize = props[@"text_size"];
         if (textSize) node.textSize = [textSize doubleValue];
 

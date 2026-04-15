@@ -9,6 +9,10 @@
     if ((self = [super init])) {
         _textSize      = 14.0;
         _padding       = 0.0;
+        _paddingTop    = -1.0;
+        _paddingRight  = -1.0;
+        _paddingBottom = -1.0;
+        _paddingLeft   = -1.0;
         _thickness     = 1.0;
         _fixedSize     = 0.0;
         _value         = NAN;   // NaN = indeterminate (progress) or not-yet-set (slider)

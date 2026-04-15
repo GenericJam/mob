@@ -23,6 +23,16 @@ extension MobNode {
     var childNodes: [MobNode] {
         children.compactMap { $0 as? MobNode }
     }
+
+    /// EdgeInsets that honour per-edge padding props (padding_top etc.).
+    /// Falls back to the uniform `padding` value for any unset edge.
+    var paddingEdgeInsets: EdgeInsets {
+        let top    = paddingTop    >= 0 ? paddingTop    : padding
+        let right  = paddingRight  >= 0 ? paddingRight  : padding
+        let bottom = paddingBottom >= 0 ? paddingBottom : padding
+        let left   = paddingLeft   >= 0 ? paddingLeft   : padding
+        return EdgeInsets(top: top, leading: left, bottom: bottom, trailing: right)
+    }
 }
 
 // ── Recursive node renderer ────────────────────────────────────────────────
@@ -38,7 +48,7 @@ struct MobNodeView: View {
                     ForEach(node.childNodes) { MobNodeView(node: $0) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(node.padding)
+                .padding(node.paddingEdgeInsets)
                 .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
                 .ifLet(node.onTap) { view, tap in
                     view.contentShape(Rectangle()).onTapGesture { tap() }
@@ -48,7 +58,7 @@ struct MobNodeView: View {
                 HStack(spacing: 0) {
                     ForEach(node.childNodes) { MobNodeView(node: $0) }
                 }
-                .padding(node.padding)
+                .padding(node.paddingEdgeInsets)
                 .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
                 .ifLet(node.onTap) { view, tap in
                     view.contentShape(Rectangle()).onTapGesture { tap() }
@@ -59,7 +69,7 @@ struct MobNodeView: View {
                     ForEach(node.childNodes) { MobNodeView(node: $0) }
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(node.padding)
+                .padding(node.paddingEdgeInsets)
                 .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
                 .ifLet(node.onTap) { view, tap in
                     view.contentShape(Rectangle()).onTapGesture { tap() }
@@ -70,7 +80,7 @@ struct MobNodeView: View {
                     .font(node.textSize > 0 ? .system(size: node.textSize) : .body)
                     .foregroundColor(node.textColor.map { Color($0) } ?? Color.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(node.padding)
+                    .padding(node.paddingEdgeInsets)
                     .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
 
             case .button:
@@ -80,7 +90,7 @@ struct MobNodeView: View {
                         .foregroundColor(node.textColor.map { Color($0) } ?? Color.accentColor)
                         .frame(maxWidth: .infinity)
                 }
-                .padding(node.padding)
+                .padding(node.paddingEdgeInsets)
                 .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
 
             case .scroll:
@@ -100,22 +110,22 @@ struct MobNodeView: View {
                     }
                 }
                 .scrollDismissesKeyboard(.interactively)
-                .padding(node.padding)
+                .padding(node.paddingEdgeInsets)
                 .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
 
             case .textField:
                 let placeholder = node.placeholder ?? ""
                 let initialText = node.text ?? ""
                 MobTextField(node: node, placeholder: placeholder, initialText: initialText)
-                    .padding(node.padding)
+                    .padding(node.paddingEdgeInsets)
 
             case .toggle:
                 MobToggle(node: node)
-                    .padding(node.padding)
+                    .padding(node.paddingEdgeInsets)
 
             case .slider:
                 MobSlider(node: node)
-                    .padding(node.padding)
+                    .padding(node.paddingEdgeInsets)
 
             case .divider:
                 Divider()
@@ -123,7 +133,7 @@ struct MobNodeView: View {
                     .overlay(
                         node.color.map { Color($0) } ?? Color(UIColor.separator)
                     )
-                    .padding(node.padding)
+                    .padding(node.paddingEdgeInsets)
 
             case .spacer:
                 if node.fixedSize > 0 {
@@ -134,7 +144,7 @@ struct MobNodeView: View {
 
             case .image:
                 MobImage(node: node)
-                    .padding(node.padding)
+                    .padding(node.paddingEdgeInsets)
 
             case .lazyList:
                 ScrollView(.vertical, showsIndicators: true) {
@@ -151,7 +161,7 @@ struct MobNodeView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxHeight: .infinity)
-                .padding(node.padding)
+                .padding(node.paddingEdgeInsets)
                 .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
 
             case .progress:
@@ -161,13 +171,13 @@ struct MobNodeView: View {
                         .progressViewStyle(.linear)
                         .tint(trackColor)
                         .frame(maxWidth: .infinity)
-                        .padding(node.padding)
+                        .padding(node.paddingEdgeInsets)
                 } else {
                     ProgressView(value: node.value, total: 1.0)
                         .progressViewStyle(.linear)
                         .tint(trackColor)
                         .frame(maxWidth: .infinity)
-                        .padding(node.padding)
+                        .padding(node.paddingEdgeInsets)
                 }
 
             @unknown default:
