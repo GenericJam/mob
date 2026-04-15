@@ -59,6 +59,7 @@ defmodule Mob.Screen do
   defmacro __using__(_opts) do
     quote do
       @behaviour Mob.Screen
+      import Mob.Sigil
 
       def handle_info(_message, socket), do: {:noreply, socket}
 
@@ -86,6 +87,24 @@ defmodule Mob.Screen do
   @spec start_link(module(), map(), keyword()) :: GenServer.on_start()
   def start_link(screen_module, params, opts \\ []) do
     GenServer.start_link(__MODULE__, {screen_module, params, :no_render, :android}, opts)
+  end
+
+  @doc """
+  Return the module of the currently active screen in the navigation stack.
+  Intended for testing and debugging.
+  """
+  @spec get_current_module(pid()) :: module()
+  def get_current_module(pid) do
+    GenServer.call(pid, :get_current_module)
+  end
+
+  @doc """
+  Return the navigation history (list of `{module, socket}` pairs, head = most recent).
+  Intended for testing and debugging.
+  """
+  @spec get_nav_history(pid()) :: [{module(), Mob.Socket.t()}]
+  def get_nav_history(pid) do
+    GenServer.call(pid, :get_nav_history)
   end
 
   @doc """
@@ -133,7 +152,7 @@ defmodule Mob.Screen do
           else
             mounted_socket
           end
-        {:ok, {screen_module, socket, render_mode}}
+        {:ok, {screen_module, socket, [], render_mode}}
 
       {:error, reason} ->
         {:stop, reason}
@@ -141,58 +160,165 @@ defmodule Mob.Screen do
   end
 
   @impl GenServer
-  def handle_call({:event, event, params}, _from, {module, socket, render_mode}) do
+  def handle_call({:event, event, params}, _from, {module, socket, nav_history, render_mode}) do
     case module.handle_event(event, params, socket) do
       {:noreply, new_socket} ->
+        {module, new_socket, nav_history, transition} =
+          apply_nav_action(module, new_socket, nav_history)
         new_socket =
           if render_mode == :render do
-            do_render(module, new_socket)
+            do_render(module, new_socket, transition)
           else
             new_socket
           end
-        {:reply, :ok, {module, new_socket, render_mode}}
+        {:reply, :ok, {module, new_socket, nav_history, render_mode}}
 
       {:reply, _response, new_socket} ->
+        {module, new_socket, nav_history, transition} =
+          apply_nav_action(module, new_socket, nav_history)
         new_socket =
           if render_mode == :render do
-            do_render(module, new_socket)
+            do_render(module, new_socket, transition)
           else
             new_socket
           end
-        {:reply, :ok, {module, new_socket, render_mode}}
+        {:reply, :ok, {module, new_socket, nav_history, render_mode}}
     end
   end
 
-  def handle_call(:get_socket, _from, {_module, socket, _mode} = state) do
+  def handle_call(:get_socket, _from, {_module, socket, _nav_history, _mode} = state) do
     {:reply, socket, state}
   end
 
-  @impl GenServer
-  def handle_info(message, {module, socket, render_mode}) do
-    {:noreply, new_socket} = module.handle_info(message, socket)
-    new_socket =
-      if render_mode == :render do
-        do_render(module, new_socket)
-      else
-        new_socket
-      end
-    {:noreply, {module, new_socket, render_mode}}
+  def handle_call(:get_current_module, _from, {module, _socket, _nav_history, _mode} = state) do
+    {:reply, module, state}
+  end
+
+  def handle_call(:get_nav_history, _from, {_module, _socket, nav_history, _mode} = state) do
+    {:reply, nav_history, state}
   end
 
   @impl GenServer
-  def terminate(reason, {module, socket, _render_mode}) do
+  def handle_info(message, {module, socket, nav_history, render_mode}) do
+    {:noreply, new_socket} = module.handle_info(message, socket)
+    {module, new_socket, nav_history, transition} =
+      apply_nav_action(module, new_socket, nav_history)
+    new_socket =
+      if render_mode == :render do
+        do_render(module, new_socket, transition)
+      else
+        new_socket
+      end
+    {:noreply, {module, new_socket, nav_history, render_mode}}
+  end
+
+  @impl GenServer
+  def terminate(reason, {module, socket, _nav_history, _render_mode}) do
     module.terminate(reason, socket)
+  end
+
+  # ── Navigation ────────────────────────────────────────────────────────────
+
+  # Inspect the socket's nav_action and execute it, returning
+  # {new_module, new_socket, new_nav_history, transition}.
+  defp apply_nav_action(module, socket, nav_history) do
+    case socket.__mob__.nav_action do
+      nil ->
+        {module, socket, nav_history, :none}
+
+      {:push, dest, params} ->
+        new_module = resolve_module(dest)
+        platform = socket.__mob__.platform
+        new_base = Mob.Socket.new(new_module, platform: platform)
+        {:ok, mounted} = new_module.mount(params, %{}, new_base)
+        saved = {module, clear_nav_action(socket)}
+        {new_module, mounted, [saved | nav_history], :push}
+
+      {:pop} ->
+        case nav_history do
+          [{prev_module, prev_socket} | rest] ->
+            {prev_module, prev_socket, rest, :pop}
+
+          [] ->
+            {module, clear_nav_action(socket), [], :none}
+        end
+
+      {:pop_to_root} ->
+        case Enum.reverse(nav_history) do
+          [{root_module, root_socket} | _] ->
+            {root_module, root_socket, [], :pop}
+
+          [] ->
+            {module, clear_nav_action(socket), [], :none}
+        end
+
+      {:pop_to, dest} ->
+        target = resolve_module(dest)
+
+        case pop_to_module(nav_history, target) do
+          {:found, prev_module, prev_socket, rest} ->
+            {prev_module, prev_socket, rest, :pop}
+
+          :not_found ->
+            {module, clear_nav_action(socket), nav_history, :none}
+        end
+
+      {:reset, dest, params} ->
+        new_module = resolve_module(dest)
+        platform = socket.__mob__.platform
+        new_base = Mob.Socket.new(new_module, platform: platform)
+        {:ok, mounted} = new_module.mount(params, %{}, new_base)
+        {new_module, mounted, [], :reset}
+
+      {:switch_tab, _tab} ->
+        # Tab switching is handled renderer-side; clear the action.
+        {module, clear_nav_action(socket), nav_history, :none}
+    end
+  end
+
+  defp resolve_module(dest) when is_atom(dest) do
+    case Code.ensure_loaded(dest) do
+      {:module, ^dest} ->
+        # dest is a loaded module — use it directly
+        dest
+
+      _ ->
+        # dest is a registered screen name atom — look up in registry
+        case Mob.Nav.Registry.lookup(dest) do
+          {:ok, module} ->
+            module
+
+          {:error, :not_found} ->
+            raise ArgumentError,
+                  "Mob.Screen: unknown navigation destination #{inspect(dest)}. " <>
+                    "Register it via Mob.Nav.Registry.register/2 or declare it in " <>
+                    "your App.navigation/1."
+        end
+    end
+  end
+
+  defp pop_to_module([], _target), do: :not_found
+
+  defp pop_to_module([{module, socket} | rest], target) do
+    if module == target do
+      {:found, module, socket, rest}
+    else
+      pop_to_module(rest, target)
+    end
+  end
+
+  defp clear_nav_action(socket) do
+    Mob.Socket.put_mob(socket, :nav_action, nil)
   end
 
   # ── Render pipeline ───────────────────────────────────────────────────────
 
-  defp do_render(module, socket) do
+  defp do_render(module, socket, transition \\ :none) do
     platform = socket.__mob__.platform
     tree = module.render(socket.assigns)
-    case Mob.Renderer.render(tree, platform) do
-      {:ok, root_ref} ->
-        :mob_nif.set_root(root_ref)
-        Mob.Socket.put_root_view(socket, root_ref)
+    case Mob.Renderer.render(tree, platform, :mob_nif, transition) do
+      {:ok, token} ->
+        Mob.Socket.put_root_view(socket, token)
       {:error, reason} ->
         Logger.error("Mob.Screen render failed: #{inspect(reason)}")
         socket

@@ -23,22 +23,8 @@ extern void _mob_ui_cache_class_impl(JNIEnv* env, const char* bridge_class);
 static char s_native_lib_dir[512] = {0};
 static char s_files_dir[512]      = {0};
 
-// Declared in mob_nif.c — the C function registered as the tap native.
-extern void mob_native_on_tap(JNIEnv* jenv, jclass cls, jlong ptr);
-
 void mob_ui_cache_class(JNIEnv* env, const char* bridge_class) {
     _mob_ui_cache_class_impl(env, bridge_class);
-}
-
-void mob_register_tap_native(JNIEnv* env, const char* tap_class) {
-    jclass cls = (*env)->FindClass(env, tap_class);
-    if (!cls) { LOGE("mob_register_tap_native: class %s not found", tap_class); return; }
-    JNINativeMethod methods[] = {
-        {"nativeOnTap", "(J)V", (void*)mob_native_on_tap}
-    };
-    (*env)->RegisterNatives(env, cls, methods, 1);
-    (*env)->DeleteLocalRef(env, cls);
-    LOGI("mob_register_tap_native: registered nativeOnTap on %s", tap_class);
 }
 
 // Declared in mob_nif.c — the cached Bridge.cls global ref.

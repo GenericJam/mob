@@ -1,80 +1,93 @@
 defmodule Mob.RendererTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Mob.Renderer
 
-  # A mock NIF backend that records calls instead of touching Android Views.
-  # This lets us test the renderer logic without a device.
+  # A mock NIF backend that records calls instead of touching Android.
   defmodule MockNIF do
     use Agent
 
-    def start_link, do: Agent.start_link(fn -> [] end, name: __MODULE__)
+    # Use Agent.start (not start_link) so the Agent is not linked to the test
+    # process and survives across test process boundaries. The setup resets state
+    # rather than restarting the process, eliminating name-registry races.
+    def start_link, do: Agent.start(fn -> %{calls: [], tap_next: 0} end, name: __MODULE__)
 
-    def calls, do: Agent.get(__MODULE__, & &1)
+    def calls,  do: Agent.get(__MODULE__, & &1.calls)
+    def reset,  do: Agent.update(__MODULE__, fn _ -> %{calls: [], tap_next: 0} end)
 
-    def reset, do: Agent.update(__MODULE__, fn _ -> [] end)
-
-    # Stub every NIF function — return a fake view ref and record the call.
-    def create_column, do: record(:create_column, [])
-    def create_row, do: record(:create_row, [])
-    def create_label(text), do: record(:create_label, [text])
-    def create_button(text), do: record(:create_button, [text])
-    def create_scroll, do: record(:create_scroll, [])
-    def add_child(parent, child) do record_void(:add_child, [parent, child]); :ok end
-    def set_text(view, text) do record_void(:set_text, [view, text]); :ok end
-    def set_text_size(view, sp) do record_void(:set_text_size, [view, sp]); :ok end
-    def set_text_color(view, color) do record_void(:set_text_color, [view, color]); :ok end
-    def set_background_color(view, color) do record_void(:set_background_color, [view, color]); :ok end
-    def set_padding(view, dp) do record_void(:set_padding, [view, dp]); :ok end
-    def on_tap(view, pid) do record_void(:on_tap, [view, pid]); :ok end
-    def set_root(view) do record_void(:set_root, [view]); :ok end
-
-    defp record(fn_name, args) do
-      ref = make_ref()
-      Agent.update(__MODULE__, fn calls -> [{fn_name, args, ref} | calls] end)
-      {:ok, ref}
+    def clear_taps do
+      Agent.update(__MODULE__, fn s -> %{s | calls: [{:clear_taps, []} | s.calls], tap_next: 0} end)
+      :ok
     end
 
-    defp record_void(fn_name, args) do
-      Agent.update(__MODULE__, fn calls -> [{fn_name, args} | calls] end)
+    def set_transition(trans) do
+      Agent.update(__MODULE__, fn s -> %{s | calls: [{:set_transition, [trans]} | s.calls]} end)
+      :ok
+    end
+
+    def register_tap(pid_or_tagged) do
+      Agent.get_and_update(__MODULE__, fn s ->
+        handle = s.tap_next
+        calls  = [{:register_tap, [pid_or_tagged]} | s.calls]
+        {handle, %{s | calls: calls, tap_next: handle + 1}}
+      end)
+    end
+
+    def set_root(json) do
+      Agent.update(__MODULE__, fn s -> %{s | calls: [{:set_root, [json]} | s.calls]} end)
+      :ok
     end
   end
 
   setup do
-    MockNIF.start_link()
-    MockNIF.reset()
+    # Start the Agent if not running, or just reset state if already running.
+    # Using Agent.start (not start_link) means it persists across test processes.
+    case Process.whereis(MockNIF) do
+      nil -> {:ok, _} = MockNIF.start_link()
+      _   -> MockNIF.reset()
+    end
+
     :ok
   end
 
   describe "render/3" do
-    test "column with no children calls create_column" do
+    test "calls clear_taps before serializing" do
       tree = %{type: :column, props: %{}, children: []}
       Renderer.render(tree, :android, MockNIF)
-      calls = MockNIF.calls()
-      assert Enum.any?(calls, fn {fn_name, _, _} -> fn_name == :create_column end)
+      assert Enum.any?(MockNIF.calls(), fn {f, _} -> f == :clear_taps end)
     end
 
-    test "text node calls create_label with correct text" do
+    test "calls set_root with a JSON binary" do
+      tree = %{type: :column, props: %{}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      assert Enum.any?(MockNIF.calls(), fn
+        {:set_root, [json]} -> is_binary(json)
+        _ -> false
+      end)
+    end
+
+    test "returns {:ok, :json_tree}" do
+      tree = %{type: :column, props: %{}, children: []}
+      assert {:ok, :json_tree} = Renderer.render(tree, :android, MockNIF)
+    end
+
+    test "JSON contains correct node type" do
       tree = %{type: :text, props: %{text: "Hello"}, children: []}
       Renderer.render(tree, :android, MockNIF)
-      calls = MockNIF.calls()
-      assert Enum.any?(calls, fn
-        {:create_label, ["Hello"], _} -> true
-        _ -> false
-      end)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["type"] == "text"
     end
 
-    test "button node calls create_button with label" do
-      tree = %{type: :button, props: %{label: "Click me"}, children: []}
+    test "JSON contains text prop" do
+      tree = %{type: :text, props: %{text: "Hello"}, children: []}
       Renderer.render(tree, :android, MockNIF)
-      calls = MockNIF.calls()
-      assert Enum.any?(calls, fn
-        {:create_button, ["Click me"], _} -> true
-        _ -> false
-      end)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["text"] == "Hello"
     end
 
-    test "column with children calls add_child for each child" do
+    test "JSON contains nested children" do
       tree = %{
         type: :column,
         props: %{},
@@ -84,38 +97,68 @@ defmodule Mob.RendererTest do
         ]
       }
       Renderer.render(tree, :android, MockNIF)
-      calls = MockNIF.calls()
-      add_child_calls = Enum.filter(calls, fn
-        {:add_child, _} -> true
-        _ -> false
-      end)
-      assert length(add_child_calls) == 2
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert length(decoded["children"]) == 2
+      assert Enum.at(decoded["children"], 0)["props"]["text"] == "A"
+      assert Enum.at(decoded["children"], 1)["props"]["text"] == "B"
     end
 
-    test "returns a view ref for the root node" do
-      tree = %{type: :column, props: %{}, children: []}
-      assert {:ok, ref} = Renderer.render(tree, :android, MockNIF)
-      assert is_reference(ref)
+    test "on_tap pid is replaced by integer handle" do
+      pid  = self()
+      tree = %{type: :button, props: %{text: "Tap", on_tap: pid}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert is_integer(decoded["props"]["on_tap"])
     end
 
-    test "padding prop triggers set_padding call" do
+    test "register_tap is called for each on_tap pid" do
+      pid  = self()
+      tree = %{
+        type: :column,
+        props: %{},
+        children: [
+          %{type: :button, props: %{text: "A", on_tap: pid}, children: []},
+          %{type: :button, props: %{text: "B", on_tap: pid}, children: []}
+        ]
+      }
+      Renderer.render(tree, :android, MockNIF)
+      tap_calls = Enum.filter(MockNIF.calls(), fn {f, _} -> f == :register_tap end)
+      assert length(tap_calls) == 2
+    end
+
+    test "on_tap {pid, tag} is replaced by integer handle" do
+      pid  = self()
+      tree = %{type: :button, props: %{text: "Tap", on_tap: {pid, :my_action}}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert is_integer(decoded["props"]["on_tap"])
+    end
+
+    test "register_tap receives {pid, tag} for tagged taps" do
+      pid  = self()
+      tree = %{type: :button, props: %{text: "Tap", on_tap: {pid, :my_action}}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      tap_calls = Enum.filter(MockNIF.calls(), fn {f, _} -> f == :register_tap end)
+      assert [{:register_tap, [{^pid, :my_action}]}] = tap_calls
+    end
+
+    test "padding prop is serialized into JSON" do
       tree = %{type: :column, props: %{padding: 16}, children: []}
       Renderer.render(tree, :android, MockNIF)
-      calls = MockNIF.calls()
-      assert Enum.any?(calls, fn
-        {:set_padding, _} -> true
-        _ -> false
-      end)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["padding"] == 16
     end
 
-    test "background prop triggers set_background_color call" do
+    test "background color integer is preserved in JSON" do
       tree = %{type: :column, props: %{background: 0xFFFFFFFF}, children: []}
       Renderer.render(tree, :android, MockNIF)
-      calls = MockNIF.calls()
-      assert Enum.any?(calls, fn
-        {:set_background_color, _} -> true
-        _ -> false
-      end)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["background"] == 0xFFFFFFFF
     end
   end
 end

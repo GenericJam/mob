@@ -3,6 +3,17 @@
 
 import SwiftUI
 
+extension View {
+    @ViewBuilder
+    func ifLet<T>(_ value: T?, transform: (Self, T) -> some View) -> some View {
+        if let value {
+            transform(self, value)
+        } else {
+            self
+        }
+    }
+}
+
 // Allow MobNode to be used as ForEach identity (NSObject provides hash/isEqual).
 extension MobNode: Identifiable {
     public var id: ObjectIdentifier { ObjectIdentifier(self) }
@@ -29,8 +40,9 @@ struct MobNodeView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(node.padding)
                 .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
-                .contentShape(Rectangle())
-                .onTapGesture { node.onTap?() }
+                .ifLet(node.onTap) { view, tap in
+                    view.contentShape(Rectangle()).onTapGesture { tap() }
+                }
 
             case .row:
                 HStack(spacing: 0) {
@@ -38,8 +50,9 @@ struct MobNodeView: View {
                 }
                 .padding(node.padding)
                 .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
-                .contentShape(Rectangle())
-                .onTapGesture { node.onTap?() }
+                .ifLet(node.onTap) { view, tap in
+                    view.contentShape(Rectangle()).onTapGesture { tap() }
+                }
 
             case .label:
                 Text(node.text ?? "")
@@ -80,14 +93,16 @@ struct MobNodeView: View {
 
 public struct MobRootView: View {
     @ObservedObject var model = MobViewModel.shared
+    @State private var currentRoot: MobNode? = nil
 
     public init() {}
 
     public var body: some View {
-        Group {
-            if let root = model.root {
+        ZStack {
+            if let root = currentRoot {
                 MobNodeView(node: root)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .transition(navTransition(model.transition))
             } else {
                 VStack {
                     Spacer()
@@ -96,8 +111,49 @@ public struct MobRootView: View {
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
+                .transition(.opacity)
             }
         }
         .ignoresSafeArea(edges: .bottom)
+        .onChange(of: model.rootVersion) { _ in
+            let t = model.transition
+            if let animation = navAnimation(t) {
+                withAnimation(animation) {
+                    currentRoot = model.root
+                }
+            } else {
+                currentRoot = model.root
+            }
+        }
+    }
+
+    private func navTransition(_ t: String) -> AnyTransition {
+        switch t {
+        case "push":
+            return .asymmetric(
+                insertion:  .move(edge: .trailing),
+                removal:    .move(edge: .leading)
+            )
+        case "pop":
+            return .asymmetric(
+                insertion:  .move(edge: .leading),
+                removal:    .move(edge: .trailing)
+            )
+        case "reset":
+            return .opacity
+        default:
+            return .identity
+        }
+    }
+
+    private func navAnimation(_ t: String) -> Animation? {
+        switch t {
+        case "push", "pop":
+            return .spring(response: 0.3, dampingFraction: 0.85)
+        case "reset":
+            return .easeInOut(duration: 0.25)
+        default:
+            return nil
+        }
     }
 }

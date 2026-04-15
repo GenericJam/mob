@@ -1,106 +1,80 @@
 defmodule Mob.Renderer do
   @moduledoc """
-  Walks a component tree (nested maps) and issues NIF calls to build
-  the native view hierarchy.
+  Serializes a component tree to JSON and passes it to the platform NIF in
+  a single call. Compose (Android) and SwiftUI (iOS) handle diffing and
+  rendering internally.
 
-  A component tree node looks like:
+  A component tree node:
 
       %{
-        type: :column,           # atom — looked up in Mob.Registry
-        props: %{padding: 16},   # keyword props applied after creation
-        children: [...]          # nested nodes, recursively rendered
+        type: :column,
+        props: %{padding: 16, background: 0xFFFFFFFF},
+        children: [
+          %{type: :text,   props: %{text: "Hello"}, children: []},
+          %{type: :button, props: %{text: "Tap",  on_tap: self()}, children: []}
+        ]
       }
 
-  `render/3` returns `{:ok, root_view_ref}` where `root_view_ref` is an
-  opaque Erlang resource (a reference to a native View object).
+  `on_tap` PIDs are replaced with integer handles before serialization.
+  The NIF's `register_tap/1` returns the handle; `mob_send_tap(handle)`
+  in C routes the tap back to the correct PID via `enif_send`.
 
   ## Injecting a mock NIF
 
-  Pass a module as the third argument to swap in a test double:
-
       Mob.Renderer.render(tree, :android, MockNIF)
-
-  In production the default is `:mob_nif`.
   """
 
   @default_nif :mob_nif
 
   @doc """
-  Render a component tree for a given platform and return the root view ref.
+  Render a component tree for the given platform.
+
+  Clears the tap registry, serializes the tree to JSON, and calls `set_root/1`
+  on the NIF. Returns `{:ok, :json_tree}` — there is no view ref to track.
+
+  `transition` is an atom (`:push`, `:pop`, `:reset`, `:none`) that tells the
+  platform which animation to play. Defaults to `:none` (instant swap).
   """
-  @spec render(map(), atom(), module() | atom()) :: {:ok, term()} | {:error, term()}
-  def render(node, platform, nif_mod \\ @default_nif)
+  @spec render(map(), atom(), module() | atom(), atom()) :: {:ok, :json_tree} | {:error, term()}
+  def render(tree, _platform, nif \\ @default_nif, transition \\ :none) do
+    nif.clear_taps()
+    nif.set_transition(transition)
 
-  def render(%{type: type, props: props, children: children}, platform, nif) do
-    with {:ok, view_ref} <- create_view(type, props, nif),
-         :ok             <- apply_props(view_ref, props, nif),
-         :ok             <- render_children(view_ref, children, platform, nif, type) do
-      {:ok, view_ref}
-    end
+    json =
+      tree
+      |> prepare(nif)
+      |> :json.encode()
+      |> IO.iodata_to_binary()
+
+    nif.set_root(json)
+    {:ok, :json_tree}
   end
 
-  # ── View creation ─────────────────────────────────────────────────────────
+  # ── Tree preparation ─────────────────────────────────────────────────────────
+  # Converts atom keys → string keys and registers on_tap PIDs for handles.
 
-  defp create_view(:text, %{text: text}, nif), do: apply(nif, :create_label, [text])
-  defp create_view(:text, _props, nif),         do: apply(nif, :create_label, [""])
-  defp create_view(:button, %{label: label}, nif), do: apply(nif, :create_button, [label])
-  defp create_view(:button, %{text: text}, nif),   do: apply(nif, :create_button, [text])
-  defp create_view(:button, _props, nif),           do: apply(nif, :create_button, [""])
-  defp create_view(:column, _props, nif),  do: apply(nif, :create_column, [])
-  defp create_view(:row, _props, nif),     do: apply(nif, :create_row, [])
-  defp create_view(:scroll, _props, nif),  do: apply(nif, :create_scroll, [])
-
-  defp create_view(unknown, _props, _nif),
-    do: {:error, {:unknown_component, unknown}}
-
-  # ── Prop application ──────────────────────────────────────────────────────
-
-  defp apply_props(view_ref, props, nif) do
-    Enum.reduce_while(props, :ok, fn
-      {:padding, dp}, :ok ->
-        apply(nif, :set_padding, [view_ref, dp])
-        {:cont, :ok}
-
-      {:background, color}, :ok ->
-        apply(nif, :set_background_color, [view_ref, color])
-        {:cont, :ok}
-
-      {:text_color, color}, :ok ->
-        apply(nif, :set_text_color, [view_ref, color])
-        {:cont, :ok}
-
-      {:text_size, sp}, :ok ->
-        apply(nif, :set_text_size, [view_ref, sp * 1.0])
-        {:cont, :ok}
-
-      {:on_tap, pid}, :ok ->
-        apply(nif, :on_tap, [view_ref, pid])
-        {:cont, :ok}
-
-      # Props consumed at creation time — skip here
-      {k, _}, :ok when k in [:text, :label] ->
-        {:cont, :ok}
-
-      # Unknown props are silently ignored for forward-compat
-      {_k, _v}, :ok ->
-        {:cont, :ok}
-    end)
+  defp prepare(%{type: type, props: props, children: children}, nif) do
+    %{
+      "type"     => Atom.to_string(type),
+      "props"    => prepare_props(props, nif),
+      "children" => Enum.map(children, &prepare(&1, nif))
+    }
   end
 
-  # ── Children ──────────────────────────────────────────────────────────────
+  defp prepare_props(props, nif) do
+    Map.new(props, fn
+      {:on_tap, pid} when is_pid(pid) ->
+        # Simple pid — NIF sends {:tap, :ok}
+        handle = nif.register_tap(pid)
+        {"on_tap", handle}
 
-  defp render_children(parent_ref, children, platform, nif, _parent_type) do
-    Enum.reduce_while(children, :ok, fn child, :ok ->
-      case render(child, platform, nif) do
-        {:ok, child_ref} ->
-          # add_child/2 — the NIF reads is_row and scroll inner layout from
-          # the parent resource itself. We always pass the parent ref directly.
-          apply(nif, :add_child, [parent_ref, child_ref])
-          {:cont, :ok}
+      {:on_tap, {pid, tag}} when is_pid(pid) ->
+        # Tagged pid — NIF sends {:tap, tag}
+        handle = nif.register_tap({pid, tag})
+        {"on_tap", handle}
 
-        {:error, _} = err ->
-          {:halt, err}
-      end
+      {key, value} ->
+        {Atom.to_string(key), value}
     end)
   end
 end

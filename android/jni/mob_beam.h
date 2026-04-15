@@ -8,9 +8,11 @@
 
 // Call from JNI_OnLoad (main thread).
 // bridge_class: e.g. "com/myapp/MobBridge"
-// tap_class:    e.g. "com/myapp/MobTapListener"
 void mob_ui_cache_class(JNIEnv* env, const char* bridge_class);
-void mob_register_tap_native(JNIEnv* env, const char* tap_class);
+
+// Send a tap event to the BEAM process registered for handle.
+// Called from the app's Java_..._MobBridge_nativeSendTap JNI stub.
+void mob_send_tap(int handle);
 
 // Call from nativeSetActivity.
 void mob_init_bridge(JNIEnv* env, jobject activity);

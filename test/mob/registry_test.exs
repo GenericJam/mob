@@ -42,20 +42,19 @@ defmodule Mob.RegistryTest do
 
   describe "default registry" do
     setup do
-      # Start the named registry if not already running
-      case Registry.start_link(name: Registry) do
-        {:ok, pid} -> on_exit(fn -> if Process.alive?(pid), do: Agent.stop(pid) end)
-        {:error, {:already_started, _}} -> :ok
-      end
-      :ok
+      # Use a unique name per test to avoid async collisions
+      name = :"Mob.Registry.#{System.unique_integer([:positive])}"
+      {:ok, pid} = Registry.start_link(name: name)
+      on_exit(fn -> if Process.alive?(pid), do: Agent.stop(pid) end)
+      %{default_reg: name}
     end
 
-    test "default registry has built-in components registered" do
-      assert {:ok, _} = Registry.lookup(Registry, :column, :android)
-      assert {:ok, _} = Registry.lookup(Registry, :row, :android)
-      assert {:ok, _} = Registry.lookup(Registry, :text, :android)
-      assert {:ok, _} = Registry.lookup(Registry, :button, :android)
-      assert {:ok, _} = Registry.lookup(Registry, :scroll, :android)
+    test "default registry has built-in components registered", %{default_reg: reg} do
+      assert {:ok, _} = Registry.lookup(reg, :column, :android)
+      assert {:ok, _} = Registry.lookup(reg, :row, :android)
+      assert {:ok, _} = Registry.lookup(reg, :text, :android)
+      assert {:ok, _} = Registry.lookup(reg, :button, :android)
+      assert {:ok, _} = Registry.lookup(reg, :scroll, :android)
     end
   end
 
