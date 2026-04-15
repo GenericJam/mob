@@ -137,6 +137,58 @@ defmodule Mob.RendererTest do
       assert is_integer(decoded["props"]["on_tap"])
     end
 
+    test "on_change {pid, tag} is replaced by integer handle" do
+      pid  = self()
+      tree = %{type: :text_field, props: %{value: "hi", on_change: {pid, :name}}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert is_integer(decoded["props"]["on_change"])
+    end
+
+    test "on_focus {pid, tag} is replaced by integer handle" do
+      pid  = self()
+      tree = %{type: :text_field, props: %{value: "hi", on_focus: {pid, :name_focused}}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert is_integer(decoded["props"]["on_focus"])
+    end
+
+    test "on_blur {pid, tag} is replaced by integer handle" do
+      pid  = self()
+      tree = %{type: :text_field, props: %{value: "hi", on_blur: {pid, :name_blurred}}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert is_integer(decoded["props"]["on_blur"])
+    end
+
+    test "on_submit {pid, tag} is replaced by integer handle" do
+      pid  = self()
+      tree = %{type: :text_field, props: %{value: "hi", on_submit: {pid, :name_submitted}}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert is_integer(decoded["props"]["on_submit"])
+    end
+
+    test "keyboard atom is serialised as string" do
+      tree = %{type: :text_field, props: %{value: "", keyboard: :decimal}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["keyboard"] == "decimal"
+    end
+
+    test "return_key atom is serialised as string" do
+      tree = %{type: :text_field, props: %{value: "", return_key: :next}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["return_key"] == "next"
+    end
+
     test "register_tap receives {pid, tag} for tagged taps" do
       pid  = self()
       tree = %{type: :button, props: %{text: "Tap", on_tap: {pid, :my_action}}, children: []}
@@ -159,6 +211,131 @@ defmodule Mob.RendererTest do
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
       decoded = :json.decode(json)
       assert decoded["props"]["background"] == 0xFFFFFFFF
+    end
+
+    test "on_end_reached {pid, tag} is replaced by integer handle" do
+      pid  = self()
+      tree = %{type: :lazy_list, props: %{on_end_reached: {pid, :load_more}}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert is_integer(decoded["props"]["on_end_reached"])
+    end
+
+    test "image src prop is serialized as string" do
+      tree = %{type: :image, props: %{src: "https://example.com/photo.jpg"}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["src"] == "https://example.com/photo.jpg"
+    end
+
+    test "placeholder_color atom is resolved to ARGB integer" do
+      tree = %{type: :image, props: %{src: "https://example.com/photo.jpg", placeholder_color: :gray_200}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["placeholder_color"] == 0xFFEEEEEE
+    end
+  end
+
+  describe "style token resolution" do
+    test "color atom in background is resolved to ARGB integer" do
+      tree = %{type: :column, props: %{background: :primary}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["background"] == 0xFF2196F3
+    end
+
+    test "color atom in text_color is resolved" do
+      tree = %{type: :text, props: %{text: "hi", text_color: :on_surface}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["text_color"] == 0xFF212121
+    end
+
+    test "text_size atom is resolved to float sp" do
+      tree = %{type: :text, props: %{text: "hi", text_size: :xl}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["text_size"] == 20.0
+    end
+
+    test "unknown color atom is left as-is (serialised as string)" do
+      tree = %{type: :column, props: %{background: :not_a_real_color}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["background"] == "not_a_real_color"
+    end
+  end
+
+  describe "platform blocks" do
+    test "android block is merged on android platform" do
+      tree = %{type: :column, props: %{padding: 8, android: %{padding: 16}}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["padding"] == 16
+    end
+
+    test "ios block is merged on ios platform" do
+      tree = %{type: :column, props: %{padding: 8, ios: %{padding: 20}}, children: []}
+      Renderer.render(tree, :ios, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["padding"] == 20
+    end
+
+    test "ios block is ignored on android platform" do
+      tree = %{type: :column, props: %{padding: 8, ios: %{padding: 20}}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["padding"] == 8
+      refute Map.has_key?(decoded["props"], "ios")
+    end
+
+    test "platform keys are stripped from serialised JSON" do
+      tree = %{type: :column, props: %{android: %{padding: 8}, ios: %{padding: 20}}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      refute Map.has_key?(decoded["props"], "android")
+      refute Map.has_key?(decoded["props"], "ios")
+    end
+  end
+
+  describe "Mob.Style struct" do
+    test "style props are merged into node props" do
+      style = %Mob.Style{props: %{text_size: :xl, text_color: :white}}
+      tree  = %{type: :text, props: %{text: "hi", style: style}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["text_size"] == 20.0
+      assert decoded["props"]["text_color"] == 0xFFFFFFFF
+    end
+
+    test "inline props override style props" do
+      style = %Mob.Style{props: %{text_size: :xl, text_color: :white}}
+      tree  = %{type: :text, props: %{text: "hi", style: style, text_size: :sm}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["text_size"] == 14.0
+    end
+
+    test "style key is not present in serialised JSON" do
+      style = %Mob.Style{props: %{text_size: :base}}
+      tree  = %{type: :text, props: %{text: "hi", style: style}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      refute Map.has_key?(decoded["props"], "style")
     end
   end
 end

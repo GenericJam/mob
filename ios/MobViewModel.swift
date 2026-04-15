@@ -25,10 +25,31 @@ import Combine
     }
 }
 
+// UIHostingController subclass that intercepts the left-edge swipe gesture
+// and forwards it to the BEAM as {:mob, :back}.
+// Using UIScreenEdgePanGestureRecognizer rather than a SwiftUI DragGesture
+// because it integrates cleanly with scroll views and doesn't require
+// threading gesture priority through the view tree.
+public class MobHostingController: UIHostingController<MobRootView> {
+    override public func viewDidLoad() {
+        super.viewDidLoad()
+        let edgePan = UIScreenEdgePanGestureRecognizer(
+            target: self, action: #selector(handleEdgePan(_:)))
+        edgePan.edges = .left
+        view.addGestureRecognizer(edgePan)
+    }
+
+    @objc private func handleEdgePan(_ gesture: UIScreenEdgePanGestureRecognizer) {
+        if gesture.state == .ended {
+            mob_handle_back()
+        }
+    }
+}
+
 // Factory: lets ObjC (AppDelegate.m) create the SwiftUI hosting controller
 // without knowing about the generic UIHostingController<MobRootView> type.
 @objc public class MobUIFactory: NSObject {
     @objc public static func makeRootViewController() -> UIViewController {
-        return UIHostingController(rootView: MobRootView())
+        return MobHostingController(rootView: MobRootView())
     }
 }

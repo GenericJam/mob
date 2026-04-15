@@ -24,6 +24,8 @@
 static struct {
     jclass    cls;
     jmethodID set_root;
+    jmethodID move_to_back;
+    jmethodID get_safe_area;
 } Bridge;
 
 // ── Tap handle registry ───────────────────────────────────────────────────────
@@ -66,6 +68,97 @@ void mob_send_tap(int handle) {
     enif_send(NULL, &pid, msg_env, msg);
     enif_free_env(msg_env);
     (void)tag_env; // owned by tap_handles; freed in clear_taps
+}
+
+// ── Change senders ────────────────────────────────────────────────────────────
+// Called from beam_jni.c JNI stubs when an input widget fires an onChange event.
+// Each builds {:change, tag, value} and sends it to the registered pid.
+
+static void send_change(int handle, ERL_NIF_TERM value_term) {
+    enif_mutex_lock(tap_mutex);
+    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
+        enif_mutex_unlock(tap_mutex);
+        return;
+    }
+    ErlNifPid    pid = tap_handles[handle].pid;
+    ERL_NIF_TERM tag = tap_handles[handle].tag;
+    enif_mutex_unlock(tap_mutex);
+
+    ErlNifEnv* msg_env = enif_alloc_env();
+    ERL_NIF_TERM msg = enif_make_tuple3(msg_env,
+        enif_make_atom(msg_env, "change"),
+        enif_make_copy(msg_env, tag),
+        enif_make_copy(msg_env, value_term));
+    enif_send(NULL, &pid, msg_env, msg);
+    enif_free_env(msg_env);
+}
+
+void mob_send_change_str(int handle, const char* utf8) {
+    ErlNifEnv* tmp = enif_alloc_env();
+    ErlNifBinary bin;
+    size_t len = strlen(utf8);
+    enif_alloc_binary(len, &bin);
+    memcpy(bin.data, utf8, len);
+    ERL_NIF_TERM term = enif_make_binary(tmp, &bin);
+    send_change(handle, term);
+    enif_free_env(tmp);
+}
+
+void mob_send_change_bool(int handle, int bool_val) {
+    ErlNifEnv* tmp = enif_alloc_env();
+    ERL_NIF_TERM term = enif_make_atom(tmp, bool_val ? "true" : "false");
+    send_change(handle, term);
+    enif_free_env(tmp);
+}
+
+void mob_send_change_float(int handle, double value) {
+    ErlNifEnv* tmp = enif_alloc_env();
+    ERL_NIF_TERM term = enif_make_double(tmp, value);
+    send_change(handle, term);
+    enif_free_env(tmp);
+}
+
+// ── Focus / blur / submit senders ────────────────────────────────────────────
+// Called from beam_jni.c JNI stubs when a text field gains/loses focus or
+// the return key is pressed. Sends a {:event, tag} 2-tuple to the registered pid.
+
+static void send_event(int handle, const char* atom) {
+    enif_mutex_lock(tap_mutex);
+    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
+        enif_mutex_unlock(tap_mutex);
+        return;
+    }
+    ErlNifPid    pid = tap_handles[handle].pid;
+    ERL_NIF_TERM tag = tap_handles[handle].tag;
+    enif_mutex_unlock(tap_mutex);
+
+    ErlNifEnv* msg_env = enif_alloc_env();
+    ERL_NIF_TERM msg = enif_make_tuple2(msg_env,
+        enif_make_atom(msg_env, atom),
+        enif_make_copy(msg_env, tag));
+    enif_send(NULL, &pid, msg_env, msg);
+    enif_free_env(msg_env);
+}
+
+void mob_send_focus(int handle)  { send_event(handle, "focus"); }
+void mob_send_blur(int handle)   { send_event(handle, "blur"); }
+void mob_send_submit(int handle) { send_event(handle, "submit"); }
+
+// ── Back gesture sender ───────────────────────────────────────────────────────
+// Called from beam_jni.c's nativeHandleBack JNI stub when the Android back
+// gesture fires. Looks up the :mob_screen registered process and sends
+// {:mob, :back} — Mob.Screen.handle_info/2 handles popping or exiting.
+
+void mob_handle_back(void) {
+    ErlNifEnv* env = enif_alloc_env();
+    ErlNifPid pid;
+    if (enif_whereis_pid(env, enif_make_atom(env, "mob_screen"), &pid)) {
+        ERL_NIF_TERM msg = enif_make_tuple2(env,
+            enif_make_atom(env, "mob"),
+            enif_make_atom(env, "back"));
+        enif_send(NULL, &pid, env, msg);
+    }
+    enif_free_env(env);
 }
 
 // ── JNI helpers ──────────────────────────────────────────────────────────────
@@ -236,6 +329,17 @@ static ERL_NIF_TERM nif_clear_taps(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
     return enif_make_atom(env, "ok");
 }
 
+// ── NIF: exit_app/0 ──────────────────────────────────────────────────────────
+// Backgrounds the app via MobBridge.moveToBack() → activity.moveTaskToBack(true).
+// Called by Mob.Screen when the back gesture fires at the root of the nav stack.
+
+static ERL_NIF_TERM nif_exit_app(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    int att; JNIEnv* jenv = get_jenv(&att);
+    (*jenv)->CallStaticVoidMethod(jenv, Bridge.cls, Bridge.move_to_back);
+    if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
+    return enif_make_atom(env, "ok");
+}
+
 // ── NIF: set_transition/1 ────────────────────────────────────────────────────
 // Stores the transition type atom (push/pop/reset/none) to be passed to
 // setRootJson on the next set_root call. Must be called before set_root.
@@ -250,6 +354,27 @@ static ERL_NIF_TERM nif_set_transition(ErlNifEnv* env, int argc, const ERL_NIF_T
     return enif_make_atom(env, "ok");
 }
 
+// ── NIF: safe_area/0 ─────────────────────────────────────────────────────────
+// Returns {Top, Right, Bottom, Left} in dp via MobBridge.getSafeArea().
+
+static ERL_NIF_TERM nif_safe_area(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    int att; JNIEnv* jenv = get_jenv(&att);
+    jfloatArray arr = (jfloatArray)(*jenv)->CallStaticObjectMethod(
+        jenv, Bridge.cls, Bridge.get_safe_area);
+    float vals[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    if (arr) {
+        (*jenv)->GetFloatArrayRegion(jenv, arr, 0, 4, vals);
+        (*jenv)->DeleteLocalRef(jenv, arr);
+    }
+    if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
+    return enif_make_tuple4(env,
+        enif_make_double(env, (double)vals[0]),
+        enif_make_double(env, (double)vals[1]),
+        enif_make_double(env, (double)vals[2]),
+        enif_make_double(env, (double)vals[3])
+    );
+}
+
 // ── NIF table & load ─────────────────────────────────────────────────────────
 
 static ErlNifFunc nif_funcs[] = {
@@ -260,6 +385,8 @@ static ErlNifFunc nif_funcs[] = {
     {"set_root",       1, nif_set_root,       0},
     {"register_tap",   1, nif_register_tap,   0},
     {"clear_taps",     0, nif_clear_taps,     0},
+    {"exit_app",       0, nif_exit_app,       0},
+    {"safe_area",      0, nif_safe_area,      0},
 };
 
 static int nif_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info) {
@@ -273,6 +400,13 @@ static int nif_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info) {
     Bridge.set_root = (*jenv)->GetStaticMethodID(jenv, Bridge.cls,
         "setRootJson", "(Ljava/lang/String;Ljava/lang/String;)V");
     if (!Bridge.set_root) { LOGE("nif_load: setRootJson(String,String) not found on MobBridge"); return -1; }
+
+    Bridge.move_to_back = (*jenv)->GetStaticMethodID(jenv, Bridge.cls, "moveToBack", "()V");
+    if (!Bridge.move_to_back) { LOGE("nif_load: moveToBack() not found on MobBridge"); return -1; }
+
+    Bridge.get_safe_area = (*jenv)->GetStaticMethodID(jenv, Bridge.cls, "getSafeArea", "()[F");
+    if (!Bridge.get_safe_area) { LOGE("nif_load: getSafeArea() not found on MobBridge"); return -1; }
+
     if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
 
     LOGI("Mob NIF loaded (Compose backend)");

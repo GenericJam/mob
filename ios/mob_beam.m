@@ -47,6 +47,11 @@ void mob_start_beam(const char* app_module) {
     const char* args[] = {
         "beam",
         "-S", "1:1", "-SDcpu", "1:1", "-SDio", "1", "-A", "1", "-sbwt", "none",
+        // elixir-desktop added "-MIscs", "10" to cap the BEAM's memory super carrier at 10MB
+        // after seeing "erts_mmap: Failed to create super carrier of size 1024 MB" on 9th gen iPads.
+        // The default is 1GB virtual reservation which iOS silently rejects. Their fix is correct in
+        // effect but may be masking wrong flags elsewhere — enable this if we see the same error.
+        // "-MIscs", "10",
         "--",
         "-root",     OTP_ROOT,
         "-bindir",   OTP_ROOT "/" ERTS_VSN "/bin",

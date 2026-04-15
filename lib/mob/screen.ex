@@ -144,6 +144,18 @@ defmodule Mob.Screen do
   def init({screen_module, params, render_mode, platform}) do
     socket = Mob.Socket.new(screen_module, platform: platform)
 
+    # Register under :mob_screen so C-layer mob_handle_back() can find us.
+    # Only in :render mode (production); tests use :no_render and run without a NIF.
+    if render_mode == :render, do: Process.register(self(), :mob_screen)
+
+    socket =
+      if render_mode == :render do
+        {t, r, b, l} = :mob_nif.safe_area()
+        Mob.Socket.assign(socket, :safe_area, %{top: t, right: r, bottom: b, left: l})
+      else
+        Mob.Socket.assign(socket, :safe_area, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0})
+      end
+
     case screen_module.mount(params, %{}, socket) do
       {:ok, mounted_socket} ->
         socket =
@@ -198,7 +210,29 @@ defmodule Mob.Screen do
     {:reply, nav_history, state}
   end
 
+  # System back gesture (Android hardware/swipe, iOS edge-pan).
+  # Handled here — before the user's handle_info — so every screen gets back
+  # navigation for free without implementing anything.
   @impl GenServer
+  def handle_info({:mob, :back}, {module, socket, nav_history, render_mode}) do
+    {module, new_socket, new_history, transition} =
+      if nav_history == [] do
+        if render_mode == :render, do: :mob_nif.exit_app()
+        {module, socket, [], :none}
+      else
+        apply_nav_action(module, Mob.Socket.put_mob(socket, :nav_action, {:pop}), nav_history)
+      end
+
+    new_socket =
+      if render_mode == :render do
+        do_render(module, new_socket, transition)
+      else
+        new_socket
+      end
+
+    {:noreply, {module, new_socket, new_history, render_mode}}
+  end
+
   def handle_info(message, {module, socket, nav_history, render_mode}) do
     {:noreply, new_socket} = module.handle_info(message, socket)
     {module, new_socket, nav_history, transition} =

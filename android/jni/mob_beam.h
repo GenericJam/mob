@@ -14,6 +14,21 @@ void mob_ui_cache_class(JNIEnv* env, const char* bridge_class);
 // Called from the app's Java_..._MobBridge_nativeSendTap JNI stub.
 void mob_send_tap(int handle);
 
+// Send a {:change, tag, value} event.  Called from the app's
+// Java_..._MobBridge_nativeSendChange* JNI stubs.
+void mob_send_change_str(int handle, const char* utf8);
+void mob_send_change_bool(int handle, int bool_val);   // 0 = false, 1 = true
+void mob_send_change_float(int handle, double value);
+
+// Send {:focus, tag}, {:blur, tag}, {:submit, tag} events.
+void mob_send_focus(int handle);
+void mob_send_blur(int handle);
+void mob_send_submit(int handle);
+
+// Signal a system back gesture to the BEAM screen process.
+// The BEAM pops the nav stack or calls exit_app if at root.
+void mob_handle_back(void);
+
 // Call from nativeSetActivity.
 void mob_init_bridge(JNIEnv* env, jobject activity);
 

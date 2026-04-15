@@ -92,6 +92,24 @@ Set the transition before navigating; the platform UI animates accordingly:
 
 Mob.Screen sets the transition automatically based on the nav action — push uses `:push`, all pop variants use `:pop`, reset uses `:reset`.
 
+### Hardware back gesture
+
+Both platforms intercept the system back gesture automatically — no code needed in your screens.
+
+- **Android**: the system back gesture (swipe from edge or hardware button) pops the nav stack. At the root screen (stack empty) the app is backgrounded via `moveTaskToBack(true)`.
+- **iOS**: a left-edge swipe gesture on the hosting controller pops the nav stack. At the root screen it is a no-op — iOS apps background naturally via the home gesture, which is OS-controlled.
+
+The gesture sends `{:mob, :back}` to the BEAM, which `Mob.Screen` intercepts before your `handle_info`. Your screens don't need to implement anything for this to work.
+
+### Auth flow and the "home screen"
+
+The bottom of the nav stack is the effective home screen — whatever was last passed to `reset_to`. After a successful login, call `reset_to(socket, MainScreen)` to zero the stack. The user can then press back repeatedly and will be backgrounded at the main screen, never returned to the login screen.
+
+```elixir
+# In your LoginScreen after successful auth:
+{:noreply, Mob.Socket.reset_to(socket, MyApp.HomeScreen)}
+```
+
 ### Deep links and constructed history
 
 When arriving from a notification or external URL, you want a back stack even though the user didn't navigate there manually. `replace_stack` (planned) will allow constructing an arbitrary history:
@@ -103,6 +121,43 @@ Mob.Socket.replace_stack(socket, [
   {:detail_screen, %{id: 42}}   # becomes the active screen
 ])
 ```
+
+## Display
+
+### Safe area insets
+
+Every screen automatically receives `assigns.safe_area` — a map with the size of the system-reserved zones in logical points (dp on Android, UIKit points on iOS):
+
+```elixir
+assigns.safe_area
+# %{top: 62.0, bottom: 34.0, left: 0.0, right: 0.0}
+```
+
+| Key | What it covers |
+|-----|---------------|
+| `top` | Status bar + Dynamic Island / notch |
+| `bottom` | Home indicator bar |
+| `left` / `right` | Curved-edge insets (most devices: `0.0`) |
+
+Values are `0.0` on devices without those features (older iPhones without a notch, most Androids). You get them for free — no opt-in needed.
+
+**The framework does not insert any padding automatically.** Use the values however you like:
+
+```elixir
+def render(assigns) do
+  safe_top    = trunc(assigns.safe_area.top)
+  safe_bottom = trunc(assigns.safe_area.bottom)
+
+  # Full-bleed header: colour fills behind the Dynamic Island,
+  # text sits below it.
+  %{type: :column, props: %{background: :blue_700}, children: [
+    %{type: :spacer, props: %{size: safe_top}, children: []},
+    %{type: :text,   props: %{text: "My App", padding: 16, ...}, children: []}
+  ]}
+end
+```
+
+Or add a plain spacer at the top and bottom of your scroll content if you just want the text to clear the system chrome.
 
 ## Live debugging
 
@@ -154,6 +209,128 @@ iOS simulator shares the Mac's network stack — no port setup needed.
 Android uses `adb reverse tcp:4369 tcp:4369` so the Android BEAM registers in the Mac's
 EPMD (not Android's), then `adb forward tcp:9100 tcp:9100` for the dist port. Both
 platforms end up in the same EPMD. `dev_connect.sh` handles this automatically.
+
+## OS debug tools
+
+If you're coming from Elixir/backend land, the mobile toolchains have their own CLIs for talking to devices. Here's what's useful and what each thing does.
+
+### Android — adb
+
+`adb` (Android Debug Bridge) is the main CLI for talking to Android devices and emulators. It ships with Android Studio but you can also install it standalone (`brew install android-platform-tools`).
+
+```bash
+adb devices                          # list connected devices/emulators
+adb -s emulator-5554 shell           # open a shell on a specific device
+```
+
+**Logs** — the equivalent of `tail -f` on your app's output:
+
+```bash
+adb logcat                           # everything (very noisy)
+adb logcat -s Elixir                 # only Logger output from your BEAM code
+adb logcat -s Elixir MobBeam MobNIF  # BEAM + native bridge logs
+adb logcat -v time -s Elixir,MobBeam,MobNIF  # same, with timestamps
+```
+
+**File transfer:**
+
+```bash
+adb push local/path /data/local/tmp/file   # Mac → device
+adb pull /data/local/tmp/file local/path   # device → Mac
+```
+
+**Port forwarding** — needed to connect Erlang distribution between Mac and Android emulator:
+
+```bash
+adb reverse tcp:4369 tcp:4369   # EPMD: Android BEAM registers in Mac's EPMD
+adb forward tcp:9100 tcp:9100   # dist port: Mac can reach Android node
+```
+
+`mix mob.connect` runs these automatically.
+
+**App lifecycle:**
+
+```bash
+adb shell am force-stop com.mob.demo        # kill the app entirely
+adb shell input keyevent KEYCODE_HOME       # press home button (backgrounds app)
+adb shell am start -n com.mob.demo/.MainActivity  # launch app
+adb install path/to/app.apk                 # install an APK
+```
+
+**Battery info** (used by `mix mob.battery_bench`):
+
+```bash
+adb shell dumpsys battery                   # current battery state
+adb shell dumpsys batterystats | grep "Charge counter"  # mAh counter
+```
+
+**Wireless ADB** — cut the USB cable once set up:
+
+```bash
+# While plugged in via USB:
+adb -s SERIAL tcpip 5555             # switch device to TCP mode
+adb connect 192.168.1.42:5555        # connect over WiFi
+adb devices                          # confirm it shows up
+```
+
+### iOS — xcrun simctl
+
+`xcrun simctl` is the CLI for the iOS Simulator. It's part of Xcode command-line tools (`xcode-select --install`).
+
+```bash
+xcrun simctl list devices            # list all simulators and their UDIDs
+xcrun simctl list devices booted     # only the ones currently running
+```
+
+**Boot and open a simulator:**
+
+```bash
+xcrun simctl boot <UDID>                    # boot without opening the window
+open -a Simulator                           # open the Simulator app window
+```
+
+**Logs** — streams NSLog / os_log output from your app:
+
+```bash
+xcrun simctl spawn booted log stream \
+  --predicate 'process == "MobDemo"'        # only MobDemo output
+
+# Save to file for later inspection:
+xcrun simctl spawn booted log stream \
+  --predicate 'process == "MobDemo"' > /tmp/mob.log &
+```
+
+**App lifecycle:**
+
+```bash
+xcrun simctl launch booted com.mob.demo     # launch app
+xcrun simctl terminate booted com.mob.demo  # kill app (simulates backgrounding / force-quit)
+xcrun simctl install booted path/to/App.app # install a built .app bundle
+```
+
+**Find app's data directory** (useful for reading crash dumps, finding BEAM files):
+
+```bash
+xcrun simctl get_app_container booted com.mob.demo data
+# → /Users/you/Library/Developer/CoreSimulator/Devices/<UDID>/data/Containers/Data/...
+```
+
+**Privacy / permissions reset** (helpful when testing first-run flows):
+
+```bash
+xcrun simctl privacy booted reset all com.mob.demo
+```
+
+### Backgrounding the app from Elixir
+
+Both platforms expose `Mob.Socket.exit_app/1` (planned) or you can call the NIF directly from IEx:
+
+```elixir
+# From an IEx session connected to the device:
+:rpc.call(:"mob_demo_android@127.0.0.1", :mob_nif, :exit_app, [])
+# Android: calls moveTaskToBack(true) — app goes to background, BEAM keeps running
+# iOS: no-op — iOS apps background via the home gesture, which is OS-controlled
+```
 
 ## Power benchmark
 

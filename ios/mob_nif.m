@@ -53,6 +53,95 @@ static void mob_send_tap(int handle) {
     enif_free_env(msg_env);
 }
 
+// ── Focus / blur / submit senders ────────────────────────────────────────────
+// Called from MobTextField SwiftUI view when focus state changes or return key tapped.
+
+static void mob_send_event(int handle, const char* atom) {
+    enif_mutex_lock(tap_mutex);
+    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
+        enif_mutex_unlock(tap_mutex);
+        return;
+    }
+    ErlNifPid    pid = tap_handles[handle].pid;
+    ERL_NIF_TERM tag = tap_handles[handle].tag;
+    enif_mutex_unlock(tap_mutex);
+
+    ErlNifEnv* msg_env = enif_alloc_env();
+    ERL_NIF_TERM msg = enif_make_tuple2(msg_env,
+        enif_make_atom(msg_env, atom),
+        enif_make_copy(msg_env, tag));
+    enif_send(NULL, &pid, msg_env, msg);
+    enif_free_env(msg_env);
+}
+
+static void mob_send_focus(int handle)  { mob_send_event(handle, "focus"); }
+static void mob_send_blur(int handle)   { mob_send_event(handle, "blur"); }
+static void mob_send_submit(int handle) { mob_send_event(handle, "submit"); }
+
+// ── Back gesture sender ───────────────────────────────────────────────────────
+// Called from MobHostingController when the left-edge-pan gesture fires.
+// Looks up the :mob_screen registered process and sends {:mob, :back}.
+// Non-static so Swift can call it via the bridging header.
+
+void mob_handle_back(void) {
+    ErlNifEnv* env = enif_alloc_env();
+    ErlNifPid pid;
+    if (enif_whereis_pid(env, enif_make_atom(env, "mob_screen"), &pid)) {
+        ERL_NIF_TERM msg = enif_make_tuple2(env,
+            enif_make_atom(env, "mob"),
+            enif_make_atom(env, "back"));
+        enif_send(NULL, &pid, env, msg);
+    }
+    enif_free_env(env);
+}
+
+// ── Change senders ────────────────────────────────────────────────────────────
+// Called from MobNode onChange blocks when an input widget fires.
+
+static void mob_send_change(int handle, ERL_NIF_TERM value_term) {
+    enif_mutex_lock(tap_mutex);
+    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
+        enif_mutex_unlock(tap_mutex);
+        return;
+    }
+    ErlNifPid    pid = tap_handles[handle].pid;
+    ERL_NIF_TERM tag = tap_handles[handle].tag;
+    enif_mutex_unlock(tap_mutex);
+
+    ErlNifEnv* msg_env = enif_alloc_env();
+    ERL_NIF_TERM msg = enif_make_tuple3(msg_env,
+        enif_make_atom(msg_env, "change"),
+        enif_make_copy(msg_env, tag),
+        enif_make_copy(msg_env, value_term));
+    enif_send(NULL, &pid, msg_env, msg);
+    enif_free_env(msg_env);
+}
+
+static void mob_send_change_str(int handle, const char* utf8) {
+    ErlNifEnv* tmp = enif_alloc_env();
+    ErlNifBinary bin;
+    size_t len = strlen(utf8);
+    enif_alloc_binary(len, &bin);
+    memcpy(bin.data, utf8, len);
+    ERL_NIF_TERM term = enif_make_binary(tmp, &bin);
+    mob_send_change(handle, term);
+    enif_free_env(tmp);
+}
+
+static void mob_send_change_bool(int handle, int bool_val) {
+    ErlNifEnv* tmp = enif_alloc_env();
+    ERL_NIF_TERM term = enif_make_atom(tmp, bool_val ? "true" : "false");
+    mob_send_change(handle, term);
+    enif_free_env(tmp);
+}
+
+static void mob_send_change_float(int handle, double value) {
+    ErlNifEnv* tmp = enif_alloc_env();
+    ERL_NIF_TERM term = enif_make_double(tmp, value);
+    mob_send_change(handle, term);
+    enif_free_env(tmp);
+}
+
 // ── JSON → MobNode parser ─────────────────────────────────────────────────────
 
 static UIColor* color_from_argb(long argb) {
@@ -69,12 +158,21 @@ static MobNode* mob_node_from_dict(NSDictionary* dict) {
     MobNode* node = [[MobNode alloc] init];
 
     NSString* type = dict[@"type"];
-    if      ([type isEqualToString:@"column"]) node.nodeType = MobNodeTypeColumn;
-    else if ([type isEqualToString:@"row"])    node.nodeType = MobNodeTypeRow;
+    if      ([type isEqualToString:@"column"])   node.nodeType = MobNodeTypeColumn;
+    else if ([type isEqualToString:@"row"])      node.nodeType = MobNodeTypeRow;
     else if ([type isEqualToString:@"text"] ||
-             [type isEqualToString:@"label"])  node.nodeType = MobNodeTypeLabel;
-    else if ([type isEqualToString:@"button"]) node.nodeType = MobNodeTypeButton;
-    else if ([type isEqualToString:@"scroll"]) node.nodeType = MobNodeTypeScroll;
+             [type isEqualToString:@"label"])    node.nodeType = MobNodeTypeLabel;
+    else if ([type isEqualToString:@"button"])   node.nodeType = MobNodeTypeButton;
+    else if ([type isEqualToString:@"scroll"])   node.nodeType = MobNodeTypeScroll;
+    else if ([type isEqualToString:@"box"])        node.nodeType = MobNodeTypeBox;
+    else if ([type isEqualToString:@"divider"])    node.nodeType = MobNodeTypeDivider;
+    else if ([type isEqualToString:@"spacer"])     node.nodeType = MobNodeTypeSpacer;
+    else if ([type isEqualToString:@"progress"])   node.nodeType = MobNodeTypeProgress;
+    else if ([type isEqualToString:@"text_field"]) node.nodeType = MobNodeTypeTextField;
+    else if ([type isEqualToString:@"toggle"])     node.nodeType = MobNodeTypeToggle;
+    else if ([type isEqualToString:@"slider"])     node.nodeType = MobNodeTypeSlider;
+    else if ([type isEqualToString:@"image"])      node.nodeType = MobNodeTypeImage;
+    else if ([type isEqualToString:@"lazy_list"])  node.nodeType = MobNodeTypeLazyList;
 
     NSDictionary* props = dict[@"props"];
     if ([props isKindOfClass:[NSDictionary class]]) {
@@ -93,10 +191,113 @@ static MobNode* mob_node_from_dict(NSDictionary* dict) {
         id textColor = props[@"text_color"];
         if (textColor) node.textColor = color_from_argb((long)[textColor longLongValue]);
 
+        id color = props[@"color"];
+        if (color) node.color = color_from_argb((long)[color longLongValue]);
+
+        id thickness = props[@"thickness"];
+        if (thickness) node.thickness = [thickness doubleValue];
+
+        id fixedSize = props[@"size"];
+        if (fixedSize) node.fixedSize = [fixedSize doubleValue];
+
+        id axis = props[@"axis"];
+        if ([axis isKindOfClass:[NSString class]]) node.axis = axis;
+
+        id showIndicator = props[@"show_indicator"];
+        if (showIndicator) node.showIndicator = [showIndicator boolValue];
+
+        id value = props[@"value"];
+        if (value) node.value = [value doubleValue];
+
         id onTap = props[@"on_tap"];
         if (onTap && [onTap isKindOfClass:[NSNumber class]]) {
             int handle = [onTap intValue];
             node.onTap = ^{ mob_send_tap(handle); };
+        }
+
+        id placeholder = props[@"placeholder"];
+        if (placeholder) node.placeholder = [placeholder isKindOfClass:[NSString class]] ? placeholder : [placeholder description];
+
+        id keyboardType = props[@"keyboard"];
+        if ([keyboardType isKindOfClass:[NSString class]]) node.keyboardTypeStr = keyboardType;
+
+        id returnKey = props[@"return_key"];
+        if ([returnKey isKindOfClass:[NSString class]]) node.returnKeyStr = returnKey;
+
+        id onFocus = props[@"on_focus"];
+        if (onFocus && [onFocus isKindOfClass:[NSNumber class]]) {
+            int handle = [onFocus intValue];
+            node.onFocus = ^{ mob_send_focus(handle); };
+        }
+
+        id onBlur = props[@"on_blur"];
+        if (onBlur && [onBlur isKindOfClass:[NSNumber class]]) {
+            int handle = [onBlur intValue];
+            node.onBlur = ^{ mob_send_blur(handle); };
+        }
+
+        id onSubmit = props[@"on_submit"];
+        if (onSubmit && [onSubmit isKindOfClass:[NSNumber class]]) {
+            int handle = [onSubmit intValue];
+            node.onSubmit = ^{ mob_send_submit(handle); };
+        }
+
+        id checked = props[@"value"];
+        if (checked && node.nodeType == MobNodeTypeToggle) {
+            // value is a boolean atom serialised as "true"/"false"
+            node.checked = [[checked description] isEqualToString:@"true"] ||
+                           ([checked isKindOfClass:[NSNumber class]] && [checked boolValue]);
+        }
+
+        id minVal = props[@"min"];
+        if (minVal) node.minValue = [minVal doubleValue];
+
+        id maxVal = props[@"max"];
+        if (maxVal) node.maxValue = [maxVal doubleValue];
+
+        id src = props[@"src"];
+        if ([src isKindOfClass:[NSString class]]) node.src = src;
+
+        id contentMode = props[@"content_mode"];
+        if ([contentMode isKindOfClass:[NSString class]]) node.contentModeStr = contentMode;
+
+        id fixedWidth = props[@"width"];
+        if (fixedWidth) node.fixedWidth = [fixedWidth doubleValue];
+
+        id fixedHeight = props[@"height"];
+        if (fixedHeight) node.fixedHeight = [fixedHeight doubleValue];
+
+        id cornerRadius = props[@"corner_radius"];
+        if (cornerRadius) node.cornerRadius = [cornerRadius doubleValue];
+
+        id placeholderColor = props[@"placeholder_color"];
+        if (placeholderColor) node.placeholderColor = color_from_argb((long)[placeholderColor longLongValue]);
+
+        id onEndReached = props[@"on_end_reached"];
+        if (onEndReached && [onEndReached isKindOfClass:[NSNumber class]]) {
+            int handle = [onEndReached intValue];
+            node.onTap = ^{ mob_send_tap(handle); };
+        }
+
+        // For slider, value is the initial position (re-uses node.value property)
+        // text_field initial text re-uses node.text property
+
+        id onChange = props[@"on_change"];
+        if (onChange && [onChange isKindOfClass:[NSNumber class]]) {
+            int handle = [onChange intValue];
+            switch (node.nodeType) {
+                case MobNodeTypeTextField:
+                    node.onChangeStr = ^(NSString* v) { mob_send_change_str(handle, [v UTF8String]); };
+                    break;
+                case MobNodeTypeToggle:
+                    node.onChangeBool = ^(BOOL v) { mob_send_change_bool(handle, (int)v); };
+                    break;
+                case MobNodeTypeSlider:
+                    node.onChangeFloat = ^(double v) { mob_send_change_float(handle, v); };
+                    break;
+                default:
+                    break;
+            }
         }
     }
 
@@ -111,10 +312,44 @@ static MobNode* mob_node_from_dict(NSDictionary* dict) {
     return node;
 }
 
+// ── NIF: exit_app/0 ──────────────────────────────────────────────────────────
+// iOS apps don't have a programmatic "exit" convention — the home gesture is
+// handled by the OS. This is intentionally a no-op; backgrounding on iOS
+// happens naturally when the user swipes up.
+
+static ERL_NIF_TERM nif_exit_app(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    return enif_make_atom(env, "ok");
+}
+
 // ── NIF: platform/0 ──────────────────────────────────────────────────────────
 
 static ERL_NIF_TERM nif_platform(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     return enif_make_atom(env, "ios");
+}
+
+// ── NIF: safe_area/0 ─────────────────────────────────────────────────────────
+// Returns {Top, Right, Bottom, Left} in logical points (not pixels).
+// Must read UIWindow.safeAreaInsets on the main thread.
+
+static ERL_NIF_TERM nif_safe_area(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    __block UIEdgeInsets insets = UIEdgeInsetsZero;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        UIWindow* window = nil;
+        for (UIScene* scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                UIWindowScene* ws = (UIWindowScene*)scene;
+                window = ws.windows.firstObject;
+                break;
+            }
+        }
+        if (window) insets = window.safeAreaInsets;
+    });
+    return enif_make_tuple4(env,
+        enif_make_double(env, insets.top),
+        enif_make_double(env, insets.right),
+        enif_make_double(env, insets.bottom),
+        enif_make_double(env, insets.left)
+    );
 }
 
 // ── NIF: log/1 ────────────────────────────────────────────────────────────────
@@ -255,6 +490,8 @@ static ErlNifFunc nif_funcs[] = {
     {"set_root",       1, nif_set_root,       0},
     {"register_tap",   1, nif_register_tap,   0},
     {"clear_taps",     0, nif_clear_taps,     0},
+    {"exit_app",       0, nif_exit_app,       0},
+    {"safe_area",      0, nif_safe_area,      0},
 };
 
 static int nif_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info) {

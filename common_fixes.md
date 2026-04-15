@@ -100,3 +100,169 @@ path against `File.cwd!()` (the Erlang process CWD, correctly set to the project
 
 **Fixed in**: `mob_dev/lib/mob_dev/deployer.ex` — both `deploy_ios/3` and
 `push_beams_android/2` now use `Path.expand(dir)` (2026-04-14).
+
+---
+
+## Android crash: OTP spawns local `epmd` that conflicts with ADB reverse tunnel
+
+**Symptom**: Distribution fails or crashes when `mix mob.connect` is active. OTP's
+`Node.start/2` tries to spawn a local `epmd` that also binds port 4369, conflicting
+with the ADB reverse tunnel listener (`adb reverse tcp:4369 tcp:4369`).
+
+**Root cause**: `mix mob.connect` runs `adb reverse tcp:4369 tcp:4369`, which creates a
+listener on device port 4369 forwarded to Mac EPMD. When `Node.start/2` is called, OTP
+attempts to spawn a local `epmd` daemon that also tries to bind port 4369 — conflicting
+with the ADB listener.
+
+**Fix**: Set `:kernel` env `start_epmd: false` before calling `Node.start/2`, which
+prevents OTP from spawning a local EPMD. Additionally, poll port 4369 before starting
+distribution — if the ADB tunnel isn't up (standalone launch, no `mix mob.connect`),
+skip distribution entirely rather than crashing. Timeout is 10 seconds.
+
+The polling also acts as a synchronization barrier: distribution only starts once the Mac
+EPMD is actually reachable, eliminating the timing race.
+
+If no EPMD appears within 10s, `Mob.Dist` logs:
+`"Mob.Dist: no EPMD on port 4369 after 10s — skipping dist (run mix mob.connect to enable)"`
+
+**Fixed in**: `mob/lib/mob/dist.ex` — `start_after/4` now calls `wait_for_epmd/1` and
+sets `start_epmd: false` before `Node.start/2` (2026-04-15).
+
+---
+
+## Android BEAM crashes every time after first deploy — `mix mob.connect` missing chcon
+
+**Symptom**: App works on first `mix mob.deploy` but crashes every subsequent time
+`mix mob.connect` relaunches it. Logcat shows:
+
+```
+E MobBeam: mob_start_beam: symlink erl_child_setup failed: Permission denied
+E MobBeam: mob_start_beam: symlink inet_gethost failed: Permission denied
+E MobBeam: mob_start_beam: symlink epmd failed: Permission denied
+W beam-main: avc: denied { search } scontext=u:r:untrusted_app:s0:c19,...
+                                    tcontext=u:object_r:app_data_file:s0:c2,...
+```
+
+And `files/erl_crash.dump` contains:
+```
+Slogan: Runtime terminating during boot ({undef,[{mob_demo,start,[],[]}, ...]})
+```
+
+Or a SIGABRT tombstone from inside `mob_start_beam`/`erl_start`.
+
+**Root cause (two-part)**:
+
+1. **SELinux MCS mismatch**: When the APK is installed/reinstalled, Android assigns the
+   package a pair of MCS categories (e.g. `c19,c257,c512,c768`). Files in `files/otp/`
+   pushed via `adb push` retain whatever category they had at push time (e.g. `c2`). The
+   app process runs with `c19` but the OTP directory has `c2` → SELinux denies access →
+   symlink creation fails → `erl_start` calls `abort()` → SIGABRT.
+   `mix mob.deploy` runs `chcon` to fix this, but `mix mob.connect` (which calls
+   `Android.restart_app`) did NOT run `chcon` before `am start`.
+
+2. **Missing `mob_demo/` BEAMs**: If only `mix mob.connect` (not `mix mob.deploy`) was
+   run, the app BEAM files in `files/otp/mob_demo/` may not exist. The BEAM starts but
+   `mob_demo:start()` is `undef` → clean OTP exit (not a crash signal, no auto-restart).
+
+**Fix**: Added `chcon -R $(stat -c %C .../files) .../files/otp` to `Android.restart_app`
+in `mob_dev/lib/mob_dev/discovery/android.ex`. Now both `mob.deploy` and `mob.connect`
+heal the SELinux labels before starting the app.
+
+**Fixed in**: `mob_dev/lib/mob_dev/discovery/android.ex` — `restart_app/4` now runs
+`chcon` before `am start` (2026-04-15).
+
+---
+
+## Android symlink permission denied after APK reinstall
+
+**Symptom**: App crashes on every launch after reinstalling the APK. Logcat shows:
+
+```
+E MobBeam: mob_start_beam: symlink erl_child_setup failed: Permission denied
+E MobBeam: mob_start_beam: symlink inet_gethost failed: Permission denied
+E MobBeam: mob_start_beam: symlink epmd failed: Permission denied
+```
+
+The BEAM never starts. The app appears to open but immediately goes blank.
+
+**Root cause**: Android assigns each app a pair of SELinux MCS categories (e.g.
+`c9,c257,c512,c768`). These are embedded in the labels on the app's data directory
+by `installd` at install time. When an APK is reinstalled, Android may assign a *new*
+category pair. Files already present in the data directory (pushed by `adb push`) retain
+their old categories. The process then can't access files labeled with a different category —
+SELinux MCS isolation blocks it even though both use the `app_data_file` type.
+
+Diagnosis — compare the process category with the file category:
+```
+# App's current category (from parent dir, always correct):
+adb shell ls -laZ /data/user/0/com.mob.demo/
+
+# OTP files' category (may be stale):
+adb shell ls -laZ /data/user/0/com.mob.demo/files/otp/erts-16.3/bin/erl_child_setup
+```
+A mismatch in the first MCS number (e.g. `c9` vs `c2`) is the tell.
+
+**Why `restorecon` doesn't fix it**: `restorecon` only restores the *type label*
+(`app_data_file`). MCS categories are not part of the file_contexts policy — they are
+set per-package by `installd` and `restorecon` leaves them unchanged.
+
+**Fix**: Use `chcon` to copy the correct context from the app's own `files/` directory
+(which `installd` always keeps correctly labeled) to the OTP tree:
+
+```bash
+# One-liner on device:
+chcon -R $(stat -c %C /data/user/0/com.mob.demo/files) /data/user/0/com.mob.demo/files/otp
+```
+
+In the deployer, this runs automatically via `restart_android` (before `am start`) and
+`push_beams_android` (after `adb push`).
+
+**Fixed in**: `mob_dev/lib/mob_dev/deployer.ex` — replaced both `restorecon` calls with
+`chcon -R $(stat -c %C <files_dir>) <otp_dir>` (2026-04-15).
+
+---
+
+## Android "screen wipe" when backgrounding / resuming the app
+
+**Symptom**: When the app is backgrounded and then resumed, the screen briefly goes
+black or white (a "wipe") for 1–2 frames before the UI reappears. The app content
+visually disappears and snaps back.
+
+**Root causes (two separate issues)**:
+
+1. **`Theme.NoTitleBar` white `windowBackground`**: The default system theme has a white
+   `windowBackground`. Android briefly shows the window background during the 1–2 frame
+   gap between recreating the window surface and Compose drawing the first frame on resume.
+   With a white background the flash is highly visible. Changing it to black makes it
+   imperceptible (matches the app's dark default background).
+
+2. **Missing `android:configChanges`**: Without this, any system configuration change
+   (rotation, font scale, display density, keyboard availability, etc.) destroys and
+   recreates the Activity. This calls `nativeStartBeam()` a second time on an already-
+   running BEAM — undefined behavior (likely crash or silent second BEAM instance).
+   Declaring all expected config changes prevents Activity recreation entirely; Compose
+   handles them in-process.
+
+**Fix**:
+
+1. Create `app/src/main/res/values/styles.xml`:
+   ```xml
+   <style name="AppTheme" parent="android:style/Theme.NoTitleBar">
+       <item name="android:windowBackground">@android:color/black</item>
+       <item name="android:windowAnimationStyle">@null</item>
+       <item name="android:windowNoTitle">true</item>
+   </style>
+   ```
+   (`windowAnimationStyle` is cleared so system window open/close slide animations
+   don't fight Compose's own nav transitions.)
+
+2. In `AndroidManifest.xml`:
+   - Change `android:theme` on `<application>` from `@android:style/Theme.NoTitleBar`
+     to `@style/AppTheme`
+   - Add to `<activity>`:
+     ```
+     android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|fontScale|density"
+     ```
+
+**Fixed in**: `mob_demo/android/app/src/main/res/values/styles.xml` (created) and
+`mob_demo/android/app/src/main/AndroidManifest.xml` — theme + configChanges (2026-04-15).
