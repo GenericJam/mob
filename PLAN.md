@@ -874,6 +874,44 @@ App (on device)                     Update server (Elixir)
 
 ## Nice to have
 
+### Mob.Bluetooth + Mob.NFC
+
+Device APIs following the same async `handle_info` pattern as `Mob.Camera` and
+`Mob.Location`. NIF implementation only — no special BEAM changes required.
+
+**`Mob.Bluetooth`** — BLE peripheral interaction (heart rate monitors, IoT
+sensors, custom peripherals). iOS CoreBluetooth / Android BluetoothLE.
+
+```elixir
+Mob.Bluetooth.scan(socket)
+# → {:bluetooth, :discovered, %{id: "AA:BB:...", name: "My Sensor", rssi: -62}}
+
+Mob.Bluetooth.connect(socket, "AA:BB:...")
+Mob.Bluetooth.read(socket, service_uuid, characteristic_uuid)
+# → {:bluetooth, :read, %{uuid: "...", value: <<0x42>>}}
+```
+
+BLE peripheral mode (phone advertises itself) is also worth supporting — it is
+a natural `Mob.Cluster` rendezvous mechanism: two phones exchange node name +
+session cookie over BLE, then form an Erlang distribution cluster over TCP
+without needing a server or shared WiFi network.
+
+**`Mob.NFC`** — read/write NFC tags, peer-to-peer exchange. iOS requires a
+background NFC entitlement for unsolicited reads; tag writing is more open.
+
+```elixir
+Mob.NFC.read(socket)
+# → {:nfc, :tag, %{type: :ndef, records: [%{type: "text/plain", data: "hello"}]}}
+
+Mob.NFC.write(socket, records)
+# → {:nfc, :written}
+```
+
+NFC tap-to-connect is the most ergonomic `Mob.Cluster` bootstrap: tap two
+phones together to exchange credentials, cluster forms automatically. Worth
+implementing `Mob.Cluster` first so the NFC and BLE rendezvous flows have
+something to connect to.
+
 ### Auth (`mix mob.gen.auth`)
 
 Inspired by `mix phx.gen.auth` — a generator that scaffolds a complete auth layer for the app based on what the developer wants. Uses Igniter for AST-aware code generation so it integrates cleanly with the existing project rather than overwriting files.
