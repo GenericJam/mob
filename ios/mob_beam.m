@@ -1,5 +1,7 @@
 // mob_beam.m — Mob BEAM launcher for iOS.
 // Extracted from the per-app beam_main.m stub so app code stays minimal.
+// mob_set_startup_phase/error are implemented in mob_nif.m (which imports the
+// Swift-generated header) so this file stays free of app-specific includes.
 
 #import <Foundation/Foundation.h>
 #include <stdlib.h>
@@ -19,6 +21,7 @@ void mob_init_ui(void) {
 }
 
 void mob_start_beam(const char* app_module) {
+    mob_set_startup_phase("Setting up BEAM environment…");
     setenv("BINDIR",   OTP_ROOT "/" ERTS_VSN "/bin", 1);
     setenv("ROOTDIR",  OTP_ROOT, 1);
     setenv("PROGNAME", "erl", 1);
@@ -72,8 +75,10 @@ void mob_start_beam(const char* app_module) {
     int ac = 0;
     while (args[ac]) ac++;
     NSLog(@"[MobBeam] mob_start_beam: starting BEAM module=%s argc=%d", app_module, ac);
+    mob_set_startup_phase("Starting BEAM…");
 
     void erl_start(int, char**);
     erl_start(ac, (char**)args);
+    mob_set_startup_error("BEAM exited unexpectedly — check /tmp/mob_erl_crash.dump");
     NSLog(@"[MobBeam] mob_start_beam: erl_start returned (unexpected)");
 }

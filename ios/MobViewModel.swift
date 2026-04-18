@@ -20,6 +20,10 @@ import Combine
     /// Transition type for the *next* root change. Read by MobRootView before
     /// calling withAnimation; not @Published to avoid spurious recompositions.
     public var transition: String = "none"
+    /// Current startup phase message shown while BEAM is initialising.
+    @Published public var startupPhase: String = "Starting…"
+    /// Non-nil when a fatal startup error has occurred; the error screen stalls here.
+    @Published public var startupError: String? = nil
 
     @objc public func setRoot(_ node: MobNode?, transition: String) {
         DispatchQueue.main.async {
@@ -30,6 +34,14 @@ import Combine
                 self.navVersion += 1
             }
         }
+    }
+
+    @objc public func setStartupPhase(_ phase: String) {
+        DispatchQueue.main.async { self.startupPhase = phase }
+    }
+
+    @objc public func setStartupError(_ error: String?) {
+        DispatchQueue.main.async { self.startupError = error }
     }
 }
 

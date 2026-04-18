@@ -36,6 +36,12 @@ void mob_init_bridge(JNIEnv* env, jobject activity);
 // app_module: Erlang module name, e.g. "mob_demo"
 void mob_start_beam(const char* app_module);
 
+// Update the startup status shown on screen while BEAM is initialising.
+// mob_set_startup_error stalls the screen with an error message (does not crash).
+// Both are safe to call from any thread; no-op if MobBridge lacks the method.
+void mob_set_startup_phase(const char* phase);
+void mob_set_startup_error(const char* error);
+
 // Global JVM pointer — defined in mob_beam.c, extern'd for mob_nif.c.
 extern JavaVM* g_jvm;
 extern jobject g_activity;

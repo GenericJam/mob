@@ -48,6 +48,9 @@ static struct {
     jmethodID notify_cancel;
     jmethodID notify_register_push;
     jmethodID take_launch_notification;
+    // Cached before nif_load (used during BEAM startup before NIFs are loaded)
+    jmethodID set_startup_phase;
+    jmethodID set_startup_error;
 } Bridge;
 
 // ── Tap handle registry ───────────────────────────────────────────────────────
@@ -203,7 +206,34 @@ void _mob_ui_cache_class_impl(JNIEnv* jenv, const char* bridge_class) {
     if (!cls) { LOGE("mob_ui_cache_class: %s not found", bridge_class); return; }
     Bridge.cls = (*jenv)->NewGlobalRef(jenv, cls);
     (*jenv)->DeleteLocalRef(jenv, cls);
+    // Cache startup status methods now — they're needed before nif_load runs.
+    // These are optional (older MobBridge versions may not have them); clear
+    // any pending exception rather than aborting.
+    Bridge.set_startup_phase = (*jenv)->GetStaticMethodID(jenv, Bridge.cls, "setStartupPhase", "(Ljava/lang/String;)V");
+    if (!Bridge.set_startup_phase) (*jenv)->ExceptionClear(jenv);
+    Bridge.set_startup_error  = (*jenv)->GetStaticMethodID(jenv, Bridge.cls, "setStartupError",  "(Ljava/lang/String;)V");
+    if (!Bridge.set_startup_error)  (*jenv)->ExceptionClear(jenv);
     LOGI("mob_ui_cache_class: %s cached OK", bridge_class);
+}
+
+void mob_set_startup_phase(const char* phase) {
+    if (!g_jvm || !Bridge.cls || !Bridge.set_startup_phase) return;
+    int att; JNIEnv* env = get_jenv(&att);
+    jstring js = (*env)->NewStringUTF(env, phase);
+    (*env)->CallStaticVoidMethod(env, Bridge.cls, Bridge.set_startup_phase, js);
+    (*env)->DeleteLocalRef(env, js);
+    if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
+    LOGI("startup: %s", phase);
+}
+
+void mob_set_startup_error(const char* error) {
+    if (!g_jvm || !Bridge.cls || !Bridge.set_startup_error) return;
+    int att; JNIEnv* env = get_jenv(&att);
+    jstring js = (*env)->NewStringUTF(env, error);
+    (*env)->CallStaticVoidMethod(env, Bridge.cls, Bridge.set_startup_error, js);
+    (*env)->DeleteLocalRef(env, js);
+    if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
+    LOGE("startup ERROR: %s", error);
 }
 
 // ── Initialize bridge with Activity (called from mob_beam.c) ─────────────────

@@ -1,6 +1,146 @@
 # Troubleshooting
 
+## Start here: mix mob.doctor
+
+Before diving into specific issues, run:
+
+```bash
+mix mob.doctor
+```
+
+This checks your entire environment in one go — required tools, `mob.exs`
+configuration, OTP runtime caches, and connected devices — and prints specific
+fix instructions for anything wrong. Most setup problems are caught here.
+
+```
+=== Mob Doctor ===
+
+Tools
+  ✓ adb — /usr/bin/adb
+  ✗ xcrun — not found
+      Install Xcode command-line tools:
+      xcode-select --install
+
+Project
+  ✗ mob_dir — path not found: /Users/you/old/path/to/mob
+      Update mob.exs — the path must exist on this machine
+
+OTP Cache
+  ✗ OTP iOS simulator — directory exists but contains no erts-* — extraction was incomplete
+      Remove the stale directory and re-download:
+      rm -rf ~/.mob/cache/otp-ios-sim-73ba6e0f
+      mix mob.install
+
+Devices
+  ⚠ Android devices — none connected
+      Connect a device via USB (enable USB debugging) or start an emulator
+
+3 failures — fix the issues above and re-run mix mob.doctor.
+```
+
+The sections below cover issues that `mix mob.doctor` doesn't catch — runtime
+behaviour, distribution quirks, and platform-specific edge cases.
+
+---
+
 Common issues encountered during development and how to resolve them.
+
+## Elixir or Hex version too old
+
+**Symptom:** `mix deps.get` or `mix mob.install` fails with errors like
+`no matching version found`, `invalid requirement`, or dependency resolution
+failures that look unrelated to your code.
+
+**Cause:** Mob requires Elixir 1.18 or later. Older versions of Hex (pre-2.0)
+also have issues resolving some package requirements used by `mob_dev`.
+
+**Check:**
+
+```bash
+mix mob.doctor   # shows Elixir, OTP, and Hex versions with ✓/✗
+elixir --version
+mix hex --version
+```
+
+**Fix — Hex** (fast, no version manager needed):
+
+```bash
+mix local.hex --force
+```
+
+**Fix — Elixir** (choose the method that matches how you installed it):
+
+```bash
+# mise
+mise install elixir@latest && mise use elixir@latest
+
+# asdf
+asdf install elixir latest && asdf global elixir latest
+
+# Homebrew
+brew upgrade elixir
+
+# Nix / nix-shell: update your shell.nix or flake.nix to use elixir_1_18
+
+# Official installer: https://elixir-lang.org/install.html
+```
+
+After upgrading, re-fetch deps:
+
+```bash
+mix deps.get
+mix mob.doctor   # confirm versions are green
+```
+
+---
+
+## OTP cache: "No erts-* directory found"
+
+**Symptom:** `mix mob.deploy --native` fails with:
+
+```
+ERROR: No erts-* directory found in ~/.mob/cache/otp-ios-sim-73ba6e0f
+       Have you built OTP for iOS simulator?
+```
+
+**Cause:** The OTP cache directory was created during a previous download attempt
+that failed partway through (network error, SSL failure, or curl exiting non-zero).
+Because the directory exists, subsequent runs skip re-downloading, so the problem
+persists across restarts.
+
+This is particularly common on **Nix-managed macOS** setups, where Nix provides
+its own `curl` binary that uses a different CA certificate store than macOS system
+curl. The GitHub release download may fail with an SSL certificate error that isn't
+surfaced clearly.
+
+**Fix:**
+
+```bash
+mix mob.doctor   # confirms the problem and shows the exact path
+
+rm -rf ~/.mob/cache/otp-ios-sim-73ba6e0f   # remove stale cache
+mix mob.install                             # re-download
+```
+
+If the download fails again (Nix curl SSL), download the tarball manually using
+the system curl:
+
+```bash
+/usr/bin/curl -L https://github.com/GenericJam/mob/releases/download/otp-73ba6e0f/otp-ios-sim-73ba6e0f.tar.gz \
+  -o /tmp/otp-ios-sim.tar.gz
+
+mkdir -p ~/.mob/cache/otp-ios-sim-73ba6e0f
+tar xzf /tmp/otp-ios-sim.tar.gz -C ~/.mob/cache/otp-ios-sim-73ba6e0f --strip-components=1
+```
+
+Verify it worked:
+
+```bash
+ls ~/.mob/cache/otp-ios-sim-73ba6e0f/erts-*   # should list erts-16.x
+mix mob.doctor                                  # should show ✓ for iOS simulator OTP
+```
+
+---
 
 ## EPMD port conflict with adb (port 4369)
 

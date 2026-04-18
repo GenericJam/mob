@@ -41,6 +41,51 @@ mix mob.install
 
 This fetches Elixir dependencies and downloads the pre-built OTP runtime for your target platform(s). The OTP download is platform-specific (iOS simulator or Android ARM64) and may take a few minutes the first time.
 
+## Verify your environment
+
+```bash
+mix mob.doctor
+```
+
+`mix mob.doctor` checks that every required tool is installed, your `mob.exs` is correctly configured, the OTP runtimes were downloaded and extracted properly, and at least one device or simulator is visible. Run it any time something isn't working — it prints specific fix instructions for each issue it finds:
+
+```
+=== Mob Doctor ===
+
+Tools
+  ✓ Elixir — 1.18.3
+  ✓ OTP — 28 (ERTS 16.3)
+  ✓ Hex — 2.1.1
+  ✓ adb — /usr/bin/adb
+  ✓ xcrun — Xcode 15.4 Build version 15F31d
+  ✓ java — openjdk version "21.0.2" 2024-01-16
+  ✓ Android SDK — /Users/you/Library/Android/sdk
+  ✓ python3 — /usr/bin/python3
+  ✓ rsync — /usr/bin/rsync
+  ⚠ ideviceinfo — not found (optional, needed for iOS physical device battery benchmarks)
+      brew install libimobiledevice
+
+Project
+  ✓ mob.exs — found
+  ✓ mob_dir — /Users/you/code/mob
+
+Build
+  ✓ mix deps — 42 deps fetched
+  ✓ compiled — 680 BEAMs in 12 lib(s)
+
+OTP Cache
+  ✓ OTP Android — otp-android-73ba6e0f (erts-16.3)
+  ✓ OTP iOS simulator — otp-ios-sim-73ba6e0f (erts-16.3)
+
+Devices
+  ✓ Android devices — Pixel 8 (emulator-5554)
+  ✓ iOS simulator — iPhone 16 Pro (A1B2-...)
+
+1 warning — optional items above may limit some features.
+```
+
+If `mix mob.doctor` shows failures, fix them before continuing. See [Troubleshooting](troubleshooting.md) for detailed solutions.
+
 ## Run on simulator / emulator
 
 `mix mob.deploy` compiles your Elixir code and pushes it to the running app. With `--native` it also rebuilds and reinstalls the full native binary. Without `--native` it hot-upgrades only the BEAM bytecode over a live IEx connection — no rebuild required.
@@ -108,11 +153,12 @@ Mob.Test.assigns(:"my_app_ios@127.0.0.1")
 Edit a screen module, then push the new bytecode to the running app without restarting:
 
 ```bash
-# Recompile and push one module (run in a terminal, not inside IEx)
-mix compile && nl(MyApp.HomeScreen)
+mix mob.push
 ```
 
-`nl/1` is an IEx helper that loads a freshly compiled module onto all connected nodes. The screen updates instantly.
+`mix mob.push` compiles your project and loads every changed module into the live BEAM on all connected devices — no app restart. The screen updates instantly.
+
+Use `mix mob.push --all` to force-push every module rather than just those that changed.
 
 ## Your first screen
 

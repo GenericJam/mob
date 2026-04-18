@@ -26,6 +26,20 @@
 #define LOGI(...) NSLog(@"[MobNIF] " __VA_ARGS__)
 #define LOGE(...) NSLog(@"[MobNIF][ERROR] " __VA_ARGS__)
 
+// ── Startup status (declared in mob_beam.h, called from mob_beam.m) ───────────
+// Implemented here rather than in mob_beam.m because this file is compiled with
+// -I $BUILD_DIR so it can import the Swift-generated MobApp-Swift.h header.
+
+void mob_set_startup_phase(const char* phase) {
+    NSLog(@"[MobBeam] startup: %s", phase);
+    [MobViewModel.shared setStartupPhase:[NSString stringWithUTF8String:phase]];
+}
+
+void mob_set_startup_error(const char* error) {
+    NSLog(@"[MobBeam] ERROR: %s", error);
+    [MobViewModel.shared setStartupError:[NSString stringWithUTF8String:error]];
+}
+
 // ── Tap handle registry ───────────────────────────────────────────────────────
 // Cleared before every render. Max 256 tappable elements per frame.
 

@@ -64,9 +64,13 @@ socket.assigns   # live assigns
 
 ### Hot code push
 
-```elixir
-# After editing a screen:
-mix compile && nl(MobDemo.CounterScreen)
+```bash
+# After editing a screen (from the terminal):
+mix mob.push          # compile + push all changed modules to all connected devices
+mix mob.push --all    # force-push every module
+
+# Or from inside IEx (after mob.connect), one module at a time:
+nl(MobDemo.CounterScreen)
 # Returns: {:ok, [{:"mob_demo@127.0.0.1", :loaded, MobDemo.CounterScreen}]}
 ```
 
@@ -121,6 +125,13 @@ mix test          # from ~/code/mob
 
 See [`common_fixes.md`](common_fixes.md) for a running log of diagnosed bugs and their
 fixes — consult it first when hitting silent crashes or unexpected BEAM behavior.
+
+## User issues log
+
+See [`user_issues.md`](user_issues.md) for a record of real issues encountered by
+beta users, their root causes, and fixes applied. Read this before working on setup,
+deployment, or tooling problems — the same issues recur, especially for Nix users.
+User alias "Nova" = macOS + Nix-managed toolchain throughout.
 
 ## Key files
 

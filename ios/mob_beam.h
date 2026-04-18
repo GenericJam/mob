@@ -12,6 +12,12 @@ void mob_init_ui(void);
 // app_module: Erlang module name, e.g. "mob_demo"
 void mob_start_beam(const char* app_module);
 
+// Update the startup status shown on screen while BEAM is initialising.
+// mob_set_startup_error stalls the screen with an error message (does not crash).
+// Both are safe to call from any thread.
+void mob_set_startup_phase(const char* phase);
+void mob_set_startup_error(const char* error);
+
 // Call from AppDelegate didRegisterForRemoteNotificationsWithDeviceToken
 // to forward the APNs device token to the BEAM as {:push_token, :ios, hex_string}.
 // Convert the raw NSData to a hex string before calling.

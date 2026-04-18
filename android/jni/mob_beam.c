@@ -68,6 +68,7 @@ void mob_start_beam(const char* app_module) {
     LOGI("mob_start_beam: NO_BEAM defined, skipping BEAM launch (battery baseline)");
     return;
 #endif
+    mob_set_startup_phase("Setting up BEAM environment…");
     // Build all paths dynamically from s_files_dir (set in mob_init_bridge).
     char otp_root[560];
     snprintf(otp_root, sizeof(otp_root), "%s/otp", s_files_dir);
@@ -201,6 +202,7 @@ void mob_start_beam(const char* app_module) {
     //     (needs_detach == 0) we skip both Attach and Detach.  Only a purely
     //     native thread that was never attached would set needs_detach == 1.
     if (g_jvm && g_activity) {
+        mob_set_startup_phase("Waiting for window focus…");
         JNIEnv* env2 = NULL;
         int needs_detach = ((*g_jvm)->GetEnv(g_jvm, (void**)&env2, JNI_VERSION_1_6) != JNI_OK);
         if (needs_detach)
@@ -225,6 +227,7 @@ void mob_start_beam(const char* app_module) {
     }
     // ── end cold-start race condition fix ────────────────────────────────────
 
+    mob_set_startup_phase("Starting BEAM…");
     LOGI("mob_start_beam: starting BEAM with module=%s, argc=%d", app_module, ac);
 
     // Symlink ERTS executables from BINDIR to the native lib dir.
@@ -254,5 +257,6 @@ void mob_start_beam(const char* app_module) {
 
     void erl_start(int, char**);
     erl_start(ac, (char**)args);
+    mob_set_startup_error("BEAM exited unexpectedly — see logcat (tag: MobBeam) for details");
     LOGE("mob_start_beam: erl_start returned (unexpected)");
 }
