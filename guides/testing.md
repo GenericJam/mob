@@ -137,17 +137,18 @@ Mob.Test.send_message(node, {:scan, :result, %{type: :qr, value: "https://exampl
 Mob.Test.send_message(node, {:my_event, %{key: "value"}})
 ```
 
-`send_message/2` is fire-and-forget. Use `:sys.get_state` as a sync point if you need to wait before reading state:
+`send_message/2` is fire-and-forget. Use `:sys.get_state` as a sync point if you need to wait before reading state. Pass the screen pid retrieved via `Mob.Test`:
 
 ```elixir
 Mob.Test.send_message(node, {:permission, :camera, :granted})
-:rpc.call(node, :sys, :get_state, [:mob_screen])  # wait for handle_info to finish
+pid = Mob.Test.screen_pid(node)
+:rpc.call(node, :sys, :get_state, [pid])  # blocks until the GenServer is idle
 Mob.Test.assigns(node)
 ```
 
 ### Native UI interaction
 
-`Mob.Test.tap_native/1` locates an element via the iOS accessibility tree and sends a real touch event. Requires `idb`.
+`Mob.Test.tap_native/1` locates an element via the iOS accessibility tree and sends a real touch event. **iOS only.** Requires `idb` — install it with `brew install facebook/fb/idb-companion`.
 
 ```elixir
 Mob.Test.tap_native("Increment")   # by visible text
@@ -157,7 +158,7 @@ Mob.Test.locate("Increment")
 #=> {:ok, %{x: 0.0, y: 412.0, width: 402.0, height: 44.0}}
 ```
 
-Use `tap_native/1` when you need to test the native gesture path. Prefer `tap/2` for testing Elixir logic.
+Use `tap_native/1` when you need to test the native gesture path end-to-end. Prefer `tap/2` for testing Elixir logic — it's faster, works on both platforms, and doesn't require `idb`.
 
 ## Hot code push in development
 

@@ -86,7 +86,9 @@ Mob ships three built-in themes:
 - **`Mob.Theme.Citrus`** — warm background with lime-green primary
 - **`Mob.Theme.Birch`** — warm neutral tones, brown accents
 
-Set the theme in your app module:
+There are two ways to set a theme:
+
+**At startup** — pass it to `use Mob.App`. This sets the theme before any screen mounts:
 
 ```elixir
 defmodule MyApp do
@@ -94,6 +96,22 @@ defmodule MyApp do
   ...
 end
 ```
+
+**At runtime** — call `Mob.Theme.set/1` from `mount/3` or any event handler. Use this when you want the user to be able to switch themes:
+
+```elixir
+def mount(_params, _session, socket) do
+  Mob.Theme.set(Mob.Theme.Obsidian)
+  {:ok, Mob.Socket.assign(socket, :theme, :obsidian)}
+end
+
+def handle_info({:tap, :theme_citrus}, socket) do
+  Mob.Theme.set(Mob.Theme.Citrus)
+  {:noreply, Mob.Socket.assign(socket, :theme, :citrus)}
+end
+```
+
+`Mob.Theme.set/1` is global — it applies to all screens on the next render. If your app only ever uses one theme, the `use Mob.App` option is sufficient and you don't need to call `Mob.Theme.set/1`.
 
 ## Overriding individual tokens
 

@@ -18,7 +18,7 @@ Mob does not wrap a web renderer — you are writing directly to SwiftUI and Com
 | `:toggle` | `Toggle` | `Switch` inside a `Row` |
 | `:slider` | `Slider` | `Slider` |
 | `:divider` | `Divider` | `HorizontalDivider` |
-| `:spacer` | `Spacer().frame(minHeight:, maxHeight:)` | `Spacer(modifier = Modifier.height())` |
+| `:spacer` | `Spacer().frame(minWidth:, minHeight:)` | `Spacer(modifier = Modifier.size())` |
 | `:progress` | `ProgressView()` (indeterminate spinner) | `CircularProgressIndicator` |
 | `:image` | `AsyncImage` | `AsyncImage` (Coil) |
 | `:lazy_list` | `ScrollView` + `LazyVStack` | `LazyColumn` |
@@ -59,7 +59,7 @@ On both platforms, background is applied **before** padding so the color fills t
 | `text_size` | `Font.system(size:)` | `fontSize =` | Number (sp/pt) or size token (`:base`, `:xl`, etc.) |
 | `font_weight` | `Font.weight(_:)` | `fontWeight =` | `"bold"`, `"semibold"`, `"medium"`, `"regular"`, `"light"`, `"thin"` |
 | `italic` | `.italic()` | `fontStyle = FontStyle.Italic` | Boolean |
-| `text_align` | `.multilineTextAlignment()` + `.frame(alignment:)` | `textAlign =` | `:left` / `:center` / `:right` |
+| `text_align` | `.multilineTextAlignment()` + `.frame(alignment:)` | `textAlign =` | `"left"` / `"center"` / `"right"` (default: `"left"`) |
 | `letter_spacing` | `.tracking(_:)` | `letterSpacing =` | Float (sp/pt) |
 | `line_height` | `.lineSpacing(_:)` (derived as `(multiplier - 1.0) × size`) | `lineHeight =` | Float multiplier (e.g. `1.5` = 150%) |
 | `font` | `Font.custom(name, size:)` | `FontFamily` loaded from assets | PostScript name on iOS; lowercase+underscore filename on Android. Falls back to system font if not found. |
@@ -226,6 +226,29 @@ The renderer injects these defaults for missing styling props. Explicit props al
 | `:progress` | `color: :primary` |
 
 All other components have no injected defaults — unstyled components use the platform's own defaults.
+
+---
+
+## Toggle and slider props
+
+### `:toggle`
+
+| Prop | iOS | Android |
+|---|---|---|
+| `label` | `Toggle(label, isOn:)` — label text | `Text` inside a `Row` beside `Switch` |
+| `value` | `isOn` binding initial value | `checked` state |
+| `on_change` | `.onChange(of: isOn)` → NIF | `onCheckedChange` → NIF |
+| `color` | `.tint(Color)` | `SwitchDefaults.colors(checkedThumbColor:)` |
+
+### `:slider`
+
+| Prop | iOS | Android |
+|---|---|---|
+| `value` | Initial `Slider` value | `value` state |
+| `min` | `in: min...max` range lower bound | `valueRange` lower bound |
+| `max` | `in: min...max` range upper bound | `valueRange` upper bound |
+| `on_change` | `.onChange(of: value)` → NIF | `onValueChange` → NIF |
+| `color` | `.tint(Color)` | `SliderDefaults.colors(thumbColor:, activeTrackColor:)` |
 
 ---
 

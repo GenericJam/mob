@@ -4,10 +4,10 @@ This guide walks you through creating a new Mob app from scratch, running it on 
 
 ## Prerequisites
 
-- Elixir 1.18 or later
+- Elixir 1.18 or later (with Hex: `mix local.hex`)
 - `mob_new` installed globally: `mix archive.install hex mob_new`
-- For iOS: Xcode 15+ and the iOS simulator
-- For Android: Android Studio with an AVD (Android Virtual Device)
+- For iOS: Xcode 15+ with the iOS Simulator
+- For Android: Android Studio Hedgehog or later with an AVD (Android Virtual Device) configured
 
 ## Create a new app
 
@@ -27,29 +27,61 @@ my_app/
 │   └── my_app/
 │       └── home_screen.ex # Your first screen
 ├── ios/
-│   └── MyApp.xcodeproj    # Open in Xcode to build and run
+│   └── build.sh           # iOS build script
 ├── android/
-│   └── app/               # Open in Android Studio
+│   └── app/               # Android project
 └── mix.exs
 ```
 
-## Run on iOS simulator
+## Install dependencies
 
 ```bash
-# Build and launch in the booted iOS simulator
-mix mob.deploy --ios
+mix mob.install
 ```
 
-Or open `ios/MyApp.xcodeproj` in Xcode, select a simulator, and press Run.
+This fetches Elixir dependencies and downloads the pre-built OTP runtime for your target platform(s). The OTP download is platform-specific (iOS simulator or Android ARM64) and may take a few minutes the first time.
 
-## Run on Android emulator
+## Run on simulator / emulator
+
+`mix mob.deploy` compiles your Elixir code and pushes it to the running app. With `--native` it also rebuilds and reinstalls the full native binary. Without `--native` it hot-upgrades only the BEAM bytecode over a live IEx connection — no rebuild required.
+
+Use `--ios` or `--android` to target a single platform; omit both to deploy to all connected devices.
+
+> **Physical devices:** Android devices must have Developer Options and USB Debugging enabled and be connected via USB for the initial deploy. After the first install, wireless debugging works. iOS is similar — trust the Mac on first connection.
+
+### iOS simulator
 
 ```bash
-# Build and launch in the running Android emulator
-mix mob.deploy --android
+mix mob.deploy --native --ios
+```
+
+Or open `ios/` in Xcode, select a simulator, and press Run.
+
+### Android emulator
+
+```bash
+mix mob.deploy --native --android
 ```
 
 Or open the `android/` folder in Android Studio and press Run.
+
+## Use the dev server for live debugging
+
+```bash
+iex -S mix mob.server
+```
+
+Without `iex`:
+
+```bash
+mix mob.server
+```
+
+This starts the Mob dev server and opens a dashboard at `http://localhost:4040`.
+
+The dashboard shows each connected device (Android emulator and iOS simulator side by side), with **Update** and **First Deploy** buttons for each. Below the device cards is a live log panel that streams BEAM output from every connected device in real time — useful for watching startup, crashes, and `IO.inspect` output without leaving the browser.
+
+![Mob Dev dashboard showing two connected devices and live BEAM logs](../assets/mob_dev_dashboard.png)
 
 ## Connect a live IEx session
 
@@ -73,52 +105,22 @@ Mob.Test.assigns(:"my_app_ios@127.0.0.1")
 
 ## Hot-push a code change
 
-Edit a screen module, recompile, and push the new bytecode to the running app:
+Edit a screen module, then push the new bytecode to the running app without restarting:
 
 ```bash
-# In the terminal (not inside IEx):
+# Recompile and push one module (run in a terminal, not inside IEx)
 mix compile && nl(MyApp.HomeScreen)
 ```
 
-The screen updates instantly. No restart, no rebuild.
+`nl/1` is an IEx helper that loads a freshly compiled module onto all connected nodes. The screen updates instantly.
 
 ## Your first screen
 
-A minimal screen:
+A screen module looks like this:
 
 ```elixir
 defmodule MyApp.HomeScreen do
   use Mob.Screen
-
-  def mount(_params, _session, socket) do
-    {:ok, Mob.Socket.assign(socket, :count, 0)}
-  end
-
-  def render(assigns) do
-    %{
-      type: :column,
-      props: %{padding: 24, gap: 16},
-      children: [
-        %{type: :text, props: %{text: "Count: #{assigns.count}", text_size: :xl}, children: []},
-        %{type: :button, props: %{text: "Tap me", on_tap: {self(), :increment}}, children: []}
-      ]
-    }
-  end
-
-  def handle_info({:tap, :increment}, socket) do
-    {:noreply, Mob.Socket.assign(socket, :count, socket.assigns.count + 1)}
-  end
-
-  def handle_info(_message, socket), do: {:noreply, socket}
-end
-```
-
-The same screen written with the `~MOB` sigil is identical at runtime:
-
-```elixir
-defmodule MyApp.HomeScreen do
-  use Mob.Screen
-  import Mob.Sigil
 
   def mount(_params, _session, socket) do
     {:ok, Mob.Socket.assign(socket, :count, 0)}
@@ -128,7 +130,7 @@ defmodule MyApp.HomeScreen do
     ~MOB"""
     <Column padding={24} gap={16}>
       <Text text={"Count: #{assigns.count}"} text_size={:xl} />
-      <Button text="Tap me" on_tap={{self(), :increment}} />
+      <Button text="Tap me" on_tap={tap(:increment)} />
     </Column>
     """
   end
@@ -141,7 +143,7 @@ defmodule MyApp.HomeScreen do
 end
 ```
 
-`mount/3` initialises assigns. `render/1` returns the component tree — as a plain map or via the `~MOB` sigil, your choice. `handle_info/2` updates assigns in response to user interaction. After each callback that returns a modified socket, the framework calls `render/1` again and pushes the diff to the native layer.
+`mount/3` initialises assigns. `render/1` returns the component tree via the `~MOB` sigil (imported automatically by `use Mob.Screen`). `handle_info/2` updates assigns in response to user interaction. After each callback that returns a modified socket, the framework calls `render/1` again and pushes the diff to the native layer.
 
 ## App entry point
 
@@ -171,3 +173,4 @@ end
 - [Theming](theming.md) — color tokens, named themes, runtime switching
 - [Device Capabilities](device_capabilities.md) — camera, location, haptics, notifications
 - [Testing](testing.md) — unit tests and live device inspection
+- [Troubleshooting](troubleshooting.md) — if something isn't working, start here

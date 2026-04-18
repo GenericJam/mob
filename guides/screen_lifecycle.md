@@ -38,64 +38,20 @@ If `mount/3` returns `{:error, reason}`, the GenServer stops with that reason.
 
 Returns the component tree as a plain Elixir map. Called after every callback that returns a modified socket. The renderer serialises the tree, resolves tokens, and calls the NIF — Compose or SwiftUI diffs and updates the display.
 
-Keep `render/1` pure. No side effects, no process sends. It may be called more than once for a given state.
+The `~MOB` sigil (imported automatically by `use Mob.Screen`) compiles to the same maps at compile time:
 
 ```elixir
 def render(assigns) do
-  %{
-    type: :column,
-    props: %{padding: :space_md, background: :background},
-    children: [
-      %{type: :text,   props: %{text: assigns.title, text_size: :xl, text_color: :on_background}, children: []},
-      %{type: :button, props: %{text: "Save",        on_tap: {self(), :save}},                    children: []}
-    ]
-  }
+  ~MOB"""
+  <Column padding={:space_md} background={:background}>
+    <Text text={assigns.title} text_size={:xl} text_color={:on_background} />
+    <Button text="Save" on_tap={{self(), :save}} />
+  </Column>
+  """
 end
 ```
 
-### `handle_event/3`
-
-```elixir
-@callback handle_event(event :: String.t(), params :: map(), socket :: Mob.Socket.t()) ::
-  {:noreply, Mob.Socket.t()} | {:reply, map(), socket :: Mob.Socket.t()}
-```
-
-Fires when the user interacts with a UI component. The `event` string and `params` map come from the native layer.
-
-For tap events, the event is `"tap"` and params include `"tag"` when you used a tagged `on_tap`:
-
-```elixir
-# In render:
-on_tap: {self(), :save}
-
-# In handle_event:
-def handle_event("tap", %{"tag" => "save"}, socket) do
-  save_data(socket.assigns)
-  {:noreply, socket}
-end
-```
-
-For text fields, `on_change` fires with `%{"value" => new_text}`:
-
-```elixir
-# In render:
-on_change: {self(), :name_changed}
-
-# In handle_event:
-def handle_event("tap", %{"tag" => "name_changed", "value" => value}, socket) do
-  {:noreply, Mob.Socket.assign(socket, :name, value)}
-end
-```
-
-The default implementation (from `use Mob.Screen`) raises for any unhandled event. Add `handle_event/3` clauses for every interaction your screen supports.
-
-Navigation is triggered by returning a modified socket:
-
-```elixir
-def handle_event("tap", %{"tag" => "open_detail"}, socket) do
-  {:noreply, Mob.Socket.push_screen(socket, MyApp.DetailScreen, %{id: socket.assigns.id})}
-end
-```
+Keep `render/1` pure. No side effects, no process sends. It may be called more than once for a given state.
 
 ### `handle_info/2`
 
@@ -104,17 +60,37 @@ end
   {:noreply, Mob.Socket.t()}
 ```
 
-Handles all other messages sent to the screen process — results from device APIs, push notifications, PubSub broadcasts, timer messages, and anything sent via `send/2`.
+The primary callback for responding to user interaction and async results. All UI events — taps, text changes, list selections — arrive here as messages sent by the NIF directly to the screen process.
 
-Device APIs are always async: call the API, then handle the result in `handle_info/2`:
+**Tap events** are delivered as `{:tap, tag}` where `tag` is the second element of the `on_tap: {pid, tag}` tuple you specified in `render/1`:
 
 ```elixir
-def handle_event("tap", %{"tag" => "take_photo"}, socket) do
-  # Request permission first if not already granted
-  socket = Mob.Camera.capture_photo(socket)
+# In render:
+~MOB(<Button text="Save" on_tap={tap} />) # where tap = {self(), :save}
+
+# In handle_info:
+def handle_info({:tap, :save}, socket) do
+  save_data(socket.assigns)
   {:noreply, socket}
 end
+```
 
+**Text field changes** arrive as `{:change, tag, value}`:
+
+```elixir
+# In render — pre-compute the handler tuple:
+name_change = {self(), :name_changed}
+~MOB(<TextField value={assigns.name} on_change={name_change} />)
+
+# In handle_info:
+def handle_info({:change, :name_changed, value}, socket) do
+  {:noreply, Mob.Socket.assign(socket, :name, value)}
+end
+```
+
+**Device API results** also arrive here — see [Device Capabilities](device_capabilities.md):
+
+```elixir
 def handle_info({:camera, :photo, %{path: path}}, socket) do
   {:noreply, Mob.Socket.assign(socket, :photo_path, path)}
 end
@@ -124,7 +100,41 @@ def handle_info({:camera, :cancelled}, socket) do
 end
 ```
 
-The default implementation (from `use Mob.Screen`) is a no-op that returns the socket unchanged. Override only the messages you care about.
+Navigation is triggered by returning a modified socket:
+
+```elixir
+def handle_info({:tap, :open_detail}, socket) do
+  {:noreply, Mob.Socket.push_screen(socket, MyApp.DetailScreen, %{id: socket.assigns.id})}
+end
+```
+
+The default implementation (from `use Mob.Screen`) is a no-op that returns the socket unchanged. Always add a catch-all clause to handle messages you don't care about:
+
+```elixir
+def handle_info(_message, socket), do: {:noreply, socket}
+```
+
+### `handle_event/3`
+
+```elixir
+@callback handle_event(event :: String.t(), params :: map(), socket :: Mob.Socket.t()) ::
+  {:noreply, Mob.Socket.t()} | {:reply, map(), socket :: Mob.Socket.t()}
+```
+
+Dispatched programmatically via `Mob.Screen.dispatch/3` — used in tests to send string-keyed events to a screen process. Not called for normal UI interactions (those go through `handle_info/2`).
+
+```elixir
+# In tests:
+Mob.Screen.dispatch(pid, "increment", %{})
+Mob.Screen.dispatch(pid, "tap", %{"tag" => "save"})
+
+# In the screen:
+def handle_event("increment", _params, socket) do
+  {:noreply, Mob.Socket.assign(socket, :count, socket.assigns.count + 1)}
+end
+```
+
+The default implementation (from `use Mob.Screen`) raises for any unhandled event, so only define clauses for events you explicitly dispatch.
 
 ### `terminate/2`
 
@@ -147,7 +157,9 @@ start_root/2 or push_screen/2
         ▼                                                  │
    render/1  ─ NIF set_root / set_view                    │
         │                                                  │
-        ├── user taps button ────► handle_event/3 ──► render/1
+        ├── user taps button ────► handle_info/2  ──► render/1
+        │                                                  │
+        ├── text field change ───► handle_info/2  ──► render/1
         │                                                  │
         ├── device API result ───► handle_info/2  ──► render/1
         │                                                  │
@@ -186,11 +198,13 @@ Use it to avoid content being obscured by the notch, home indicator, or status b
 ```elixir
 def render(assigns) do
   sa = assigns.safe_area
-  %{
-    type: :column,
-    props: %{padding_top: sa.top, padding_bottom: sa.bottom},
-    children: [...]
-  }
+  top    = {self(), :top}
+  bottom = {self(), :bottom}
+  ~MOB"""
+  <Column padding_top={sa.top} padding_bottom={sa.bottom}>
+    ...
+  </Column>
+  """
 end
 ```
 

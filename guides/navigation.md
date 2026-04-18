@@ -148,14 +148,17 @@ The framework automatically picks the right animation based on the navigation ac
 
 ## Passing data on pop
 
-Mob's navigation is process-based. When you pop back to a previous screen, that screen's process is still running with its original state. To pass data back, send a message:
+Mob's navigation is process-based. When you pop back to a previous screen, that screen's process is still running with its original state. To pass data back, send a message to the parent's pid.
+
+Pass the parent pid as a param when pushing:
 
 ```elixir
-# In the detail screen, before popping:
-def handle_event("tap", %{"tag" => "save"}, socket) do
-  # Send result to the previous screen's process
-  send(socket.__mob__.parent_pid, {:saved, socket.assigns.item})
-  {:noreply, Mob.Socket.pop_screen(socket)}
+# In the parent screen — pass self() so the child can reply:
+def handle_info({:tap, :open_detail}, socket) do
+  {:noreply, Mob.Socket.push_screen(socket, MyApp.DetailScreen, %{
+    id:         socket.assigns.selected_id,
+    parent_pid: self()
+  })}
 end
 
 # In the parent screen's handle_info:
@@ -164,7 +167,18 @@ def handle_info({:saved, item}, socket) do
 end
 ```
 
-(Currently, retrieving `parent_pid` requires passing it as a param in `push_screen/3`.)
+```elixir
+# In the detail screen's mount — capture the parent pid from params:
+def mount(%{id: id, parent_pid: parent_pid}, _session, socket) do
+  {:ok, Mob.Socket.assign(socket, item: fetch_item(id), parent_pid: parent_pid)}
+end
+
+# Before popping — send the result back:
+def handle_info({:tap, :save}, socket) do
+  send(socket.assigns.parent_pid, {:saved, socket.assigns.item})
+  {:noreply, Mob.Socket.pop_screen(socket)}
+end
+```
 
 ## The `Mob.Nav.Registry`
 

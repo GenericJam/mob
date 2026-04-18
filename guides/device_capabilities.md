@@ -126,12 +126,16 @@ Open the system file picker:
 
 ```elixir
 socket = Mob.Files.pick(socket)
-socket = Mob.Files.pick(socket, types: ["public.pdf", "public.text"])
+socket = Mob.Files.pick(socket, types: ["public.pdf", "public.text"])  # iOS UTI strings
+socket = Mob.Files.pick(socket, types: ["application/pdf", "text/plain"])  # Android MIME types
 
 def handle_info({:files, :picked, files}, socket) do
   # files is a list of %{path: path, name: name, size: bytes} maps
   {:noreply, Mob.Socket.assign(socket, :files, files)}
 end
+```
+
+> **Platform note:** `types` uses iOS UTI strings on iOS (`"public.pdf"`) and MIME type strings on Android (`"application/pdf"`). To support both platforms with the same call, pass both forms — the platform ignores strings it doesn't recognise. See [Platform-specific props](components.md#platform-specific-props) for a cleaner pattern.
 ```
 
 ## Audio recording
@@ -244,7 +248,7 @@ end
 
 ### Push notifications
 
-Register for push tokens and forward them to your server. Use the [`mob_push`](https://hex.pm/packages/mob_push) library on the server side to send notifications.
+Register for push tokens and forward them to your server. A server-side push library (`mob_push`) is planned but not yet published — for now, use a standard APNs/FCM client library with the tokens you receive.
 
 ```elixir
 # After :notifications permission is granted:

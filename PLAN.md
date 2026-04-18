@@ -488,6 +488,66 @@ Events arriving as `handle_info`:
 
 ---
 
+## `Mob.Intent` — Android inter-app communication (planned)
+
+Expose Android intents to Elixir so apps can reach out to other apps on the device (WhatsApp, email, browser, dialer, etc.).
+
+### Elixir API
+
+```elixir
+# Send a message to a specific app (e.g. WhatsApp)
+Mob.Intent.send(socket, package: "com.whatsapp", text: "Hello from the agent")
+
+# Share sheet (existing Mob.Share) — chooser, no target package
+Mob.Intent.send(socket, text: "Hello")
+
+# Compose email
+Mob.Intent.email(socket, to: "foo@example.com", subject: "Hi", body: "...")
+
+# Open URL in browser
+Mob.Intent.open_url(socket, "https://example.com")
+
+# Open dialer (does not auto-dial)
+Mob.Intent.dial(socket, "+1-555-1234")
+
+# SMS
+Mob.Intent.sms(socket, to: "+1-555-1234", body: "Hello")
+
+# List installed apps the device can handle (subject to Android 11+ query restrictions)
+Mob.Intent.installed_apps(socket)
+# → arrives as {:intent_result, :installed_apps, [{package, label}, ...]}
+```
+
+All calls are fire-and-forget except `installed_apps` which delivers a result via `handle_info`.
+
+### Android implementation
+
+- `mob_intent_send/1`, `mob_intent_email/1`, `mob_intent_open_url/1`, `mob_intent_dial/1`, `mob_intent_sms/1`, `mob_intent_installed_apps/0` NIFs in `mob_nif.c` / `MobBridge.kt`
+- `ACTION_SEND` with `setPackage(package)` for targeted sends; `createChooser` when no package specified
+- `ACTION_SENDTO` with `mailto:` / `smsto:` URIs for email and SMS
+- `ACTION_VIEW` for URLs and dialer
+- `PackageManager.queryIntentActivities` for installed apps (requires `<queries>` entries in `AndroidManifest.xml`)
+- All UI operations dispatch to main thread via `activity.runOnUiThread`
+
+### iOS
+
+Most of these map to `UIApplication.shared.open(url:)` with URL schemes:
+- `whatsapp://send?text=...` — WhatsApp deep link
+- `mailto:?to=...&subject=...&body=...`
+- `http://` / `https://` — opens Safari
+- `tel:` — opens Phone app
+- `sms:?body=...`
+
+iOS requires declaring URL schemes in `Info.plist` under `LSApplicationQueriesSchemes` to call `canOpenURL`. The capability build wizard (item 13) should handle this.
+
+### Notes
+
+- Android 11+ restricts `PackageManager.getInstalledApplications` — Play Store apps must declare specific `<queries>` or request `QUERY_ALL_PACKAGES` (restricted permission). `installed_apps` will only return apps the manifest declares queries for.
+- Targeted sends (`package:`) silently fall back to the chooser if the target app is not installed.
+- iOS does not have a general intent system; `Mob.Intent` on iOS is a URL scheme bridge.
+
+---
+
 ## Device capabilities
 
 Hardware APIs arrive as `handle_info` events, same as tap events. Permission requests are explicit — the developer calls `Mob.Permissions.request/2` and receives `{:permission, capability, :granted | :denied}` back.
