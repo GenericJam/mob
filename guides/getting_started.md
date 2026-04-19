@@ -88,7 +88,7 @@ If `mix mob.doctor` shows failures, fix them before continuing. See [Troubleshoo
 
 ## Run on simulator / emulator
 
-`mix mob.deploy` compiles your Elixir code and pushes it to the running app. With `--native` it also rebuilds and reinstalls the full native binary. Without `--native` it hot-upgrades only the BEAM bytecode over a live IEx connection — no rebuild required.
+`mix mob.deploy` compiles your Elixir code and pushes it to the running app. With `--native` it also rebuilds and reinstalls the full native binary. Without `--native` it pushes only the changed .beam files — no rebuild required.
 
 Use `--ios` or `--android` to target a single platform; omit both to deploy to all connected devices.
 
@@ -166,9 +166,9 @@ There are several ways to get code onto a device. Each one has a different scope
 
 | Command | Restarts app? | Requires dist? | What it does |
 |---------|:---:|:---:|---|
-| `mix mob.deploy --native` | Yes | No | Build native binary + install APK/IPA + push BEAMs |
-| `mix mob.deploy` | Yes | No | Push BEAMs + restart app (falls back to adb/simctl if dist unavailable) |
-| `mix mob.push` | No | **Yes** | Hot-push changed BEAMs via RPC — preserves all app state |
+| `mix mob.deploy --native` | Yes | No | Build native binary + install APK/IPA + push .beam files |
+| `mix mob.deploy` | Yes | No | Push .beam files + restart app (falls back to adb/simctl if dist unavailable) |
+| `mix mob.push` | No | **Yes** | Hot-push changed .beam files via RPC — preserves all app state |
 | `mix mob.watch` | No | **Yes** | Same as `mob.push`, triggered automatically on file save |
 | `nl(MyApp.Screen)` in IEx | No | **Yes** | Hot-push a single module from an IEx session |
 
@@ -193,7 +193,7 @@ There are several ways to get code onto a device. Each one has a different scope
 
 ### Under the hood
 
-`mix mob.deploy` uses `adb push` (Android) or `simctl` (iOS) to copy `.beam` files into the app bundle, then restarts the app. No live connection required.
+`mix mob.deploy` uses `adb push` (Android) or `simctl` (iOS) to copy .beam files into the app bundle, then restarts the app. No live connection required.
 
 `mix mob.push` and `nl/1` both use Erlang distribution: they call `:code.load_binary/3` on the device node via RPC, replacing the running module in-place — exactly like hot code loading in a production release. The running process state is untouched. This is the fastest path: sub-second for a single module.
 
