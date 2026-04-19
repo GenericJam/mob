@@ -160,6 +160,43 @@ mix mob.push
 
 Use `mix mob.push --all` to force-push every module rather than just those that changed.
 
+## Deployment reference
+
+There are several ways to get code onto a device. Each one has a different scope and mechanism — here's how they fit together:
+
+| Command | Restarts app? | Requires dist? | What it does |
+|---------|:---:|:---:|---|
+| `mix mob.deploy --native` | Yes | No | Build native binary + install APK/IPA + push BEAMs |
+| `mix mob.deploy` | Yes | No | Push BEAMs + restart app (falls back to adb/simctl if dist unavailable) |
+| `mix mob.push` | No | **Yes** | Hot-push changed BEAMs via RPC — preserves all app state |
+| `mix mob.watch` | No | **Yes** | Same as `mob.push`, triggered automatically on file save |
+| `nl(MyApp.Screen)` in IEx | No | **Yes** | Hot-push a single module from an IEx session |
+
+**Requires dist** means the app must already be running with Erlang distribution active. Run `mix mob.connect` first or use the dashboard's **Watch** button — both establish the distribution connection.
+
+### Which one should I use?
+
+- **First time running the app, or changed native code (Swift/Kotlin/C)?**
+  → `mix mob.deploy --native`
+
+- **Changed Elixir code and want a clean restart?**
+  → `mix mob.deploy`
+
+- **Changed Elixir code and want to keep app state (fastest)?**
+  → `mix mob.push` (requires the app to be running with dist active)
+
+- **Want changes pushed automatically while you edit?**
+  → Enable Watch in the dev dashboard, or run `mix mob.watch`
+
+- **Already in IEx and want to push one module?**
+  → `nl(MyApp.Screen)` — same underlying RPC, no shell required
+
+### Under the hood
+
+`mix mob.deploy` uses `adb push` (Android) or `simctl` (iOS) to copy `.beam` files into the app bundle, then restarts the app. No live connection required.
+
+`mix mob.push` and `nl/1` both use Erlang distribution: they call `:code.load_binary/3` on the device node via RPC, replacing the running module in-place — exactly like hot code loading in a production release. The running process state is untouched. This is the fastest path: sub-second for a single module.
+
 ## Your first screen
 
 A screen module looks like this:
