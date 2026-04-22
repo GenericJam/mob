@@ -34,10 +34,11 @@ target if not secured.
 
 ## Separate Project: Pegleg
 
-*Sparked by Mob but a distinct tool — noted here to preserve the idea. Name rationale:
-mobile developers have been hopping on one leg (outside-in testing, screenshots, accessibility
-trees) without realising the support was available. Piratey — because it pirates any app
-into the BEAM's control.*
+*Lives at `/Users/kevin/code/pegleg` — see `PLAN.md` there for the full vision.*
+
+*Name rationale: mobile developers have been hopping on one leg (outside-in testing,
+screenshots, accessibility trees) without realising the support was available.
+Piratey — because it pirates any app into the BEAM's control.*
 
 A standalone mobile testing tool that embeds a minimal BEAM node in an iOS app and
 exposes live app state to a desktop client. Nothing like this exists in the mobile

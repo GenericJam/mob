@@ -77,6 +77,11 @@ defmodule Mob.App do
           {:error, {:already_started, _}} -> :ok
         end
 
+        case Mob.State.start_link() do
+          {:ok, _} -> :ok
+          {:error, {:already_started, _}} -> :ok
+        end
+
         __MODULE__.on_start()
       end
 

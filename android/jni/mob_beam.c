@@ -8,6 +8,8 @@
 #include <time.h>
 #include <errno.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <dirent.h>
 #include "mob_beam.h"
 
 #define LOG_TAG "MobBeam"
@@ -84,6 +86,9 @@ void mob_start_beam(const char* app_module) {
 
     char logger_dir[600];
     snprintf(logger_dir, sizeof(logger_dir), "%s/lib/logger/ebin", otp_root);
+
+    char eex_dir[600];
+    snprintf(eex_dir, sizeof(eex_dir), "%s/lib/eex/ebin", otp_root);
 
     char crash_dump[560];
     snprintf(crash_dump, sizeof(crash_dump), "%s/erl_crash.dump", s_files_dir);
@@ -166,6 +171,7 @@ void mob_start_beam(const char* app_module) {
         "-boot",   boot_path,
         "-pa",     elixir_dir,
         "-pa",     logger_dir,
+        "-pa",     eex_dir,
         "-pa",     beams_dir,
         "-eval",   eval_expr,
         NULL
@@ -270,6 +276,65 @@ void mob_start_beam(const char* app_module) {
                 LOGI("mob_start_beam: symlink %s -> %s", exes[i], lib_path);
             } else {
                 LOGE("mob_start_beam: symlink %s failed: %s", exes[i], strerror(errno));
+            }
+        }
+    }
+
+    // Symlink sqlite3_nif.so into the exqlite OTP lib structure so that
+    // code:priv_dir(:exqlite) resolves correctly.
+    //
+    // The OTP code server registers lib_dirs by scanning $OTP_ROOT/lib/*/ebin
+    // at boot. For code:lib_dir(:exqlite) to work, exqlite must live at
+    // $OTP_ROOT/lib/exqlite-VERSION/ — a flat -pa dir is NOT sufficient.
+    // The deployer creates $OTP_ROOT/lib/exqlite-VERSION/{ebin,priv}; we
+    // create the sqlite3_nif.so symlink inside priv/ at runtime so the path
+    // (which contains the APK install hash) is always up-to-date.
+    if (s_native_lib_dir[0]) {
+        char nif_target[560];
+        snprintf(nif_target, sizeof(nif_target), "%s/libsqlite3_nif.so", s_native_lib_dir);
+
+        // Scan $OTP_ROOT/lib/ for exqlite-* and symlink the NIF in its priv/.
+        char lib_path[600];
+        snprintf(lib_path, sizeof(lib_path), "%s/lib", otp_root);
+        DIR *d = opendir(lib_path);
+        int found = 0;
+        if (d) {
+            struct dirent *entry;
+            while ((entry = readdir(d)) != NULL) {
+                if (strncmp(entry->d_name, "exqlite-", 8) == 0) {
+                    char exqlite_priv[700];
+                    snprintf(exqlite_priv, sizeof(exqlite_priv),
+                             "%s/%s/priv", lib_path, entry->d_name);
+                    mkdir(exqlite_priv, 0755);
+                    char nif_link[760];
+                    snprintf(nif_link, sizeof(nif_link),
+                             "%s/sqlite3_nif.so", exqlite_priv);
+                    unlink(nif_link);
+                    if (symlink(nif_target, nif_link) == 0) {
+                        LOGI("mob_start_beam: symlink exqlite NIF -> %s", nif_target);
+                        found = 1;
+                    } else {
+                        LOGE("mob_start_beam: symlink exqlite NIF failed: %s", strerror(errno));
+                    }
+                    break;
+                }
+            }
+            closedir(d);
+        }
+
+        if (!found) {
+            // Fallback: symlink into flat beams_dir/priv/ for backward compatibility
+            // while the deployer hasn't yet created the versioned lib structure.
+            char priv_dir[660];
+            snprintf(priv_dir, sizeof(priv_dir), "%s/priv", beams_dir);
+            mkdir(priv_dir, 0755);
+            char nif_link[720];
+            snprintf(nif_link, sizeof(nif_link), "%s/sqlite3_nif.so", priv_dir);
+            unlink(nif_link);
+            if (symlink(nif_target, nif_link) == 0) {
+                LOGI("mob_start_beam: symlink sqlite3_nif.so (fallback) -> %s", nif_target);
+            } else {
+                LOGE("mob_start_beam: symlink sqlite3_nif (fallback) failed: %s", strerror(errno));
             }
         }
     }

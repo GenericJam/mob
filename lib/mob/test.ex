@@ -235,6 +235,160 @@ defmodule Mob.Test do
     :ok
   end
 
+  # ── Native UI — unmodified app test harness ─────────────────────────────────
+  #
+  # These functions drive the native UI of any app — not just Mob-rendered ones.
+  # They call mob_nif directly via RPC and do not require a mob screen process.
+
+  @doc """
+  Return the live accessibility tree from the running native app.
+
+  Each element is a tuple: `{type, label, value, {x, y, w, h}}`
+
+      Mob.Test.ui_tree(node)
+      #=> [{:button, "Increment", "", {164.0, 400.0, 54.0, 54.0}}, ...]
+  """
+  @spec ui_tree(node()) :: list()
+  def ui_tree(node) do
+    :rpc.call(node, :mob_nif, :ui_tree, [])
+  end
+
+  @doc """
+  Tap at screen coordinates on the native app. On simulator uses accessibility
+  activation; on real device synthesises a UITouch via IOHIDEvent.
+
+      Mob.Test.tap_xy(node, 289.7, 518.8)
+  """
+  @spec tap_xy(node(), number(), number()) :: :ok | {:error, atom()}
+  def tap_xy(node, x, y) do
+    :rpc.call(node, :mob_nif, :tap_xy, [x * 1.0, y * 1.0])
+  end
+
+  @doc """
+  Type text into the currently focused text field.
+
+  Tap the field first to give it focus, then call this function.
+
+      Mob.Test.tap_xy(node, 195.0, 300.0)
+      Process.sleep(100)
+      Mob.Test.type_text(node, "hello@example.com")
+  """
+  @spec type_text(node(), String.t()) :: :ok | {:error, atom()}
+  def type_text(node, text) do
+    :rpc.call(node, :mob_nif, :type_text, [text])
+  end
+
+  @doc "Delete one character behind the cursor (backspace)."
+  @spec delete_backward(node()) :: :ok | {:error, atom()}
+  def delete_backward(node) do
+    :rpc.call(node, :mob_nif, :delete_backward, [])
+  end
+
+  @doc """
+  Press a special key on the focused text input.
+
+  Keys: `:return` | `:tab` | `:escape` | `:space`
+
+      Mob.Test.key_press(node, :return)
+      Mob.Test.key_press(node, :escape)
+  """
+  @spec key_press(node(), atom()) :: :ok | {:error, atom()}
+  def key_press(node, key) when key in [:return, :tab, :escape, :space] do
+    :rpc.call(node, :mob_nif, :key_press, [key])
+  end
+
+  @doc "Clear all text in the focused input (select-all + delete)."
+  @spec clear_text(node()) :: :ok | {:error, atom()}
+  def clear_text(node) do
+    :rpc.call(node, :mob_nif, :clear_text, [])
+  end
+
+  @doc """
+  Long-press at screen coordinates for `duration_ms` milliseconds (default 800ms).
+
+      Mob.Test.long_press_xy(node, 195.0, 400.0)
+      Mob.Test.long_press_xy(node, 195.0, 400.0, 1200)
+  """
+  @spec long_press_xy(node(), number(), number(), non_neg_integer()) :: :ok | {:error, atom()}
+  def long_press_xy(node, x, y, duration_ms \\ 800) do
+    :rpc.call(node, :mob_nif, :long_press_xy, [x * 1.0, y * 1.0, duration_ms])
+  end
+
+  @doc """
+  Swipe from (x1, y1) to (x2, y2). Drives UIScrollView contentOffset on
+  simulator; synthesises a drag gesture on real device.
+
+      Mob.Test.swipe(node, 195.0, 500.0, 195.0, 100.0)   # scroll down
+  """
+  @spec swipe(node(), number(), number(), number(), number()) :: :ok | {:error, atom()}
+  def swipe(node, x1, y1, x2, y2) do
+    :rpc.call(node, :mob_nif, :swipe_xy, [x1 * 1.0, y1 * 1.0, x2 * 1.0, y2 * 1.0])
+  end
+
+  @doc """
+  Find elements in the native accessibility tree whose label or value contains `text`.
+
+      Mob.Test.find_native(node, "Increment")
+      #=> [{:button, "Increment", "", {164.0, 400.0, 54.0, 54.0}}]
+  """
+  @spec find_native(node(), String.t()) :: list()
+  def find_native(node, text) do
+    node
+    |> ui_tree()
+    |> Enum.filter(fn {_type, label, value, _frame} ->
+      String.contains?(to_string(label), text) or
+      String.contains?(to_string(value), text)
+    end)
+  end
+
+  @doc """
+  Wait until `predicate` returns true when called with the current `ui_tree`,
+  polling every `interval_ms` until `timeout_ms` elapses.
+
+      Mob.Test.wait_for(node, fn tree ->
+        Enum.any?(tree, fn {_, label, _, _} -> label == "Success" end)
+      end)
+  """
+  @spec wait_for(node(), (list() -> boolean()), keyword()) :: :ok | {:error, :timeout}
+  def wait_for(node, predicate, opts \\ []) do
+    timeout_ms  = Keyword.get(opts, :timeout_ms, 5000)
+    interval_ms = Keyword.get(opts, :interval_ms, 200)
+    deadline    = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for(node, predicate, deadline, interval_ms)
+  end
+
+  @doc """
+  Wait until an element whose label or value contains `text` appears in the
+  accessibility tree.
+
+      Mob.Test.wait_for_text(node, "Welcome")
+      Mob.Test.wait_for_text(node, "Error", timeout_ms: 2000)
+  """
+  @spec wait_for_text(node(), String.t(), keyword()) :: :ok | {:error, :timeout}
+  def wait_for_text(node, text, opts \\ []) do
+    wait_for(node, fn tree ->
+      Enum.any?(tree, fn {_type, label, value, _frame} ->
+        String.contains?(to_string(label), text) or
+        String.contains?(to_string(value), text)
+      end)
+    end, opts)
+  end
+
+  defp do_wait_for(node, predicate, deadline, interval_ms) do
+    tree = ui_tree(node)
+    if predicate.(tree) do
+      :ok
+    else
+      remaining = deadline - System.monotonic_time(:millisecond)
+      if remaining <= 0 do
+        {:error, :timeout}
+      else
+        Process.sleep(min(interval_ms, remaining))
+        do_wait_for(node, predicate, deadline, interval_ms)
+      end
+    end
+  end
+
   # ── Native UI (requires MCP tools) ───────────────────────────────────────────
 
   @doc """

@@ -41,7 +41,18 @@
          notify_schedule/1,
          notify_cancel/1,
          notify_register_push/0,
-         take_launch_notification/0]).
+         take_launch_notification/0,
+         %% Test harness — native UI inspection and interaction
+         ui_tree/0,
+         ui_debug/0,
+         tap/1,
+         tap_xy/2,
+         type_text/1,
+         delete_backward/0,
+         key_press/1,
+         clear_text/0,
+         long_press_xy/3,
+         swipe_xy/4]).
 
 -nifs([platform/0,
        log/1, log/2,
@@ -72,7 +83,17 @@
        notify_schedule/1,
        notify_cancel/1,
        notify_register_push/0,
-       take_launch_notification/0]).
+       take_launch_notification/0,
+       ui_tree/0,
+       ui_debug/0,
+       tap/1,
+       tap_xy/2,
+       type_text/1,
+       delete_backward/0,
+       key_press/1,
+       clear_text/0,
+       long_press_xy/3,
+       swipe_xy/4]).
 
 -on_load(init/0).
 
@@ -109,3 +130,13 @@ notify_schedule(_OptsJson)        -> erlang:nif_error(not_loaded).
 notify_cancel(_Id)                -> erlang:nif_error(not_loaded).
 notify_register_push()            -> erlang:nif_error(not_loaded).
 take_launch_notification()        -> erlang:nif_error(not_loaded).
+ui_tree()                         -> erlang:nif_error(not_loaded).
+ui_debug()                        -> erlang:nif_error(not_loaded).
+tap(_Label)                       -> erlang:nif_error(not_loaded).
+tap_xy(_X, _Y)                    -> erlang:nif_error(not_loaded).
+type_text(_Text)                  -> erlang:nif_error(not_loaded).
+delete_backward()                 -> erlang:nif_error(not_loaded).
+key_press(_Key)                   -> erlang:nif_error(not_loaded).
+clear_text()                      -> erlang:nif_error(not_loaded).
+long_press_xy(_X, _Y, _Ms)        -> erlang:nif_error(not_loaded).
+swipe_xy(_X1, _Y1, _X2, _Y2)     -> erlang:nif_error(not_loaded).

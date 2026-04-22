@@ -254,6 +254,7 @@ end
 - [Components](components.md) — the full component reference
 - [Navigation](navigation.md) — stack, tab bar, drawer, push/pop
 - [Theming](theming.md) — color tokens, named themes, runtime switching
+- [Data & Persistence](data.md) — `Mob.State` for app preferences, Ecto + SQLite for structured data
 - [Device Capabilities](device_capabilities.md) — camera, location, haptics, notifications
 - [Testing](testing.md) — unit tests and live device inspection
 - [Troubleshooting](troubleshooting.md) — if something isn't working, start here
