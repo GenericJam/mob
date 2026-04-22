@@ -10,6 +10,20 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#include <mach/mach_time.h>
+#include <objc/message.h>
+#include <objc/runtime.h>
+#include <dlfcn.h>
+// dlopen/dlsym are marked unavailable in iOS SDK headers but exist at runtime
+// in the iOS Simulator (macOS). Declare prototypes directly to bypass the header
+// restriction. On a real device these will be NULL (weak symbols).
+#ifndef RTLD_DEFAULT
+#define RTLD_DEFAULT ((void *)-2L)
+#define RTLD_LAZY    1
+#endif
+extern void *dlopen(const char *path, int mode)  __attribute__((weak));
+extern void *dlsym(void *handle, const char *symbol) __attribute__((weak));
+extern char *dlerror(void) __attribute__((weak));
 #import <LocalAuthentication/LocalAuthentication.h>
 #import <CoreLocation/CoreLocation.h>
 #import <CoreMotion/CoreMotion.h>
@@ -1450,9 +1464,1420 @@ static ERL_NIF_TERM nif_notify_register_push(ErlNifEnv* env, int argc, const ERL
     return enif_make_atom(env, "ok");
 }
 
+
+// ── Test harness helpers (a11y walk, nsstring_to_term, AX framework) ───────────
+static ERL_NIF_TERM nsstring_to_term(ErlNifEnv *env, NSString *s) {
+    if (!s) return enif_make_atom(env, "nil");
+    const char *utf8 = [s UTF8String];
+    if (!utf8) return enif_make_atom(env, "nil");
+    size_t len = strlen(utf8);
+    ErlNifBinary bin;
+    enif_alloc_binary(len, &bin);
+    memcpy(bin.data, utf8, len);
+    return enif_make_binary(env, &bin);
+}
+
+static void walk_a11y(ErlNifEnv *env, id obj, ERL_NIF_TERM *list, int depth) {
+    if (!obj || depth > 30) return;
+
+    // Collect leaf accessibility elements (visible, interactive, or labelled nodes)
+    BOOL isElem = [obj respondsToSelector:@selector(isAccessibilityElement)] &&
+                  [(id)obj isAccessibilityElement];
+    if (isElem) {
+        NSString *label  = [obj respondsToSelector:@selector(accessibilityLabel)]
+                         ? [(id)obj accessibilityLabel] : nil;
+        NSString *value  = [obj respondsToSelector:@selector(accessibilityValue)]
+                         ? [(id)obj accessibilityValue] : nil;
+        UIAccessibilityTraits traits = [obj respondsToSelector:@selector(accessibilityTraits)]
+                         ? [(id)obj accessibilityTraits] : 0;
+        CGRect frame     = [obj respondsToSelector:@selector(accessibilityFrame)]
+                         ? [(id)obj accessibilityFrame] : CGRectZero;
+
+        const char *type_str = "element";
+        if      (traits & UIAccessibilityTraitButton)     type_str = "button";
+        else if (traits & UIAccessibilityTraitStaticText) type_str = "text";
+        else if (traits & UIAccessibilityTraitImage)      type_str = "image";
+        else if (traits & UIAccessibilityTraitHeader)     type_str = "header";
+        else if (traits & UIAccessibilityTraitSearchField) type_str = "text_field";
+
+        ERL_NIF_TERM frame_tup = enif_make_tuple4(env,
+            enif_make_double(env, frame.origin.x),
+            enif_make_double(env, frame.origin.y),
+            enif_make_double(env, frame.size.width),
+            enif_make_double(env, frame.size.height));
+
+        ERL_NIF_TERM elem = enif_make_tuple4(env,
+            enif_make_atom(env, type_str),
+            nsstring_to_term(env, label),
+            nsstring_to_term(env, value),
+            frame_tup);
+
+        *list = enif_make_list_cell(env, elem, *list);
+    }
+
+    // Walk children via exactly one path to avoid duplicates.
+    // Prefer accessibilityElements array, fall back to count/index, then UIView subviews.
+    BOOL walked = NO;
+
+    if ([obj respondsToSelector:@selector(accessibilityElements)]) {
+        NSArray *elems = [(id)obj accessibilityElements];
+        if (elems.count > 0) {
+            for (id child in elems) {
+                if (child && child != obj) walk_a11y(env, child, list, depth + 1);
+            }
+            walked = YES;
+        }
+    }
+
+    if (!walked && [obj respondsToSelector:@selector(accessibilityElementCount)]) {
+        NSInteger count = [(id)obj accessibilityElementCount];
+        if (count != NSNotFound && count > 0) {
+            for (NSInteger i = 0; i < count; i++) {
+                id child = [(id)obj accessibilityElementAtIndex:i];
+                if (child && child != obj) walk_a11y(env, child, list, depth + 1);
+            }
+            walked = YES;
+        }
+    }
+
+    if (!walked && [obj isKindOfClass:[UIView class]]) {
+        for (UIView *sub in [(UIView *)obj subviews]) {
+            walk_a11y(env, sub, list, depth + 1);
+        }
+    }
+}
+
+// ── NIF: ui_debug/0 — diagnostic: dumps window/view/a11y structure to NSLog ──
+static void debug_walk(id obj, int depth) {
+    if (!obj || depth > 8) return;
+    NSString *indent = [@"" stringByPaddingToLength:depth*2 withString:@"  " startingAtIndex:0];
+    NSString *cls = NSStringFromClass([obj class]);
+    NSString *label = [obj respondsToSelector:@selector(accessibilityLabel)] ? [obj accessibilityLabel] : @"-";
+    NSString *value = [obj respondsToSelector:@selector(accessibilityValue)] ? [obj accessibilityValue] : @"-";
+    BOOL isElem    = [obj respondsToSelector:@selector(isAccessibilityElement)] && [obj isAccessibilityElement];
+    NSInteger a11yCount = [obj respondsToSelector:@selector(accessibilityElementCount)] ? [obj accessibilityElementCount] : -99;
+    NSArray *a11yArr    = [obj respondsToSelector:@selector(accessibilityElements)] ? [obj accessibilityElements] : nil;
+    NSInteger subCount  = [obj isKindOfClass:[UIView class]] ? [(UIView*)obj subviews].count : -1;
+    NSLog(@"[ui_debug]%@%@ isElem=%d a11yCount=%ld a11yArr=%ld subs=%ld label=%@ value=%@",
+          indent, cls, isElem, (long)a11yCount, (long)a11yArr.count, (long)subCount, label, value);
+    if ([obj respondsToSelector:@selector(accessibilityElementCount)]) {
+        NSInteger cnt = [obj accessibilityElementCount];
+        if (cnt != NSNotFound && cnt > 0) {
+            for (NSInteger i = 0; i < cnt; i++) debug_walk([obj accessibilityElementAtIndex:i], depth+1);
+        }
+    }
+    for (id child in [obj respondsToSelector:@selector(accessibilityElements)] ? [obj accessibilityElements] : @[])
+        debug_walk(child, depth+1);
+    if ([obj isKindOfClass:[UIView class]])
+        for (UIView *sub in [(UIView*)obj subviews]) debug_walk(sub, depth+1);
+}
+
+// Walk macOS AXUIElement tree (works because the iOS Simulator IS a macOS process).
+// We load ApplicationServices from the Mac host path (not the simulator runtime root).
+typedef void *AXUIElementRef_t;
+typedef int   AXError_t;
+typedef void *(*AXUIElementCreateApplicationFn)(pid_t pid);
+typedef AXError_t (*AXUIElementCopyAttributeValueFn)(AXUIElementRef_t elem, void *attr, void **value);
+typedef AXError_t (*AXUIElementCopyAttributeNamesFn)(AXUIElementRef_t elem, void **names);
+typedef Boolean (*AXIsProcessTrustedFn)(void);
+static void *g_AppSvc = NULL;
+static AXUIElementCreateApplicationFn    g_AXCreateApp  = NULL;
+static AXUIElementCopyAttributeValueFn   g_AXCopyAttr   = NULL;
+static AXIsProcessTrustedFn              g_AXIsTrusted  = NULL;
+
+static NSString *g_ax_load_error = nil;
+static void load_ax(void) {
+    if (g_AppSvc) return;
+    // The iOS Simulator is a macOS process. Check if AX symbols are already available
+    // in the process image (RTLD_DEFAULT searches all loaded libraries).
+    if (dlsym) {
+        void *fn = dlsym(RTLD_DEFAULT, "AXUIElementCreateApplication");
+        if (fn) {
+            g_AppSvc = RTLD_DEFAULT;  // sentinel: symbols are available
+        } else {
+            const char *err = dlerror ? dlerror() : "no dlerror";
+            g_ax_load_error = [NSString stringWithFormat:@"RTLD_DEFAULT AXUIElementCreateApplication: %s", err];
+        }
+    }
+    if (!g_AppSvc) return;
+    g_AXCreateApp = (AXUIElementCreateApplicationFn) dlsym(g_AppSvc, "AXUIElementCreateApplication");
+    g_AXCopyAttr  = (AXUIElementCopyAttributeValueFn)dlsym(g_AppSvc, "AXUIElementCopyAttributeValue");
+    g_AXIsTrusted = (AXIsProcessTrustedFn)           dlsym(g_AppSvc, "AXIsProcessTrusted");
+}
+
+static void ax_walk(void *elem, ErlNifEnv *env, ERL_NIF_TERM *list, int depth) {
+    if (!elem || depth > 20) return;
+    // role
+    void *role = NULL;
+    g_AXCopyAttr(elem, (void *)CFSTR("AXRole"), &role);
+    // label
+    void *label = NULL;
+    g_AXCopyAttr(elem, (void *)CFSTR("AXLabel"), &label);
+    // value
+    void *value = NULL;
+    g_AXCopyAttr(elem, (void *)CFSTR("AXValue"), &value);
+    // frame via AXFrame (CFDictionaryRef with x/y/w/h)
+    void *frameVal = NULL;
+    g_AXCopyAttr(elem, (void *)CFSTR("AXFrame"), &frameVal);
+
+    // Only emit if we have a role (leaf or intermediate)
+    if (role) {
+        // CF types loaded via dlopen — bridge via CFStringRef intermediate (no ARC transfer)
+        NSString *roleStr  = (__bridge NSString *)((CFStringRef)role);
+        NSString *labelStr = label ? (__bridge NSString *)((CFStringRef)label) : @"";
+        NSString *valueStr = value ? (__bridge NSString *)((CFStringRef)value) : @"";
+        CGRect frame = CGRectZero;
+        if (frameVal) {
+            // AXFrame value is an AXValue (AXValueType kAXValueCGRectType == 3)
+            typedef Boolean (*AXValueGetValueFn)(CFTypeRef axval, int type, void *out);
+            AXValueGetValueFn axGetVal = (AXValueGetValueFn)dlsym(g_AppSvc, "AXValueGetValue");
+            if (axGetVal) axGetVal((CFTypeRef)frameVal, 3, &frame);
+            CFRelease((CFTypeRef)frameVal);
+        }
+        ERL_NIF_TERM frame_tup = enif_make_tuple4(env,
+            enif_make_double(env, frame.origin.x),
+            enif_make_double(env, frame.origin.y),
+            enif_make_double(env, frame.size.width),
+            enif_make_double(env, frame.size.height));
+        ERL_NIF_TERM elem_tup = enif_make_tuple4(env,
+            nsstring_to_term(env, roleStr),
+            nsstring_to_term(env, labelStr),
+            nsstring_to_term(env, valueStr),
+            frame_tup);
+        *list = enif_make_list_cell(env, elem_tup, *list);
+        if (role)  CFRelease((CFTypeRef)role);
+        if (label) CFRelease((CFTypeRef)label);
+        if (value) CFRelease((CFTypeRef)value);
+    }
+    // recurse into children
+    void *children = NULL;
+    g_AXCopyAttr(elem, (void *)CFSTR("AXChildren"), &children);
+    if (children) {
+        CFIndex count = CFArrayGetCount((CFArrayRef)children);
+        for (CFIndex i = 0; i < count; i++) {
+            void *child = (void *)CFArrayGetValueAtIndex((CFArrayRef)children, i);
+            ax_walk(child, env, list, depth + 1);
+        }
+        CFRelease((CFTypeRef)children);
+    }
+}
+
+
+
+// ── Test harness (ui_tree, tap, tap_xy, type_text, swipe_xy, etc.) ─────────────
+static ERL_NIF_TERM nif_ui_debug(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    load_ax();
+
+    __block ERL_NIF_TERM result = enif_make_list(env, 0);
+    // Probe via macOS AXUIElement — runs on NIF thread, no main-queue needed.
+    Boolean trusted = g_AXIsTrusted ? g_AXIsTrusted() : NO;
+    ERL_NIF_TERM trusted_t = enif_make_atom(env, trusted ? "trusted" : "not_trusted");
+    ERL_NIF_TERM appsvc_t  = enif_make_atom(env, g_AppSvc ? "loaded" : "not_loaded");
+    result = enif_make_list_cell(env, enif_make_tuple2(env,
+        enif_make_atom(env, "ax_status"),
+        enif_make_tuple2(env, appsvc_t, trusted_t)), result);
+    if (g_ax_load_error) {
+        result = enif_make_list_cell(env, nsstring_to_term(env, g_ax_load_error), result);
+    }
+
+    if (g_AXCreateApp && g_AXCopyAttr && trusted) {
+        void *appElem = g_AXCreateApp(getpid());
+        if (appElem) {
+            ax_walk(appElem, env, &result, 0);
+            CFRelease((CFTypeRef)appElem);
+        }
+    }
+
+    ERL_NIF_TERM reversed;
+    enif_make_reverse_list(env, result, &reversed);
+    return reversed;
+}
+
+
+// ensure_a11y_enabled: no-op in the NIF itself.
+// Accessibility must be activated from the Mac side before calling ui_tree():
+//   xcrun simctl spawn <udid> defaults write com.apple.Accessibility VoiceOverTouchEnabled -bool YES
+//   xcrun simctl spawn <udid> notifyutil -p com.apple.accessibility.voiceover.status.changed
+// pegleg_dev's `mix mob.connect` will do this automatically.
+static void ensure_a11y_enabled(void) { }
+
+static ERL_NIF_TERM nif_ui_tree(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    __block ERL_NIF_TERM list = enif_make_list(env, 0);
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        ensure_a11y_enabled();
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *window in [(UIWindowScene *)scene windows]) {
+                if (window.isHidden) continue;
+                walk_a11y(env, window, &list, 0);
+            }
+        }
+    });
+    ERL_NIF_TERM reversed;
+    enif_make_reverse_list(env, list, &reversed);
+    return reversed;
+}
+
+// ─── tap/1 — activate element by accessibility label (PUBLIC API) ─────────────
+//
+// Walks the same a11y tree as ui_tree() and calls -accessibilityActivate on the
+// first element whose accessibilityLabel matches the given binary string.
+//
+// -accessibilityActivate is fully public (UIAccessibilityAction protocol, iOS 4+).
+// For SwiftUI buttons it fires the button's action. The app cannot tell this from
+// a real tap, though it bypasses the touch event system entirely (no gesture
+// recognizer involvement, no UITouch objects).
+//
+// Use this for Phase 2 (driving apps from tests). For interactions that require
+// real UITouch events (custom gesture recognizers, scroll view momentum, etc.)
+// use tap_xy/2 instead.
+
+// Returns the deepest accessibility element whose frame contains 'pt'.
+// Walks children depth-first (deepest/most-specific match wins).
+static id find_a11y_at_point(id obj, CGPoint pt, int depth) {
+    if (!obj || depth > 30) return nil;
+
+    // Recurse into children first (deepest match wins)
+    if ([obj respondsToSelector:@selector(accessibilityElements)]) {
+        NSArray *elems = [(id)obj accessibilityElements];
+        if (elems.count > 0) {
+            for (id child in elems) {
+                if (child && child != obj) {
+                    id found = find_a11y_at_point(child, pt, depth + 1);
+                    if (found) return found;
+                }
+            }
+            goto check_self;
+        }
+    }
+    if ([obj respondsToSelector:@selector(accessibilityElementCount)]) {
+        NSInteger count = [(id)obj accessibilityElementCount];
+        if (count != NSNotFound && count > 0) {
+            for (NSInteger i = 0; i < count; i++) {
+                id child = [(id)obj accessibilityElementAtIndex:i];
+                if (child && child != obj) {
+                    id found = find_a11y_at_point(child, pt, depth + 1);
+                    if (found) return found;
+                }
+            }
+            goto check_self;
+        }
+    }
+    if ([obj isKindOfClass:[UIView class]]) {
+        for (UIView *sub in [(UIView *)obj subviews]) {
+            id found = find_a11y_at_point(sub, pt, depth + 1);
+            if (found) return found;
+        }
+    }
+
+check_self:
+    if ([obj respondsToSelector:@selector(isAccessibilityElement)] &&
+        [(id)obj isAccessibilityElement] &&
+        [obj respondsToSelector:@selector(accessibilityFrame)]) {
+        CGRect frame = [(id)obj accessibilityFrame];
+        if (CGRectContainsPoint(frame, pt)) return obj;
+    }
+    return nil;
+}
+
+static id find_a11y_by_label(id obj, NSString *target, int depth) {
+    if (!obj || depth > 30) return nil;
+
+    if ([obj respondsToSelector:@selector(isAccessibilityElement)] &&
+        [(id)obj isAccessibilityElement]) {
+        NSString *lbl = [obj respondsToSelector:@selector(accessibilityLabel)]
+                      ? [(id)obj accessibilityLabel] : nil;
+        if ([lbl isEqualToString:target]) return obj;
+    }
+
+    // Walk children via the same single-path logic as walk_a11y() to avoid duplicates.
+    if ([obj respondsToSelector:@selector(accessibilityElements)]) {
+        NSArray *elems = [(id)obj accessibilityElements];
+        if (elems.count > 0) {
+            for (id child in elems) {
+                if (child && child != obj) {
+                    id found = find_a11y_by_label(child, target, depth + 1);
+                    if (found) return found;
+                }
+            }
+            return nil;
+        }
+    }
+    if ([obj respondsToSelector:@selector(accessibilityElementCount)]) {
+        NSInteger count = [(id)obj accessibilityElementCount];
+        if (count != NSNotFound && count > 0) {
+            for (NSInteger i = 0; i < count; i++) {
+                id child = [(id)obj accessibilityElementAtIndex:i];
+                if (child && child != obj) {
+                    id found = find_a11y_by_label(child, target, depth + 1);
+                    if (found) return found;
+                }
+            }
+            return nil;
+        }
+    }
+    if ([obj isKindOfClass:[UIView class]]) {
+        for (UIView *sub in [(UIView *)obj subviews]) {
+            id found = find_a11y_by_label(sub, target, depth + 1);
+            if (found) return found;
+        }
+    }
+    return nil;
+}
+
+static ERL_NIF_TERM nif_tap(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    // Accept Elixir binary strings (the normal case)
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[0], &bin)) return enif_make_badarg(env);
+    NSString *label = [[NSString alloc] initWithBytes:bin.data
+                                               length:bin.size
+                                             encoding:NSUTF8StringEncoding];
+    if (!label) return enif_make_badarg(env);
+
+    __block BOOL activated = NO;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *window in [(UIWindowScene *)scene windows]) {
+                if (window.isHidden) continue;
+                id elem = find_a11y_by_label(window, label, 0);
+                if (elem) {
+                    [elem accessibilityActivate];
+                    activated = YES;
+                    return;
+                }
+            }
+        }
+    });
+
+    if (activated) return enif_make_atom(env, "ok");
+    return enif_make_tuple2(env,
+        enif_make_atom(env, "error"),
+        enif_make_atom(env, "not_found"));
+}
+
+
+// ─── tap_xy/2 — Phase 3: real UITouch injection at screen coordinates ─────────
+//
+// Synthesises genuine UITouch/UIEvent objects and delivers them through UIKit's
+// full event dispatch pipeline:
+//
+//   UIWindow.sendEvent: → UIGestureRecognizer → UIResponder.touchesBegan/Ended
+//
+// The app sees these as indistinguishable from a real finger. Scroll view
+// momentum, custom gesture recognizers, drag & drop — all work.
+//
+// ⚠️  PRIVATE API throughout — read before modifying ⚠️
+//
+// Private interfaces declared via categories below. Using categories (not
+// performSelector:) gives the compiler type information and avoids ARC leaks.
+//
+// BREAKAGE SIGNALS AND FALLBACKS (most → least likely):
+//
+//   _setLocationInWindow:resetPrevious: renamed:
+//     Try _setLocationInWindow: (no resetPrevious), or KVC:
+//     [touch setValue:[NSValue valueWithCGPoint:pt] forKey:@"locationInWindow"]
+//
+//   _setPhase: renamed:
+//     Try KVC: [touch setValue:@(UITouchPhaseBegan) forKey:@"phase"]
+//     The backing ivar has been "_phase" since iOS 8.
+//
+//   _setView: / _setWindow: renamed:
+//     Try KVC with keys @"view" and @"window" — UITouch KVC has been stable.
+//
+//   _touchesEvent not found on UIApplication:
+//     Try [UIEvent eventWithType:UIEventTypeTouches subtype:0 timestamp:ts]
+//     or [[UIApplication sharedApplication] _makeTouchEvent]
+//
+//   _clearTouches / _addTouch:forDelayedDelivery: renamed:
+//     Try [event _removeAllTouches] or building a fresh UIEvent each time.
+//
+//   Everything above breaks at once:
+//     Fall back to the IOHIDEvent path (works on real device, not simulator):
+//     dlopen IOKit → IOHIDEventCreateDigitizerFingerEvent →
+//     [UIApplication.sharedApplication _handleHIDEvent:event] via objc_msgSend.
+//     Coordinates may need scaling by [UIScreen mainScreen].scale on device.
+//
+// COORDINATES: UIKit screen points, same space as ui_tree() frames.
+//   Centre of a frame: tap_xy(x + w/2, y + h/2).
+
+// ── Private category declarations ─────────────────────────────────────────────
+// iOS 26 promoted many UITouch setters to public API. The remaining private
+// pieces are declared here so the compiler has type information.
+//
+// iOS 26 availability notes (from runtime enumeration 2026-04-21):
+//   PUBLIC (no underscore):  setWindow:  setView:  setPhase:  setTimestamp:  setTapCount:
+//   STILL PRIVATE:           _setLocationInWindow:resetPrevious:
+//   NEW (UIEvent):           _initWithEvent:touches:  (replaces _clearTouches + _addTouch:)
+//   GONE (UITouch):          _setWindow: _setView: _setPhase: _setTimestamp: _setTapCount:
+//   GONE (UIEvent):          _clearTouches  _addTouch:forDelayedDelivery:
+//
+// On older iOS (< 26), the _-prefixed versions are used and the public ones
+// may not exist — both paths are guarded with respondsToSelector:.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wundeclared-selector"
+
+@interface UIApplication (MobPhase3)
+// iOS <26 only (still present on iOS 26 but unused in the new path)
+- (UIEvent *)_touchesEvent;
+@end
+
+@interface UIEvent (MobPhase3)
+// iOS <26 path — touch management on a shared UIEvent
+- (void)_clearTouches;
+- (void)_addTouch:(UITouch *)touch forDelayedDelivery:(BOOL)delayed;
+// iOS 26+ — create bare event backed by IOHIDEvent
+- (instancetype)_init;
+- (void)_setHIDEvent:(CFTypeRef)hidEvent;  // back UIEvent with IOHIDEventRef
+@end
+
+@interface UITouch (MobPhase3)
+// Private on all iOS versions
+- (void)_setLocationInWindow:(CGPoint)pt resetPrevious:(BOOL)reset;
+- (void)_setHidEvent:(CFTypeRef)hidEvent;   // per-touch HID backing (lowercase 'id')
+// Private on iOS < 26, GONE on iOS 26 (replaced by public setters below)
+- (void)_setWindow:(UIWindow *)window;
+- (void)_setView:(UIView *)view;
+- (void)_setPhase:(UITouchPhase)phase;
+- (void)_setTimestamp:(NSTimeInterval)ts;
+- (void)_setTapCount:(NSUInteger)n;
+// iOS 26+ public setters (exist at runtime, not yet in UITouch.h SDK headers)
+- (void)setPhase:(UITouchPhase)phase;
+- (void)setTimestamp:(NSTimeInterval)ts;
+- (void)setTapCount:(NSUInteger)n;
+@end
+
+#pragma clang diagnostic pop
+
+// Preserved UITouch from Began phase — reused for Ended/Cancelled so that
+// the touch object's pointer identity remains stable across phases.
+static UITouch * __strong   sSavedTouch = nil;
+
+// IOHIDEventCreateDigitizerFingerEvent — resolved once via dlsym.
+typedef CFTypeRef IOHIDEventRef_t;
+typedef IOHIDEventRef_t (*IOHIDCreateFingerFn)(
+    CFAllocatorRef, uint64_t, uint32_t, uint32_t, uint32_t,
+    double, double, double, double, double, bool, bool, uint32_t
+);
+static IOHIDCreateFingerFn sIOHIDCreateFinger;
+static dispatch_once_t     sIOHIDOnce;
+
+// ── Core touch-phase helper ────────────────────────────────────────────────────
+// Delivers one touch phase to UIKit.
+//
+// iOS 26+ path: IOHIDDigitizerFingerEvent → UIApplication._handleHIDEvent:
+//   UIKit creates UITouch/UIEvent internally from the HID event. This path is
+//   indistinguishable from a real touch because it enters UIKit at the same
+//   level as hardware-generated events.
+//
+// iOS <26 path: manual UITouch + UIEvent construction via private setters,
+//   then [UIWindow sendEvent:].
+//
+// Returns NO if the required APIs are missing on this iOS version.
+static BOOL mob_send_touch_phase(UIWindow *window, UIView *hitView,
+                                    CGPoint pt, UITouchPhase phase) {
+    // ── iOS 26+ path: pure IOHIDEvent → _handleHIDEvent: ─────────────────────────
+    // Let UIKit create UITouch and dispatch through its full pipeline.
+    // Both Began and Ended go through _handleHIDEvent: — no manual UITouch injection,
+    // no [window sendEvent:].  UIKit routes based on the window's contextId.
+    {
+        dispatch_once(&sIOHIDOnce, ^{
+            sIOHIDCreateFinger =
+                dlsym(RTLD_DEFAULT, "IOHIDEventCreateDigitizerFingerEvent");
+        });
+
+        SEL handleSel = NSSelectorFromString(@"_handleHIDEvent:");
+        UIApplication *app = [UIApplication sharedApplication];
+
+        if (!sIOHIDCreateFinger || ![app respondsToSelector:handleSel]) {
+            LOGE(@"tap_xy: IOHIDCreateFinger=%p handleHIDEvent=%d",
+                 (void *)sIOHIDCreateFinger, (int)[app respondsToSelector:handleSel]);
+            return NO;
+        }
+
+        CGSize screen = [UIScreen mainScreen].bounds.size;
+        double normX  = pt.x / screen.width;
+        double normY  = pt.y / screen.height;
+        uint64_t ts   = mach_absolute_time();
+
+        // fingerDown=YES for Began/Moved, NO for Ended/Cancelled
+        BOOL fingerDown = (phase == UITouchPhaseBegan || phase == UITouchPhaseMoved);
+
+        IOHIDEventRef_t hidEvent = sIOHIDCreateFinger(
+            kCFAllocatorDefault, ts,
+            0u,             // fingerIndex
+            1u,             // identity
+            1u | 2u | 4u,  // eventMask: Range | Touch | Position
+            normX, normY, 0.0,
+            fingerDown ? 1.0 : 0.0,  // tipPressure: 1.0 down, 0.0 up
+            0.0,
+            (bool)fingerDown,   // range: finger in digitizer range?
+            (bool)fingerDown,   // touch: finger touching?
+            0u
+        );
+        if (!hidEvent) {
+            LOGE(@"tap_xy: IOHIDEventCreateDigitizerFingerEvent returned nil");
+            return NO;
+        }
+
+        LOGI(@"tap_xy: _handleHIDEvent: phase=%d normX=%.3f normY=%.3f fingerDown=%d",
+             (int)phase, normX, normY, (int)fingerDown);
+
+        typedef void (*HandleFn)(id, SEL, CFTypeRef);
+        ((HandleFn)objc_msgSend)(app, handleSel, hidEvent);
+
+        // Check what UIKit created — did it produce a UITouch?
+        if ([app respondsToSelector:@selector(_touchesEvent)]) {
+            UIEvent *ev = [app _touchesEvent];
+            LOGI(@"tap_xy: post-handleHID: _touchesEvent=%p allTouches=%lu",
+                 (__bridge void *)ev, (unsigned long)ev.allTouches.count);
+            if (ev && ev.allTouches.count > 0) {
+                // UIKit created a UITouch — dispatch via the correct window
+                LOGI(@"tap_xy: dispatching via [window sendEvent:] with UIKit-created touch");
+                [window sendEvent:ev];
+            }
+        }
+
+        CFRelease(hidEvent);
+        return YES;
+    }   // end iOS 26+ pure-HID block
+
+    // ── iOS <26 path: manual UITouch + UIEvent ────────────────────────────────
+    // UITouch private setters + _touchesEvent + _addTouch:forDelayedDelivery:.
+    // These APIs were removed in iOS 26 (confirmed by probe), so this path only
+    // runs on older devices/OS versions.
+    UIApplication *app = [UIApplication sharedApplication];
+    NSTimeInterval ts = [NSProcessInfo processInfo].systemUptime;
+    UITouch *touch = [[UITouch alloc] init];
+
+    // window setter
+    if ([touch respondsToSelector:@selector(_setWindow:)])
+        [touch _setWindow:window];
+    else { LOGE(@"tap_xy (<26): no _setWindow: on UITouch"); return NO; }
+
+    // view setter (best-effort; nil is tolerated by some iOS versions)
+    if ([touch respondsToSelector:@selector(_setView:)])
+        [touch _setView:hitView];
+
+    // phase setter
+    if ([touch respondsToSelector:@selector(_setPhase:)])
+        [touch _setPhase:phase];
+    else { LOGE(@"tap_xy (<26): no _setPhase: on UITouch"); return NO; }
+
+    // timestamp
+    if ([touch respondsToSelector:@selector(_setTimestamp:)])
+        [touch _setTimestamp:ts];
+
+    // tap count
+    if ([touch respondsToSelector:@selector(_setTapCount:)])
+        [touch _setTapCount:1];
+
+    // location
+    if ([touch respondsToSelector:@selector(_setLocationInWindow:resetPrevious:)])
+        [touch _setLocationInWindow:pt resetPrevious:(phase == UITouchPhaseBegan)];
+    else { LOGE(@"tap_xy (<26): no _setLocationInWindow:resetPrevious: on UITouch"); return NO; }
+
+    // build UIEvent
+    if (![app respondsToSelector:@selector(_touchesEvent)]) {
+        LOGE(@"tap_xy (<26): no _touchesEvent on UIApplication"); return NO;
+    }
+    UIEvent *event = [app _touchesEvent];
+    if ([event respondsToSelector:@selector(_clearTouches)])
+        [event _clearTouches];
+    if ([event respondsToSelector:@selector(_addTouch:forDelayedDelivery:)])
+        [event _addTouch:touch forDelayedDelivery:NO];
+    else { LOGE(@"tap_xy (<26): no _addTouch:forDelayedDelivery:"); return NO; }
+
+    [window sendEvent:event];
+    return YES;
+}
+
+// Temporary diagnostic: returns which Phase 3 private selectors are available.
+// Call as: :rpc.call(node, :pegleg_nif, :tap_xy, [:probe])  — not real NIF arg,
+// just probe by passing atom; actual impl checks argc.
+static ERL_NIF_TERM nif_tap_xy_enumerate(ErlNifEnv *env, Class cls, const char *filter) {
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    ERL_NIF_TERM list = enif_make_list(env, 0);
+    for (unsigned int i = 0; i < count; i++) {
+        const char *name = sel_getName(method_getName(methods[i]));
+        if (!filter || strstr(name, filter)) {
+            list = enif_make_list_cell(env, enif_make_atom(env, name), list);
+        }
+    }
+    free(methods);
+    return list;
+}
+
+static ERL_NIF_TERM nif_tap_xy_probe(ErlNifEnv *env) {
+    UIApplication *app = [UIApplication sharedApplication];
+    UITouch *touch = [[UITouch alloc] init];
+    UIEvent *fakeEvent = [UIEvent new];
+
+    struct { const char *name; BOOL found; } checks[] = {
+        {"UIApp._touchesEvent",                      [app    respondsToSelector:@selector(_touchesEvent)]},
+        // UITouch — old private names (iOS <26)
+        {"UITouch._setWindow:",                      [touch  respondsToSelector:@selector(_setWindow:)]},
+        {"UITouch._setView:",                        [touch  respondsToSelector:@selector(_setView:)]},
+        {"UITouch._setPhase:",                       [touch  respondsToSelector:@selector(_setPhase:)]},
+        {"UITouch._setTimestamp:",                   [touch  respondsToSelector:@selector(_setTimestamp:)]},
+        {"UITouch._setTapCount:",                    [touch  respondsToSelector:@selector(_setTapCount:)]},
+        {"UITouch._setLocationInWindow:resetPrevious:", [touch respondsToSelector:@selector(_setLocationInWindow:resetPrevious:)]},
+        // UITouch — iOS 26+ names (no underscore)
+        {"UITouch.setWindow:",                       [touch  respondsToSelector:@selector(setWindow:)]},
+        {"UITouch.setView:",                         [touch  respondsToSelector:@selector(setView:)]},
+        {"UITouch.setPhase:",                        [touch  respondsToSelector:@selector(setPhase:)]},
+        {"UITouch.setTimestamp:",                    [touch  respondsToSelector:@selector(setTimestamp:)]},
+        {"UITouch.setTapCount:",                     [touch  respondsToSelector:@selector(setTapCount:)]},
+        // UIEvent — old private names (iOS <26)
+        {"UIEvent._clearTouches",                    [fakeEvent respondsToSelector:@selector(_clearTouches)]},
+        {"UIEvent._addTouch:forDelayedDelivery:",    [fakeEvent respondsToSelector:@selector(_addTouch:forDelayedDelivery:)]},
+        // UIEvent — iOS 26+
+        {"UIEvent._initWithEvent:touches:",          [UIEvent instancesRespondToSelector:@selector(_initWithEvent:touches:)]},
+        // UITouch HID backing
+        {"UITouch._setHidEvent:",                    [touch  respondsToSelector:@selector(_setHidEvent:)]},
+        {"UITouch._hidEvent",                        [touch  respondsToSelector:@selector(_hidEvent)]},
+    };
+
+    ERL_NIF_TERM list = enif_make_list(env, 0);
+    int n = sizeof(checks) / sizeof(checks[0]);
+    for (int i = n - 1; i >= 0; i--) {
+        ERL_NIF_TERM key = enif_make_atom(env, checks[i].name);
+        ERL_NIF_TERM val = enif_make_atom(env, checks[i].found ? "true" : "false");
+        list = enif_make_list_cell(env, enif_make_tuple2(env, key, val), list);
+    }
+
+    // Inspect the type encoding of _initWithEvent:touches: to learn what first arg type it wants.
+    // "@" = id (object), "^" = pointer, etc.
+    {
+        Method m = class_getInstanceMethod([UIEvent class], @selector(_initWithEvent:touches:));
+        if (m) {
+            const char *enc = method_getTypeEncoding(m);
+            // enc looks like "@24@0:8@16@16" — arg0 is return (id), arg2 is self,
+            // arg3 is SEL, arg4 is first real arg. We want arg4's type.
+            ERL_NIF_TERM enc_term = enif_make_string(env, enc ? enc : "(null)", ERL_NIF_LATIN1);
+            list = enif_make_list_cell(env,
+                enif_make_tuple2(env,
+                    enif_make_atom(env, "UIEvent._initWithEvent:touches:.encoding"),
+                    enc_term),
+                list);
+        }
+    }
+
+    // Test _initWithEvent: with empty NSSet to isolate whether UITouch or base causes nil return.
+    {
+        UIEvent *baseInit = [UIEvent instancesRespondToSelector:@selector(_init)]
+                          ? [[UIEvent alloc] _init] : nil;
+        SEL initWithEvSel = NSSelectorFromString(@"_initWithEvent:touches:");
+        typedef UIEvent* (*InitWithEvFn)(id, SEL, void*, NSSet*);
+        UIEvent *testEmpty = [UIEvent instancesRespondToSelector:initWithEvSel]
+            ? ((InitWithEvFn)objc_msgSend)([[UIEvent alloc] init], initWithEvSel, (__bridge void *)baseInit, [NSSet set])
+            : nil;
+        ERL_NIF_TERM val = enif_make_atom(env, testEmpty ? "non_nil" : "nil");
+        list = enif_make_list_cell(env,
+            enif_make_tuple2(env,
+                enif_make_atom(env, "_initWithEvent:emptySet"),
+                val),
+            list);
+    }
+
+    // Type encoding of UIEvent._setHIDEvent: to learn what it takes.
+    {
+        Method m = class_getInstanceMethod([UIEvent class], @selector(_setHIDEvent:));
+        if (m) {
+            const char *enc = method_getTypeEncoding(m);
+            list = enif_make_list_cell(env,
+                enif_make_tuple2(env,
+                    enif_make_atom(env, "UIEvent._setHIDEvent:.encoding"),
+                    enif_make_string(env, enc ? enc : "(null)", ERL_NIF_LATIN1)),
+                list);
+        }
+    }
+
+    // Check if IOHIDEventCreate* functions are available (for direct HID injection).
+    {
+        BOOL hasCreateFinger = dlsym(RTLD_DEFAULT, "IOHIDEventCreateDigitizerFingerEvent") != NULL;
+        BOOL hasCreateFingerQ = dlsym(RTLD_DEFAULT, "IOHIDEventCreateDigitizerFingerEventWithQuality") != NULL;
+        list = enif_make_list_cell(env,
+            enif_make_tuple2(env,
+                enif_make_atom(env, "dlsym.IOHIDEventCreateDigitizerFingerEvent"),
+                enif_make_atom(env, hasCreateFinger ? "true" : "false")),
+            list);
+        list = enif_make_list_cell(env,
+            enif_make_tuple2(env,
+                enif_make_atom(env, "dlsym.IOHIDEventCreateDigitizerFingerEventWithQuality"),
+                enif_make_atom(env, hasCreateFingerQ ? "true" : "false")),
+            list);
+    }
+
+    // Check for UIApplication._handleHIDEvent:
+    {
+        UIApplication *a = [UIApplication sharedApplication];
+        BOOL hasHandle = [a respondsToSelector:NSSelectorFromString(@"_handleHIDEvent:")];
+        list = enif_make_list_cell(env,
+            enif_make_tuple2(env,
+                enif_make_atom(env, "UIApp._handleHIDEvent:"),
+                enif_make_atom(env, hasHandle ? "true" : "false")),
+            list);
+    }
+
+    // Check for GSSendSystemEvent / GSSynthesizeSystemEvent via dlsym.
+    {
+        const char *gsFuncs[] = {
+            "GSSendSystemEvent", "GSSynthesizeSystemEvent",
+            "GSSendEvent", "GSEventDispatch",
+            "GSSendSystemEventFast",
+        };
+        for (int i = 0; i < 5; i++) {
+            BOOL found = dlsym(RTLD_DEFAULT, gsFuncs[i]) != NULL;
+            list = enif_make_list_cell(env,
+                enif_make_tuple2(env,
+                    enif_make_atom(env, gsFuncs[i]),
+                    enif_make_atom(env, found ? "true" : "false")),
+                list);
+        }
+    }
+
+    return list;
+}
+
+static ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    // Diagnostics mode — pass :probe or :enumerate_touch or :enumerate_event
+    if (enif_is_atom(env, argv[0])) {
+        char atom[64]; enif_get_atom(env, argv[0], atom, sizeof(atom), ERL_NIF_LATIN1);
+        if (strcmp(atom, "enumerate_touch") == 0)
+            return nif_tap_xy_enumerate(env, [UITouch class], NULL);
+        if (strcmp(atom, "enumerate_event") == 0)
+            return nif_tap_xy_enumerate(env, [UIEvent class], NULL);
+        if (strcmp(atom, "enumerate_app_event") == 0)
+            return nif_tap_xy_enumerate(env, [UIApplication class], "Event");
+        if (strcmp(atom, "enumerate_app_hid") == 0)
+            return nif_tap_xy_enumerate(env, [UIApplication class], "HID");
+        if (strcmp(atom, "enumerate_app_touch") == 0)
+            return nif_tap_xy_enumerate(env, [UIApplication class], "ouch");
+        if (strcmp(atom, "enumerate_touch_set") == 0)
+            return nif_tap_xy_enumerate(env, [UITouch class], "set");
+        if (strcmp(atom, "enumerate_touch_init") == 0)
+            return nif_tap_xy_enumerate(env, [UITouch class], "init");
+        if (strcmp(atom, "enumerate_event_ivars") == 0) {
+            // Dump UIEvent instance variable names and offsets
+            unsigned int count = 0;
+            Ivar *ivars = class_copyIvarList([UIEvent class], &count);
+            ERL_NIF_TERM list = enif_make_list(env, 0);
+            for (unsigned int i = 0; i < count; i++) {
+                const char *name = ivar_getName(ivars[i]);
+                ptrdiff_t   off  = ivar_getOffset(ivars[i]);
+                const char *type = ivar_getTypeEncoding(ivars[i]);
+                char buf[256];
+                snprintf(buf, sizeof(buf), "%s@%td(%s)", name ? name : "?", off, type ? type : "?");
+                list = enif_make_list_cell(env, enif_make_atom(env, buf), list);
+            }
+            free(ivars);
+            return list;
+        }
+        // Enumerate UIWindow methods (useful for finding contextId getter)
+        if (strcmp(atom, "enumerate_window") == 0) {
+            return nif_tap_xy_enumerate(env, [UIWindow class], NULL);
+        }
+        if (strcmp(atom, "enumerate_window_context") == 0) {
+            return nif_tap_xy_enumerate(env, [UIWindow class], "context");
+        }
+        // Return contextId and class of the key window — for HID event routing
+        if (strcmp(atom, "window_info") == 0) {
+            __block ERL_NIF_TERM result = enif_make_atom(env, "no_window");
+            dispatch_sync(dispatch_get_main_queue(), ^{
+                UIWindow *win = nil;
+                for (UIScene *sc in [UIApplication sharedApplication].connectedScenes) {
+                    if ([sc isKindOfClass:[UIWindowScene class]]) {
+                        for (UIWindow *w in [(UIWindowScene *)sc windows]) {
+                            if (!w.isHidden) { win = w; break; }
+                        }
+                        if (win) break;
+                    }
+                }
+                if (!win) return;
+
+                // Try various contextId getters
+                uint32_t ctxId = 0;
+                SEL ctxSels[] = {
+                    @selector(_contextId),
+                    @selector(_windowContextID),
+                    @selector(contextId),
+                    @selector(_displayID),
+                };
+                NSString *ctxSelName = @"none";
+                for (int i = 0; i < 4; i++) {
+                    if ([win respondsToSelector:ctxSels[i]]) {
+                        typedef uint32_t (*GetU32Fn)(id, SEL);
+                        ctxId = ((GetU32Fn)objc_msgSend)(win, ctxSels[i]);
+                        ctxSelName = NSStringFromSelector(ctxSels[i]);
+                        break;
+                    }
+                }
+
+                char buf[256];
+                snprintf(buf, sizeof(buf), "win=%p class=%s ctxSel=%s ctxId=0x%08x",
+                         (__bridge void *)win,
+                         class_getName(object_getClass(win)),
+                         [ctxSelName UTF8String],
+                         ctxId);
+                result = enif_make_string(env, buf, ERL_NIF_LATIN1);
+            });
+            return result;
+        }
+        return nif_tap_xy_probe(env);
+    }
+    double x, y;
+    if (!enif_get_double(env, argv[0], &x)) {
+        int ix; if (!enif_get_int(env, argv[0], &ix)) return enif_make_badarg(env); x = ix;
+    }
+    if (!enif_get_double(env, argv[1], &y)) {
+        int iy; if (!enif_get_int(env, argv[1], &iy)) return enif_make_badarg(env); y = iy;
+    }
+
+    CGPoint pt = CGPointMake(x, y);
+
+#if TARGET_OS_SIMULATOR
+    // ── Simulator: accessibility-based activation by coordinates ─────────────────
+    // The iOS simulator rejects in-process synthetic IOHIDEvents (no valid display
+    // context) and SwiftUI on iOS 26 ignores direct touchesBegan: calls without
+    // proper event system backing. Accessibility activation is the reliable path
+    // for the simulator; for scroll views and custom GRs that lack accessibility,
+    // a simulator-specific event injection mechanism would be needed.
+    __block BOOL activated = NO;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+                if (win.isHidden) continue;
+                id elem = find_a11y_at_point(win, pt, 0);
+                if (elem) {
+                    LOGI(@"tap_xy(sim): accessibilityActivate on %@ frame=%@",
+                         NSStringFromClass(object_getClass(elem)),
+                         NSStringFromCGRect([elem accessibilityFrame]));
+                    [elem accessibilityActivate];
+                    // For text fields: accessibilityActivate on UITextFieldLabel
+                    // (the hint label inside UITextField) doesn't focus the
+                    // field. Walk the responder chain up from the hit view to
+                    // find the first UITextField/UITextView and focus it.
+                    UIView *hv = [win hitTest:pt withEvent:nil];
+                    UIResponder *r = hv;
+                    while (r) {
+                        if ([r isKindOfClass:[UITextField class]] ||
+                            [r isKindOfClass:[UITextView class]]) {
+                            [(UIView *)r becomeFirstResponder];
+                            break;
+                        }
+                        r = r.nextResponder;
+                    }
+                    activated = YES;
+                    return;
+                }
+            }
+        }
+    });
+    if (activated) return enif_make_atom(env, "ok");
+    return enif_make_tuple2(env,
+        enif_make_atom(env, "error"),
+        enif_make_atom(env, "no_element_at_point"));
+
+#else
+    // ── Real device: UITouch injection via IOHIDEvent ─────────────────────────────
+    __block UIWindow *targetWindow = nil;
+    __block UIView   *hitView      = nil;
+
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+                if (win.isHidden) continue;
+                UIView *hit = [win hitTest:pt withEvent:nil];
+                if (hit) { targetWindow = win; hitView = hit; return; }
+            }
+        }
+    });
+
+    if (!hitView) {
+        return enif_make_tuple2(env,
+            enif_make_atom(env, "error"),
+            enif_make_atom(env, "no_view_at_point"));
+    }
+
+    __block BOOL ok = NO;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        ok = mob_send_touch_phase(targetWindow, hitView, pt, UITouchPhaseBegan);
+    });
+    if (!ok) {
+        return enif_make_tuple2(env,
+            enif_make_atom(env, "error"),
+            nif_tap_xy_probe(env));
+    }
+
+    [NSThread sleepForTimeInterval:0.10];
+
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        mob_send_touch_phase(targetWindow, hitView, pt, UITouchPhaseEnded);
+    });
+
+    return enif_make_atom(env, "ok");
+#endif
+}
+
+
+static id find_first_responder_in(UIView *view) {
+    if (view.isFirstResponder) return view;
+    for (UIView *sub in view.subviews) {
+        id fr = find_first_responder_in(sub);
+        if (fr) return fr;
+    }
+    return nil;
+}
+
+// ─── delete_backward/0 — delete one character behind the cursor ──────────────
+//
+// Calls deleteBackward: on the current first responder. Equivalent to pressing
+// the backspace key. Repeating gives "hold backspace" behaviour.
+//
+// Returns: ok | {error, no_first_responder} | {error, not_text_input}
+
+static ERL_NIF_TERM nif_delete_backward(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    __block BOOL done = NO;
+    __block BOOL found = NO;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+                if (win.isHidden) continue;
+                id fr = find_first_responder_in(win);
+                if (!fr) continue;
+                found = YES;
+                if ([fr respondsToSelector:@selector(deleteBackward)]) {
+                    [fr deleteBackward];
+                    done = YES;
+                }
+                return;
+            }
+        }
+    });
+    if (done)  return enif_make_atom(env, "ok");
+    if (found) return enif_make_tuple2(env,
+                   enif_make_atom(env, "error"),
+                   enif_make_atom(env, "not_text_input"));
+    return enif_make_tuple2(env,
+        enif_make_atom(env, "error"),
+        enif_make_atom(env, "no_first_responder"));
+}
+
+
+// ─── key_press/1 — send a special key to the focused text input ───────────────
+//
+// Accepts an atom:
+//   return   — submit / next field (inserts "\n", triggers textFieldShouldReturn:)
+//   tab      — move to next field (inserts "\t")
+//   escape   — dismiss keyboard (resignFirstResponder)
+//   space    — insert a space character
+//
+// Returns: ok | {error, no_first_responder} | {error, unknown_key} |
+//          {error, not_text_input}
+
+static ERL_NIF_TERM nif_key_press(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    char keybuf[32];
+    if (!enif_get_atom(env, argv[0], keybuf, sizeof(keybuf), ERL_NIF_LATIN1))
+        return enif_make_badarg(env);
+    NSString *key = [NSString stringWithUTF8String:keybuf];
+
+    __block BOOL done = NO;
+    __block BOOL found = NO;
+    __block BOOL unknown = NO;
+
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+                if (win.isHidden) continue;
+                id fr = find_first_responder_in(win);
+                if (!fr) continue;
+                found = YES;
+
+                if ([key isEqualToString:@"return"]) {
+                    if ([fr respondsToSelector:@selector(insertText:)]) {
+                        [fr insertText:@"\n"];
+                        done = YES;
+                    }
+                } else if ([key isEqualToString:@"tab"]) {
+                    if ([fr respondsToSelector:@selector(insertText:)]) {
+                        [fr insertText:@"\t"];
+                        done = YES;
+                    }
+                } else if ([key isEqualToString:@"space"]) {
+                    if ([fr respondsToSelector:@selector(insertText:)]) {
+                        [fr insertText:@" "];
+                        done = YES;
+                    }
+                } else if ([key isEqualToString:@"escape"]) {
+                    [fr resignFirstResponder];
+                    done = YES;
+                } else {
+                    unknown = YES;
+                }
+                return;
+            }
+        }
+    });
+
+    if (unknown) return enif_make_tuple2(env,
+                     enif_make_atom(env, "error"),
+                     enif_make_atom(env, "unknown_key"));
+    if (done)  return enif_make_atom(env, "ok");
+    if (found) return enif_make_tuple2(env,
+                   enif_make_atom(env, "error"),
+                   enif_make_atom(env, "not_text_input"));
+    return enif_make_tuple2(env,
+        enif_make_atom(env, "error"),
+        enif_make_atom(env, "no_first_responder"));
+}
+
+
+// ─── clear_text/0 — erase all text in the focused input ──────────────────────
+//
+// Calls selectAll: then deleteBackward: on the first responder. Works on
+// UITextField, UITextView, and UIKeyInput adopters.
+//
+// Returns: ok | {error, no_first_responder} | {error, not_text_input}
+
+static ERL_NIF_TERM nif_clear_text(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    __block BOOL done = NO;
+    __block BOOL found = NO;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+                if (win.isHidden) continue;
+                id fr = find_first_responder_in(win);
+                if (!fr) continue;
+                found = YES;
+                BOOL canClear = [fr respondsToSelector:@selector(selectAll:)] &&
+                                [fr respondsToSelector:@selector(deleteBackward)];
+                if (canClear) {
+                    [fr selectAll:nil];
+                    // selectAll: is async in UITextView — yield once to let selection settle
+                    // before deleting.
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [fr deleteBackward];
+                    });
+                    done = YES;
+                }
+                return;
+            }
+        }
+    });
+    if (done)  return enif_make_atom(env, "ok");
+    if (found) return enif_make_tuple2(env,
+                   enif_make_atom(env, "error"),
+                   enif_make_atom(env, "not_text_input"));
+    return enif_make_tuple2(env,
+        enif_make_atom(env, "error"),
+        enif_make_atom(env, "no_first_responder"));
+}
+
+
+// ─── long_press_xy/3 — hold touch at (x, y) for duration_ms milliseconds ─────
+//
+// Simulator: finds UILongPressGestureRecognizer on the hit view or its ancestors
+// and forces state transitions via the private _setState: selector, which fires
+// the target/action pairs without needing HID events.
+//
+// Real device: emits Began → sleep(duration_ms) → Ended via IOHIDEvent, same
+// path as tap_xy.
+//
+// Returns: ok | {error, no_view_at_point} | {error, no_long_press_recognizer}
+
+static ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    double x, y;
+    int duration_ms;
+    if (!enif_get_double(env, argv[0], &x) ||
+        !enif_get_double(env, argv[1], &y) ||
+        !enif_get_int(env, argv[2], &duration_ms))
+        return enif_make_badarg(env);
+
+    CGPoint pt = CGPointMake((CGFloat)x, (CGFloat)y);
+
+#if TARGET_OS_SIMULATOR
+    __block BOOL fired = NO;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        UIView *hitView = nil;
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+                if (win.isHidden) continue;
+                UIView *h = [win hitTest:pt withEvent:nil];
+                if (h) { hitView = h; break; }
+            }
+            if (hitView) break;
+        }
+        if (!hitView) return;
+
+        // Walk up the responder chain looking for any UILongPressGestureRecognizer
+        SEL setStateSel = NSSelectorFromString(@"_setState:");
+        UIView *v = hitView;
+        while (v && !fired) {
+            for (UIGestureRecognizer *gr in v.gestureRecognizers) {
+                if (![gr isKindOfClass:[UILongPressGestureRecognizer class]]) continue;
+                if (![gr respondsToSelector:setStateSel]) continue;
+                typedef void (*SetStateFn)(id, SEL, NSInteger);
+                SetStateFn setState = (SetStateFn)objc_msgSend;
+                LOGI(@"long_press_xy(sim): firing LPGR on %@", NSStringFromClass([v class]));
+                setState(gr, setStateSel, UIGestureRecognizerStateBegan);
+                setState(gr, setStateSel, UIGestureRecognizerStateEnded);
+                fired = YES;
+                break;
+            }
+            v = v.superview;
+        }
+
+        // SwiftUI onLongPressGesture may also surface as an accessibility custom action.
+        // Try accessibilityActivate as a fallback — limited but better than nothing.
+        if (!fired) {
+            id elem = find_a11y_at_point(hitView, pt, 0);
+            if (elem && [elem respondsToSelector:@selector(accessibilityActivate)]) {
+                LOGI(@"long_press_xy(sim): fallback to accessibilityActivate on %@",
+                     NSStringFromClass(object_getClass(elem)));
+                [elem accessibilityActivate];
+                fired = YES;
+            }
+        }
+    });
+
+    if (fired) return enif_make_atom(env, "ok");
+    return enif_make_tuple2(env,
+        enif_make_atom(env, "error"),
+        enif_make_atom(env, "no_long_press_recognizer"));
+
+#else
+    // Real device: Began → hold → Ended
+    __block UIWindow *targetWindow = nil;
+    __block UIView   *hitView      = nil;
+
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+                if (win.isHidden) continue;
+                UIView *h = [win hitTest:pt withEvent:nil];
+                if (h) { targetWindow = win; hitView = h; return; }
+            }
+        }
+    });
+
+    if (!hitView)
+        return enif_make_tuple2(env,
+            enif_make_atom(env, "error"),
+            enif_make_atom(env, "no_view_at_point"));
+
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        mob_send_touch_phase(targetWindow, hitView, pt, UITouchPhaseBegan);
+    });
+
+    [NSThread sleepForTimeInterval:(double)duration_ms / 1000.0];
+
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        mob_send_touch_phase(targetWindow, hitView, pt, UITouchPhaseEnded);
+    });
+
+    return enif_make_atom(env, "ok");
+#endif
+}
+
+
+// ─── type_text/1 — type into whatever UITextField/UITextView has focus ────────
+//
+// Finds the current first responder in the view hierarchy and calls insertText:
+// on it. Works for UITextField, UITextView, and any custom view that adopts
+// UIKeyInput. The caller should tap the field first to give it focus.
+//
+// Returns: ok | {error, no_first_responder} | {error, not_text_input}
+
+static ERL_NIF_TERM nif_type_text(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[0], &bin))
+        return enif_make_badarg(env);
+
+    NSString *text = [[NSString alloc] initWithBytes:bin.data
+                                              length:bin.size
+                                           encoding:NSUTF8StringEncoding];
+    if (!text)
+        return enif_make_tuple2(env,
+            enif_make_atom(env, "error"),
+            enif_make_atom(env, "invalid_utf8"));
+
+    __block BOOL typed = NO;
+    __block BOOL found = NO;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+                if (win.isHidden) continue;
+                id fr = find_first_responder_in(win);
+                if (!fr) continue;
+                found = YES;
+                if ([fr respondsToSelector:@selector(insertText:)]) {
+                    LOGI(@"type_text: inserting %lu chars into %@",
+                         (unsigned long)text.length, NSStringFromClass([fr class]));
+                    [fr insertText:text];
+                    typed = YES;
+                }
+                return;
+            }
+        }
+    });
+
+    if (typed)  return enif_make_atom(env, "ok");
+    if (found)  return enif_make_tuple2(env,
+                    enif_make_atom(env, "error"),
+                    enif_make_atom(env, "not_text_input"));
+    return enif_make_tuple2(env,
+        enif_make_atom(env, "error"),
+        enif_make_atom(env, "no_first_responder"));
+}
+
+
+// ─── swipe_xy/4 — scroll gesture from (x1,y1) to (x2,y2) ────────────────────
+//
+// Simulator: walks the hit-test chain up from the touch point to find a
+// UIScrollView and adjusts its contentOffset by the swipe delta.
+//
+// Real device: synthesises Began + multiple Moved + Ended IOHIDEvents through
+// the same mob_send_touch_phase path used by tap_xy.
+//
+// Returns: ok | {error, no_scroll_view} | {error, no_view_at_point}
+
+static UIScrollView *find_scroll_view_at(CGPoint pt) {
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+            if (win.isHidden) continue;
+            UIView *hit = [win hitTest:pt withEvent:nil];
+            UIView *v = hit;
+            while (v) {
+                if ([v isKindOfClass:[UIScrollView class]])
+                    return (UIScrollView *)v;
+                v = v.superview;
+            }
+        }
+    }
+    return nil;
+}
+
+static ERL_NIF_TERM nif_swipe_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    double x1, y1, x2, y2;
+    if (!enif_get_double(env, argv[0], &x1) ||
+        !enif_get_double(env, argv[1], &y1) ||
+        !enif_get_double(env, argv[2], &x2) ||
+        !enif_get_double(env, argv[3], &y2))
+        return enif_make_badarg(env);
+
+    CGFloat dx = (CGFloat)(x2 - x1);
+    CGFloat dy = (CGFloat)(y2 - y1);
+    // Center of swipe for hit-testing
+    CGPoint mid = CGPointMake((CGFloat)((x1 + x2) / 2.0), (CGFloat)((y1 + y2) / 2.0));
+
+#if TARGET_OS_SIMULATOR
+    __block BOOL scrolled = NO;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        UIScrollView *sv = find_scroll_view_at(mid);
+        if (!sv) {
+            // Also try start point
+            sv = find_scroll_view_at(CGPointMake((CGFloat)x1, (CGFloat)y1));
+        }
+        if (!sv) return;
+
+        CGPoint cur = sv.contentOffset;
+        // Swiping up (dy < 0) means content moves down (contentOffset.y increases)
+        CGFloat newX = cur.x - dx;
+        CGFloat newY = cur.y - dy;
+        // Clamp to valid range
+        CGFloat maxX = MAX(0.0f, sv.contentSize.width  - sv.bounds.size.width);
+        CGFloat maxY = MAX(0.0f, sv.contentSize.height - sv.bounds.size.height);
+        newX = MAX(0.0f, MIN(newX, maxX));
+        newY = MAX(0.0f, MIN(newY, maxY));
+        LOGI(@"swipe_xy(sim): sv=%@ offset (%.1f,%.1f) → (%.1f,%.1f)",
+             NSStringFromClass([sv class]), cur.x, cur.y, newX, newY);
+        [sv setContentOffset:CGPointMake(newX, newY) animated:YES];
+        scrolled = YES;
+    });
+    if (scrolled) return enif_make_atom(env, "ok");
+    return enif_make_tuple2(env,
+        enif_make_atom(env, "error"),
+        enif_make_atom(env, "no_scroll_view"));
+
+#else
+    // Real device: emit Began → 10 Moved steps → Ended via HID events
+    __block UIWindow *targetWindow = nil;
+    __block UIView   *hitView      = nil;
+    CGPoint startPt = CGPointMake((CGFloat)x1, (CGFloat)y1);
+    CGPoint endPt   = CGPointMake((CGFloat)x2, (CGFloat)y2);
+
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+                if (win.isHidden) continue;
+                UIView *hit = [win hitTest:startPt withEvent:nil];
+                if (hit) { targetWindow = win; hitView = hit; return; }
+            }
+        }
+    });
+
+    if (!hitView)
+        return enif_make_tuple2(env,
+            enif_make_atom(env, "error"),
+            enif_make_atom(env, "no_view_at_point"));
+
+    // Began
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        mob_send_touch_phase(targetWindow, hitView, startPt, UITouchPhaseBegan);
+    });
+
+    // 10 evenly-spaced Moved steps
+    int steps = 10;
+    for (int i = 1; i <= steps; i++) {
+        [NSThread sleepForTimeInterval:0.016]; // ~60fps
+        CGPoint movePt = CGPointMake(
+            (CGFloat)(x1 + dx * i / steps),
+            (CGFloat)(y1 + dy * i / steps)
+        );
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            mob_send_touch_phase(targetWindow, hitView, movePt, UITouchPhaseMoved);
+        });
+    }
+
+    [NSThread sleepForTimeInterval:0.016];
+
+    // Ended
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        mob_send_touch_phase(targetWindow, hitView, endPt, UITouchPhaseEnded);
+    });
+
+    return enif_make_atom(env, "ok");
+#endif
+}
+
+
 // ── NIF table & load ──────────────────────────────────────────────────────────
 
 static ErlNifFunc nif_funcs[] = {
+    // ── Test harness (listed first to survive linker dead-code stripping) ──────
+    {"ui_tree",          0, nif_ui_tree,          0},
+    {"ui_debug",         0, nif_ui_debug,         0},
+    {"tap",              1, nif_tap,              0},
+    {"tap_xy",           2, nif_tap_xy,           0},
+    {"type_text",        1, nif_type_text,        0},
+    {"delete_backward",  0, nif_delete_backward,  0},
+    {"key_press",        1, nif_key_press,        0},
+    {"clear_text",       0, nif_clear_text,       0},
+    {"long_press_xy",    3, nif_long_press_xy,    0},
+    {"swipe_xy",         4, nif_swipe_xy,         0},
+    // ── Core mob functions ───────────────────────────────────────────────────
     {"platform",       0, nif_platform,       0},
     {"log",            1, nif_log,            0},
     {"log",            2, nif_log2,           0},

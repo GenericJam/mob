@@ -40,6 +40,7 @@ defmodule Mob.MixProject do
         "guides/theming.md": [title: "Theming"],
         "guides/navigation.md": [title: "Navigation"],
         "guides/device_capabilities.md": [title: "Device Capabilities"],
+        "guides/data.md": [title: "Data & Persistence"],
         "guides/testing.md": [title: "Testing"],
         "guides/troubleshooting.md": [title: "Troubleshooting"],
         "guides/agentic_coding.md": [title: "Agentic Coding"],
@@ -48,7 +49,7 @@ defmodule Mob.MixProject do
         Guides: ~r/guides\/.*/
       ],
       groups_for_modules: [
-        "Core": [Mob, Mob.App, Mob.Screen, Mob.Socket],
+        "Core": [Mob, Mob.App, Mob.Screen, Mob.Socket, Mob.State],
         "UI": [Mob.UI, Mob.Style, Mob.Renderer, Mob.Theme, Mob.Theme.Obsidian, Mob.Theme.Citrus, Mob.Theme.Birch],
         "Navigation": [Mob.Nav.Registry],
         "Device APIs": [Mob.Haptic, Mob.Clipboard, Mob.Share, Mob.Permissions, Mob.Biometric, Mob.Location, Mob.Camera, Mob.Photos, Mob.Files, Mob.Audio, Mob.Motion, Mob.Scanner, Mob.Notify],
