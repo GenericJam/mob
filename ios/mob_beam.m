@@ -47,6 +47,18 @@ void mob_start_beam(const char* app_module) {
     char beams_dir[256];
     snprintf(beams_dir, sizeof(beams_dir), OTP_ROOT "/%s", app_module);
 
+    // MOB_BEAMS_DIR — the directory where app BEAMs (and priv/) are deployed.
+    //
+    // Ecto.Migrator uses :code.priv_dir(app) to locate migration .exs files, but
+    // that requires an OTP lib structure ($OTP_ROOT/lib/APP-VERSION/ebin/). Mob
+    // apps use a flat -pa directory, so :code.priv_dir/1 returns {error, bad_name}
+    // and Ecto silently reports "Migrations already up" without running anything.
+    //
+    // Fix: deployer.ex copies priv/ into beams_dir/priv/. App code reads this
+    // env var and passes the explicit path to Ecto.Migrator.run/4. See also the
+    // corresponding comment in mob_beam.c for the Android side.
+    setenv("MOB_BEAMS_DIR", beams_dir, 1);
+
     const char* args[] = {
         "beam",
         "-S", "1:1", "-SDcpu", "1:1", "-SDio", "1", "-A", "1", "-sbwt", "none",

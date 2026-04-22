@@ -92,7 +92,26 @@ void mob_start_beam(const char* app_module) {
     setenv("ROOTDIR",  otp_root,    1);
     setenv("PROGNAME", "erl",       1);
     setenv("EMU",      "beam",      1);
-    setenv("HOME",     s_files_dir, 1);
+    setenv("HOME",         s_files_dir, 1);
+    setenv("MOB_DATA_DIR", s_files_dir, 1);
+
+    // MOB_BEAMS_DIR — the directory where app BEAMs (and priv/) are deployed.
+    //
+    // Problem: Ecto.Migrator uses :code.priv_dir(app) to locate migration .exs
+    // files. :code.priv_dir/1 works by looking up the app's OTP lib structure
+    // ($OTP_ROOT/lib/APP-VERSION/ebin/). Mob apps are deployed to a flat -pa
+    // directory (e.g. files/otp/my_app/*.beam), not an OTP lib structure, so
+    // :code.priv_dir/1 returns {error, bad_name} and Ecto silently reports
+    // "Migrations already up" without running anything.
+    //
+    // Fix: deployer.ex pushes priv/ alongside the BEAMs into beams_dir/priv/.
+    // App code reads MOB_BEAMS_DIR at startup and passes the explicit path to
+    // Ecto.Migrator.run/4 instead of relying on :code.priv_dir/1. This env var
+    // is the only reliable way to communicate beams_dir to Elixir code since it
+    // is computed here from getFilesDir() at runtime (the path includes the
+    // Android user ID which is not predictable at compile time).
+    setenv("MOB_BEAMS_DIR", beams_dir, 1);
+
     setenv("ERL_CRASH_DUMP",         crash_dump, 1);
     setenv("ERL_CRASH_DUMP_SECONDS", "30",       1);
 
