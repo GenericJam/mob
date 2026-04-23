@@ -54,6 +54,7 @@ void mob_start_beam(const char* app_module) {
 
     char beams_dir[256];
     snprintf(beams_dir, sizeof(beams_dir), OTP_ROOT "/%s", app_module);
+
     // MOB_BEAMS_DIR — the directory where app BEAMs (and priv/) are deployed.
     //
     // Ecto.Migrator uses :code.priv_dir(app) to locate migration .exs files, but
