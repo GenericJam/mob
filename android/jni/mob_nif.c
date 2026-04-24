@@ -39,6 +39,9 @@ static struct {
     jmethodID camera_capture_video;
     jmethodID camera_start_preview;
     jmethodID camera_stop_preview;
+    jmethodID alert_show;
+    jmethodID action_sheet_show;
+    jmethodID toast_show;
     jmethodID webview_eval_js;
     jmethodID webview_post_message;
     jmethodID webview_can_go_back;
@@ -1272,6 +1275,115 @@ static ERL_NIF_TERM nif_storage_save_to_photo_library(ErlNifEnv* env, int argc, 
 
 // ── WebView ────────────────────────────────────────────────────────────────────
 
+// ── Alert delivery (called from beam_jni.c when a dialog button is tapped) ──
+
+void mob_deliver_alert_action(const char* action) {
+    ErlNifEnv* e = enif_alloc_env();
+    ErlNifPid pid;
+    if (!enif_whereis_pid(e, enif_make_atom(e, "mob_screen"), &pid)) {
+        enif_free_env(e); return;
+    }
+    ERL_NIF_TERM msg = enif_make_tuple2(e,
+        enif_make_atom(e, "alert"),
+        enif_make_atom(e, action));
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+}
+
+// ── NIF: alert_show/3 ─────────────────────────────────────────────────────
+
+static ERL_NIF_TERM nif_alert_show(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary title_bin, msg_bin, btns_bin;
+    if (!enif_inspect_binary(env, argv[0], &title_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &title_bin))
+        return enif_make_badarg(env);
+    if (!enif_inspect_binary(env, argv[1], &msg_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[1], &msg_bin))
+        return enif_make_badarg(env);
+    if (!enif_inspect_binary(env, argv[2], &btns_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[2], &btns_bin))
+        return enif_make_badarg(env);
+
+    char* title = malloc(title_bin.size + 1);
+    memcpy(title, title_bin.data, title_bin.size);
+    title[title_bin.size] = '\0';
+
+    char* message = malloc(msg_bin.size + 1);
+    memcpy(message, msg_bin.data, msg_bin.size);
+    message[msg_bin.size] = '\0';
+
+    char* btns = malloc(btns_bin.size + 1);
+    memcpy(btns, btns_bin.data, btns_bin.size);
+    btns[btns_bin.size] = '\0';
+
+    int att; JNIEnv* jenv = get_jenv(&att);
+    jstring jtitle   = (*jenv)->NewStringUTF(jenv, title);
+    jstring jmessage = (*jenv)->NewStringUTF(jenv, message);
+    jstring jbtns    = (*jenv)->NewStringUTF(jenv, btns);
+    free(title); free(message); free(btns);
+    (*jenv)->CallStaticVoidMethod(jenv, Bridge.cls, Bridge.alert_show, jtitle, jmessage, jbtns);
+    (*jenv)->DeleteLocalRef(jenv, jtitle);
+    (*jenv)->DeleteLocalRef(jenv, jmessage);
+    (*jenv)->DeleteLocalRef(jenv, jbtns);
+    if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
+    return enif_make_atom(env, "ok");
+}
+
+// ── NIF: action_sheet_show/2 ──────────────────────────────────────────────
+
+static ERL_NIF_TERM nif_action_sheet_show(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary title_bin, btns_bin;
+    if (!enif_inspect_binary(env, argv[0], &title_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &title_bin))
+        return enif_make_badarg(env);
+    if (!enif_inspect_binary(env, argv[1], &btns_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[1], &btns_bin))
+        return enif_make_badarg(env);
+
+    char* title = malloc(title_bin.size + 1);
+    memcpy(title, title_bin.data, title_bin.size);
+    title[title_bin.size] = '\0';
+
+    char* btns = malloc(btns_bin.size + 1);
+    memcpy(btns, btns_bin.data, btns_bin.size);
+    btns[btns_bin.size] = '\0';
+
+    int att; JNIEnv* jenv = get_jenv(&att);
+    jstring jtitle = (*jenv)->NewStringUTF(jenv, title);
+    jstring jbtns  = (*jenv)->NewStringUTF(jenv, btns);
+    free(title); free(btns);
+    (*jenv)->CallStaticVoidMethod(jenv, Bridge.cls, Bridge.action_sheet_show, jtitle, jbtns);
+    (*jenv)->DeleteLocalRef(jenv, jtitle);
+    (*jenv)->DeleteLocalRef(jenv, jbtns);
+    if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
+    return enif_make_atom(env, "ok");
+}
+
+// ── NIF: toast_show/2 ────────────────────────────────────────────────────
+
+static ERL_NIF_TERM nif_toast_show(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary msg_bin;
+    char dur[8] = "short";
+    if (!enif_inspect_binary(env, argv[0], &msg_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &msg_bin))
+        return enif_make_badarg(env);
+    enif_get_atom(env, argv[1], dur, sizeof(dur), ERL_NIF_LATIN1);
+
+    char* msg = malloc(msg_bin.size + 1);
+    memcpy(msg, msg_bin.data, msg_bin.size);
+    msg[msg_bin.size] = '\0';
+
+    int att; JNIEnv* jenv = get_jenv(&att);
+    jstring jmsg = (*jenv)->NewStringUTF(jenv, msg);
+    jstring jdur = (*jenv)->NewStringUTF(jenv, dur);
+    free(msg);
+    (*jenv)->CallStaticVoidMethod(jenv, Bridge.cls, Bridge.toast_show, jmsg, jdur);
+    (*jenv)->DeleteLocalRef(jenv, jmsg);
+    (*jenv)->DeleteLocalRef(jenv, jdur);
+    if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
+    return enif_make_atom(env, "ok");
+}
+
 static ERL_NIF_TERM nif_webview_eval_js(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifBinary bin;
     if (!enif_inspect_binary(env, argv[0], &bin) &&
@@ -1375,6 +1487,9 @@ static ErlNifFunc nif_funcs[] = {
     {"storage_save_to_media_store",    2, nif_storage_save_to_media_store,    0},
     {"storage_external_files_dir",     1, nif_storage_external_files_dir,     0},
     {"storage_save_to_photo_library",  1, nif_storage_save_to_photo_library,  0},
+    {"alert_show",          3, nif_alert_show,          0},
+    {"action_sheet_show",   2, nif_action_sheet_show,   0},
+    {"toast_show",          2, nif_toast_show,          0},
     {"webview_eval_js",     1, nif_webview_eval_js,     0},
     {"webview_post_message",1, nif_webview_post_message,0},
     {"webview_can_go_back", 0, nif_webview_can_go_back, 0},
@@ -1434,6 +1549,9 @@ static int nif_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info) {
     CACHE(storage_dir,                  "(Ljava/lang/String;)Ljava/lang/String;")
     CACHE(storage_save_to_media_store,  "(JLjava/lang/String;Ljava/lang/String;)V")
     CACHE(storage_external_files_dir,   "(Ljava/lang/String;)Ljava/lang/String;")
+    CACHE(alert_show,                   "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V")
+    CACHE(action_sheet_show,            "(Ljava/lang/String;Ljava/lang/String;)V")
+    CACHE(toast_show,                   "(Ljava/lang/String;Ljava/lang/String;)V")
     CACHE(webview_eval_js,              "(Ljava/lang/String;)V")
     CACHE(webview_post_message,         "(Ljava/lang/String;)V")
     CACHE(webview_can_go_back,          "()Z")

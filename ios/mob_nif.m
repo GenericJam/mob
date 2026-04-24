@@ -3171,6 +3171,170 @@ void mob_deliver_webview_blocked(const char* url_utf8) {
 WKWebView* g_webview = nil;
 
 
+// ── Alert delivery (called from UIAlertAction blocks) ────────────────────────
+
+static void mob_deliver_alert_action(const char* action) {
+    ErlNifEnv* env = enif_alloc_env();
+    ErlNifPid pid;
+    if (enif_whereis_pid(env, enif_make_atom(env, "mob_screen"), &pid)) {
+        ERL_NIF_TERM msg = enif_make_tuple2(env,
+            enif_make_atom(env, "alert"),
+            enif_make_atom(env, action));
+        enif_send(NULL, &pid, env, msg);
+    }
+    enif_free_env(env);
+}
+
+// Returns the root UIViewController for presenting dialogs.
+static UIViewController* root_vc(void) {
+    for (UIWindowScene* scene in [UIApplication sharedApplication].connectedScenes) {
+        if (scene.activationState == UISceneActivationStateForegroundActive) {
+            UIWindow* win = scene.windows.firstObject;
+            UIViewController* vc = win.rootViewController;
+            while (vc.presentedViewController) vc = vc.presentedViewController;
+            return vc;
+        }
+    }
+    return nil;
+}
+
+// ── NIF: alert_show/3 ────────────────────────────────────────────────────────
+
+static ERL_NIF_TERM nif_alert_show(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary title_bin, msg_bin, btns_bin;
+    if (!enif_inspect_binary(env, argv[0], &title_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &title_bin)) return enif_make_badarg(env);
+    if (!enif_inspect_binary(env, argv[1], &msg_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[1], &msg_bin))   return enif_make_badarg(env);
+    if (!enif_inspect_binary(env, argv[2], &btns_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[2], &btns_bin))  return enif_make_badarg(env);
+
+    NSString* title   = [[NSString alloc] initWithBytes:title_bin.data length:title_bin.size encoding:NSUTF8StringEncoding];
+    NSString* message = msg_bin.size > 0 ? [[NSString alloc] initWithBytes:msg_bin.data length:msg_bin.size encoding:NSUTF8StringEncoding] : nil;
+    NSData*   btns_d  = [NSData dataWithBytes:btns_bin.data length:btns_bin.size];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSArray* buttons = [NSJSONSerialization JSONObjectWithData:btns_d options:0 error:nil];
+        if (![buttons isKindOfClass:[NSArray class]]) return;
+
+        UIAlertController* ac = [UIAlertController alertControllerWithTitle:title
+                                                                     message:message
+                                                              preferredStyle:UIAlertControllerStyleAlert];
+        for (NSDictionary* btn in buttons) {
+            NSString* label  = btn[@"label"]  ?: @"";
+            NSString* action = btn[@"action"] ?: @"dismiss";
+            NSString* style  = btn[@"style"]  ?: @"default";
+            UIAlertActionStyle as = UIAlertActionStyleDefault;
+            if ([style isEqualToString:@"cancel"])      as = UIAlertActionStyleCancel;
+            if ([style isEqualToString:@"destructive"]) as = UIAlertActionStyleDestructive;
+            const char* act_c = [action UTF8String];
+            [ac addAction:[UIAlertAction actionWithTitle:label style:as handler:^(UIAlertAction* _) {
+                mob_deliver_alert_action(act_c);
+            }]];
+        }
+        UIViewController* vc = root_vc();
+        if (vc) [vc presentViewController:ac animated:YES completion:nil];
+    });
+    return enif_make_atom(env, "ok");
+}
+
+// ── NIF: action_sheet_show/2 ─────────────────────────────────────────────────
+
+static ERL_NIF_TERM nif_action_sheet_show(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary title_bin, btns_bin;
+    if (!enif_inspect_binary(env, argv[0], &title_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &title_bin)) return enif_make_badarg(env);
+    if (!enif_inspect_binary(env, argv[1], &btns_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[1], &btns_bin))  return enif_make_badarg(env);
+
+    NSString* title  = title_bin.size > 0 ? [[NSString alloc] initWithBytes:title_bin.data length:title_bin.size encoding:NSUTF8StringEncoding] : nil;
+    NSData*   btns_d = [NSData dataWithBytes:btns_bin.data length:btns_bin.size];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSArray* buttons = [NSJSONSerialization JSONObjectWithData:btns_d options:0 error:nil];
+        if (![buttons isKindOfClass:[NSArray class]]) return;
+
+        UIAlertController* ac = [UIAlertController alertControllerWithTitle:title
+                                                                     message:nil
+                                                              preferredStyle:UIAlertControllerStyleActionSheet];
+        for (NSDictionary* btn in buttons) {
+            NSString* label  = btn[@"label"]  ?: @"";
+            NSString* action = btn[@"action"] ?: @"dismiss";
+            NSString* style  = btn[@"style"]  ?: @"default";
+            UIAlertActionStyle as = UIAlertActionStyleDefault;
+            if ([style isEqualToString:@"cancel"])      as = UIAlertActionStyleCancel;
+            if ([style isEqualToString:@"destructive"]) as = UIAlertActionStyleDestructive;
+            const char* act_c = [action UTF8String];
+            [ac addAction:[UIAlertAction actionWithTitle:label style:as handler:^(UIAlertAction* _) {
+                mob_deliver_alert_action(act_c);
+            }]];
+        }
+        UIViewController* vc = root_vc();
+        if (!vc) return;
+        // iPad requires a source view for action sheets
+        if (ac.popoverPresentationController) {
+            ac.popoverPresentationController.sourceView = vc.view;
+            ac.popoverPresentationController.sourceRect =
+                CGRectMake(vc.view.bounds.size.width / 2, vc.view.bounds.size.height, 0, 0);
+        }
+        [vc presentViewController:ac animated:YES completion:nil];
+    });
+    return enif_make_atom(env, "ok");
+}
+
+// ── NIF: toast_show/2 ────────────────────────────────────────────────────────
+
+static ERL_NIF_TERM nif_toast_show(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary msg_bin;
+    char dur[8] = "short";
+    if (!enif_inspect_binary(env, argv[0], &msg_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &msg_bin)) return enif_make_badarg(env);
+    enif_get_atom(env, argv[1], dur, sizeof(dur), ERL_NIF_LATIN1);
+
+    NSString* message = [[NSString alloc] initWithBytes:msg_bin.data length:msg_bin.size encoding:NSUTF8StringEncoding];
+    double seconds = strcmp(dur, "long") == 0 ? 3.5 : 2.0;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // Find the key window
+        UIWindow* window = nil;
+        for (UIWindowScene* scene in [UIApplication sharedApplication].connectedScenes) {
+            if (scene.activationState == UISceneActivationStateForegroundActive) {
+                window = scene.windows.firstObject; break;
+            }
+        }
+        if (!window) return;
+
+        UILabel* label = [[UILabel alloc] init];
+        label.text = message;
+        label.textColor = [UIColor whiteColor];
+        label.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.75];
+        label.textAlignment = NSTextAlignmentCenter;
+        label.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+        label.layer.cornerRadius = 12;
+        label.layer.masksToBounds = YES;
+        label.numberOfLines = 0;
+
+        CGFloat maxW = window.bounds.size.width - 48;
+        CGSize  fit  = [label sizeThatFits:CGSizeMake(maxW - 32, 200)];
+        CGFloat w    = MIN(fit.width + 32, maxW);
+        CGFloat h    = fit.height + 16;
+        CGFloat x    = (window.bounds.size.width - w) / 2;
+        CGFloat y    = window.bounds.size.height - h - 80; // above home indicator
+        label.frame  = CGRectMake(x, y, w, h);
+        label.alpha  = 0;
+
+        [window addSubview:label];
+        [UIView animateWithDuration:0.25 animations:^{ label.alpha = 1.0; } completion:^(BOOL _) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                [UIView animateWithDuration:0.25 animations:^{ label.alpha = 0; }
+                               completion:^(BOOL _) { [label removeFromSuperview]; }];
+            });
+        }];
+    });
+    return enif_make_atom(env, "ok");
+}
+
 static ERL_NIF_TERM nif_webview_eval_js(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifBinary bin;
     if (!enif_inspect_binary(env, argv[0], &bin) &&
@@ -3273,6 +3437,9 @@ static ErlNifFunc nif_funcs[] = {
     {"storage_save_to_photo_library",  1, nif_storage_save_to_photo_library,  0},
     {"storage_save_to_media_store",    2, nif_storage_save_to_media_store,    0},
     {"storage_external_files_dir",     1, nif_storage_external_files_dir,     0},
+    {"alert_show",          3, nif_alert_show,          0},
+    {"action_sheet_show",   2, nif_action_sheet_show,   0},
+    {"toast_show",          2, nif_toast_show,          0},
     {"webview_eval_js",     1, nif_webview_eval_js,     0},
     {"webview_post_message",1, nif_webview_post_message,0},
     {"webview_can_go_back", 0, nif_webview_can_go_back, 0},

@@ -61,4 +61,8 @@ void mob_deliver_push_token(jlong pid, const char* token);
 void mob_deliver_notification(jlong pid, const char* json);
 void mob_set_launch_notification(const char* json);
 
+// Deliver {:alert, action_atom} to the registered :mob_screen process.
+// Called from beam_jni.c when a dialog button is tapped.
+void mob_deliver_alert_action(const char* action);
+
 #endif // MOB_BEAM_H

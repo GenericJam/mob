@@ -53,6 +53,10 @@
          storage_save_to_photo_library/1,
          storage_save_to_media_store/2,
          storage_external_files_dir/1,
+         %% Alerts / overlays
+         alert_show/3,
+         action_sheet_show/2,
+         toast_show/2,
          %% WebView
          webview_eval_js/1,
          webview_post_message/1,
@@ -120,6 +124,10 @@
        storage_save_to_photo_library/1,
        storage_save_to_media_store/2,
        storage_external_files_dir/1,
+       %% Alerts / overlays
+       alert_show/3,
+       action_sheet_show/2,
+       toast_show/2,
        %% WebView
        webview_eval_js/1,
        webview_post_message/1,
@@ -180,6 +188,9 @@ storage_dir(_Location)                      -> erlang:nif_error(not_loaded).
 storage_save_to_photo_library(_Path)        -> erlang:nif_error(not_loaded).
 storage_save_to_media_store(_Path, _Type)   -> erlang:nif_error(not_loaded).
 storage_external_files_dir(_Type)           -> erlang:nif_error(not_loaded).
+alert_show(_Title, _Message, _ButtonsJson)  -> erlang:nif_error(not_loaded).
+action_sheet_show(_Title, _ButtonsJson)     -> erlang:nif_error(not_loaded).
+toast_show(_Message, _Duration)            -> erlang:nif_error(not_loaded).
 webview_eval_js(_Code)                      -> erlang:nif_error(not_loaded).
 webview_post_message(_Json)                 -> erlang:nif_error(not_loaded).
 webview_can_go_back()                       -> erlang:nif_error(not_loaded).
