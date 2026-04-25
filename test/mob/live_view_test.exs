@@ -26,7 +26,9 @@ defmodule Mob.LiveViewTest do
 
     test "default catch-all accepts any payload" do
       socket = %{}
-      assert {:noreply, ^socket} = BareView.handle_event("mob_message", %{"anything" => true}, socket)
+
+      assert {:noreply, ^socket} =
+               BareView.handle_event("mob_message", %{"anything" => true}, socket)
     end
 
     test "user-defined clause handles its pattern" do
@@ -40,6 +42,7 @@ defmodule Mob.LiveViewTest do
       # entirely. If you define handle_event/3, add your own catch-all for events
       # you don't handle — exactly as you would in any LiveView.
       socket = %{}
+
       assert_raise FunctionClauseError, fn ->
         HandlingView.handle_event("mob_message", %{"type" => "unknown"}, socket)
       end

@@ -6,17 +6,20 @@ defmodule Mob.StateTest do
     tmp = Path.join(System.tmp_dir!(), "mob_state_test_#{System.unique_integer([:positive])}")
     File.mkdir_p!(tmp)
     System.put_env("MOB_DATA_DIR", tmp)
+
     on_exit(fn ->
       System.delete_env("MOB_DATA_DIR")
       # Close the DETS table if still open, then clean up.
       :dets.close(:mob_state)
       File.rm_rf!(tmp)
     end)
+
     # Stop any running State process from a prior test.
     case Process.whereis(Mob.State) do
       nil -> :ok
       pid -> GenServer.stop(pid)
     end
+
     {:ok, _} = Mob.State.start_link()
     :ok
   end
@@ -61,8 +64,10 @@ defmodule Mob.StateTest do
       # the GenServer is killed before its terminate/2 can run dets.close/1.
       Mob.State.put(:kill_survived, :yes)
       pid = Process.whereis(Mob.State)
-      Process.unlink(pid)        # don't cascade the kill to the test process
-      Process.exit(pid, :kill)   # bypasses terminate/2, no dets.close
+      # don't cascade the kill to the test process
+      Process.unlink(pid)
+      # bypasses terminate/2, no dets.close
+      Process.exit(pid, :kill)
       Process.sleep(10)
       {:ok, _} = Mob.State.start_link()
       assert Mob.State.get(:kill_survived) == :yes

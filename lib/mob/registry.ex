@@ -27,8 +27,8 @@ defmodule Mob.Registry do
   # Built-in component mappings — same NIF module for both platforms for now
   @builtins [
     column: [android: {:mob_nif, :create_column, []}, ios: {:mob_nif, :create_column, []}],
-    row:    [android: {:mob_nif, :create_row, []},    ios: {:mob_nif, :create_row, []}],
-    text:   [android: {:mob_nif, :create_label, []},  ios: {:mob_nif, :create_label, []}],
+    row: [android: {:mob_nif, :create_row, []}, ios: {:mob_nif, :create_row, []}],
+    text: [android: {:mob_nif, :create_label, []}, ios: {:mob_nif, :create_label, []}],
     button: [android: {:mob_nif, :create_button, []}, ios: {:mob_nif, :create_button, []}],
     scroll: [android: {:mob_nif, :create_scroll, []}, ios: {:mob_nif, :create_scroll, []}]
   ]
@@ -61,9 +61,12 @@ defmodule Mob.Registry do
   def register(registry \\ __MODULE__, name, mappings) when is_atom(name) and is_list(mappings) do
     Agent.update(registry, fn state ->
       existing = Map.get(state, name, %{})
-      updated = Enum.reduce(mappings, existing, fn {platform, spec}, acc ->
-        Map.put(acc, platform, spec)
-      end)
+
+      updated =
+        Enum.reduce(mappings, existing, fn {platform, spec}, acc ->
+          Map.put(acc, platform, spec)
+        end)
+
       Map.put(state, name, updated)
     end)
   end

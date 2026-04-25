@@ -28,8 +28,10 @@ defmodule Mob.Motion do
   """
   @spec start(Mob.Socket.t(), keyword()) :: Mob.Socket.t()
   def start(socket, opts \\ []) do
-    sensors     = Keyword.get(opts, :sensors, [:accelerometer, :gyro])
-                  |> Enum.map(&Atom.to_string/1)
+    sensors =
+      Keyword.get(opts, :sensors, [:accelerometer, :gyro])
+      |> Enum.map(&Atom.to_string/1)
+
     interval_ms = Keyword.get(opts, :interval_ms, 100)
     :mob_nif.motion_start(sensors, interval_ms)
     socket

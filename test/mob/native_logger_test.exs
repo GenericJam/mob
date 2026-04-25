@@ -12,7 +12,7 @@ defmodule Mob.NativeLoggerTest do
       Agent.start_link(fn -> %{platform: platform, calls: []} end)
     end
 
-    def calls(pid),    do: Agent.get(pid, & &1.calls)
+    def calls(pid), do: Agent.get(pid, & &1.calls)
     def platform(pid), do: Agent.get(pid, & &1.platform)
 
     def log(pid, level, msg) do
@@ -28,7 +28,7 @@ defmodule Mob.NativeLoggerTest do
 
   defmodule BoundNIF do
     def bind(pid), do: Process.put(:mock_nif_pid, pid)
-    def platform,  do: MockNIF.platform(Process.get(:mock_nif_pid))
+    def platform, do: MockNIF.platform(Process.get(:mock_nif_pid))
     def log(level, msg), do: MockNIF.log(Process.get(:mock_nif_pid), level, msg)
   end
 
@@ -81,6 +81,7 @@ defmodule Mob.NativeLoggerTest do
         %{level: :info, msg: {:string, "hello world"}, meta: %{}},
         %{nif: BoundNIF}
       )
+
       assert [{:info, "hello world"}] = MockNIF.calls(pid)
     end
 
@@ -89,6 +90,7 @@ defmodule Mob.NativeLoggerTest do
         %{level: :warning, msg: {:report, %{key: :value}}, meta: %{}},
         %{nif: BoundNIF}
       )
+
       [{:warning, text}] = MockNIF.calls(pid)
       assert text =~ "key"
       assert text =~ "value"
@@ -99,6 +101,7 @@ defmodule Mob.NativeLoggerTest do
         %{level: :error, msg: {:format, "count=~p", [42]}, meta: %{}},
         %{nif: BoundNIF}
       )
+
       assert [{:error, "count=42"}] = MockNIF.calls(pid)
     end
 
@@ -107,32 +110,34 @@ defmodule Mob.NativeLoggerTest do
       # Give the async logger handler a moment to flush
       Process.sleep(50)
       calls = MockNIF.calls(pid)
+
       assert Enum.any?(calls, fn {level, msg} ->
-        level == :info and String.contains?(msg, "end-to-end test")
-      end)
+               level == :info and String.contains?(msg, "end-to-end test")
+             end)
     end
 
     test "Logger.error/1 reaches the handler with :error level", %{nif_pid: pid} do
       Logger.error("something broke")
       Process.sleep(50)
       calls = MockNIF.calls(pid)
+
       assert Enum.any?(calls, fn {level, msg} ->
-        level == :error and String.contains?(msg, "something broke")
-      end)
+               level == :error and String.contains?(msg, "something broke")
+             end)
     end
   end
 
   # ── level_to_nif/1 ───────────────────────────────────────────────────────────
 
   describe "level_to_nif/1" do
-    test "maps :debug to :debug",     do: assert NativeLogger.level_to_nif(:debug)     == :debug
-    test "maps :info to :info",       do: assert NativeLogger.level_to_nif(:info)      == :info
-    test "maps :notice to :info",     do: assert NativeLogger.level_to_nif(:notice)    == :info
-    test "maps :warning to :warning", do: assert NativeLogger.level_to_nif(:warning)   == :warning
-    test "maps :error to :error",     do: assert NativeLogger.level_to_nif(:error)     == :error
-    test "maps :critical to :error",  do: assert NativeLogger.level_to_nif(:critical)  == :error
-    test "maps :alert to :error",     do: assert NativeLogger.level_to_nif(:alert)     == :error
-    test "maps :emergency to :error", do: assert NativeLogger.level_to_nif(:emergency) == :error
+    test "maps :debug to :debug", do: assert(NativeLogger.level_to_nif(:debug) == :debug)
+    test "maps :info to :info", do: assert(NativeLogger.level_to_nif(:info) == :info)
+    test "maps :notice to :info", do: assert(NativeLogger.level_to_nif(:notice) == :info)
+    test "maps :warning to :warning", do: assert(NativeLogger.level_to_nif(:warning) == :warning)
+    test "maps :error to :error", do: assert(NativeLogger.level_to_nif(:error) == :error)
+    test "maps :critical to :error", do: assert(NativeLogger.level_to_nif(:critical) == :error)
+    test "maps :alert to :error", do: assert(NativeLogger.level_to_nif(:alert) == :error)
+    test "maps :emergency to :error", do: assert(NativeLogger.level_to_nif(:emergency) == :error)
   end
 
   # ── format_msg/2 ─────────────────────────────────────────────────────────────

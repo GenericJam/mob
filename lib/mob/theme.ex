@@ -84,29 +84,29 @@ defmodule Mob.Theme do
 
   defstruct [
     # ── Semantic colors ──────────────────────────────────────────────────────
-    primary:        :blue_500,
-    on_primary:     :white,
-    secondary:      :gray_600,
-    on_secondary:   :white,
-    surface:        :gray_800,
+    primary: :blue_500,
+    on_primary: :white,
+    secondary: :gray_600,
+    on_secondary: :white,
+    surface: :gray_800,
     surface_raised: :gray_700,
-    on_surface:     :gray_100,
-    muted:          :gray_500,
-    background:     :gray_900,
-    on_background:  :gray_100,
-    error:          :red_500,
-    on_error:       :white,
-    border:         :gray_700,
+    on_surface: :gray_100,
+    muted: :gray_500,
+    background: :gray_900,
+    on_background: :gray_100,
+    error: :red_500,
+    on_error: :white,
+    border: :gray_700,
 
     # ── Scale factors ─────────────────────────────────────────────────────
-    type_scale:  1.0,
+    type_scale: 1.0,
     space_scale: 1.0,
 
     # ── Corner radii (dp / pt) ─────────────────────────────────────────────
-    radius_sm:   6,
-    radius_md:   10,
-    radius_lg:   16,
-    radius_pill: 100,
+    radius_sm: 6,
+    radius_md: 10,
+    radius_lg: 16,
+    radius_pill: 100
   ]
 
   @type t :: %__MODULE__{}
@@ -116,7 +116,7 @@ defmodule Mob.Theme do
     space_sm: 8,
     space_md: 16,
     space_lg: 24,
-    space_xl: 32,
+    space_xl: 32
   }
 
   @doc """
@@ -166,19 +166,19 @@ defmodule Mob.Theme do
   @spec color_map(t()) :: %{atom() => color_value()}
   def color_map(%__MODULE__{} = t) do
     %{
-      primary:        t.primary,
-      on_primary:     t.on_primary,
-      secondary:      t.secondary,
-      on_secondary:   t.on_secondary,
-      surface:        t.surface,
+      primary: t.primary,
+      on_primary: t.on_primary,
+      secondary: t.secondary,
+      on_secondary: t.on_secondary,
+      surface: t.surface,
       surface_raised: t.surface_raised,
-      on_surface:     t.on_surface,
-      muted:          t.muted,
-      background:     t.background,
-      on_background:  t.on_background,
-      error:          t.error,
-      on_error:       t.on_error,
-      border:         t.border,
+      on_surface: t.on_surface,
+      muted: t.muted,
+      background: t.background,
+      on_background: t.on_background,
+      error: t.error,
+      on_error: t.on_error,
+      border: t.border
     }
   end
 
@@ -192,10 +192,10 @@ defmodule Mob.Theme do
   @spec radius_map(t()) :: %{atom() => non_neg_integer()}
   def radius_map(%__MODULE__{} = t) do
     %{
-      radius_sm:   t.radius_sm,
-      radius_md:   t.radius_md,
-      radius_lg:   t.radius_lg,
-      radius_pill: t.radius_pill,
+      radius_sm: t.radius_sm,
+      radius_md: t.radius_md,
+      radius_lg: t.radius_lg,
+      radius_pill: t.radius_pill
     }
   end
 end

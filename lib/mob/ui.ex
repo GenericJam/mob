@@ -39,10 +39,11 @@ defmodule Mob.UI do
   """
   @spec text(keyword() | map()) :: map()
   def text(props) when is_list(props), do: text(Map.new(props))
+
   def text(%{} = props) do
     %{
-      type:     :text,
-      props:    Map.take(props, @text_props),
+      type: :text,
+      props: Map.take(props, @text_props),
       children: []
     }
   end
@@ -65,13 +66,16 @@ defmodule Mob.UI do
   @spec webview(keyword() | map()) :: map()
   def webview(props \\ [])
   def webview(props) when is_list(props), do: webview(Map.new(props))
+
   def webview(%{} = props) do
     allow_str = (props[:allow] || []) |> Enum.join(",")
+
     node_props =
       %{url: props[:url] || "", allow: allow_str, show_url: props[:show_url] || false}
       |> then(fn p -> if props[:title], do: Map.put(p, :title, props[:title]), else: p end)
-      |> then(fn p -> if props[:width],  do: Map.put(p, :width,  props[:width]),  else: p end)
+      |> then(fn p -> if props[:width], do: Map.put(p, :width, props[:width]), else: p end)
       |> then(fn p -> if props[:height], do: Map.put(p, :height, props[:height]), else: p end)
+
     %{type: :web_view, props: node_props, children: []}
   end
 
@@ -88,10 +92,11 @@ defmodule Mob.UI do
   @spec camera_preview(keyword() | map()) :: map()
   def camera_preview(props \\ [])
   def camera_preview(props) when is_list(props), do: camera_preview(Map.new(props))
+
   def camera_preview(%{} = props) do
     %{
-      type:     :camera_preview,
-      props:    Map.take(props, [:facing, :width, :height]),
+      type: :camera_preview,
+      props: Map.take(props, [:facing, :width, :height]),
       children: []
     }
   end
@@ -113,6 +118,7 @@ defmodule Mob.UI do
   @spec native_view(module(), keyword() | map()) :: map()
   def native_view(module, props \\ [])
   def native_view(module, props) when is_list(props), do: native_view(module, Map.new(props))
+
   def native_view(module, %{} = props) when is_atom(module) do
     %{type: :native_view, props: Map.put(props, :module, module), children: []}
   end

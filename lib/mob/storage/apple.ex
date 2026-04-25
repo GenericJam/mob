@@ -42,8 +42,8 @@ defmodule Mob.Storage.Apple do
   @spec dir(atom()) :: String.t() | nil
   def dir(location) when location in @locations do
     case :mob_nif.storage_dir(location) do
-      :nil  -> nil
-      path  -> IO.iodata_to_binary(path)
+      nil -> nil
+      path -> IO.iodata_to_binary(path)
     end
   end
 

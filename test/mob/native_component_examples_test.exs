@@ -25,10 +25,10 @@ defmodule Mob.NativeComponentExamplesTest do
 
     def render(assigns) do
       %{
-        lat:             assigns.lat,
-        lon:             assigns.lon,
-        zoom:            assigns.zoom,
-        markers:         assigns.markers,
+        lat: assigns.lat,
+        lon: assigns.lon,
+        zoom: assigns.zoom,
+        markers: assigns.markers,
         selected_marker: assigns.selected_marker
       }
     end
@@ -76,9 +76,9 @@ defmodule Mob.NativeComponentExamplesTest do
 
     def render(assigns) do
       %{
-        data:           assigns.data,
-        style:          Atom.to_string(assigns.style),
-        color:          assigns.color,
+        data: assigns.data,
+        style: Atom.to_string(assigns.style),
+        color: assigns.color,
         selected_index: assigns.selected_index
       }
     end
@@ -110,10 +110,10 @@ defmodule Mob.NativeComponentExamplesTest do
 
     def render(assigns) do
       %{
-        url:      assigns.url,
+        url: assigns.url,
         autoplay: assigns.autoplay,
         controls: assigns.controls,
-        playing:  assigns.playing
+        playing: assigns.playing
       }
     end
 
@@ -159,9 +159,9 @@ defmodule Mob.NativeComponentExamplesTest do
 
     def render(assigns) do
       %{
-        url:          assigns.url,
+        url: assigns.url,
         current_page: assigns.current_page,
-        total_pages:  assigns.total_pages
+        total_pages: assigns.total_pages
       }
     end
 
@@ -194,9 +194,9 @@ defmodule Mob.NativeComponentExamplesTest do
 
     def render(assigns) do
       %{
-        model_url:       assigns.model_url,
+        model_url: assigns.model_url,
         enable_coaching: assigns.enable_coaching,
-        tracking_ready:  assigns.tracking_ready,
+        tracking_ready: assigns.tracking_ready,
         planes_detected: assigns.planes_detected
       }
     end
@@ -230,27 +230,27 @@ defmodule Mob.NativeComponentExamplesTest do
   describe "MapComponent mount/2" do
     test "defaults lat/lon/zoom when not provided" do
       socket = mount!(MapComponent, %{})
-      assert socket.assigns.lat  == 0.0
-      assert socket.assigns.lon  == 0.0
+      assert socket.assigns.lat == 0.0
+      assert socket.assigns.lon == 0.0
       assert socket.assigns.zoom == 12
     end
 
     test "accepts lat/lon/zoom from props" do
       socket = mount!(MapComponent, %{lat: 43.65, lon: -79.38, zoom: 15})
-      assert socket.assigns.lat  == 43.65
-      assert socket.assigns.lon  == -79.38
+      assert socket.assigns.lat == 43.65
+      assert socket.assigns.lon == -79.38
       assert socket.assigns.zoom == 15
     end
 
     test "defaults markers to empty list and selected_marker to nil" do
       socket = mount!(MapComponent, %{})
-      assert socket.assigns.markers         == []
+      assert socket.assigns.markers == []
       assert socket.assigns.selected_marker == nil
     end
 
     test "accepts markers list from props" do
       markers = [%{id: "a", lat: 43.65, lon: -79.38, title: "Union"}]
-      socket  = mount!(MapComponent, %{markers: markers})
+      socket = mount!(MapComponent, %{markers: markers})
       assert socket.assigns.markers == markers
     end
   end
@@ -258,16 +258,17 @@ defmodule Mob.NativeComponentExamplesTest do
   describe "MapComponent render/1" do
     test "includes all expected keys" do
       socket = mount!(MapComponent, %{lat: 43.65, lon: -79.38, zoom: 14})
-      props  = MapComponent.render(socket.assigns)
+      props = MapComponent.render(socket.assigns)
+
       assert Map.keys(props) |> Enum.sort() ==
                [:lat, :lon, :markers, :selected_marker, :zoom]
     end
 
     test "reflects current state" do
       socket = mount!(MapComponent, %{lat: 43.65, lon: -79.38, zoom: 14})
-      props  = MapComponent.render(socket.assigns)
-      assert props.lat  == 43.65
-      assert props.lon  == -79.38
+      props = MapComponent.render(socket.assigns)
+      assert props.lat == 43.65
+      assert props.lon == -79.38
       assert props.zoom == 14
     end
   end
@@ -281,16 +282,22 @@ defmodule Mob.NativeComponentExamplesTest do
 
     test "region_changed updates lat/lon/zoom" do
       socket = mount!(MapComponent, %{lat: 0.0, lon: 0.0, zoom: 12})
+
       {:noreply, updated} =
-        MapComponent.handle_event("region_changed", %{"lat" => 48.85, "lon" => 2.35, "zoom" => 16}, socket)
-      assert updated.assigns.lat  == 48.85
-      assert updated.assigns.lon  == 2.35
+        MapComponent.handle_event(
+          "region_changed",
+          %{"lat" => 48.85, "lon" => 2.35, "zoom" => 16},
+          socket
+        )
+
+      assert updated.assigns.lat == 48.85
+      assert updated.assigns.lon == 2.35
       assert updated.assigns.zoom == 16
     end
 
     test "map_tapped clears selected_marker" do
-      socket  = mount!(MapComponent, %{})
-      socket  = Mob.Socket.assign(socket, :selected_marker, "pin1")
+      socket = mount!(MapComponent, %{})
+      socket = Mob.Socket.assign(socket, :selected_marker, "pin1")
       {:noreply, updated} = MapComponent.handle_event("map_tapped", %{}, socket)
       assert updated.assigns.selected_marker == nil
     end
@@ -298,7 +305,7 @@ defmodule Mob.NativeComponentExamplesTest do
 
   describe "MapComponent update/2" do
     test "update re-mounts with new props" do
-      socket        = mount!(MapComponent, %{lat: 0.0, lon: 0.0})
+      socket = mount!(MapComponent, %{lat: 0.0, lon: 0.0})
       {:ok, updated} = MapComponent.update(%{lat: 51.5, lon: -0.12}, socket)
       assert updated.assigns.lat == 51.5
       assert updated.assigns.lon == -0.12
@@ -328,9 +335,9 @@ defmodule Mob.NativeComponentExamplesTest do
     end
 
     test "accepts data and custom color" do
-      data   = [%{x: 1, y: 10}, %{x: 2, y: 20}]
+      data = [%{x: 1, y: 10}, %{x: 2, y: 20}]
       socket = mount!(ChartComponent, %{data: data, color: "#FF3B30"})
-      assert socket.assigns.data  == data
+      assert socket.assigns.data == data
       assert socket.assigns.color == "#FF3B30"
     end
 
@@ -348,7 +355,8 @@ defmodule Mob.NativeComponentExamplesTest do
 
     test "includes all expected keys" do
       socket = mount!(ChartComponent, %{})
-      props  = ChartComponent.render(socket.assigns)
+      props = ChartComponent.render(socket.assigns)
+
       assert Map.keys(props) |> Enum.sort() ==
                [:color, :data, :selected_index, :style]
     end
@@ -382,13 +390,13 @@ defmodule Mob.NativeComponentExamplesTest do
     test "autoplay defaults to false and playing mirrors it" do
       socket = mount!(VideoComponent, %{url: "x"})
       assert socket.assigns.autoplay == false
-      assert socket.assigns.playing  == false
+      assert socket.assigns.playing == false
     end
 
     test "autoplay true sets playing true" do
       socket = mount!(VideoComponent, %{url: "x", autoplay: true})
       assert socket.assigns.autoplay == true
-      assert socket.assigns.playing  == true
+      assert socket.assigns.playing == true
     end
 
     test "controls defaults to true" do
@@ -410,15 +418,15 @@ defmodule Mob.NativeComponentExamplesTest do
   describe "VideoComponent render/1" do
     test "does not expose position or duration to native (managed internally)" do
       socket = mount!(VideoComponent, %{url: "x"})
-      props  = VideoComponent.render(socket.assigns)
+      props = VideoComponent.render(socket.assigns)
       refute Map.has_key?(props, :position)
       refute Map.has_key?(props, :duration)
     end
 
     test "includes url, autoplay, controls, playing" do
       socket = mount!(VideoComponent, %{url: "x", autoplay: true})
-      props  = VideoComponent.render(socket.assigns)
-      assert props.url     == "x"
+      props = VideoComponent.render(socket.assigns)
+      assert props.url == "x"
       assert props.playing == true
     end
   end
@@ -440,14 +448,20 @@ defmodule Mob.NativeComponentExamplesTest do
       socket = mount!(VideoComponent, %{url: "x", autoplay: true})
       socket = Mob.Socket.assign(socket, :position, 42.0)
       {:noreply, updated} = VideoComponent.handle_event("ended", %{}, socket)
-      assert updated.assigns.playing  == false
+      assert updated.assigns.playing == false
       assert updated.assigns.position == 0.0
     end
 
     test "time_update tracks position and duration" do
       socket = mount!(VideoComponent, %{url: "x"})
+
       {:noreply, updated} =
-        VideoComponent.handle_event("time_update", %{"position" => 12.5, "duration" => 180.0}, socket)
+        VideoComponent.handle_event(
+          "time_update",
+          %{"position" => 12.5, "duration" => 180.0},
+          socket
+        )
+
       assert updated.assigns.position == 12.5
       assert updated.assigns.duration == 180.0
     end
@@ -466,16 +480,16 @@ defmodule Mob.NativeComponentExamplesTest do
   describe "PDFComponent mount/2" do
     test "stores url and starts at page 1" do
       socket = mount!(PDFComponent, %{url: "https://example.com/doc.pdf"})
-      assert socket.assigns.url          == "https://example.com/doc.pdf"
+      assert socket.assigns.url == "https://example.com/doc.pdf"
       assert socket.assigns.current_page == 1
-      assert socket.assigns.total_pages  == nil
+      assert socket.assigns.total_pages == nil
     end
   end
 
   describe "PDFComponent render/1" do
     test "includes url, current_page, total_pages" do
       socket = mount!(PDFComponent, %{url: "x"})
-      props  = PDFComponent.render(socket.assigns)
+      props = PDFComponent.render(socket.assigns)
       assert Map.keys(props) |> Enum.sort() == [:current_page, :total_pages, :url]
     end
   end
@@ -489,26 +503,33 @@ defmodule Mob.NativeComponentExamplesTest do
 
     test "page_changed updates current page and total" do
       socket = mount!(PDFComponent, %{url: "x"})
+
       {:noreply, updated} =
         PDFComponent.handle_event("page_changed", %{"page" => 5, "total" => 20}, socket)
+
       assert updated.assigns.current_page == 5
-      assert updated.assigns.total_pages  == 20
+      assert updated.assigns.total_pages == 20
     end
 
     test "page_changed is idempotent on current page" do
       socket = mount!(PDFComponent, %{url: "x"})
-      {:noreply, s1} = PDFComponent.handle_event("page_changed", %{"page" => 3, "total" => 10}, socket)
-      {:noreply, s2} = PDFComponent.handle_event("page_changed", %{"page" => 3, "total" => 10}, s1)
+
+      {:noreply, s1} =
+        PDFComponent.handle_event("page_changed", %{"page" => 3, "total" => 10}, socket)
+
+      {:noreply, s2} =
+        PDFComponent.handle_event("page_changed", %{"page" => 3, "total" => 10}, s1)
+
       assert s2.assigns.current_page == 3
     end
   end
 
   describe "PDFComponent update/2" do
     test "switching url resets page to 1" do
-      socket         = mount!(PDFComponent, %{url: "doc1.pdf"})
-      socket         = Mob.Socket.assign(socket, :current_page, 7)
+      socket = mount!(PDFComponent, %{url: "doc1.pdf"})
+      socket = Mob.Socket.assign(socket, :current_page, 7)
       {:ok, updated} = PDFComponent.update(%{url: "doc2.pdf"}, socket)
-      assert updated.assigns.url          == "doc2.pdf"
+      assert updated.assigns.url == "doc2.pdf"
       assert updated.assigns.current_page == 1
     end
   end
@@ -521,7 +542,7 @@ defmodule Mob.NativeComponentExamplesTest do
     test "coaching defaults to enabled, tracking not ready, no planes" do
       socket = mount!(ARComponent, %{model_url: "robot.usdz"})
       assert socket.assigns.enable_coaching == true
-      assert socket.assigns.tracking_ready  == false
+      assert socket.assigns.tracking_ready == false
       assert socket.assigns.planes_detected == 0
     end
 
@@ -539,7 +560,8 @@ defmodule Mob.NativeComponentExamplesTest do
 
     test "includes model_url, enable_coaching, tracking_ready, planes_detected" do
       socket = mount!(ARComponent, %{model_url: "robot.usdz"})
-      props  = ARComponent.render(socket.assigns)
+      props = ARComponent.render(socket.assigns)
+
       assert Map.keys(props) |> Enum.sort() ==
                [:enable_coaching, :model_url, :planes_detected, :tracking_ready]
     end
@@ -561,8 +583,10 @@ defmodule Mob.NativeComponentExamplesTest do
 
     test "tap_in_world records position" do
       socket = mount!(ARComponent, %{model_url: "x"})
+
       {:noreply, updated} =
         ARComponent.handle_event("tap_in_world", %{"x" => 0.5, "y" => 0.0, "z" => -1.2}, socket)
+
       assert updated.assigns.tap_position == %{x: 0.5, y: 0.0, z: -1.2}
     end
   end
@@ -581,7 +605,7 @@ defmodule Mob.NativeComponentExamplesTest do
       test "#{module} — props contain module and id" do
         node = Mob.UI.native_view(unquote(module), id: :test)
         assert node.props.module == unquote(module)
-        assert node.props.id     == :test
+        assert node.props.id == :test
       end
 
       test "#{module} — children is always []" do
@@ -614,13 +638,15 @@ defmodule Mob.NativeComponentExamplesTest do
       platform = :rpc.call(@node, Application, :get_env, [:mob, :platform, :ios])
 
       {:ok, pid} =
-        :rpc.call(@node, Mob.ComponentServer, :start, [[
-          module:     MapComponent,
-          id:         :od_map_handle,
-          screen_pid: :rpc.call(@node, Process, :whereis, [:mob_screen]),
-          props:      %{lat: 43.65, lon: -79.38},
-          platform:   platform
-        ]])
+        :rpc.call(@node, Mob.ComponentServer, :start, [
+          [
+            module: MapComponent,
+            id: :od_map_handle,
+            screen_pid: :rpc.call(@node, Process, :whereis, [:mob_screen]),
+            props: %{lat: 43.65, lon: -79.38},
+            platform: platform
+          ]
+        ])
 
       handle = :rpc.call(@node, Mob.ComponentServer, :get_handle, [pid])
       assert is_integer(handle) and handle != 0
@@ -632,17 +658,19 @@ defmodule Mob.NativeComponentExamplesTest do
       screen_pid = :rpc.call(@node, Process, :whereis, [:mob_screen])
 
       {:ok, pid} =
-        :rpc.call(@node, Mob.ComponentServer, :start, [[
-          module:     ChartComponent,
-          id:         :od_chart,
-          screen_pid: screen_pid,
-          props:      %{data: [1, 2, 3], style: :bar},
-          platform:   :no_render
-        ]])
+        :rpc.call(@node, Mob.ComponentServer, :start, [
+          [
+            module: ChartComponent,
+            id: :od_chart,
+            screen_pid: screen_pid,
+            props: %{data: [1, 2, 3], style: :bar},
+            platform: :no_render
+          ]
+        ])
 
       props = :rpc.call(@node, Mob.ComponentServer, :render_props, [pid])
       assert props.style == "bar"
-      assert props.data  == [1, 2, 3]
+      assert props.data == [1, 2, 3]
 
       :rpc.call(@node, Process, :exit, [pid, :shutdown])
     end
@@ -651,16 +679,19 @@ defmodule Mob.NativeComponentExamplesTest do
       screen_pid = :rpc.call(@node, Process, :whereis, [:mob_screen])
 
       {:ok, pid} =
-        :rpc.call(@node, Mob.ComponentServer, :start, [[
-          module:     ChartComponent,
-          id:         :od_chart_event,
-          screen_pid: screen_pid,
-          props:      %{data: [10, 20, 30]},
-          platform:   :no_render
-        ]])
+        :rpc.call(@node, Mob.ComponentServer, :start, [
+          [
+            module: ChartComponent,
+            id: :od_chart_event,
+            screen_pid: screen_pid,
+            props: %{data: [10, 20, 30]},
+            platform: :no_render
+          ]
+        ])
 
       :rpc.call(@node, Mob.ComponentServer, :dispatch, [pid, "segment_tapped", %{"index" => 2}])
-      :rpc.call(@node, :sys, :get_state, [pid])  # flush mailbox
+      # flush mailbox
+      :rpc.call(@node, :sys, :get_state, [pid])
 
       props = :rpc.call(@node, Mob.ComponentServer, :render_props, [pid])
       assert props.selected_index == 2
@@ -672,19 +703,21 @@ defmodule Mob.NativeComponentExamplesTest do
       screen_pid = :rpc.call(@node, Process, :whereis, [:mob_screen])
 
       {:ok, pid} =
-        :rpc.call(@node, Mob.ComponentServer, :start, [[
-          module:     MapComponent,
-          id:         :od_map_update,
-          screen_pid: screen_pid,
-          props:      %{lat: 0.0, lon: 0.0, zoom: 12},
-          platform:   :no_render
-        ]])
+        :rpc.call(@node, Mob.ComponentServer, :start, [
+          [
+            module: MapComponent,
+            id: :od_map_update,
+            screen_pid: screen_pid,
+            props: %{lat: 0.0, lon: 0.0, zoom: 12},
+            platform: :no_render
+          ]
+        ])
 
       :rpc.call(@node, Mob.ComponentServer, :update, [pid, %{lat: 51.5, lon: -0.12, zoom: 14}])
       :rpc.call(@node, :sys, :get_state, [pid])
 
       props = :rpc.call(@node, Mob.ComponentServer, :render_props, [pid])
-      assert props.lat  == 51.5
+      assert props.lat == 51.5
       assert props.zoom == 14
 
       :rpc.call(@node, Process, :exit, [pid, :shutdown])
@@ -694,22 +727,32 @@ defmodule Mob.NativeComponentExamplesTest do
       screen_pid = :rpc.call(@node, Process, :whereis, [:mob_screen])
 
       {:ok, pid} =
-        :rpc.call(@node, Mob.ComponentServer, :start, [[
-          module:     PDFComponent,
-          id:         :od_pdf_term,
-          screen_pid: screen_pid,
-          props:      %{url: "test.pdf"},
-          platform:   :no_render
-        ]])
+        :rpc.call(@node, Mob.ComponentServer, :start, [
+          [
+            module: PDFComponent,
+            id: :od_pdf_term,
+            screen_pid: screen_pid,
+            props: %{url: "test.pdf"},
+            platform: :no_render
+          ]
+        ])
 
       assert {:ok, ^pid} =
-               :rpc.call(@node, Mob.ComponentRegistry, :lookup, [screen_pid, :od_pdf_term, PDFComponent])
+               :rpc.call(@node, Mob.ComponentRegistry, :lookup, [
+                 screen_pid,
+                 :od_pdf_term,
+                 PDFComponent
+               ])
 
       :rpc.call(@node, Process, :exit, [pid, :shutdown])
       Process.sleep(50)
 
       assert {:error, :not_found} =
-               :rpc.call(@node, Mob.ComponentRegistry, :lookup, [screen_pid, :od_pdf_term, PDFComponent])
+               :rpc.call(@node, Mob.ComponentRegistry, :lookup, [
+                 screen_pid,
+                 :od_pdf_term,
+                 PDFComponent
+               ])
     end
   end
 end

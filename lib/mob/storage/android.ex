@@ -36,7 +36,7 @@ defmodule Mob.Storage.Android do
   @spec external_files_dir(atom()) :: String.t() | nil
   def external_files_dir(type \\ :documents) do
     case :mob_nif.storage_external_files_dir(type) do
-      :nil -> nil
+      nil -> nil
       path -> IO.iodata_to_binary(path)
     end
   end

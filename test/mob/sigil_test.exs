@@ -81,6 +81,7 @@ defmodule Mob.SigilTest do
         <Text text="hello" />
       </Column>
       """
+
       assert node.type == :column
       assert node.props.padding == 16
       assert length(node.children) == 1
@@ -96,6 +97,7 @@ defmodule Mob.SigilTest do
         <Text text="three" />
       </Column>
       """
+
       assert length(node.children) == 3
       assert Enum.map(node.children, & &1.props.text) == ["one", "two", "three"]
     end
@@ -109,6 +111,7 @@ defmodule Mob.SigilTest do
         </Row>
       </Column>
       """
+
       assert node.type == :column
       [row] = node.children
       assert row.type == :row
@@ -125,6 +128,7 @@ defmodule Mob.SigilTest do
         </Row>
       </Column>
       """
+
       assert length(node.children) == 2
       [text, row] = node.children
       assert text.type == :text
@@ -138,34 +142,40 @@ defmodule Mob.SigilTest do
   describe "expression child slots {expr}" do
     test "injects a single node from an expression" do
       child = %{type: :text, props: %{text: "dynamic"}, children: []}
+
       node = ~MOB"""
       <Column>
         {child}
       </Column>
       """
+
       assert length(node.children) == 1
       assert hd(node.children).props.text == "dynamic"
     end
 
     test "injects a list of nodes from Enum.map" do
       items = ["a", "b", "c"]
+
       node = ~MOB"""
       <Column>
         {Enum.map(items, fn i -> %{type: :text, props: %{text: i}, children: []} end)}
       </Column>
       """
+
       assert length(node.children) == 3
       assert Enum.map(node.children, & &1.props.text) == ["a", "b", "c"]
     end
 
     test "expression child mixed with static child" do
       extra = %{type: :divider, props: %{}, children: []}
+
       node = ~MOB"""
       <Column>
         <Text text="header" />
         {extra}
       </Column>
       """
+
       assert length(node.children) == 2
       assert hd(node.children).type == :text
       assert List.last(node.children).type == :divider

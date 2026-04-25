@@ -19,8 +19,17 @@ defmodule Mob.Scanner do
   > `implementation 'androidx.camera:camera-view:1.3.0'`
   """
 
-  @type format :: :qr | :ean13 | :ean8 | :code128 | :code39 |
-                  :upca | :upce | :pdf417 | :aztec | :data_matrix
+  @type format ::
+          :qr
+          | :ean13
+          | :ean8
+          | :code128
+          | :code39
+          | :upca
+          | :upce
+          | :pdf417
+          | :aztec
+          | :data_matrix
 
   @doc """
   Open the barcode scanner.

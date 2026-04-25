@@ -4,7 +4,7 @@ defmodule Mob.MixProject do
   def project do
     [
       app: :mob,
-      version: "0.4.0",
+      version: "0.5.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -43,20 +43,42 @@ defmodule Mob.MixProject do
         "guides/data.md": [title: "Data & Persistence"],
         "guides/testing.md": [title: "Testing"],
         "guides/troubleshooting.md": [title: "Troubleshooting"],
-        "guides/agentic_coding.md": [title: "Agentic Coding"],
+        "guides/agentic_coding.md": [title: "Agentic Coding"]
       ],
       groups_for_extras: [
         Guides: ~r/guides\/.*/
       ],
       groups_for_modules: [
-        "Core": [Mob, Mob.App, Mob.Screen, Mob.Socket, Mob.State],
-        "UI": [Mob.UI, Mob.Style, Mob.Renderer, Mob.Theme, Mob.Theme.Obsidian, Mob.Theme.Citrus, Mob.Theme.Birch],
-        "Navigation": [Mob.Nav.Registry],
-        "Device APIs": [Mob.Haptic, Mob.Clipboard, Mob.Share, Mob.Permissions, Mob.Biometric, Mob.Location, Mob.Camera, Mob.Photos, Mob.Files, Mob.Audio, Mob.Motion, Mob.Scanner, Mob.Notify],
+        Core: [Mob, Mob.App, Mob.Screen, Mob.Socket, Mob.State],
+        UI: [
+          Mob.UI,
+          Mob.Style,
+          Mob.Renderer,
+          Mob.Theme,
+          Mob.Theme.Obsidian,
+          Mob.Theme.Citrus,
+          Mob.Theme.Birch
+        ],
+        Navigation: [Mob.Nav.Registry],
+        "Device APIs": [
+          Mob.Haptic,
+          Mob.Clipboard,
+          Mob.Share,
+          Mob.Permissions,
+          Mob.Biometric,
+          Mob.Location,
+          Mob.Camera,
+          Mob.Photos,
+          Mob.Files,
+          Mob.Audio,
+          Mob.Motion,
+          Mob.Scanner,
+          Mob.Notify
+        ],
         "Testing & Debugging": [Mob.Test],
-        "Internals": [Mob.Dist, Mob.NativeLogger, Mob.List, Mob.Sigil],
+        Internals: [Mob.Dist, Mob.NativeLogger, Mob.List, Mob.Sigil]
       ],
-      before_closing_body_tag: &before_closing_body_tag/1,
+      before_closing_body_tag: &before_closing_body_tag/1
     ]
   end
 
@@ -74,7 +96,7 @@ defmodule Mob.MixProject do
   defp before_closing_body_tag(_), do: ""
 
   defp elixirc_paths(:test), do: ["lib", "test/onboarding", "test/onboarding/support"]
-  defp elixirc_paths(_),     do: ["lib"]
+  defp elixirc_paths(_), do: ["lib"]
 
   defp package do
     [

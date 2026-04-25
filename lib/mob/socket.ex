@@ -13,16 +13,16 @@ defmodule Mob.Socket do
   @type platform :: :android | :ios
 
   @type t :: %__MODULE__{
-    assigns: map(),
-    __mob__: %{
-      screen: module() | nil,
-      platform: platform(),
-      root_view: term(),
-      view_tree: map(),
-      nav_stack: list(),
-      nav_action: term()
-    }
-  }
+          assigns: map(),
+          __mob__: %{
+            screen: module() | nil,
+            platform: platform(),
+            root_view: term(),
+            view_tree: map(),
+            nav_stack: list(),
+            nav_action: term()
+          }
+        }
 
   defstruct assigns: %{},
             __mob__: %{
@@ -43,6 +43,7 @@ defmodule Mob.Socket do
   @spec new(module(), keyword()) :: t()
   def new(screen, opts \\ []) do
     platform = Keyword.get(opts, :platform, :android)
+
     %__MODULE__{
       assigns: %{},
       __mob__: %{

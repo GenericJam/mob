@@ -29,23 +29,34 @@ defmodule Mob.Theme.Birch do
   def theme do
     Mob.Theme.build(
       # ── Brand ──────────────────────────────────────────────────────────────
-      primary:      :brown_600,      # 0xFF7C4A1E — warm chestnut
-      on_primary:   0xFFFFF4E8,      # warm cream — readable on chestnut
-      secondary:    0xFF5C7A52,      # muted sage green — complements chestnut
-      on_secondary: 0xFFFFF4E8,      # warm cream
+      # 0xFF7C4A1E — warm chestnut
+      primary: :brown_600,
+      # warm cream — readable on chestnut
+      on_primary: 0xFFFFF4E8,
+      # muted sage green — complements chestnut
+      secondary: 0xFF5C7A52,
+      # warm cream
+      on_secondary: 0xFFFFF4E8,
 
       # ── Surfaces ───────────────────────────────────────────────────────────
-      background:    0xFFF5EFE0,     # warm parchment
-      on_background: 0xFF2C1A08,     # dark coffee — high contrast on parchment
-      surface:       0xFFEDE6D5,     # slightly darker warm card
-      surface_raised: 0xFFE0D7C3,    # elevated card
-      on_surface:    0xFF2C1A08,     # dark coffee
-      muted:         0xFF8A7A6A,     # warm gray-brown — placeholders / captions
+      # warm parchment
+      background: 0xFFF5EFE0,
+      # dark coffee — high contrast on parchment
+      on_background: 0xFF2C1A08,
+      # slightly darker warm card
+      surface: 0xFFEDE6D5,
+      # elevated card
+      surface_raised: 0xFFE0D7C3,
+      # dark coffee
+      on_surface: 0xFF2C1A08,
+      # warm gray-brown — placeholders / captions
+      muted: 0xFF8A7A6A,
 
       # ── Utility ────────────────────────────────────────────────────────────
-      error:    :red_500,
+      error: :red_500,
       on_error: :white,
-      border:   0xFFCCBCA8          # warm beige divider
+      # warm beige divider
+      border: 0xFFCCBCA8
     )
   end
 end

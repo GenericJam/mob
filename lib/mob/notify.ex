@@ -48,10 +48,10 @@ defmodule Mob.Notify do
   """
   @spec schedule(Mob.Socket.t(), keyword()) :: Mob.Socket.t()
   def schedule(socket, opts) do
-    id    = Keyword.fetch!(opts, :id)
+    id = Keyword.fetch!(opts, :id)
     title = Keyword.fetch!(opts, :title)
-    body  = Keyword.fetch!(opts, :body)
-    data  = Keyword.get(opts, :data, %{})
+    body = Keyword.fetch!(opts, :body)
+    data = Keyword.get(opts, :data, %{})
 
     trigger_at =
       case opts[:at] do
@@ -62,13 +62,14 @@ defmodule Mob.Notify do
     # Convert data map keys to strings for JSON serialisation
     data_str = Map.new(data, fn {k, v} -> {to_string(k), v} end)
 
-    opts_json = :json.encode(%{
-      "id"         => id,
-      "title"      => title,
-      "body"       => body,
-      "trigger_at" => trigger_at,
-      "data"       => data_str
-    })
+    opts_json =
+      :json.encode(%{
+        "id" => id,
+        "title" => title,
+        "body" => body,
+        "trigger_at" => trigger_at,
+        "data" => data_str
+      })
 
     :mob_nif.notify_schedule(opts_json)
     socket

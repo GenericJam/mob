@@ -13,26 +13,37 @@ defmodule Mob.Nav.ScreenNavTest do
     def mount(_params, _session, socket), do: {:ok, Mob.Socket.assign(socket, :page, :home)}
     def render(assigns), do: %{type: :text, props: %{text: "home #{assigns.page}"}, children: []}
 
-    def handle_event("go_profile", _, socket),       do: {:noreply, Mob.Socket.push_screen(socket, @profile)}
-    def handle_event("go_settings", _, socket),      do: {:noreply, Mob.Socket.push_screen(socket, :settings, %{from: :home})}
-    def handle_event("reset_to_profile", _, socket), do: {:noreply, Mob.Socket.reset_to(socket, @profile)}
+    def handle_event("go_profile", _, socket),
+      do: {:noreply, Mob.Socket.push_screen(socket, @profile)}
+
+    def handle_event("go_settings", _, socket),
+      do: {:noreply, Mob.Socket.push_screen(socket, :settings, %{from: :home})}
+
+    def handle_event("reset_to_profile", _, socket),
+      do: {:noreply, Mob.Socket.reset_to(socket, @profile)}
   end
 
   defmodule ProfileScreen do
     use Mob.Screen
 
-    @home     Mob.Nav.ScreenNavTest.HomeScreen
+    @home Mob.Nav.ScreenNavTest.HomeScreen
     @settings Mob.Nav.ScreenNavTest.SettingsScreen
 
     def mount(params, _session, socket) do
       {:ok, Mob.Socket.assign(socket, :name, Map.get(params, :name, "anon"))}
     end
-    def render(assigns), do: %{type: :text, props: %{text: "profile #{assigns.name}"}, children: []}
 
-    def handle_event("back", _, socket),           do: {:noreply, Mob.Socket.pop_screen(socket)}
-    def handle_event("back_to_root", _, socket),   do: {:noreply, Mob.Socket.pop_to_root(socket)}
-    def handle_event("go_settings", _, socket),    do: {:noreply, Mob.Socket.push_screen(socket, @settings)}
-    def handle_event("reset_to_home", _, socket),  do: {:noreply, Mob.Socket.reset_to(socket, @home)}
+    def render(assigns),
+      do: %{type: :text, props: %{text: "profile #{assigns.name}"}, children: []}
+
+    def handle_event("back", _, socket), do: {:noreply, Mob.Socket.pop_screen(socket)}
+    def handle_event("back_to_root", _, socket), do: {:noreply, Mob.Socket.pop_to_root(socket)}
+
+    def handle_event("go_settings", _, socket),
+      do: {:noreply, Mob.Socket.push_screen(socket, @settings)}
+
+    def handle_event("reset_to_home", _, socket),
+      do: {:noreply, Mob.Socket.reset_to(socket, @home)}
   end
 
   defmodule SettingsScreen do
@@ -43,11 +54,13 @@ defmodule Mob.Nav.ScreenNavTest do
     def mount(params, _session, socket) do
       {:ok, Mob.Socket.assign(socket, :from, Map.get(params, :from, :unknown))}
     end
-    def render(assigns), do: %{type: :text, props: %{text: "settings from=#{assigns.from}"}, children: []}
 
-    def handle_event("back", _, socket),          do: {:noreply, Mob.Socket.pop_screen(socket)}
-    def handle_event("back_to_root", _, socket),  do: {:noreply, Mob.Socket.pop_to_root(socket)}
-    def handle_event("pop_to_home", _, socket),   do: {:noreply, Mob.Socket.pop_to(socket, @home)}
+    def render(assigns),
+      do: %{type: :text, props: %{text: "settings from=#{assigns.from}"}, children: []}
+
+    def handle_event("back", _, socket), do: {:noreply, Mob.Socket.pop_screen(socket)}
+    def handle_event("back_to_root", _, socket), do: {:noreply, Mob.Socket.pop_to_root(socket)}
+    def handle_event("pop_to_home", _, socket), do: {:noreply, Mob.Socket.pop_to(socket, @home)}
   end
 
   defmodule DemoApp do

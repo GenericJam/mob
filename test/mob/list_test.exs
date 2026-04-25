@@ -35,10 +35,10 @@ defmodule Mob.ListTest do
     end
 
     test "preserves existing renderers" do
-      socket  = Mob.Socket.new(Mob.ListTest)
+      socket = Mob.Socket.new(Mob.ListTest)
       r1 = fn item -> %{type: :text, props: %{text: item}, children: []} end
       r2 = fn item -> %{type: :text, props: %{text: to_string(item)}, children: []} end
-      socket  = socket |> List.put_renderer(:list_a, r1) |> List.put_renderer(:list_b, r2)
+      socket = socket |> List.put_renderer(:list_a, r1) |> List.put_renderer(:list_b, r2)
       renderers = Map.get(socket.__mob__, :list_renderers)
       assert renderers[:list_a] == r1
       assert renderers[:list_b] == r2
@@ -47,18 +47,20 @@ defmodule Mob.ListTest do
 
   describe "expand/3" do
     test "leaves non-list nodes unchanged" do
-      pid  = self()
+      pid = self()
       node = %{type: :text, props: %{text: "hi"}, children: []}
       assert List.expand(node, %{}, pid) == node
     end
 
     test "expands :list node into :lazy_list with default renderer" do
-      pid  = self()
+      pid = self()
+
       node = %{
-        type:     :list,
-        props:    %{id: :my_list, items: ["a", "b"]},
+        type: :list,
+        props: %{id: :my_list, items: ["a", "b"]},
         children: []
       }
+
       expanded = List.expand(node, %{}, pid)
 
       assert expanded.type == :lazy_list
@@ -66,12 +68,14 @@ defmodule Mob.ListTest do
     end
 
     test "each row is a :box wrapping the rendered item" do
-      pid  = self()
+      pid = self()
+
       node = %{
-        type:     :list,
-        props:    %{id: :my_list, items: ["x"]},
+        type: :list,
+        props: %{id: :my_list, items: ["x"]},
         children: []
       }
+
       [row] = List.expand(node, %{}, pid).children
 
       assert row.type == :box
@@ -81,26 +85,31 @@ defmodule Mob.ListTest do
     end
 
     test "uses custom renderer when registered" do
-      pid      = self()
+      pid = self()
+
       renderer = fn item ->
         %{type: :text, props: %{text: "custom:#{item}"}, children: []}
       end
+
       node = %{
-        type:     :list,
-        props:    %{id: :my_list, items: ["a"]},
+        type: :list,
+        props: %{id: :my_list, items: ["a"]},
         children: []
       }
+
       [row] = List.expand(node, %{my_list: renderer}, pid).children
       assert hd(row.children).props.text == "custom:a"
     end
 
     test "on_end_reached prop passes through to lazy_list" do
-      pid  = self()
+      pid = self()
+
       node = %{
-        type:     :list,
-        props:    %{id: :my_list, items: [], on_end_reached: {pid, :load_more}},
+        type: :list,
+        props: %{id: :my_list, items: [], on_end_reached: {pid, :load_more}},
         children: []
       }
+
       expanded = List.expand(node, %{}, pid)
       assert expanded.props.on_end_reached == {pid, :load_more}
       refute Map.has_key?(expanded.props, :id)
@@ -108,14 +117,16 @@ defmodule Mob.ListTest do
     end
 
     test "recurses into children of non-list nodes" do
-      pid  = self()
+      pid = self()
+
       node = %{
-        type:     :column,
-        props:    %{},
+        type: :column,
+        props: %{},
         children: [
           %{type: :list, props: %{id: :inner, items: ["z"]}, children: []}
         ]
       }
+
       expanded = List.expand(node, %{}, pid)
       assert expanded.type == :column
       [child] = expanded.children
@@ -132,13 +143,14 @@ defmodule Mob.ListTest do
           socket
           |> Mob.Socket.assign(:items, ["alpha", "beta", "gamma"])
           |> Mob.Socket.assign(:selected, nil)
+
         {:ok, socket}
       end
 
       def render(assigns) do
         %{
-          type:     :list,
-          props:    %{id: :my_list, items: assigns.items},
+          type: :list,
+          props: %{id: :my_list, items: assigns.items},
           children: []
         }
       end

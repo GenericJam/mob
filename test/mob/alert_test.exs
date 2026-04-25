@@ -37,6 +37,7 @@ defmodule Mob.AlertTest do
         [label: "Delete", style: :destructive, action: :delete],
         [label: "Cancel", style: :cancel]
       ]
+
       json = Mob.Alert.encode_buttons(buttons)
       decoded = :json.decode(json)
       assert length(decoded) == 2

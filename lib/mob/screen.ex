@@ -164,12 +164,14 @@ defmodule Mob.Screen do
             # consistent with foreground notification delivery.
             case :mob_nif.take_launch_notification() do
               :none -> :ok
-              json  -> send(self(), {:mob_launch_notification, json})
+              json -> send(self(), {:mob_launch_notification, json})
             end
+
             do_render(screen_module, mounted_socket)
           else
             mounted_socket
           end
+
         {:ok, {screen_module, socket, [], render_mode}}
 
       {:error, reason} ->
@@ -183,23 +185,27 @@ defmodule Mob.Screen do
       {:noreply, new_socket} ->
         {module, new_socket, nav_history, transition} =
           apply_nav_action(module, new_socket, nav_history)
+
         new_socket =
           if render_mode == :render do
             do_render(module, new_socket, transition)
           else
             new_socket
           end
+
         {:reply, :ok, {module, new_socket, nav_history, render_mode}}
 
       {:reply, _response, new_socket} ->
         {module, new_socket, nav_history, transition} =
           apply_nav_action(module, new_socket, nav_history)
+
         new_socket =
           if render_mode == :render do
             do_render(module, new_socket, transition)
           else
             new_socket
           end
+
         {:reply, :ok, {module, new_socket, nav_history, render_mode}}
     end
   end
@@ -218,14 +224,17 @@ defmodule Mob.Screen do
   """
   def handle_call({:navigate, nav_action}, _from, {module, socket, nav_history, render_mode}) do
     socket = Mob.Socket.put_mob(socket, :nav_action, nav_action)
+
     {new_module, new_socket, new_history, transition} =
       apply_nav_action(module, socket, nav_history)
+
     new_socket =
       if render_mode == :render do
         do_render(new_module, new_socket, transition)
       else
         new_socket
       end
+
     {:reply, :ok, {new_module, new_socket, new_history, render_mode}}
   end
 
@@ -235,12 +244,14 @@ defmodule Mob.Screen do
 
   def handle_call(:inspect, _from, {module, socket, nav_history, _mode} = state) do
     tree = module.render(socket.assigns)
+
     info = %{
-      screen:      module,
-      assigns:     socket.assigns,
+      screen: module,
+      assigns: socket.assigns,
       nav_history: Enum.map(nav_history, fn {mod, _} -> mod end),
-      tree:        tree,
+      tree: tree
     }
+
     {:reply, info, state}
   end
 
@@ -264,29 +275,51 @@ defmodule Mob.Screen do
   # Decode the JSON and re-dispatch as the user-facing event tuple.
   def handle_info({:mob_file_result, event, sub, json_binary}, state) do
     event_atom = String.to_atom(event)
-    sub_atom   = String.to_atom(sub)
-    items = case :json.decode(json_binary) do
-      list when is_list(list) ->
-        Enum.map(list, fn item when is_map(item) ->
-          Map.new(item, fn {k, v} -> {String.to_atom(k), v} end)
-        end)
-      _ -> []
-    end
-    msg = case {event_atom, sub_atom} do
-      {:camera, :photo}   -> {:camera, :photo,   List.first(items) || %{}}
-      {:camera, :video}   -> {:camera, :video,   List.first(items) || %{}}
-      {:camera, :cancelled} -> {:camera, :cancelled}
-      {:photos, :picked}  -> {:photos, :picked,  items}
-      {:files,  :picked}  -> {:files,  :picked,  items}
-      {:audio,   :recorded}       -> {:audio,  :recorded, List.first(items) || %{}}
-      {:storage, :saved_to_library} ->
-        item = List.first(items) || %{}
-        {:storage, :saved_to_library, item[:path]}
-      {:scan,   :result}  ->
-        item = List.first(items) || %{}
-        {:scan, :result, %{type: item[:type] |> to_atom_safe(), value: item[:value]}}
-      _ -> {event_atom, sub_atom, items}
-    end
+    sub_atom = String.to_atom(sub)
+
+    items =
+      case :json.decode(json_binary) do
+        list when is_list(list) ->
+          Enum.map(list, fn item when is_map(item) ->
+            Map.new(item, fn {k, v} -> {String.to_atom(k), v} end)
+          end)
+
+        _ ->
+          []
+      end
+
+    msg =
+      case {event_atom, sub_atom} do
+        {:camera, :photo} ->
+          {:camera, :photo, List.first(items) || %{}}
+
+        {:camera, :video} ->
+          {:camera, :video, List.first(items) || %{}}
+
+        {:camera, :cancelled} ->
+          {:camera, :cancelled}
+
+        {:photos, :picked} ->
+          {:photos, :picked, items}
+
+        {:files, :picked} ->
+          {:files, :picked, items}
+
+        {:audio, :recorded} ->
+          {:audio, :recorded, List.first(items) || %{}}
+
+        {:storage, :saved_to_library} ->
+          item = List.first(items) || %{}
+          {:storage, :saved_to_library, item[:path]}
+
+        {:scan, :result} ->
+          item = List.first(items) || %{}
+          {:scan, :result, %{type: item[:type] |> to_atom_safe(), value: item[:value]}}
+
+        _ ->
+          {event_atom, sub_atom, items}
+      end
+
     handle_info(msg, state)
   end
 
@@ -324,14 +357,17 @@ defmodule Mob.Screen do
   # the internal {:tap, {:list, ...}} tag format.
   def handle_info({:tap, {:list, id, :select, index}}, {module, socket, nav_history, render_mode}) do
     {:noreply, new_socket} = module.handle_info({:select, id, index}, socket)
+
     {module, new_socket, nav_history, transition} =
       apply_nav_action(module, new_socket, nav_history)
+
     new_socket =
       if render_mode == :render do
         do_render(module, new_socket, transition)
       else
         new_socket
       end
+
     {:noreply, {module, new_socket, nav_history, render_mode}}
   end
 
@@ -343,19 +379,23 @@ defmodule Mob.Screen do
       else
         socket
       end
+
     {:noreply, {module, new_socket, nav_history, render_mode}}
   end
 
   def handle_info(message, {module, socket, nav_history, render_mode}) do
     {:noreply, new_socket} = module.handle_info(message, socket)
+
     {module, new_socket, nav_history, transition} =
       apply_nav_action(module, new_socket, nav_history)
+
     new_socket =
       if render_mode == :render do
         do_render(module, new_socket, transition)
       else
         new_socket
       end
+
     {:noreply, {module, new_socket, nav_history, render_mode}}
   end
 
@@ -380,9 +420,11 @@ defmodule Mob.Screen do
       {:push, dest, params} ->
         new_module = resolve_module(dest)
         platform = socket.__mob__.platform
+
         new_base =
           Mob.Socket.new(new_module, platform: platform)
           |> Mob.Socket.assign(:safe_area, socket.assigns.safe_area)
+
         {:ok, mounted} = new_module.mount(params, %{}, new_base)
         saved = {module, clear_nav_action(socket)}
         {new_module, mounted, [saved | nav_history], :push}
@@ -419,9 +461,11 @@ defmodule Mob.Screen do
       {:reset, dest, params} ->
         new_module = resolve_module(dest)
         platform = socket.__mob__.platform
+
         new_base =
           Mob.Socket.new(new_module, platform: platform)
           |> Mob.Socket.assign(:safe_area, socket.assigns.safe_area)
+
         {:ok, mounted} = new_module.mount(params, %{}, new_base)
         {new_module, mounted, [], :reset}
 
@@ -471,36 +515,46 @@ defmodule Mob.Screen do
   defp decode_notification_json(json) when is_binary(json) do
     case :json.decode(json) do
       map when is_map(map) ->
-        source = case Map.get(map, "source", "local") do
-          "push" -> :push
-          _      -> :local
-        end
-        data = case Map.get(map, "data") do
-          d when is_map(d) ->
-            Map.new(d, fn {k, v} -> {String.to_atom(k), v} end)
-          _ -> %{}
-        end
+        source =
+          case Map.get(map, "source", "local") do
+            "push" -> :push
+            _ -> :local
+          end
+
+        data =
+          case Map.get(map, "data") do
+            d when is_map(d) ->
+              Map.new(d, fn {k, v} -> {String.to_atom(k), v} end)
+
+            _ ->
+              %{}
+          end
+
         %{
-          id:     Map.get(map, "id"),
-          title:  Map.get(map, "title"),
-          body:   Map.get(map, "body"),
-          data:   data,
+          id: Map.get(map, "id"),
+          title: Map.get(map, "title"),
+          body: Map.get(map, "body"),
+          data: data,
           source: source
         }
-      _ -> %{source: :local, data: %{}}
+
+      _ ->
+        %{source: :local, data: %{}}
     end
   end
 
   # ── Render pipeline ───────────────────────────────────────────────────────
 
   defp do_render(module, socket, transition \\ :none) do
-    platform       = socket.__mob__.platform
+    platform = socket.__mob__.platform
     list_renderers = Map.get(socket.__mob__, :list_renderers, %{})
     socket = ensure_safe_area(socket, platform)
+
     {tree, active_component_keys} =
       module.render(socket.assigns)
       |> Mob.List.expand(list_renderers, self())
       |> Mob.Component.expand(self(), platform)
+
     Mob.ComponentRegistry.reconcile(self(), active_component_keys)
     {:ok, token} = Mob.Renderer.render(tree, platform, :mob_nif, transition)
     Mob.Socket.put_root_view(socket, token)
@@ -517,6 +571,7 @@ defmodule Mob.Screen do
         else
           %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
         end
+
       Mob.Socket.assign(socket, :safe_area, safe_area)
     end
   end

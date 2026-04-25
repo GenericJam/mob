@@ -24,7 +24,7 @@ defmodule Mob.Audio do
   iOS: `AVAudioPlayer` / `AVPlayer`. Android: `MediaPlayer`.
   """
 
-  @type format  :: :aac | :wav
+  @type format :: :aac | :wav
   @type quality :: :low | :medium | :high
 
   @doc """
@@ -44,7 +44,7 @@ defmodule Mob.Audio do
   @spec recording_opts(keyword()) :: %{String.t() => String.t()}
   def recording_opts(opts) do
     %{
-      "format"  => Keyword.get(opts, :format, :aac) |> Atom.to_string(),
+      "format" => Keyword.get(opts, :format, :aac) |> Atom.to_string(),
       "quality" => Keyword.get(opts, :quality, :medium) |> Atom.to_string()
     }
   end
@@ -80,7 +80,7 @@ defmodule Mob.Audio do
   @spec play_opts(keyword()) :: %{String.t() => term()}
   def play_opts(opts) do
     %{
-      "loop"   => Keyword.get(opts, :loop, false),
+      "loop" => Keyword.get(opts, :loop, false),
       "volume" => Keyword.get(opts, :volume, 1.0) * 1.0
     }
   end

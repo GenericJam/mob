@@ -11,7 +11,7 @@ defmodule Mob.Onboarding.FailureInjector do
 
   alias Mob.Onboarding.Workspace
 
-  @type undo_fn :: (() -> :ok)
+  @type undo_fn :: (-> :ok)
 
   # ── OTP download failures ─────────────────────────────────────────────────────
 
@@ -25,14 +25,21 @@ defmodule Mob.Onboarding.FailureInjector do
   @spec empty_otp_cache(Workspace.t(), :ios | :android) :: {:ok, undo_fn()}
   def empty_otp_cache(%Workspace{mob_cache_dir: cache}, platform) do
     # Match the naming pattern used by OtpDownloader
-    prefix = case platform do
-      :ios     -> "otp-ios-sim-"
-      :android -> "otp-android-"
-    end
+    prefix =
+      case platform do
+        :ios -> "otp-ios-sim-"
+        :android -> "otp-android-"
+      end
+
     # Create a plausible-looking but empty cache dir
     fake_dir = Path.join(cache, "#{prefix}73ba6e0f")
     File.mkdir_p!(fake_dir)
-    undo = fn -> File.rm_rf!(fake_dir); :ok end
+
+    undo = fn ->
+      File.rm_rf!(fake_dir)
+      :ok
+    end
+
     {:ok, undo}
   end
 
@@ -63,6 +70,7 @@ defmodule Mob.Onboarding.FailureInjector do
 
     # Fake `elixir` that just echoes the scripted version
     fake_elixir = Path.join(bin_dir, "elixir")
+
     File.write!(fake_elixir, """
     #!/bin/sh
     if [ "$1" = "--version" ]; then
@@ -73,13 +81,16 @@ defmodule Mob.Onboarding.FailureInjector do
     # Fall through to real elixir for everything else (so mix still works)
     exec "$(which -a elixir | grep -v #{bin_dir} | head -1)" "$@"
     """)
+
     File.chmod!(fake_elixir, 0o755)
 
     fake_mix = Path.join(bin_dir, "mix")
+
     File.write!(fake_mix, """
     #!/bin/sh
     exec "$(which -a mix | grep -v #{bin_dir} | head -1)" "$@"
     """)
+
     File.chmod!(fake_mix, 0o755)
 
     env_patch = %{"PATH" => "#{bin_dir}:#{System.get_env("PATH")}"}
@@ -103,6 +114,7 @@ defmodule Mob.Onboarding.FailureInjector do
       |> String.split(":")
       |> Enum.reject(fn dir ->
         path = Path.join(dir, tool)
+
         case File.stat(path) do
           {:ok, %{mode: mode}} -> Bitwise.band(mode, 0o111) != 0
           _ -> false
@@ -129,7 +141,13 @@ defmodule Mob.Onboarding.FailureInjector do
     backup = module_path <> ".bak"
     File.copy!(module_path, backup)
     File.write!(module_path, "NOTBEAM garbage bytes \x00\xFF\x00")
-    undo = fn -> File.copy!(backup, module_path); File.rm!(backup); :ok end
+
+    undo = fn ->
+      File.copy!(backup, module_path)
+      File.rm!(backup)
+      :ok
+    end
+
     {:ok, undo}
   end
 
@@ -142,13 +160,21 @@ defmodule Mob.Onboarding.FailureInjector do
     mob_exs = Path.join(project_dir, "mob.exs")
     original = File.read!(mob_exs)
 
-    patched = original <> """
+    patched =
+      original <>
+        """
 
-    # Injected by FailureInjector — stale path
-    config :mob_dev, elixir_lib: "/nix/store/aaaaaaaaaaaaaaaa-elixir-1.17.0/lib"
-    """
+        # Injected by FailureInjector — stale path
+        config :mob_dev, elixir_lib: "/nix/store/aaaaaaaaaaaaaaaa-elixir-1.17.0/lib"
+        """
+
     File.write!(mob_exs, patched)
-    undo = fn -> File.write!(mob_exs, original); :ok end
+
+    undo = fn ->
+      File.write!(mob_exs, original)
+      :ok
+    end
+
     {:ok, undo}
   end
 
@@ -162,10 +188,17 @@ defmodule Mob.Onboarding.FailureInjector do
   def stale_mob_dir(%Workspace{project_dir: project_dir}) when not is_nil(project_dir) do
     mob_exs = Path.join(project_dir, "mob.exs")
     original = File.read!(mob_exs)
-    patched  = Regex.replace(~r/mob_dir: "[^"]*"/, original,
-                 "mob_dir: \"/nonexistent/moved/mob-old\"")
+
+    patched =
+      Regex.replace(~r/mob_dir: "[^"]*"/, original, "mob_dir: \"/nonexistent/moved/mob-old\"")
+
     File.write!(mob_exs, patched)
-    undo = fn -> File.write!(mob_exs, original); :ok end
+
+    undo = fn ->
+      File.write!(mob_exs, original)
+      :ok
+    end
+
     {:ok, undo}
   end
 
@@ -178,12 +211,21 @@ defmodule Mob.Onboarding.FailureInjector do
   def inject_mount_hang(%Workspace{project_dir: project_dir}) do
     home = Path.join([project_dir, "lib", project_name(project_dir), "home_screen.ex"])
     original = File.read!(home)
-    patched  = String.replace(original,
-      "def mount(_params, _session, socket) do",
-      "def mount(_params, _session, socket) do\n    Process.sleep(:infinity)"
-    )
+
+    patched =
+      String.replace(
+        original,
+        "def mount(_params, _session, socket) do",
+        "def mount(_params, _session, socket) do\n    Process.sleep(:infinity)"
+      )
+
     File.write!(home, patched)
-    undo = fn -> File.write!(home, original); :ok end
+
+    undo = fn ->
+      File.write!(home, original)
+      :ok
+    end
+
     {:ok, undo}
   end
 
@@ -198,7 +240,12 @@ defmodule Mob.Onboarding.FailureInjector do
     # Append something that will definitely not compile
     patched = original <> "\n  def this_is a syntax error !!! do\nend\n"
     File.write!(home, patched)
-    undo = fn -> File.write!(home, original); :ok end
+
+    undo = fn ->
+      File.write!(home, original)
+      :ok
+    end
+
     {:ok, undo}
   end
 
@@ -213,9 +260,14 @@ defmodule Mob.Onboarding.FailureInjector do
     app_name = project_name(project_dir)
     app_file = Path.join([project_dir, "lib", app_name, "app.ex"])
     original = File.read!(app_file)
-    patched  = Regex.replace(~r/Mob\.Dist\.ensure_started\([^)]+\)\n?/, original, "")
+    patched = Regex.replace(~r/Mob\.Dist\.ensure_started\([^)]+\)\n?/, original, "")
     File.write!(app_file, patched)
-    undo = fn -> File.write!(app_file, original); :ok end
+
+    undo = fn ->
+      File.write!(app_file, original)
+      :ok
+    end
+
     {:ok, undo}
   end
 

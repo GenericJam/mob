@@ -59,6 +59,7 @@ defmodule Mob.Onboarding.Case do
     on_exit(fn ->
       passed = Agent.get(flag, & &1)
       Agent.stop(flag)
+
       if passed do
         Workspace.destroy(ws)
       else
@@ -97,6 +98,7 @@ defmodule Mob.Onboarding.Case do
       Process.put(:onboarding_failure_reason, {:command_failed, r.command, r.exit_code})
       Shell.assert_success!(r)
     end
+
     r
   end
 
@@ -110,13 +112,16 @@ defmodule Mob.Onboarding.Case do
       #{r.output}
       """)
     end
+
     r
   end
 
   @doc "Assert the output does NOT contain the given string or regex."
   def refute_output(%Shell{} = r, pattern, opts \\ []) do
     if Shell.output_contains?(r, pattern) do
-      msg = opts[:message] || "Expected output of `#{r.command}` NOT to contain #{inspect(pattern)}"
+      msg =
+        opts[:message] || "Expected output of `#{r.command}` NOT to contain #{inspect(pattern)}"
+
       flunk("""
       #{msg}
 
@@ -124,24 +129,29 @@ defmodule Mob.Onboarding.Case do
       #{r.output}
       """)
     end
+
     r
   end
 
   @doc "Assert a file exists inside the workspace."
   def assert_file(%Workspace{root: root}, rel_path) do
     full = Path.join(root, rel_path)
+
     unless File.exists?(full) do
       flunk("Expected file to exist: #{full}")
     end
+
     full
   end
 
   @doc "Assert a directory exists inside the workspace."
   def assert_dir(%Workspace{root: root}, rel_path) do
     full = Path.join(root, rel_path)
+
     unless File.dir?(full) do
       flunk("Expected directory to exist: #{full}")
     end
+
     full
   end
 
@@ -149,6 +159,7 @@ defmodule Mob.Onboarding.Case do
   def assert_file_contains(%Workspace{root: root}, rel_path, pattern) do
     full = Path.join(root, rel_path)
     content = File.read!(full)
+
     unless content_matches?(content, pattern) do
       flunk("""
       Expected #{rel_path} to contain #{inspect(pattern)}
@@ -157,6 +168,7 @@ defmodule Mob.Onboarding.Case do
       #{String.slice(content, 0, 500)}
       """)
     end
+
     content
   end
 
@@ -164,9 +176,11 @@ defmodule Mob.Onboarding.Case do
   def refute_file_contains(%Workspace{root: root}, rel_path, pattern) do
     full = Path.join(root, rel_path)
     content = File.read!(full)
+
     if content_matches?(content, pattern) do
       flunk("Expected #{rel_path} NOT to contain #{inspect(pattern)}")
     end
+
     content
   end
 
@@ -201,11 +215,13 @@ defmodule Mob.Onboarding.Case do
 
   Call this after `Workspace.set_project/2` and before `shell_project("mix mob.install", ...)`.
   """
-  def configure_mob_exs(%Workspace{project_dir: nil}), do:
-    raise("call Workspace.set_project/2 before configure_mob_exs/1")
+  def configure_mob_exs(%Workspace{project_dir: nil}),
+    do: raise("call Workspace.set_project/2 before configure_mob_exs/1")
+
   def configure_mob_exs(%Workspace{project_dir: project_dir} = ws) do
     mob_dir = Path.join(project_dir, "deps/mob")
-    path    = Path.join(project_dir, "mob.exs")
+    path = Path.join(project_dir, "mob.exs")
+
     File.write!(path, """
     import Config
 
@@ -214,13 +230,15 @@ defmodule Mob.Onboarding.Case do
     config :mob_dev,
       mob_dir: #{inspect(mob_dir)}
     """)
+
     ws
   end
 
   @doc "Mark the test as passed — call at the end of every successful test."
   def mark_passed do
     case Process.get(:onboarding_passed_agent) do
-      nil   -> :ok   # shouldn't happen, but don't crash if setup didn't run
+      # shouldn't happen, but don't crash if setup didn't run
+      nil -> :ok
       agent -> Agent.update(agent, fn _ -> true end)
     end
   end
@@ -228,7 +246,9 @@ defmodule Mob.Onboarding.Case do
   # ── Private ───────────────────────────────────────────────────────────────────
 
   defp unique_id(context) do
-    test_name = context.test |> to_string() |> String.replace(~r/[^a-z0-9]+/i, "_") |> String.downcase()
+    test_name =
+      context.test |> to_string() |> String.replace(~r/[^a-z0-9]+/i, "_") |> String.downcase()
+
     short = String.slice(test_name, -20..-1//1)
     "#{short}_#{:erlang.unique_integer([:positive, :monotonic])}"
   end

@@ -43,37 +43,37 @@ defmodule Mob.Sigil do
   # ── Whitelist ────────────────────────────────────────────────────────────────
 
   @known_tags (
-    ios_file     = Application.app_dir(:mob, "priv/tags/ios.txt")
-    android_file = Application.app_dir(:mob, "priv/tags/android.txt")
+                ios_file = Application.app_dir(:mob, "priv/tags/ios.txt")
+                android_file = Application.app_dir(:mob, "priv/tags/android.txt")
 
-    parse_tags = fn file ->
-      if File.exists?(file) do
-        file
-        |> File.read!()
-        |> String.split("\n", trim: true)
-        |> Enum.reject(&String.starts_with?(&1, "#"))
-        |> MapSet.new()
-      else
-        MapSet.new()
-      end
-    end
+                parse_tags = fn file ->
+                  if File.exists?(file) do
+                    file
+                    |> File.read!()
+                    |> String.split("\n", trim: true)
+                    |> Enum.reject(&String.starts_with?(&1, "#"))
+                    |> MapSet.new()
+                  else
+                    MapSet.new()
+                  end
+                end
 
-    ios_tags     = parse_tags.(ios_file)
-    android_tags = parse_tags.(android_file)
+                ios_tags = parse_tags.(ios_file)
+                android_tags = parse_tags.(android_file)
 
-    %{
-      ios:     ios_tags,
-      android: android_tags,
-      both:    MapSet.union(ios_tags, android_tags)
-    }
-  )
+                %{
+                  ios: ios_tags,
+                  android: android_tags,
+                  both: MapSet.union(ios_tags, android_tags)
+                }
+              )
 
   # ── Parser (NimbleParsec) ────────────────────────────────────────────────────
 
   import NimbleParsec
 
   whitespace = ascii_string([?\s, ?\t, ?\n, ?\r], min: 1)
-  opt_ws     = optional(whitespace)
+  opt_ws = optional(whitespace)
 
   # Tag name: starts with uppercase letter
   tag_name =
@@ -167,7 +167,8 @@ defmodule Mob.Sigil do
   # Balanced brace content: captures everything between an outer { } pair,
   # preserving inner { } pairs recursively. Returns a single joined string.
   # Used by expr_value and expr_child so that {%{a: 1}} and {fn -> ... end} work.
-  defparsec :brace_content,
+  defparsec(
+    :brace_content,
     repeat(
       choice([
         ascii_string([not: ?{, not: ?}], min: 1),
@@ -178,18 +179,23 @@ defmodule Mob.Sigil do
       ])
     )
     |> reduce({Enum, :join, [""]})
+  )
 
-  defparsec :node,
+  defparsec(
+    :node,
     choice([
       self_closing,
       element
     ])
+  )
 
-  defparsec :parse_template,
+  defparsec(
+    :parse_template,
     ignore(opt_ws)
     |> parsec(:node)
     |> ignore(opt_ws)
     |> eos()
+  )
 
   # ── Macro ────────────────────────────────────────────────────────────────────
 
@@ -199,6 +205,7 @@ defmodule Mob.Sigil do
   """
   defmacro sigil_MOB({:<<>>, _meta, [template]}, _modifiers) when is_binary(template) do
     caller = __CALLER__
+
     case parse_template(String.trim(template)) do
       {:ok, [node], "", _, _, _} ->
         build_ast(node, caller)
@@ -221,17 +228,17 @@ defmodule Mob.Sigil do
 
   defp build_ast({:self_closing, parts}, caller) do
     {tag, attrs} = split_tag_attrs(parts)
-    type  = resolve_type(tag, caller)
+    type = resolve_type(tag, caller)
     props = build_props_ast(attrs, caller)
     quote do: %{type: unquote(type), props: unquote(props), children: []}
   end
 
   defp build_ast({:element, parts}, caller) do
     # parts: [{:open_part, [tag, ...attrs]}, ...children..., {:close_tag, [close_tag]}]
-    {open_part, rest}  = List.keytake(parts, :open_part, 0)
-    {close_tag, rest2} = List.keytake(rest,  :close_tag, 0)
+    {open_part, rest} = List.keytake(parts, :open_part, 0)
+    {close_tag, rest2} = List.keytake(rest, :close_tag, 0)
 
-    {:open_part, open_parts}  = open_part
+    {:open_part, open_parts} = open_part
     {:close_tag, [close_name]} = close_tag
 
     {tag, attrs} = split_tag_attrs(open_parts)
@@ -243,8 +250,8 @@ defmodule Mob.Sigil do
         description: "~MOB: mismatched tags <#{tag}> ... </#{close_name}>"
     end
 
-    type         = resolve_type(tag, caller)
-    props        = build_props_ast(attrs, caller)
+    type = resolve_type(tag, caller)
+    props = build_props_ast(attrs, caller)
     children_ast = build_children_ast(rest2, caller)
 
     quote do: %{type: unquote(type), props: unquote(props), children: unquote(children_ast)}
@@ -273,7 +280,9 @@ defmodule Mob.Sigil do
     child_asts =
       Enum.map(children, fn
         {:expr_child, [expr_str]} ->
-          quoted = Code.string_to_quoted!(String.trim(expr_str), file: caller.file, line: caller.line)
+          quoted =
+            Code.string_to_quoted!(String.trim(expr_str), file: caller.file, line: caller.line)
+
           quote do
             case unquote(quoted) do
               list when is_list(list) -> list
@@ -293,14 +302,17 @@ defmodule Mob.Sigil do
     atom = tag |> Macro.underscore() |> String.to_atom()
 
     unless MapSet.member?(@known_tags.both, tag) do
-      ios_only     = MapSet.member?(@known_tags.ios, tag) and not MapSet.member?(@known_tags.android, tag)
-      android_only = MapSet.member?(@known_tags.android, tag) and not MapSet.member?(@known_tags.ios, tag)
+      ios_only =
+        MapSet.member?(@known_tags.ios, tag) and not MapSet.member?(@known_tags.android, tag)
+
+      android_only =
+        MapSet.member?(@known_tags.android, tag) and not MapSet.member?(@known_tags.ios, tag)
 
       msg =
         cond do
-          ios_only     -> "~MOB: <#{tag}> is iOS-only — not supported on Android"
+          ios_only -> "~MOB: <#{tag}> is iOS-only — not supported on Android"
           android_only -> "~MOB: <#{tag}> is Android-only — not supported on iOS"
-          true         -> "~MOB: <#{tag}> is not in the Mob tag whitelist — pass-through as :#{atom}"
+          true -> "~MOB: <#{tag}> is not in the Mob tag whitelist — pass-through as :#{atom}"
         end
 
       IO.warn(msg, Macro.Env.stacktrace(caller))

@@ -40,7 +40,7 @@ defmodule Mob.Clipboard do
   def get(_socket) do
     case :mob_nif.clipboard_get() do
       {:ok, text} -> {:clipboard, :ok, text}
-      :empty      -> {:clipboard, :empty}
+      :empty -> {:clipboard, :empty}
     end
   end
 end

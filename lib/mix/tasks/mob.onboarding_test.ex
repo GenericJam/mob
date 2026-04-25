@@ -47,10 +47,10 @@ defmodule Mix.Tasks.Mob.OnboardingTest do
   use Mix.Task
 
   @switches [
-    all:      :boolean,
-    only:     :string,
-    env:      :string,
-    seed:     :integer,
+    all: :boolean,
+    only: :string,
+    env: :string,
+    seed: :integer,
     no_color: :boolean
   ]
 
@@ -59,7 +59,7 @@ defmodule Mix.Tasks.Mob.OnboardingTest do
     {opts, _rest, _invalid} = OptionParser.parse(argv, strict: @switches)
 
     include_tags = build_include_tags(opts)
-    test_args    = build_test_args(opts, include_tags)
+    test_args = build_test_args(opts, include_tags)
 
     banner(opts)
     System.put_env("MIX_ENV", "test")
@@ -77,22 +77,23 @@ defmodule Mix.Tasks.Mob.OnboardingTest do
     # module-level :onboarding tag. --only overrides the global exclusion of
     # :onboarding so all onboarding subtests get included.
     cond do
-      opts[:all]  -> ["onboarding"]
+      opts[:all] -> ["onboarding"]
       opts[:only] -> [opts[:only]]
-      true        -> ["generator", "pre_device"]
+      true -> ["generator", "pre_device"]
     end
   end
 
   defp build_test_args(opts, include_tags) do
     args = Enum.flat_map(include_tags, fn tag -> ["--only", tag] end)
     args = if seed = opts[:seed], do: args ++ ["--seed", "#{seed}"], else: args
-    args = if opts[:no_color],    do: args ++ ["--no-color"],        else: args
+    args = if opts[:no_color], do: args ++ ["--no-color"], else: args
     args
   end
 
   defp banner(opts) do
     env_label = opts[:env] || "default"
-    scope     = if opts[:all], do: "all tests", else: opts[:only] || "generator + pre-device"
+    scope = if opts[:all], do: "all tests", else: opts[:only] || "generator + pre-device"
+
     Mix.shell().info("""
     ╔══════════════════════════════════════════════════════╗
     ║         Mob Onboarding Integration Tests             ║

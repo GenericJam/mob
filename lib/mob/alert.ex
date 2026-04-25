@@ -68,7 +68,7 @@ defmodule Mob.Alert do
   """
   @spec alert(Mob.Socket.t(), keyword()) :: Mob.Socket.t()
   def alert(socket, opts) do
-    title   = to_string(opts[:title]   || "")
+    title = to_string(opts[:title] || "")
     message = to_string(opts[:message] || "")
     buttons = opts[:buttons] || [[label: "OK", style: :cancel]]
     :mob_nif.alert_show(title, message, encode_buttons(buttons))
@@ -82,7 +82,7 @@ defmodule Mob.Alert do
   """
   @spec action_sheet(Mob.Socket.t(), keyword()) :: Mob.Socket.t()
   def action_sheet(socket, opts) do
-    title   = to_string(opts[:title] || "")
+    title = to_string(opts[:title] || "")
     buttons = opts[:buttons] || []
     :mob_nif.action_sheet_show(title, encode_buttons(buttons))
     socket
@@ -106,8 +106,8 @@ defmodule Mob.Alert do
     buttons
     |> Enum.map(fn btn ->
       %{
-        "label"  => to_string(btn[:label]  || ""),
-        "style"  => to_string(btn[:style]  || :default),
+        "label" => to_string(btn[:label] || ""),
+        "style" => to_string(btn[:style] || :default),
         "action" => to_string(btn[:action] || :dismiss)
       }
     end)

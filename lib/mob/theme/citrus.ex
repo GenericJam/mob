@@ -29,23 +29,34 @@ defmodule Mob.Theme.Citrus do
   def theme do
     Mob.Theme.build(
       # ── Brand ──────────────────────────────────────────────────────────────
-      primary:      :lime_400,         # 0xFFA3E635 — bright lime green
-      on_primary:   0xFF141A00,        # near-black with green tint — max contrast
-      secondary:    :amber_500,        # 0xFFF59E0B — warm amber accent
-      on_secondary: 0xFF1A1000,        # near-black with warm tint
+      # 0xFFA3E635 — bright lime green
+      primary: :lime_400,
+      # near-black with green tint — max contrast
+      on_primary: 0xFF141A00,
+      # 0xFFF59E0B — warm amber accent
+      secondary: :amber_500,
+      # near-black with warm tint
+      on_secondary: 0xFF1A1000,
 
       # ── Surfaces ───────────────────────────────────────────────────────────
-      background:    0xFF111209,       # near-black, olive-tinted
-      on_background: 0xFFF0EDCF,       # warm cream
-      surface:       0xFF1C1E0F,       # dark warm card background
-      surface_raised: 0xFF252715,      # slightly elevated card
-      on_surface:    0xFFF0EDCF,       # warm cream
-      muted:         0xFF7A7A4A,       # muted olive — placeholder / secondary text
+      # near-black, olive-tinted
+      background: 0xFF111209,
+      # warm cream
+      on_background: 0xFFF0EDCF,
+      # dark warm card background
+      surface: 0xFF1C1E0F,
+      # slightly elevated card
+      surface_raised: 0xFF252715,
+      # warm cream
+      on_surface: 0xFFF0EDCF,
+      # muted olive — placeholder / secondary text
+      muted: 0xFF7A7A4A,
 
       # ── Utility ────────────────────────────────────────────────────────────
-      error:    :red_400,
+      error: :red_400,
       on_error: :white,
-      border:   0xFF323420            # warm olive-tinted divider
+      # warm olive-tinted divider
+      border: 0xFF323420
     )
   end
 end

@@ -29,23 +29,31 @@ defmodule Mob.Theme.Obsidian do
   def theme do
     Mob.Theme.build(
       # ── Brand ──────────────────────────────────────────────────────────────
-      primary:      :violet_600,   # 0xFF7C3AED
-      on_primary:   :white,
-      secondary:    :violet_400,   # 0xFFA78BFA — lighter for accents/tags
+      # 0xFF7C3AED
+      primary: :violet_600,
+      on_primary: :white,
+      # 0xFFA78BFA — lighter for accents/tags
+      secondary: :violet_400,
       on_secondary: :white,
 
       # ── Surfaces ───────────────────────────────────────────────────────────
-      background:    0xFF0D0D1A,   # near-black, blue-tinted
-      on_background: 0xFFE8E6FF,   # lavender-tinted white
-      surface:       0xFF16162A,   # dark card background
-      surface_raised: 0xFF1E1E38,  # slightly elevated card
-      on_surface:    0xFFE8E6FF,
-      muted:         0xFF6B6B8E,   # muted text / placeholders
+      # near-black, blue-tinted
+      background: 0xFF0D0D1A,
+      # lavender-tinted white
+      on_background: 0xFFE8E6FF,
+      # dark card background
+      surface: 0xFF16162A,
+      # slightly elevated card
+      surface_raised: 0xFF1E1E38,
+      on_surface: 0xFFE8E6FF,
+      # muted text / placeholders
+      muted: 0xFF6B6B8E,
 
       # ── Utility ────────────────────────────────────────────────────────────
-      error:    :red_400,
+      error: :red_400,
       on_error: :white,
-      border:   0xFF2D2D4A         # subtle purple-tinted divider
+      # subtle purple-tinted divider
+      border: 0xFF2D2D4A
     )
   end
 end

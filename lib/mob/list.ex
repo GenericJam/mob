@@ -98,8 +98,8 @@ defmodule Mob.List do
   """
   @spec expand(map(), map(), pid()) :: map()
   def expand(%{type: :list, props: props} = _node, renderers, pid) do
-    id       = Map.fetch!(props, :id)
-    items    = Map.get(props, :items, [])
+    id = Map.fetch!(props, :id)
+    items = Map.get(props, :items, [])
     renderer = Map.get(renderers, id, &default_renderer/1)
 
     children =
@@ -107,9 +107,10 @@ defmodule Mob.List do
       |> Enum.with_index()
       |> Enum.map(fn {item, index} ->
         row = renderer.(item)
+
         %{
-          type:     :box,
-          props:    %{on_tap: {pid, {:list, id, :select, index}}},
+          type: :box,
+          props: %{on_tap: {pid, {:list, id, :select, index}}},
           children: [row]
         }
       end)
@@ -121,8 +122,8 @@ defmodule Mob.List do
 
   def expand(%{type: type, props: props, children: children}, renderers, pid) do
     %{
-      type:     type,
-      props:    props,
+      type: type,
+      props: props,
       children: Enum.map(children, &expand(&1, renderers, pid))
     }
   end
@@ -133,8 +134,8 @@ defmodule Mob.List do
 
   defp text_row(text) do
     %{
-      type:     :text,
-      props:    %{text: text, text_size: :base, text_color: :on_surface, padding: 16},
+      type: :text,
+      props: %{text: text, text_size: :base, text_color: :on_surface, padding: 16},
       children: []
     }
   end

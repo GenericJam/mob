@@ -30,11 +30,11 @@ defmodule Mob.ComponentServer do
 
   @impl GenServer
   def init(opts) do
-    module     = opts[:module]
-    id         = opts[:id]
+    module = opts[:module]
+    id = opts[:id]
     screen_pid = opts[:screen_pid]
-    props      = opts[:props]
-    platform   = opts[:platform]
+    props = opts[:props]
+    platform = opts[:platform]
 
     socket = Mob.Socket.new(module, platform: platform)
 
@@ -69,35 +69,52 @@ defmodule Mob.ComponentServer do
   def handle_cast({:update, new_props}, %{module: module, socket: socket} = state) do
     case module.update(new_props, socket) do
       {:ok, new_socket} -> {:noreply, %{state | socket: new_socket}}
-      _                 -> {:noreply, state}
+      _ -> {:noreply, state}
     end
   end
 
-  def handle_cast({:event, event, payload}, %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state) do
+  def handle_cast(
+        {:event, event, payload},
+        %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state
+      ) do
     {:noreply, new_socket} = module.handle_event(event, payload, socket)
     send(screen_pid, {:component_changed, id, module})
     {:noreply, %{state | socket: new_socket}}
   end
 
   @impl GenServer
-  def handle_info({:component_event, event, payload_json}, %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state) do
-    payload = case :json.decode(payload_json) do
-      map when is_map(map) -> map
-      _                   -> %{}
-    end
+  def handle_info(
+        {:component_event, event, payload_json},
+        %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state
+      ) do
+    payload =
+      case :json.decode(payload_json) do
+        map when is_map(map) -> map
+        _ -> %{}
+      end
+
     {:noreply, new_socket} = module.handle_event(event, payload, socket)
     send(screen_pid, {:component_changed, id, module})
     {:noreply, %{state | socket: new_socket}}
   end
 
-  def handle_info(message, %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state) do
+  def handle_info(
+        message,
+        %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state
+      ) do
     {:noreply, new_socket} = module.handle_info(message, socket)
     send(screen_pid, {:component_changed, id, module})
     {:noreply, %{state | socket: new_socket}}
   end
 
   @impl GenServer
-  def terminate(reason, %{module: module, socket: socket, screen_pid: screen_pid, id: id, handle: handle}) do
+  def terminate(reason, %{
+        module: module,
+        socket: socket,
+        screen_pid: screen_pid,
+        id: id,
+        handle: handle
+      }) do
     Mob.ComponentRegistry.deregister(screen_pid, id, module)
     if handle != 0, do: :mob_nif.deregister_component(handle)
     module.terminate(reason, socket)

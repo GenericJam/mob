@@ -49,6 +49,7 @@ defmodule Mob.App do
 
   defmacro __using__(opts) do
     theme_opts = Keyword.get(opts, :theme, [])
+
     quote do
       @behaviour Mob.App
       import Mob.App

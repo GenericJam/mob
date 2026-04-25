@@ -122,7 +122,7 @@ defmodule Mob.Component do
 
   defp walk(%{type: :native_view, props: props} = node, screen_pid, platform, active) do
     module = props[:module]
-    id     = props[:id]
+    id = props[:id]
 
     unless is_atom(module) and is_atom(id) do
       raise ArgumentError,
@@ -133,11 +133,12 @@ defmodule Mob.Component do
     rendered_props = Mob.ComponentServer.render_props(component_pid)
     handle = Mob.ComponentServer.get_handle(component_pid)
 
-    enriched = Map.merge(rendered_props, %{
-      module:           module_name(module),
-      id:               Atom.to_string(id),
-      component_handle: handle
-    })
+    enriched =
+      Map.merge(rendered_props, %{
+        module: module_name(module),
+        id: Atom.to_string(id),
+        component_handle: handle
+      })
 
     active = MapSet.put(active, {id, module})
     {%{node | props: enriched}, active}
@@ -148,6 +149,7 @@ defmodule Mob.Component do
       Enum.map_reduce(children, active, fn child, acc ->
         walk(child, screen_pid, platform, acc)
       end)
+
     {%{node | children: new_children}, active}
   end
 
@@ -160,13 +162,15 @@ defmodule Mob.Component do
         pid
 
       {:error, :not_found} ->
-        {:ok, pid} = Mob.ComponentServer.start(
-          module:     module,
-          id:         id,
-          screen_pid: screen_pid,
-          props:      props,
-          platform:   platform
-        )
+        {:ok, pid} =
+          Mob.ComponentServer.start(
+            module: module,
+            id: id,
+            screen_pid: screen_pid,
+            props: props,
+            platform: platform
+          )
+
         pid
     end
   end

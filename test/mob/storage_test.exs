@@ -119,7 +119,7 @@ defmodule Mob.StorageTest do
 
   describe "copy/2" do
     test "copies file to dest path and returns dest", %{dir: dir} do
-      src  = Path.join(dir, "src.txt")
+      src = Path.join(dir, "src.txt")
       dest = Path.join(dir, "dest.txt")
       Storage.write(src, "original")
       assert {:ok, ^dest} = Storage.copy(src, dest)
@@ -127,7 +127,7 @@ defmodule Mob.StorageTest do
     end
 
     test "leaves the source intact after copy", %{dir: dir} do
-      src  = Path.join(dir, "src.txt")
+      src = Path.join(dir, "src.txt")
       dest = Path.join(dir, "dest.txt")
       Storage.write(src, "original")
       Storage.copy(src, dest)
@@ -143,7 +143,7 @@ defmodule Mob.StorageTest do
 
   describe "move/2" do
     test "moves file to dest path and returns dest", %{dir: dir} do
-      src  = Path.join(dir, "move_src.txt")
+      src = Path.join(dir, "move_src.txt")
       dest = Path.join(dir, "move_dest.txt")
       Storage.write(src, "moving")
       assert {:ok, ^dest} = Storage.move(src, dest)
@@ -151,7 +151,7 @@ defmodule Mob.StorageTest do
     end
 
     test "source no longer exists after move", %{dir: dir} do
-      src  = Path.join(dir, "move_src.txt")
+      src = Path.join(dir, "move_src.txt")
       dest = Path.join(dir, "move_dest.txt")
       Storage.write(src, "moving")
       Storage.move(src, dest)

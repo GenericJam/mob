@@ -69,17 +69,17 @@ defmodule Mob.Renderer do
 
   @colors %{
     # Semantic fallbacks (used when no theme is configured or as base values)
-    primary:    0xFF2196F3,
-    surface:    0xFFFFFFFF,
+    primary: 0xFF2196F3,
+    surface: 0xFFFFFFFF,
     on_primary: 0xFFFFFFFF,
     on_surface: 0xFF212121,
-    error:      0xFFF44336,
+    error: 0xFFF44336,
     # Basic
-    white:       0xFFFFFFFF,
-    black:       0xFF000000,
+    white: 0xFFFFFFFF,
+    black: 0xFF000000,
     transparent: 0x00000000,
     # Grays
-    gray_50:  0xFFFAFAFA,
+    gray_50: 0xFFFAFAFA,
     gray_100: 0xFFF5F5F5,
     gray_200: 0xFFEEEEEE,
     gray_300: 0xFFE0E0E0,
@@ -97,9 +97,9 @@ defmodule Mob.Renderer do
     blue_700: 0xFF1976D2,
     blue_900: 0xFF0D47A1,
     # Greens
-    green_400:   0xFF66BB6A,
-    green_500:   0xFF4CAF50,
-    green_700:   0xFF388E3C,
+    green_400: 0xFF66BB6A,
+    green_500: 0xFF4CAF50,
+    green_700: 0xFF388E3C,
     emerald_400: 0xFF34D399,
     emerald_500: 0xFF10B981,
     emerald_700: 0xFF047857,
@@ -110,9 +110,9 @@ defmodule Mob.Renderer do
     # Oranges / Amber
     orange_400: 0xFFFFA726,
     orange_500: 0xFFFF9800,
-    amber_400:  0xFFFBBF24,
-    amber_500:  0xFFF59E0B,
-    amber_700:  0xFFF57C00,
+    amber_400: 0xFFFBBF24,
+    amber_500: 0xFFF59E0B,
+    amber_700: 0xFFF57C00,
     # Limes / Yellows
     lime_300: 0xFFBEF264,
     lime_400: 0xFFA3E635,
@@ -121,14 +121,14 @@ defmodule Mob.Renderer do
     yellow_400: 0xFFFACC15,
     yellow_500: 0xFFEAB308,
     # Purples / Indigo / Violet
-    purple_500:      0xFF9C27B0,
-    purple_700:      0xFF7B1FA2,
-    indigo_500:      0xFF3F51B5,
+    purple_500: 0xFF9C27B0,
+    purple_700: 0xFF7B1FA2,
+    indigo_500: 0xFF3F51B5,
     deep_purple_700: 0xFF512DA8,
-    violet_400:      0xFFA78BFA,
-    violet_500:      0xFF8B5CF6,
-    violet_600:      0xFF7C3AED,
-    violet_700:      0xFF6D28D9,
+    violet_400: 0xFFA78BFA,
+    violet_500: 0xFF8B5CF6,
+    violet_600: 0xFF7C3AED,
+    violet_700: 0xFF6D28D9,
     # Teals / Cyans
     teal_500: 0xFF009688,
     cyan_500: 0xFF00BCD4,
@@ -145,29 +145,29 @@ defmodule Mob.Renderer do
     brown_800: 0xFF3E2010,
     # Pinks / Roses
     pink_500: 0xFFE91E63,
-    rose_500: 0xFFF43F5E,
+    rose_500: 0xFFF43F5E
   }
 
   @text_sizes %{
-    xs:    12.0,
-    sm:    14.0,
-    base:  16.0,
-    lg:    18.0,
-    xl:    20.0,
+    xs: 12.0,
+    sm: 14.0,
+    base: 16.0,
+    lg: 18.0,
+    xl: 20.0,
     "2xl": 24.0,
     "3xl": 30.0,
     "4xl": 36.0,
     "5xl": 48.0,
-    "6xl": 60.0,
+    "6xl": 60.0
   }
 
   # Props whose atom values are resolved as colors
-  @color_props   ~w(background text_color border_color color placeholder_color)a
+  @color_props ~w(background text_color border_color color placeholder_color)a
   # Props whose atom values are resolved as spacing or radius tokens
   @spacing_props ~w(padding padding_top padding_right padding_bottom padding_left gap)a
-  @radius_props  ~w(corner_radius)a
+  @radius_props ~w(corner_radius)a
   # Props whose atom values are resolved as text sizes (scaled by type_scale)
-  @size_props    ~w(text_size font_size)a
+  @size_props ~w(text_size font_size)a
 
   # ── Component defaults ────────────────────────────────────────────────────
   # Injected for missing styling props. Use semantic tokens so they inherit
@@ -175,30 +175,30 @@ defmodule Mob.Renderer do
 
   @component_defaults %{
     button: %{
-      background:    :primary,
-      text_color:    :on_primary,
-      padding:       :space_md,
+      background: :primary,
+      text_color: :on_primary,
+      padding: :space_md,
       corner_radius: :radius_md,
-      text_size:     :base,
-      font_weight:   "medium",
-      fill_width:    true,
-      text_align:    :center,
+      text_size: :base,
+      font_weight: "medium",
+      fill_width: true,
+      text_align: :center
     },
     text_field: %{
-      background:        :surface_raised,
-      text_color:        :on_surface,
+      background: :surface_raised,
+      text_color: :on_surface,
       placeholder_color: :muted,
-      border_color:      :border,
-      padding:           :space_sm,
-      corner_radius:     :radius_sm,
-      text_size:         :base,
+      border_color: :border,
+      padding: :space_sm,
+      corner_radius: :radius_sm,
+      text_size: :base
     },
     divider: %{
-      color: :border,
+      color: :border
     },
     progress: %{
-      color: :primary,
-    },
+      color: :primary
+    }
   }
 
   # ── Public API ────────────────────────────────────────────────────────────
@@ -215,11 +215,12 @@ defmodule Mob.Renderer do
   @spec render(map(), atom(), module() | atom(), atom()) :: {:ok, :json_tree} | {:error, term()}
   def render(tree, platform, nif \\ @default_nif, transition \\ :none) do
     theme = Theme.current()
+
     ctx = %{
-      colors:     Theme.color_map(theme),
-      spacing:    Theme.spacing_map(theme),
-      radii:      Theme.radius_map(theme),
-      type_scale: theme.type_scale,
+      colors: Theme.color_map(theme),
+      spacing: Theme.spacing_map(theme),
+      radii: Theme.radius_map(theme),
+      type_scale: theme.type_scale
     }
 
     nif.clear_taps()
@@ -246,12 +247,12 @@ defmodule Mob.Renderer do
   # ── Tree preparation ──────────────────────────────────────────────────────
 
   defp prepare(%{type: type, props: props, children: children}, nif, platform, ctx) do
-    defaults    = Map.get(@component_defaults, type, %{})
+    defaults = Map.get(@component_defaults, type, %{})
     with_defaults = Map.merge(defaults, props)
 
     %{
-      "type"     => Atom.to_string(type),
-      "props"    => prepare_props(with_defaults, nif, platform, ctx),
+      "type" => Atom.to_string(type),
+      "props" => prepare_props(with_defaults, nif, platform, ctx),
       "children" => Enum.map(children, &prepare(&1, nif, platform, ctx))
     }
   end
@@ -259,16 +260,18 @@ defmodule Mob.Renderer do
   defp prepare_props(props, nif, platform, ctx) do
     # 1. Merge any %Mob.Style{} under the :style key (inline props win)
     {style, base} = Map.pop(props, :style)
+
     merged =
       case style do
         %Style{props: sp} -> Map.merge(sp, base)
-        nil               -> base
+        nil -> base
       end
 
     # 2. Resolve platform blocks (:ios / :android)
-    ios_extras     = Map.get(merged, :ios, %{})
+    ios_extras = Map.get(merged, :ios, %{})
     android_extras = Map.get(merged, :android, %{})
     platform_extra = if platform == :ios, do: ios_extras, else: android_extras
+
     final =
       merged
       |> Map.delete(:ios)
@@ -323,7 +326,7 @@ defmodule Mob.Renderer do
   # Text size props — scale table value by type_scale
   defp resolve_token(key, value, ctx) when is_atom(value) and key in @size_props do
     case Map.get(@text_sizes, value) do
-      nil  -> value
+      nil -> value
       size -> size * ctx.type_scale
     end
   end
@@ -334,9 +337,11 @@ defmodule Mob.Renderer do
       is_atom(value) ->
         case Map.get(ctx.spacing, value) do
           nil -> value
-          v   -> v
+          v -> v
         end
-      true -> value
+
+      true ->
+        value
     end
   end
 

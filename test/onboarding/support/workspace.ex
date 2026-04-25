@@ -23,14 +23,14 @@ defmodule Mob.Onboarding.Workspace do
   defstruct [:id, :root, :project_dir, :mix_home, :hex_home, :mob_cache_dir, :logs_dir]
 
   @type t :: %__MODULE__{
-    id:           String.t(),
-    root:         Path.t(),
-    project_dir:  Path.t() | nil,
-    mix_home:     Path.t(),
-    hex_home:     Path.t(),
-    mob_cache_dir: Path.t(),
-    logs_dir:     Path.t()
-  }
+          id: String.t(),
+          root: Path.t(),
+          project_dir: Path.t() | nil,
+          mix_home: Path.t(),
+          hex_home: Path.t(),
+          mob_cache_dir: Path.t(),
+          logs_dir: Path.t()
+        }
 
   # Each test run gets its own subdirectory keyed by OS PID. This prevents
   # successive runs from reusing the same workspace paths — leftover directories
@@ -45,13 +45,13 @@ defmodule Mob.Onboarding.Workspace do
     File.mkdir_p!(root)
 
     ws = %__MODULE__{
-      id:            id,
-      root:          root,
-      project_dir:   nil,
-      mix_home:      mkdir!(root, "mix_home"),
-      hex_home:      mkdir!(root, "hex_home"),
+      id: id,
+      root: root,
+      project_dir: nil,
+      mix_home: mkdir!(root, "mix_home"),
+      hex_home: mkdir!(root, "hex_home"),
       mob_cache_dir: mkdir!(root, "mob_cache"),
-      logs_dir:      mkdir!(root, "logs")
+      logs_dir: mkdir!(root, "logs")
     }
 
     ws
@@ -84,6 +84,7 @@ defmodule Mob.Onboarding.Workspace do
     Logs:   #{logs}/
     ══════════════════════════════════════════════════════
     """)
+
     :ok
   end
 
@@ -95,10 +96,12 @@ defmodule Mob.Onboarding.Workspace do
   def shell_opts(%__MODULE__{} = ws, extra_opts \\ []) do
     extra_env = Keyword.get(extra_opts, :env, %{})
     merged_env = Map.merge(env_overrides(ws), extra_env)
+
     base = [
-      cd:  ws.root,
+      cd: ws.root,
       env: merged_env
     ]
+
     Keyword.merge(base, Keyword.delete(extra_opts, :env))
   end
 
@@ -109,13 +112,16 @@ defmodule Mob.Onboarding.Workspace do
   def project_opts(%__MODULE__{project_dir: nil}, _opts) do
     raise "project_dir not set — call Workspace.set_project/2 after mix mob.new"
   end
+
   def project_opts(%__MODULE__{} = ws, extra_opts) do
     extra_env = Keyword.get(extra_opts, :env, %{})
     merged_env = Map.merge(env_overrides(ws), extra_env)
+
     base = [
-      cd:  ws.project_dir,
+      cd: ws.project_dir,
       env: merged_env
     ]
+
     Keyword.merge(base, Keyword.delete(extra_opts, :env))
   end
 
@@ -123,12 +129,12 @@ defmodule Mob.Onboarding.Workspace do
   @spec env_overrides(t()) :: map()
   def env_overrides(%__MODULE__{} = ws) do
     %{
-      "MIX_HOME"       => ws.mix_home,
-      "HEX_HOME"       => ws.hex_home,
-      "MOB_CACHE_DIR"  => ws.mob_cache_dir,
+      "MIX_HOME" => ws.mix_home,
+      "HEX_HOME" => ws.hex_home,
+      "MOB_CACHE_DIR" => ws.mob_cache_dir,
       # Prevent the running node from trying to connect to anything
-      "MIX_ENV"        => "dev",
-      "RELEASE_DISTRIBUTION" => "none",
+      "MIX_ENV" => "dev",
+      "RELEASE_DISTRIBUTION" => "none"
     }
   end
 
@@ -151,6 +157,7 @@ defmodule Mob.Onboarding.Workspace do
 
   defp format_log(step, %Mob.Onboarding.Shell{} = r) do
     status = if r.timed_out, do: "TIMEOUT", else: "exit #{r.exit_code}"
+
     """
     === #{step} [#{status}] (#{r.duration_ms}ms) ===
     Command: #{r.command}
@@ -159,5 +166,6 @@ defmodule Mob.Onboarding.Workspace do
     #{r.output}
     """
   end
+
   defp format_log(step, other), do: "=== #{step} ===\n#{inspect(other)}\n"
 end

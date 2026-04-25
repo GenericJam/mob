@@ -63,11 +63,15 @@ defmodule Mob.Onboarding.FailureModesTest do
 
       # Verify mob.install succeeded and global cache has valid OTP
       assert Shell.success?(result),
-        "mob.install failed: #{result.output}"
+             "mob.install failed: #{result.output}"
+
       otp_cache = Path.join([System.get_env("HOME"), ".mob", "cache"])
       ios_dir = File.ls!(otp_cache) |> Enum.find(&String.starts_with?(&1, "otp-ios-sim-"))
       refute is_nil(ios_dir), "No otp-ios-sim-* in #{otp_cache} after mob.install"
-      erts_dirs = File.ls!(Path.join(otp_cache, ios_dir)) |> Enum.filter(&String.starts_with?(&1, "erts-"))
+
+      erts_dirs =
+        File.ls!(Path.join(otp_cache, ios_dir)) |> Enum.filter(&String.starts_with?(&1, "erts-"))
+
       assert length(erts_dirs) >= 1, "otp-ios-sim cache has no erts- dirs — empty download?"
       mark_passed()
     end
@@ -83,7 +87,11 @@ defmodule Mob.Onboarding.FailureModesTest do
       otp_cache = Path.join([System.get_env("HOME"), ".mob", "cache"])
       android_dir = File.ls!(otp_cache) |> Enum.find(&String.starts_with?(&1, "otp-android-"))
       refute is_nil(android_dir), "No otp-android-* in #{otp_cache} after mob.install"
-      erts_dirs = File.ls!(Path.join(otp_cache, android_dir)) |> Enum.filter(&String.starts_with?(&1, "erts-"))
+
+      erts_dirs =
+        File.ls!(Path.join(otp_cache, android_dir))
+        |> Enum.filter(&String.starts_with?(&1, "erts-"))
+
       assert length(erts_dirs) >= 1, "otp-android cache has no erts- dirs — empty download?"
       mark_passed()
     end
@@ -104,11 +112,11 @@ defmodule Mob.Onboarding.FailureModesTest do
       assert Shell.success?(result), "mob.install failed: #{result.output}"
       # Must report on OTP caching — either "Ensuring OTP releases are cached…"
       # or a progress/cache-hit line. Users need to see this to diagnose issues.
-      assert_output result, ~r/OTP/
+      assert_output(result, ~r/OTP/)
       # Must show the OTP cache path so users can inspect or clear a stale cache
-      assert_output result, ~r/\.mob|otp-android|otp-ios/i
+      assert_output(result, ~r/\.mob|otp-android|otp-ios/i)
       # Must never expose raw Erlang error tuples in normal output
-      refute_output result, ~r/\{:error,/
+      refute_output(result, ~r/\{:error,/)
       mark_passed()
     end
   end
@@ -129,9 +137,9 @@ defmodule Mob.Onboarding.FailureModesTest do
       result = shell_project("mix mob.doctor", ws)
 
       # Doctor must include an Elixir version check
-      assert_output result, ~r/Elixir/
+      assert_output(result, ~r/Elixir/)
       # The version shown must be the actual running BEAM version
-      assert_output result, ~r/#{Regex.escape(System.version())}/
+      assert_output(result, ~r/#{Regex.escape(System.version())}/)
       # When the version is too old, doctor also prints upgrade instructions
       # (mise/asdf/brew/nix) — verifiable in unit tests of check_elixir/0
       mark_passed()
@@ -147,9 +155,9 @@ defmodule Mob.Onboarding.FailureModesTest do
 
       result = shell_project("mix mob.doctor", ws, env: env_patch)
 
-      assert_doctor_fail result, "adb"
+      assert_doctor_fail(result, "adb")
       # Must tell the user where to get it
-      assert_output result, ~r/android.*(sdk|studio)|brew.*android|platform.tools/i
+      assert_output(result, ~r/android.*(sdk|studio)|brew.*android|platform.tools/i)
       mark_passed()
     end
   end
@@ -168,16 +176,18 @@ defmodule Mob.Onboarding.FailureModesTest do
       result = shell_project("mix mob.doctor", ws)
 
       # Doctor must report on xcrun in the Tools section
-      assert_output result, ~r/xcrun/
+      assert_output(result, ~r/xcrun/)
+
       if Shell.success?(result) do
         # When xcrun/Xcode is installed: version must be shown clearly
-        assert_output result, ~r/✓.*xcrun/
-        assert_output result, ~r/Xcode \d+/
+        assert_output(result, ~r/✓.*xcrun/)
+        assert_output(result, ~r/Xcode \d+/)
       else
         # When xcrun is absent: must say what is missing and where to get it
-        assert_doctor_fail result, "xcrun"
-        assert_output result, ~r/xcode|developer\.apple\.com|app store/i
+        assert_doctor_fail(result, "xcrun")
+        assert_output(result, ~r/xcode|developer\.apple\.com|app store/i)
       end
+
       mark_passed()
     end
   end
@@ -196,15 +206,17 @@ defmodule Mob.Onboarding.FailureModesTest do
       result = shell_project("mix mob.doctor", ws)
 
       # Doctor must report on java in the Tools section (needed for Gradle/Android)
-      assert_output result, ~r/\bjava\b/i
+      assert_output(result, ~r/\bjava\b/i)
+
       if Shell.success?(result) do
         # When java is present: version must be shown clearly
-        assert_output result, ~r/✓.*java/
+        assert_output(result, ~r/✓.*java/)
       else
         # When java is absent: must name the tool and provide install instructions
-        assert_doctor_fail result, "java"
-        assert_output result, ~r/jdk|java.*install|brew|sdkman/i
+        assert_doctor_fail(result, "java")
+        assert_output(result, ~r/jdk|java.*install|brew|sdkman/i)
       end
+
       mark_passed()
     end
   end
@@ -228,11 +240,11 @@ defmodule Mob.Onboarding.FailureModesTest do
       # Must exit non-zero — mob_dir is a hard requirement
       refute Shell.success?(result)
       # Must name the failing check
-      assert_doctor_fail result, "mob_dir"
+      assert_doctor_fail(result, "mob_dir")
       # Must describe what is wrong
-      assert_output result, ~r/path not found|not found/i
+      assert_output(result, ~r/path not found|not found/i)
       # Must tell the user how to fix it
-      assert_output result, ~r/mob\.install|mob\.exs/i
+      assert_output(result, ~r/mob\.install|mob\.exs/i)
       mark_passed()
     end
   end
@@ -253,9 +265,9 @@ defmodule Mob.Onboarding.FailureModesTest do
       # Must exit non-zero
       refute Shell.success?(result)
       # Must name the file that failed
-      assert_output result, ~r/home_screen\.ex/
+      assert_output(result, ~r/home_screen\.ex/)
       # Must show a compile error (not a crash/exception)
-      assert_output result, ~r/CompileError|SyntaxError|compile.*error/i
+      assert_output(result, ~r/CompileError|SyntaxError|compile.*error/i)
       # Must NOT say "the previous version is still running" if it can't verify that
       # (but ideally it should say the running app was not affected)
       mark_passed()
@@ -272,6 +284,7 @@ defmodule Mob.Onboarding.FailureModesTest do
 
       # Check for a booted simulator before doing any injection
       sim_id = find_booted_simulator()
+
       if is_nil(sim_id) do
         IO.puts("  [skip] no booted iOS simulator — skipping post-device test")
         mark_passed()
@@ -282,16 +295,17 @@ defmodule Mob.Onboarding.FailureModesTest do
         # Deploy (will succeed — the app installs fine)
         shell_project("mix mob.deploy --native --ios", ws,
           env: %{"MOB_IOS_SIM_ID" => sim_id},
-          timeout: 180_000)
+          timeout: 180_000
+        )
 
         # Connect should time out quickly (we set a short timeout for the test)
         result = shell_project("mix mob.connect --timeout 10", ws, timeout: 20_000)
 
         # mob.connect exits 0 even when no nodes connected (informational, not fatal)
         # Must report which nodes timed out
-        assert_output result, ~r/timed out/i
+        assert_output(result, ~r/timed out/i)
         # Must give the user actionable next steps
-        assert_output result, ~r/mob\.devices|mob\.deploy|distribution|install/i
+        assert_output(result, ~r/mob\.devices|mob\.deploy|distribution|install/i)
         mark_passed()
       end
     end
@@ -305,6 +319,7 @@ defmodule Mob.Onboarding.FailureModesTest do
 
       # Check for simulator before expensive injection + deployment
       sim_id = find_booted_simulator()
+
       if is_nil(sim_id) do
         IO.puts("  [skip] no booted iOS simulator")
         mark_passed()
@@ -313,7 +328,8 @@ defmodule Mob.Onboarding.FailureModesTest do
 
         shell_project("mix mob.deploy --native --ios", ws,
           env: %{"MOB_IOS_SIM_ID" => sim_id},
-          timeout: 180_000)
+          timeout: 180_000
+        )
 
         # Connect to running BEAM (distribution itself should work — it's mount that hangs)
         shell_project("mix mob.connect --no-iex --timeout 15", ws, timeout: 25_000)
@@ -321,15 +337,21 @@ defmodule Mob.Onboarding.FailureModesTest do
         # Check app health. mob.server --check is a planned command.
         # Skip gracefully when the command is unavailable or has a port conflict.
         result = shell_project("mix mob.server --check", ws, timeout: 15_000)
+
         cond do
           Shell.output_contains?(result, ~r/could not be found|task.*mob\.server/i) ->
             IO.puts("  [skip] mix mob.server not available in this mob_dev release")
+
           Shell.output_contains?(result, ~r/already in use|eaddrinuse|failed.*start/i) ->
             IO.puts("  [skip] mob.server port conflict — cannot run health check")
+
           true ->
-            assert_output result,
+            assert_output(
+              result,
               ~r/screen.*not rendered|mount.*timeout|stuck|no response/i
+            )
         end
+
         mark_passed()
       end
     end
@@ -342,8 +364,16 @@ defmodule Mob.Onboarding.FailureModesTest do
       ws = setup_installed_project(ws)
 
       # Corrupt the home screen BEAM after compilation
-      home_beam = Path.join([ws.project_dir, "_build", "dev", "lib",
-        @app_name, "ebin", "Elixir.MobFailureTest.HomeScreen.beam"])
+      home_beam =
+        Path.join([
+          ws.project_dir,
+          "_build",
+          "dev",
+          "lib",
+          @app_name,
+          "ebin",
+          "Elixir.MobFailureTest.HomeScreen.beam"
+        ])
 
       # First compile
       shell_project("mix compile", ws)
@@ -352,13 +382,16 @@ defmodule Mob.Onboarding.FailureModesTest do
         {:ok, _undo} = FailureInjector.corrupt_beam(home_beam)
 
         sim_id = find_booted_simulator()
+
         if is_nil(sim_id) do
           IO.puts("  [skip] no booted iOS simulator")
           mark_passed()
         else
-          result = shell_project("mix mob.deploy --ios", ws,
-            env: %{"MOB_IOS_SIM_ID" => sim_id},
-            timeout: 60_000)
+          result =
+            shell_project("mix mob.deploy --ios", ws,
+              env: %{"MOB_IOS_SIM_ID" => sim_id},
+              timeout: 60_000
+            )
 
           # Deploy should either:
           # a) refuse to push a corrupt BEAM (preferred), or
@@ -368,10 +401,11 @@ defmodule Mob.Onboarding.FailureModesTest do
             # If it "succeeded", the app must have surfaced an error on the device
             # (tested via mob.connect in a real run — here we just verify the
             # output warned about the corrupt module)
-            assert_output result, ~r/warn|error|failed to load|beam/i
+            assert_output(result, ~r/warn|error|failed to load|beam/i)
           else
-            assert_output result, ~r/HomeScreen|corrupt|invalid.*beam|load.*failed/i
+            assert_output(result, ~r/HomeScreen|corrupt|invalid.*beam|load.*failed/i)
           end
+
           mark_passed()
         end
       else
@@ -384,7 +418,8 @@ defmodule Mob.Onboarding.FailureModesTest do
 
   defp find_booted_simulator do
     case System.cmd("xcrun", ["simctl", "list", "devices", "booted", "-j"],
-           stderr_to_stdout: true) do
+           stderr_to_stdout: true
+         ) do
       {json, 0} ->
         json
         |> Jason.decode!()
@@ -393,7 +428,9 @@ defmodule Mob.Onboarding.FailureModesTest do
         |> Enum.find_value(fn d ->
           if d["state"] == "Booted", do: d["udid"]
         end)
-      _ -> nil
+
+      _ ->
+        nil
     end
   end
 end

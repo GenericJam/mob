@@ -44,6 +44,7 @@ defmodule Mob.NativeLogger do
   @spec install(keyword()) :: :ok
   def install(opts \\ []) do
     nif = Keyword.get(opts, :nif, :mob_nif)
+
     if nif.platform() in [:android, :ios] do
       case :logger.add_handler(@handler_id, __MODULE__, %{nif: nif}) do
         :ok -> :ok
@@ -69,20 +70,22 @@ defmodule Mob.NativeLogger do
   @spec format_msg(term(), map()) :: String.t()
   def format_msg({:string, msg}, _meta), do: IO.iodata_to_binary(msg)
   def format_msg({:report, report}, _meta), do: inspect(report)
+
   def format_msg({:format, fmt, args}, _meta) do
     :io_lib.format(fmt, args) |> IO.iodata_to_binary()
   end
+
   def format_msg(msg, _meta), do: inspect(msg)
 
   @doc false
   @spec level_to_nif(:logger.level()) :: :debug | :info | :warning | :error
-  def level_to_nif(:debug),     do: :debug
-  def level_to_nif(:info),      do: :info
-  def level_to_nif(:notice),    do: :info
-  def level_to_nif(:warning),   do: :warning
-  def level_to_nif(:error),     do: :error
-  def level_to_nif(:critical),  do: :error
-  def level_to_nif(:alert),     do: :error
+  def level_to_nif(:debug), do: :debug
+  def level_to_nif(:info), do: :info
+  def level_to_nif(:notice), do: :info
+  def level_to_nif(:warning), do: :warning
+  def level_to_nif(:error), do: :error
+  def level_to_nif(:critical), do: :error
+  def level_to_nif(:alert), do: :error
   def level_to_nif(:emergency), do: :error
-  def level_to_nif(_),          do: :info
+  def level_to_nif(_), do: :info
 end

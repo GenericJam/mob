@@ -12,11 +12,14 @@ defmodule Mob.RendererTest do
     # rather than restarting the process, eliminating name-registry races.
     def start_link, do: Agent.start(fn -> %{calls: [], tap_next: 0} end, name: __MODULE__)
 
-    def calls,  do: Agent.get(__MODULE__, & &1.calls)
-    def reset,  do: Agent.update(__MODULE__, fn _ -> %{calls: [], tap_next: 0} end)
+    def calls, do: Agent.get(__MODULE__, & &1.calls)
+    def reset, do: Agent.update(__MODULE__, fn _ -> %{calls: [], tap_next: 0} end)
 
     def clear_taps do
-      Agent.update(__MODULE__, fn s -> %{s | calls: [{:clear_taps, []} | s.calls], tap_next: 0} end)
+      Agent.update(__MODULE__, fn s ->
+        %{s | calls: [{:clear_taps, []} | s.calls], tap_next: 0}
+      end)
+
       :ok
     end
 
@@ -28,7 +31,7 @@ defmodule Mob.RendererTest do
     def register_tap(pid_or_tagged) do
       Agent.get_and_update(__MODULE__, fn s ->
         handle = s.tap_next
-        calls  = [{:register_tap, [pid_or_tagged]} | s.calls]
+        calls = [{:register_tap, [pid_or_tagged]} | s.calls]
         {handle, %{s | calls: calls, tap_next: handle + 1}}
       end)
     end
@@ -44,7 +47,7 @@ defmodule Mob.RendererTest do
     # Using Agent.start (not start_link) means it persists across test processes.
     case Process.whereis(MockNIF) do
       nil -> {:ok, _} = MockNIF.start_link()
-      _   -> MockNIF.reset()
+      _ -> MockNIF.reset()
     end
 
     :ok
@@ -60,10 +63,11 @@ defmodule Mob.RendererTest do
     test "calls set_root with a JSON binary" do
       tree = %{type: :column, props: %{}, children: []}
       Renderer.render(tree, :android, MockNIF)
+
       assert Enum.any?(MockNIF.calls(), fn
-        {:set_root, [json]} -> is_binary(json)
-        _ -> false
-      end)
+               {:set_root, [json]} -> is_binary(json)
+               _ -> false
+             end)
     end
 
     test "returns {:ok, :json_tree}" do
@@ -96,6 +100,7 @@ defmodule Mob.RendererTest do
           %{type: :text, props: %{text: "B"}, children: []}
         ]
       }
+
       Renderer.render(tree, :android, MockNIF)
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
       decoded = :json.decode(json)
@@ -105,7 +110,7 @@ defmodule Mob.RendererTest do
     end
 
     test "on_tap pid is replaced by integer handle" do
-      pid  = self()
+      pid = self()
       tree = %{type: :button, props: %{text: "Tap", on_tap: pid}, children: []}
       Renderer.render(tree, :android, MockNIF)
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
@@ -114,7 +119,8 @@ defmodule Mob.RendererTest do
     end
 
     test "register_tap is called for each on_tap pid" do
-      pid  = self()
+      pid = self()
+
       tree = %{
         type: :column,
         props: %{},
@@ -123,13 +129,14 @@ defmodule Mob.RendererTest do
           %{type: :button, props: %{text: "B", on_tap: pid}, children: []}
         ]
       }
+
       Renderer.render(tree, :android, MockNIF)
       tap_calls = Enum.filter(MockNIF.calls(), fn {f, _} -> f == :register_tap end)
       assert length(tap_calls) == 2
     end
 
     test "on_tap {pid, tag} is replaced by integer handle" do
-      pid  = self()
+      pid = self()
       tree = %{type: :button, props: %{text: "Tap", on_tap: {pid, :my_action}}, children: []}
       Renderer.render(tree, :android, MockNIF)
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
@@ -138,7 +145,7 @@ defmodule Mob.RendererTest do
     end
 
     test "on_change {pid, tag} is replaced by integer handle" do
-      pid  = self()
+      pid = self()
       tree = %{type: :text_field, props: %{value: "hi", on_change: {pid, :name}}, children: []}
       Renderer.render(tree, :android, MockNIF)
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
@@ -147,8 +154,14 @@ defmodule Mob.RendererTest do
     end
 
     test "on_focus {pid, tag} is replaced by integer handle" do
-      pid  = self()
-      tree = %{type: :text_field, props: %{value: "hi", on_focus: {pid, :name_focused}}, children: []}
+      pid = self()
+
+      tree = %{
+        type: :text_field,
+        props: %{value: "hi", on_focus: {pid, :name_focused}},
+        children: []
+      }
+
       Renderer.render(tree, :android, MockNIF)
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
       decoded = :json.decode(json)
@@ -156,8 +169,14 @@ defmodule Mob.RendererTest do
     end
 
     test "on_blur {pid, tag} is replaced by integer handle" do
-      pid  = self()
-      tree = %{type: :text_field, props: %{value: "hi", on_blur: {pid, :name_blurred}}, children: []}
+      pid = self()
+
+      tree = %{
+        type: :text_field,
+        props: %{value: "hi", on_blur: {pid, :name_blurred}},
+        children: []
+      }
+
       Renderer.render(tree, :android, MockNIF)
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
       decoded = :json.decode(json)
@@ -165,8 +184,14 @@ defmodule Mob.RendererTest do
     end
 
     test "on_submit {pid, tag} is replaced by integer handle" do
-      pid  = self()
-      tree = %{type: :text_field, props: %{value: "hi", on_submit: {pid, :name_submitted}}, children: []}
+      pid = self()
+
+      tree = %{
+        type: :text_field,
+        props: %{value: "hi", on_submit: {pid, :name_submitted}},
+        children: []
+      }
+
       Renderer.render(tree, :android, MockNIF)
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
       decoded = :json.decode(json)
@@ -190,7 +215,7 @@ defmodule Mob.RendererTest do
     end
 
     test "register_tap receives {pid, tag} for tagged taps" do
-      pid  = self()
+      pid = self()
       tree = %{type: :button, props: %{text: "Tap", on_tap: {pid, :my_action}}, children: []}
       Renderer.render(tree, :android, MockNIF)
       tap_calls = Enum.filter(MockNIF.calls(), fn {f, _} -> f == :register_tap end)
@@ -214,7 +239,7 @@ defmodule Mob.RendererTest do
     end
 
     test "on_end_reached {pid, tag} is replaced by integer handle" do
-      pid  = self()
+      pid = self()
       tree = %{type: :lazy_list, props: %{on_end_reached: {pid, :load_more}}, children: []}
       Renderer.render(tree, :android, MockNIF)
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
@@ -231,7 +256,12 @@ defmodule Mob.RendererTest do
     end
 
     test "placeholder_color atom is resolved to ARGB integer" do
-      tree = %{type: :image, props: %{src: "https://example.com/photo.jpg", placeholder_color: :gray_200}, children: []}
+      tree = %{
+        type: :image,
+        props: %{src: "https://example.com/photo.jpg", placeholder_color: :gray_200},
+        children: []
+      }
+
       Renderer.render(tree, :android, MockNIF)
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
       decoded = :json.decode(json)
@@ -412,12 +442,12 @@ defmodule Mob.RendererTest do
     end
 
     # Single-word types — baseline sanity
-    test "text → \"text\"",     do: assert rendered_type(:text)     == "text"
-    test "button → \"button\"", do: assert rendered_type(:button)   == "button"
-    test "column → \"column\"", do: assert rendered_type(:column)   == "column"
-    test "row → \"row\"",       do: assert rendered_type(:row)      == "row"
-    test "image → \"image\"",   do: assert rendered_type(:image)    == "image"
-    test "scroll → \"scroll\"", do: assert rendered_type(:scroll)   == "scroll"
+    test "text → \"text\"", do: assert(rendered_type(:text) == "text")
+    test "button → \"button\"", do: assert(rendered_type(:button) == "button")
+    test "column → \"column\"", do: assert(rendered_type(:column) == "column")
+    test "row → \"row\"", do: assert(rendered_type(:row) == "row")
+    test "image → \"image\"", do: assert(rendered_type(:image) == "image")
+    test "scroll → \"scroll\"", do: assert(rendered_type(:scroll) == "scroll")
 
     # Multi-word types — the ones where a missing underscore causes a white screen
     test "web_view → \"web_view\" (not \"webview\")" do
@@ -473,7 +503,7 @@ defmodule Mob.RendererTest do
   describe "Mob.Style struct" do
     test "style props are merged into node props" do
       style = %Mob.Style{props: %{text_size: :xl, text_color: :white}}
-      tree  = %{type: :text, props: %{text: "hi", style: style}, children: []}
+      tree = %{type: :text, props: %{text: "hi", style: style}, children: []}
       Renderer.render(tree, :android, MockNIF)
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
       decoded = :json.decode(json)
@@ -483,7 +513,7 @@ defmodule Mob.RendererTest do
 
     test "inline props override style props" do
       style = %Mob.Style{props: %{text_size: :xl, text_color: :white}}
-      tree  = %{type: :text, props: %{text: "hi", style: style, text_size: :sm}, children: []}
+      tree = %{type: :text, props: %{text: "hi", style: style, text_size: :sm}, children: []}
       Renderer.render(tree, :android, MockNIF)
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
       decoded = :json.decode(json)
@@ -492,7 +522,7 @@ defmodule Mob.RendererTest do
 
     test "style key is not present in serialised JSON" do
       style = %Mob.Style{props: %{text_size: :base}}
-      tree  = %{type: :text, props: %{text: "hi", style: style}, children: []}
+      tree = %{type: :text, props: %{text: "hi", style: style}, children: []}
       Renderer.render(tree, :android, MockNIF)
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
       decoded = :json.decode(json)

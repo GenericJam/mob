@@ -337,7 +337,7 @@ defmodule Mob.Test do
     |> ui_tree()
     |> Enum.filter(fn {_type, label, value, _frame} ->
       String.contains?(to_string(label), text) or
-      String.contains?(to_string(value), text)
+        String.contains?(to_string(value), text)
     end)
   end
 
@@ -351,9 +351,9 @@ defmodule Mob.Test do
   """
   @spec wait_for(node(), (list() -> boolean()), keyword()) :: :ok | {:error, :timeout}
   def wait_for(node, predicate, opts \\ []) do
-    timeout_ms  = Keyword.get(opts, :timeout_ms, 5000)
+    timeout_ms = Keyword.get(opts, :timeout_ms, 5000)
     interval_ms = Keyword.get(opts, :interval_ms, 200)
-    deadline    = System.monotonic_time(:millisecond) + timeout_ms
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_for(node, predicate, deadline, interval_ms)
   end
 
@@ -366,20 +366,26 @@ defmodule Mob.Test do
   """
   @spec wait_for_text(node(), String.t(), keyword()) :: :ok | {:error, :timeout}
   def wait_for_text(node, text, opts \\ []) do
-    wait_for(node, fn tree ->
-      Enum.any?(tree, fn {_type, label, value, _frame} ->
-        String.contains?(to_string(label), text) or
-        String.contains?(to_string(value), text)
-      end)
-    end, opts)
+    wait_for(
+      node,
+      fn tree ->
+        Enum.any?(tree, fn {_type, label, value, _frame} ->
+          String.contains?(to_string(label), text) or
+            String.contains?(to_string(value), text)
+        end)
+      end,
+      opts
+    )
   end
 
   defp do_wait_for(node, predicate, deadline, interval_ms) do
     tree = ui_tree(node)
+
     if predicate.(tree) do
       :ok
     else
       remaining = deadline - System.monotonic_time(:millisecond)
+
       if remaining <= 0 do
         {:error, :timeout}
       else
@@ -410,11 +416,14 @@ defmodule Mob.Test do
       {:ok, %{x: x, y: y, width: w, height: h}} ->
         cx = trunc(x + w / 2)
         cy = trunc(y + h / 2)
+
         case System.cmd("idb", ["ui", "tap", "#{cx}", "#{cy}"]) do
           {_, 0} -> :ok
           {out, code} -> {:error, {code, out}}
         end
-      {:error, _} = err -> err
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -433,18 +442,23 @@ defmodule Mob.Test do
   @spec locate(atom() | String.t()) :: {:ok, map()} | {:error, :not_found}
   def locate(tag_or_label) do
     search_str = if is_atom(tag_or_label), do: Atom.to_string(tag_or_label), else: tag_or_label
+
     case accessibility_tree() do
       {:ok, elements} ->
-        match = Enum.find(elements, fn el ->
-          label = if is_binary(el[:label]), do: el[:label], else: ""
-          id    = if is_binary(el[:id]),    do: el[:id],    else: ""
-          String.contains?(label, search_str) or String.contains?(id, search_str)
-        end)
+        match =
+          Enum.find(elements, fn el ->
+            label = if is_binary(el[:label]), do: el[:label], else: ""
+            id = if is_binary(el[:id]), do: el[:id], else: ""
+            String.contains?(label, search_str) or String.contains?(id, search_str)
+          end)
+
         case match do
           nil -> {:error, :not_found}
-          el  -> {:ok, el[:frame]}
+          el -> {:ok, el[:frame]}
         end
-      {:error, _} = err -> err
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -466,23 +480,28 @@ defmodule Mob.Test do
       {output, 0} ->
         try do
           list = :json.decode(String.trim(output))
-          elements = Enum.map(list, fn el ->
-            frame = el["frame"] || %{}
-            %{
-              label: el["AXLabel"],
-              id:    el["AXUniqueId"],
-              frame: %{
-                x:      frame["x"] || 0.0,
-                y:      frame["y"] || 0.0,
-                width:  frame["width"] || 0.0,
-                height: frame["height"] || 0.0
+
+          elements =
+            Enum.map(list, fn el ->
+              frame = el["frame"] || %{}
+
+              %{
+                label: el["AXLabel"],
+                id: el["AXUniqueId"],
+                frame: %{
+                  x: frame["x"] || 0.0,
+                  y: frame["y"] || 0.0,
+                  width: frame["width"] || 0.0,
+                  height: frame["height"] || 0.0
+                }
               }
-            }
-          end)
+            end)
+
           {:ok, elements}
         rescue
           _ -> {:error, :parse_error}
         end
+
       {reason, _code} ->
         {:error, reason}
     end
@@ -491,11 +510,13 @@ defmodule Mob.Test do
   defp search(%{type: _, props: _, children: _} = node, sub, path) do
     text = get_in(node, [:props, :text]) || ""
     own = if String.contains?(to_string(text), sub), do: [{path, node}], else: []
+
     children_results =
       node
       |> Map.get(:children, [])
       |> Enum.with_index()
       |> Enum.flat_map(fn {child, i} -> search(child, sub, path ++ [i]) end)
+
     own ++ children_results
   end
 

@@ -45,15 +45,14 @@ defmodule Mob.Dist do
   """
   @spec ensure_started(keyword()) :: :ok
   def ensure_started(opts \\ []) do
-
     case :mob_nif.platform() do
       :ios ->
         :ok
 
       :android ->
-        node      = Keyword.fetch!(opts, :node)
-        cookie    = Keyword.fetch!(opts, :cookie)
-        delay     = Keyword.get(opts, :delay, @default_delay)
+        node = Keyword.fetch!(opts, :node)
+        cookie = Keyword.fetch!(opts, :cookie)
+        delay = Keyword.get(opts, :delay, @default_delay)
         dist_port = Keyword.get(opts, :dist_port, 9100)
         spawn(fn -> start_after(node, cookie, delay, dist_port) end)
         :ok
@@ -87,6 +86,7 @@ defmodule Mob.Dist do
       Enum.each(Node.list(), &Node.disconnect/1)
       :net_kernel.stop()
     end
+
     :ok
   end
 
@@ -102,6 +102,7 @@ defmodule Mob.Dist do
     # Without the tunnel (standalone launch), EPMD will never appear on 4369 and
     # we skip distribution entirely — the app runs fine, just not debuggable remotely.
     :mob_nif.log("Mob.Dist: waiting for EPMD (adb reverse tcp:4369 tcp:4369)...")
+
     case wait_for_epmd(10_000) do
       :ready ->
         :mob_nif.log("Mob.Dist: EPMD reachable, starting dist")
@@ -116,25 +117,32 @@ defmodule Mob.Dist do
         :application.set_env(:kernel, :inet_dist_listen_max, dist_port)
         result = Node.start(node, :longnames)
         :mob_nif.log("Mob.Dist: result=#{inspect(result)}")
+
         case result do
           {:ok, _} ->
             Node.set_cookie(cookie)
             :mob_nif.log("Mob.Dist: distribution started")
-          _ -> :ok
+
+          _ ->
+            :ok
         end
 
       :timeout ->
-        :mob_nif.log("Mob.Dist: no EPMD on port 4369 after 10s -- skipping dist (run mix mob.connect to enable)")
+        :mob_nif.log(
+          "Mob.Dist: no EPMD on port 4369 after 10s -- skipping dist (run mix mob.connect to enable)"
+        )
     end
   end
 
   # Poll port 4369 until the ADB-tunnelled Mac EPMD responds or we time out.
   defp wait_for_epmd(remaining_ms) when remaining_ms <= 0, do: :timeout
+
   defp wait_for_epmd(remaining_ms) do
     case :gen_tcp.connect({127, 0, 0, 1}, 4369, [], 200) do
       {:ok, sock} ->
         :gen_tcp.close(sock)
         :ready
+
       {:error, _} ->
         Process.sleep(500)
         wait_for_epmd(remaining_ms - 700)

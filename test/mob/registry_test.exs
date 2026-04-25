@@ -16,10 +16,12 @@ defmodule Mob.RegistryTest do
     end
 
     test "registers multiple platforms for same component", %{registry: reg} do
-      :ok = Registry.register(reg, :column,
-        android: {:mob_nif, :create_column, []},
-        ios:     {:mob_nif, :create_vstack, []}
-      )
+      :ok =
+        Registry.register(reg, :column,
+          android: {:mob_nif, :create_column, []},
+          ios: {:mob_nif, :create_vstack, []}
+        )
+
       assert {:ok, {:mob_nif, :create_column, []}} = Registry.lookup(reg, :column, :android)
       assert {:ok, {:mob_nif, :create_vstack, []}} = Registry.lookup(reg, :column, :ios)
     end

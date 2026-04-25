@@ -9,12 +9,12 @@ defmodule Mob.Onboarding.Shell do
   defstruct [:command, :exit_code, :output, :duration_ms, :timed_out]
 
   @type result :: %__MODULE__{
-    command:     String.t(),
-    exit_code:   non_neg_integer() | :timeout,
-    output:      String.t(),
-    duration_ms: non_neg_integer(),
-    timed_out:   boolean()
-  }
+          command: String.t(),
+          exit_code: non_neg_integer() | :timeout,
+          output: String.t(),
+          duration_ms: non_neg_integer(),
+          timed_out: boolean()
+        }
 
   @doc """
   Run a shell command. Returns a `%Shell{}` result struct.
@@ -27,31 +27,32 @@ defmodule Mob.Onboarding.Shell do
   """
   @spec run(String.t(), keyword()) :: result()
   def run(command, opts \\ []) do
-    cd      = Keyword.get(opts, :cd, System.tmp_dir!())
-    extra   = Keyword.get(opts, :env, %{})
+    cd = Keyword.get(opts, :cd, System.tmp_dir!())
+    extra = Keyword.get(opts, :env, %{})
     timeout = Keyword.get(opts, :timeout, @default_timeout_ms)
-    echo    = Keyword.get(opts, :echo, false)
+    echo = Keyword.get(opts, :echo, false)
 
-    env  = build_env(extra) |> to_charlist_pairs()
-    t0   = System.monotonic_time(:millisecond)
+    env = build_env(extra) |> to_charlist_pairs()
+    t0 = System.monotonic_time(:millisecond)
 
-    port = Port.open({:spawn, "/bin/sh -c #{shell_escape(command)}"}, [
-      :binary,
-      :exit_status,
-      :stderr_to_stdout,
-      {:cd, cd},
-      {:env, env}
-    ])
+    port =
+      Port.open({:spawn, "/bin/sh -c #{shell_escape(command)}"}, [
+        :binary,
+        :exit_status,
+        :stderr_to_stdout,
+        {:cd, cd},
+        {:env, env}
+      ])
 
     {output, exit_code, timed_out} = collect(port, "", timeout, echo)
     duration_ms = System.monotonic_time(:millisecond) - t0
 
     %__MODULE__{
-      command:     command,
-      exit_code:   exit_code,
-      output:      output,
+      command: command,
+      exit_code: exit_code,
+      output: output,
       duration_ms: duration_ms,
-      timed_out:   timed_out
+      timed_out: timed_out
     }
   end
 
@@ -61,6 +62,7 @@ defmodule Mob.Onboarding.Shell do
 
   @doc "Raises a descriptive error if the command did not exit 0."
   def assert_success!(%__MODULE__{exit_code: 0} = r), do: r
+
   def assert_success!(%__MODULE__{timed_out: true} = r) do
     raise """
     Command timed out after #{r.duration_ms}ms:
@@ -70,6 +72,7 @@ defmodule Mob.Onboarding.Shell do
     #{indent(r.output)}
     """
   end
+
   def assert_success!(%__MODULE__{} = r) do
     raise """
     Command exited #{r.exit_code} (#{r.duration_ms}ms):
@@ -82,6 +85,7 @@ defmodule Mob.Onboarding.Shell do
 
   @doc "Returns true iff the output contains the given string or matches the regex."
   def output_contains?(%__MODULE__{output: out}, %Regex{} = re), do: out =~ re
+
   def output_contains?(%__MODULE__{output: out}, str) when is_binary(str),
     do: String.contains?(out, str)
 
@@ -107,17 +111,19 @@ defmodule Mob.Onboarding.Shell do
   # always overridden by the workspace-specific values in `extra`.
   defp build_env(extra) do
     base = %{
-      "HOME"     => System.get_env("HOME", "/tmp"),
-      "PATH"     => System.get_env("PATH", "/usr/bin:/bin"),
-      "LANG"     => "en_US.UTF-8",
-      "LC_ALL"   => "en_US.UTF-8",
-      "TERM"     => "dumb",
+      "HOME" => System.get_env("HOME", "/tmp"),
+      "PATH" => System.get_env("PATH", "/usr/bin:/bin"),
+      "LANG" => "en_US.UTF-8",
+      "LC_ALL" => "en_US.UTF-8",
+      "TERM" => "dumb",
       # Prevent IEx from trying to start interactive sessions
-      "MIX_ENV"  => "dev",
+      "MIX_ENV" => "dev"
     }
+
     # Strip vars that leak host toolchain state
     strip = ~w[MIX_HOME HEX_HOME ERL_LIBS ELIXIR_ERL_OPTIONS]
     filtered = Enum.reduce(strip, System.get_env(), &Map.delete(&2, &1))
+
     filtered
     |> Map.merge(base)
     |> Map.merge(extra)

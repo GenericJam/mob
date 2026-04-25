@@ -41,10 +41,11 @@ defmodule Mob.Storage do
   """
   @spec list(atom() | String.t()) :: {:ok, [String.t()]} | {:error, atom()}
   def list(location) when is_atom(location), do: list(dir(location))
+
   def list(path) when is_binary(path) do
     case File.ls(path) do
       {:ok, names} -> {:ok, Enum.map(names, &Path.join(path, &1))}
-      error        -> error
+      error -> error
     end
   end
 
@@ -58,13 +59,16 @@ defmodule Mob.Storage do
   def stat(path) do
     case File.stat(path, time: :posix) do
       {:ok, %File.Stat{size: size, mtime: mtime}} ->
-        {:ok, %{
-          name:        Path.basename(path),
-          path:        path,
-          size:        size,
-          modified_at: DateTime.from_unix!(mtime)
-        }}
-      error -> error
+        {:ok,
+         %{
+           name: Path.basename(path),
+           path: path,
+           size: size,
+           modified_at: DateTime.from_unix!(mtime)
+         }}
+
+      error ->
+        error
     end
   end
 
@@ -84,6 +88,7 @@ defmodule Mob.Storage do
   def copy(src, dest) when is_atom(dest) do
     copy(src, Path.join(dir(dest), Path.basename(src)))
   end
+
   def copy(src, dest) when is_binary(dest) do
     with :ok <- File.cp(src, dest), do: {:ok, dest}
   end
@@ -99,6 +104,7 @@ defmodule Mob.Storage do
   def move(src, dest) when is_atom(dest) do
     move(src, Path.join(dir(dest), Path.basename(src)))
   end
+
   def move(src, dest) when is_binary(dest) do
     with :ok <- File.rename(src, dest), do: {:ok, dest}
   end

@@ -20,7 +20,7 @@ defmodule Mob.Photos do
 
   @spec pick(Mob.Socket.t(), keyword()) :: Mob.Socket.t()
   def pick(socket, opts \\ []) do
-    max   = Keyword.get(opts, :max, 1)
+    max = Keyword.get(opts, :max, 1)
     types = Keyword.get(opts, :types, [:image]) |> Enum.map(&Atom.to_string/1)
     :mob_nif.photos_pick(max, types)
     socket

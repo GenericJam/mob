@@ -21,11 +21,13 @@ defmodule Mob.ComponentRegistry do
   @spec register(pid(), atom(), module(), pid()) :: :ok
   def register(screen_pid, id, module, component_pid) do
     key = {screen_pid, id, module}
+
     case :ets.lookup(@table, key) do
       [{^key, existing}] when existing != component_pid ->
         raise ArgumentError,
               "Mob.Component: duplicate id #{inspect(id)} for #{inspect(module)} on screen " <>
                 "#{inspect(screen_pid)}. Component ids must be unique per screen."
+
       _ ->
         :ets.insert(@table, {key, component_pid})
         :ets.insert(@table, {component_pid, key})
@@ -38,7 +40,7 @@ defmodule Mob.ComponentRegistry do
   def lookup(screen_pid, id, module) do
     case :ets.lookup(@table, {screen_pid, id, module}) do
       [{_, pid}] -> {:ok, pid}
-      []         -> {:error, :not_found}
+      [] -> {:error, :not_found}
     end
   end
 
@@ -46,12 +48,16 @@ defmodule Mob.ComponentRegistry do
   @spec deregister(pid(), atom(), module()) :: :ok
   def deregister(screen_pid, id, module) do
     key = {screen_pid, id, module}
+
     case :ets.lookup(@table, key) do
       [{_, pid}] ->
         :ets.delete(@table, key)
         :ets.delete(@table, pid)
-      [] -> :ok
+
+      [] ->
+        :ok
     end
+
     :ok
   end
 
@@ -63,6 +69,7 @@ defmodule Mob.ComponentRegistry do
   def reconcile(screen_pid, active_keys) do
     pattern = {{screen_pid, :_, :_}, :_}
     entries = :ets.match_object(@table, pattern)
+
     for {{^screen_pid, id, module}, pid} <- entries do
       unless MapSet.member?(active_keys, {id, module}) do
         :ets.delete(@table, {screen_pid, id, module})
@@ -70,6 +77,7 @@ defmodule Mob.ComponentRegistry do
         Process.exit(pid, :shutdown)
       end
     end
+
     :ok
   end
 

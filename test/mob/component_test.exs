@@ -50,6 +50,7 @@ defmodule Mob.ComponentTest do
 
     test "handle_event/3 default raises for unhandled events" do
       socket = Mob.Socket.new(StatelessComponent, platform: :no_render)
+
       assert_raise RuntimeError, ~r/unhandled component event/, fn ->
         StatelessComponent.handle_event("unknown", %{}, socket)
       end
@@ -145,6 +146,7 @@ defmodule Mob.ComponentTest do
       screen = self()
       Mob.ComponentRegistry.register(screen, :temp, CounterComponent, self())
       Mob.ComponentRegistry.deregister(screen, :temp, CounterComponent)
+
       assert {:error, :not_found} =
                Mob.ComponentRegistry.lookup(screen, :temp, CounterComponent)
     end
@@ -152,6 +154,7 @@ defmodule Mob.ComponentTest do
     test "duplicate id raises" do
       screen = self()
       Mob.ComponentRegistry.register(screen, :dupe, CounterComponent, self())
+
       assert_raise ArgumentError, ~r/duplicate id/, fn ->
         Mob.ComponentRegistry.register(screen, :dupe, CounterComponent, spawn(fn -> nil end))
       end

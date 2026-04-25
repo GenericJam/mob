@@ -111,8 +111,9 @@ defmodule Mob.State do
   @impl true
   def init(_opts) do
     path = state_path() |> String.to_charlist()
+
     case :dets.open_file(@table, file: path, type: :set) do
-      {:ok, _}    -> {:ok, %{}}
+      {:ok, _} -> {:ok, %{}}
       {:error, r} -> {:stop, {:dets_open_failed, r}}
     end
   end
