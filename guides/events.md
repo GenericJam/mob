@@ -115,6 +115,50 @@ header(
 These never deliver events to BEAM — they're computed natively at display
 refresh rate.
 
+### IME composition (CJK / Korean / Vietnamese / accent input)
+
+Languages with multi-stage input show a "marked" or "composing" region
+before the user picks a final character. Apps that read text mid-keystroke
+(search-as-you-type, network sync) need to know about composition state to
+avoid sending partial input.
+
+```elixir
+text_field(value: @text,
+  on_change:  {self(), :text},      # fires on every change (including composing)
+  on_compose: {self(), :ime})       # fires on composition phase changes
+
+# Events:
+# {:compose, :ime, %{phase: :began,     text: "n"}}     # composition started
+# {:compose, :ime, %{phase: :updating,  text: "ni"}}    # composing
+# {:compose, :ime, %{phase: :committed, text: "你"}}    # user picked candidate
+# {:compose, :ime, %{phase: :cancelled, text: ""}}      # user dismissed IME
+```
+
+Commit-only handler pattern (the typical use case):
+
+```elixir
+def handle_info({:compose, _id, %{phase: :began}}, socket),
+  do: {:noreply, assign(socket, :composing, true)}
+
+def handle_info({:compose, _id, %{phase: :committed, text: text}}, socket) do
+  # Real commit replaces whatever raw text we got during composition.
+  {:noreply, assign(socket, composing: false, text: text)}
+end
+
+def handle_info({:compose, _id, %{phase: :cancelled}}, socket),
+  do: {:noreply, assign(socket, :composing, false)}
+
+def handle_info({:change, _id, value}, %{assigns: %{composing: true}} = socket),
+  do: {:noreply, socket}                 # ignore raw text while composing
+
+def handle_info({:change, _id, value}, socket),
+  do: {:noreply, assign(socket, :text, value)}
+```
+
+For most apps (forms that read the final value on submit), you don't need
+`on_compose` at all — UIKit/Compose handle IME natively and the committed
+text ends up in `value` correctly. Only opt in when partial input matters.
+
 ### Device lifecycle
 
 ```elixir

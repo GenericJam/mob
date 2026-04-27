@@ -120,6 +120,28 @@ defmodule Mob.Event.Bridge do
     end
   end
 
+  # ── IME composition (Batch 6 — text input only) ────────────────────────
+  # Phase is :began | :updating | :committed | :cancelled.
+  # Payload is %{text: "...", phase: atom}.
+  def legacy_to_canonical({:compose, tag, %{phase: phase} = payload}, screen_id, opts)
+      when not is_nil(tag) and is_atom(phase) do
+    case Address.validate_id(tag) do
+      :ok ->
+        addr =
+          Address.new(
+            screen: screen_id,
+            widget: Keyword.get(opts, :widget, :text_field),
+            id: tag,
+            render_id: Keyword.get(opts, :render_id, 1)
+          )
+
+        {:ok, {:mob_event, addr, :compose, payload}}
+
+      {:error, _} ->
+        :passthrough
+    end
+  end
+
   # ── Batch 5 Tier 1: high-frequency events with payload maps ────────────
   # The native side sends {atom, tag, %{...payload}} for these. We map the
   # widget kind from the event atom (scroll → :scroll widget, etc.) and pass

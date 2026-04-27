@@ -304,6 +304,14 @@ defmodule Mob.Renderer do
       {:on_submit, {pid, tag}} when is_pid(pid) ->
         [{"on_submit", nif.register_tap({pid, tag})}]
 
+      # IME composition — fires for languages with multi-stage input (CJK,
+      # Korean, Vietnamese, accent input). Phase atom is :began | :updating
+      # | :committed | :cancelled. Apps that need commit-only behaviour
+      # combine on_change + on_compose: ignore on_change while a composition
+      # is active, replace text on :committed.
+      {:on_compose, {pid, tag}} when is_pid(pid) ->
+        [{"on_compose", nif.register_tap({pid, tag})}]
+
       {:on_end_reached, {pid, tag}} when is_pid(pid) ->
         [{"on_end_reached", nif.register_tap({pid, tag})}]
 

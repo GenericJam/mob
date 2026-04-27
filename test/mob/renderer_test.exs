@@ -198,6 +198,21 @@ defmodule Mob.RendererTest do
       assert is_integer(decoded["props"]["on_submit"])
     end
 
+    test "on_compose {pid, tag} is replaced by integer handle (IME composition)" do
+      pid = self()
+
+      tree = %{
+        type: :text_field,
+        props: %{value: "", on_compose: {pid, :ime}},
+        children: []
+      }
+
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert is_integer(decoded["props"]["on_compose"])
+    end
+
     # ── Batch 3: on_select ────────────────────────────────────────────────
     test "on_select {pid, tag} is replaced by integer handle" do
       pid = self()

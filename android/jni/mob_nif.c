@@ -241,6 +241,39 @@ void mob_send_blur(int handle)   { send_event(handle, "blur"); }
 void mob_send_submit(int handle) { send_event(handle, "submit"); }
 void mob_send_select(int handle) { send_event(handle, "select"); }
 
+// IME composition. Sends {compose, tag, %{text, phase}} where phase is
+// began/updating/committed/cancelled. Called from beam_jni.c when the
+// Compose TextField's TextFieldValue.composition range changes, or from
+// an InputConnection observer in legacy view-system text fields.
+void mob_send_compose(int handle, const char* text, const char* phase) {
+    enif_mutex_lock(tap_mutex);
+    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
+        enif_mutex_unlock(tap_mutex);
+        return;
+    }
+    ErlNifPid    pid = tap_handles[handle].pid;
+    ERL_NIF_TERM tag = tap_handles[handle].tag;
+    enif_mutex_unlock(tap_mutex);
+
+    ErlNifEnv* env = enif_alloc_env();
+    ERL_NIF_TERM keys[2] = {
+        enif_make_atom(env, "text"),
+        enif_make_atom(env, "phase"),
+    };
+    ERL_NIF_TERM vals[2] = {
+        enif_make_string(env, text ? text : "", ERL_NIF_LATIN1),
+        enif_make_atom(env, phase),
+    };
+    ERL_NIF_TERM payload;
+    enif_make_map_from_arrays(env, keys, vals, 2, &payload);
+    ERL_NIF_TERM msg = enif_make_tuple3(env,
+        enif_make_atom(env, "compose"),
+        enif_make_copy(env, tag),
+        payload);
+    enif_send(NULL, &pid, env, msg);
+    enif_free_env(env);
+}
+
 // ── Gesture senders (Batch 4) ───────────────────────────────────────────────
 // Called from beam_jni.c when the Compose gesture detector fires. Each is
 // per-widget opt-in — only registered handles emit. Direction-aware swipes

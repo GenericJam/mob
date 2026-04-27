@@ -28,6 +28,12 @@ void mob_send_submit(int handle);
 // Send {:select, tag} for pickers, menus, segmented controls.
 void mob_send_select(int handle);
 
+// Send {:compose, tag, %{text, phase}} for IME composition events on text
+// fields. phase is "began" | "updating" | "committed" | "cancelled". Apps
+// that observe this can implement commit-only behaviour for CJK input
+// (ignore on_change while composing, replace text on :committed).
+void mob_send_compose(int handle, const char* text, const char* phase);
+
 // ── Gesture senders (Batch 4) ────────────────────────────────────────────
 // Called from beam_jni.c JNI stubs when Compose's gesture detector fires.
 // Per-widget opt-in — only nodes with the corresponding registered handle emit.

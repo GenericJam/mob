@@ -123,6 +123,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) void (^onFocus)(void);
 @property (nonatomic, copy, nullable) void (^onBlur)(void);
 @property (nonatomic, copy, nullable) void (^onSubmit)(void);
+// IME composition (CJK, Korean, Vietnamese, accent input). Called by
+// the iOS text-input layer when marked-text state changes.
+//   text:  the in-progress (or committed) text
+//   phase: "began" | "updating" | "committed" | "cancelled"
+@property (nonatomic, copy, nullable) void (^onCompose)(NSString* text, NSString* phase);
 // toggle
 @property (nonatomic) BOOL checked;
 // slider

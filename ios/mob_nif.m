@@ -209,6 +209,38 @@ static void mob_send_blur(int handle)   { mob_send_event(handle, "blur"); }
 static void mob_send_submit(int handle) { mob_send_event(handle, "submit"); }
 static void mob_send_select(int handle) { mob_send_event(handle, "select"); }
 
+// IME composition. Sends {compose, tag, %{text: ..., phase: ...}} where
+// phase is one of began/updating/committed/cancelled. Called from the
+// text-input layer when marked-text state changes.
+static void mob_send_compose(int handle, const char* text, const char* phase) {
+    enif_mutex_lock(tap_mutex);
+    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
+        enif_mutex_unlock(tap_mutex);
+        return;
+    }
+    ErlNifPid    pid = tap_handles[handle].pid;
+    ERL_NIF_TERM tag = tap_handles[handle].tag;
+    enif_mutex_unlock(tap_mutex);
+
+    ErlNifEnv* msg_env = enif_alloc_env();
+    ERL_NIF_TERM keys[2] = {
+        enif_make_atom(msg_env, "text"),
+        enif_make_atom(msg_env, "phase"),
+    };
+    ERL_NIF_TERM vals[2] = {
+        enif_make_string(msg_env, text ? text : "", ERL_NIF_LATIN1),
+        enif_make_atom(msg_env, phase),
+    };
+    ERL_NIF_TERM payload;
+    enif_make_map_from_arrays(msg_env, keys, vals, 2, &payload);
+    ERL_NIF_TERM msg = enif_make_tuple3(msg_env,
+        enif_make_atom(msg_env, "compose"),
+        enif_make_copy(msg_env, tag),
+        payload);
+    enif_send(NULL, &pid, msg_env, msg);
+    enif_free_env(msg_env);
+}
+
 // ── Gesture senders (Batch 4) ───────────────────────────────────────────────
 // Each fires {atom, tag} just like tap. SwiftUI converts gesture recognizers
 // into onLongPress/onDoubleTap/onSwipe* callbacks on the MobNode.
@@ -678,6 +710,16 @@ static MobNode* mob_node_from_dict(NSDictionary* dict) {
         if (onSubmit && [onSubmit isKindOfClass:[NSNumber class]]) {
             int handle = [onSubmit intValue];
             node.onSubmit = ^{ mob_send_submit(handle); };
+        }
+
+        id onCompose = props[@"on_compose"];
+        if (onCompose && [onCompose isKindOfClass:[NSNumber class]]) {
+            int handle = [onCompose intValue];
+            node.onCompose = ^(NSString* text, NSString* phase) {
+                mob_send_compose(handle,
+                    text ? [text UTF8String] : "",
+                    phase ? [phase UTF8String] : "updating");
+            };
         }
 
         id onSelect = props[@"on_select"];

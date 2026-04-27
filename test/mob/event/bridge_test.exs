@@ -130,6 +130,86 @@ defmodule Mob.Event.BridgeTest do
     end
   end
 
+  describe "legacy_to_canonical/3 — IME composition" do
+    test ":compose with phase :began" do
+      assert {:ok, {:mob_event, addr, :compose, payload}} =
+               Bridge.legacy_to_canonical(
+                 {:compose, :ime, %{phase: :began, text: "n"}},
+                 MyScreen
+               )
+
+      assert addr.widget == :text_field
+      assert addr.id == :ime
+      assert payload == %{phase: :began, text: "n"}
+    end
+
+    test ":compose with phase :updating" do
+      assert {:ok, {:mob_event, _, :compose, %{phase: :updating, text: "ni"}}} =
+               Bridge.legacy_to_canonical(
+                 {:compose, :ime, %{phase: :updating, text: "ni"}},
+                 MyScreen
+               )
+    end
+
+    test ":compose with phase :committed (CJK character chosen)" do
+      assert {:ok, {:mob_event, _, :compose, %{phase: :committed, text: "你"}}} =
+               Bridge.legacy_to_canonical(
+                 {:compose, :ime, %{phase: :committed, text: "你"}},
+                 MyScreen
+               )
+    end
+
+    test ":compose with phase :cancelled" do
+      assert {:ok, {:mob_event, _, :compose, %{phase: :cancelled, text: ""}}} =
+               Bridge.legacy_to_canonical(
+                 {:compose, :ime, %{phase: :cancelled, text: ""}},
+                 MyScreen
+               )
+    end
+
+    test "binary id works for compose" do
+      assert {:ok, {:mob_event, addr, :compose, _}} =
+               Bridge.legacy_to_canonical(
+                 {:compose, "field:email", %{phase: :began, text: ""}},
+                 MyScreen
+               )
+
+      assert addr.id == "field:email"
+    end
+
+    test "missing phase falls through to passthrough" do
+      assert :passthrough =
+               Bridge.legacy_to_canonical({:compose, :ime, %{text: "x"}}, MyScreen)
+    end
+
+    test "non-atom phase falls through" do
+      assert :passthrough =
+               Bridge.legacy_to_canonical(
+                 {:compose, :ime, %{phase: "began", text: "n"}},
+                 MyScreen
+               )
+    end
+
+    test "nil tag passes through" do
+      assert :passthrough =
+               Bridge.legacy_to_canonical(
+                 {:compose, nil, %{phase: :began, text: ""}},
+                 MyScreen
+               )
+    end
+
+    test "widget kind can be overridden via opts" do
+      assert {:ok, {:mob_event, addr, :compose, _}} =
+               Bridge.legacy_to_canonical(
+                 {:compose, :ime, %{phase: :began, text: ""}},
+                 MyScreen,
+                 widget: :search_box
+               )
+
+      assert addr.widget == :search_box
+    end
+  end
+
   describe "legacy_to_canonical/3 — Batch 5 Tier 1: high-frequency events" do
     test ":scroll with payload map" do
       payload = %{x: 0.0, y: 1240.0, dx: 0.0, dy: 12.0, phase: :dragging, ts: 18472, seq: 891}

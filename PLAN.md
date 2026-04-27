@@ -2086,12 +2086,165 @@ each event takes one `dispatch_async` + one `enif_send`, ~1–10 μs at <10 Hz.
 Batch 5 needs careful native-side gating: 60 Hz scroll events on multiple
 lists can become hundreds of `enif_send` calls per second per subscriber.
 
-### Batch 6 — Complex multi-stage events ⬜
+### Batch 6 — IME composition ✅ (Elixir + foundation) / ⏳ (platform-side observers)
 
-Drag-and-drop (begin / over / end with payload), IME composition (preedit text
-on CJK keyboards), multi-touch tracking, stylus input, hover (iPad trackpad /
-Android tablet). State machines, not single events. Likely needs its own
-message shape: `{:mob_device, :drag_session, session_id, phase, data}`.
+Of the originally-planned Batch 6 surface (drag-and-drop, IME, multi-touch,
+stylus, hover), only **IME composition** ships now. The others are deferred
+to Batch 7 — see speculative design below.
+
+**Why IME ships now:** text fields already exist; CJK / Korean / Vietnamese
+users SEE composition working (UIKit/Compose handle it natively), but apps
+that read partial input during composition (search-as-you-type, network
+sync) get garbled non-final text without observation. Not "wait for asks."
+
+**Shipped:**
+- `on_compose: {pid, tag}` prop on text fields. Phase atom is
+  `:began | :updating | :committed | :cancelled`. Payload is
+  `%{text: binary, phase: atom}`.
+- `Mob.Event.Bridge` recognises `{:compose, tag, %{phase: ...}}` and
+  validates the phase atom.
+- iOS NIF: `mob_send_compose(handle, text, phase)`; `MobNode.onCompose`
+  closure property; prop deserialiser wires it; SwiftUI side fires nothing
+  yet (see "Pending" below).
+- Android NIF: same C-side sender; header export.
+- Tests: 8 bridge tests, 1 renderer test, 3 integration tests including a
+  full commit-only filter pattern (CJK simulation: keystrokes during
+  composition + final commit, asserts only committed text is delivered).
+
+**Pending:**
+- iOS SwiftUI: real composition observation requires a `UIViewRepresentable`
+  wrapping `UITextField` with a delegate that watches `markedTextRange` /
+  `setMarkedText:`. Tracked separately — the existing `MobTextField` is
+  SwiftUI-based and doesn't expose marked-text state.
+- Android: Compose `TextFieldValue.composition` range observation in the
+  generated app's `MobBridge`, calling `mob_send_compose` via JNI.
+- Until both ship, the Elixir contract works (events deliver if the native
+  side calls `mob_send_compose`) but no native source emits them yet.
+
+### Batch 7 — Niche surfaces (deferred — implement on demand) ⬜
+
+The following sub-items from the original Batch 6 are **deferred until a
+real app needs them**. They each require design choices that are easier to
+make with a concrete use case to validate against, and each represents
+significant native + Elixir work that isn't justified by current users.
+
+#### Drag-and-drop
+
+**Use cases that justify implementation:** kanban boards (reorder cards
+between columns), file drop zones (chat attachments, photo upload), todo
+list reordering, draggable widgets in a layout editor.
+
+**Speculative API:**
+
+```elixir
+# Source — declares what can be dragged from this widget:
+card(id: card.id,
+  draggable: %{payload: %{type: :card, id: card.id}})
+
+# Target — declares what it accepts and the handler:
+column(id: :archive,
+  drop_target: %{accepts: [:card], on_drop: {self(), :archive_card}})
+
+# Events:
+{:drag, :begin,     %{session_id: 7, source_id: "card:123", payload: %{...}}}
+{:drag, :over,      %{session_id: 7, target_id: :archive,   x: 240, y: 100}}
+{:drag, :leave,     %{session_id: 7, target_id: :archive}}
+{:drag, :drop,      %{session_id: 7, target_id: :archive,   payload: %{...}}}
+{:drag, :end,       %{session_id: 7, accepted: true}}     # always fires last
+{:drag, :cancel,    %{session_id: 7}}                      # if interrupted
+```
+
+**Design choices to settle when implementing:**
+- **Session ID allocation.** Native side mints a monotonic per-process
+  counter; expires when terminal phase fires. Cross-platform ID? Or per-
+  platform — they're never compared.
+- **Cross-widget routing.** A drag *starts* on widget A and *ends* on widget
+  B. The address shape needs to identify both. Options: (a) the drag
+  session has its own pseudo-address `%Address{widget: :drag_session, id: N}`
+  and target widgets fan out to interested parents; (b) source events go to
+  the source's parent, target events go to the target's parent, the
+  framework correlates by session_id.
+- **Payload schema.** Drag carries arbitrary data — text, image, custom
+  Mob types. Decide: typed payloads via a tagged map (`%{type: :text, value: "x"}`),
+  or free-form? Probably typed — apps need to validate `accepts:` lists.
+- **Cancellation guarantees.** Phone call interruption mid-drag, app
+  backgrounded mid-drag, source widget unmounted mid-drag. Native side must
+  fire `:cancel` for every started session. No silent drops.
+- **Visual feedback.** Drag preview, drop-zone highlights — these are
+  rendering concerns, not event concerns. Probably a `Mob.Drag` runtime
+  module that handles the preview; events only carry semantic state.
+- **Native APIs to use.**
+  - iOS: `UIDragInteraction` / `UIDropInteraction` (UIKit) or `.draggable` /
+    `.dropDestination` (SwiftUI 16+). The SwiftUI ones are simpler.
+  - Android: `View.startDragAndDrop` + `DragEvent` listeners (View system),
+    or the equivalent in Compose's pointer-input gestures.
+
+**Estimated scope:** ~1500 LOC + tests. 1–2 weeks of focused work.
+
+#### Multi-touch tracking
+
+**Use cases:** drawing apps, custom gesture surfaces, music apps, games.
+Niche — most touch interactions are well-served by `on_tap`, `on_pinch`,
+`on_drag`. Real apps that need raw multi-touch want pressure, tilt,
+azimuth too (stylus territory).
+
+**Speculative API:**
+
+```elixir
+canvas(on_touch: {self(), :draw})
+
+# Events (one stream per finger, identified by finger_id):
+{:touch, :down, %{finger_id: 0, x: 100, y: 200, pressure: 0.8}}
+{:touch, :move, %{finger_id: 0, x: 105, y: 210, pressure: 0.9}}
+{:touch, :up,   %{finger_id: 0, x: 200, y: 300, pressure: 0.0}}
+```
+
+**Design choices:**
+- **Finger identity.** iOS `UITouch.identifier`, Android
+  `MotionEvent.getPointerId`. Stable for the duration of the gesture.
+- **Throttling.** Same Tier-1 model as Batch 5 — high-frequency, needs
+  per-finger throttle config.
+- **Pressure / tilt / azimuth.** Optional payload fields, present on
+  hardware that supports them.
+
+**Estimated scope:** ~600 LOC + tests. ~1 week.
+
+#### Stylus / Pencil
+
+**Use cases:** drawing, handwriting recognition, note-taking. Apple Pencil
++ Galaxy Note + Surface Pen.
+
+**Speculative API:** identical to multi-touch but with extra payload fields
+(`pressure`, `tilt_x`, `tilt_y`, `azimuth_radians`, `tool: :pencil | :finger`).
+Apps want pressure curves applied (linear / quadratic / exponential) — provide
+a `Mob.Stylus.curve/2` helper rather than configuring the curve at the
+native layer.
+
+**Estimated scope:** ~400 LOC on top of multi-touch.
+
+#### Hover (iPad trackpad / pointer devices)
+
+**Use cases:** showing tooltips, highlighting hover targets, custom cursor
+images. Affects ~zero current Mob apps; relevant when iPad/macOS/web port
+becomes a real target.
+
+**Speculative API:**
+
+```elixir
+button("?", on_hover: {self(), :show_tooltip})
+
+# Events:
+{:hover, :enter, %{x: 100, y: 200}}
+{:hover, :move,  %{x: 105, y: 210}}
+{:hover, :exit,  %{x: 110, y: 220}}
+```
+
+**Design notes:** hover is the most aggressive high-frequency event —
+moving a cursor across a screen produces hundreds of events per second.
+Default to native-side processing (e.g., "is the cursor over this widget?"
+as a cheap predicate) and only emit semantic transitions to BEAM.
+
+**Estimated scope:** ~400 LOC + tests, mostly per-platform.
 
 ### Selective category enable (deferred)
 

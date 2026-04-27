@@ -226,6 +226,96 @@ defmodule Mob.Event.IntegrationTest do
     end
   end
 
+  describe "IME composition flow (Batch 6 — text input only)" do
+    test "began → updating → committed sequence" do
+      {:ok, screen} = TestScreen.start_link(reply_to: self())
+
+      send(screen, {:compose, :email, %{phase: :began, text: "n"}})
+      send(screen, {:compose, :email, %{phase: :updating, text: "ni"}})
+      send(screen, {:compose, :email, %{phase: :committed, text: "你"}})
+
+      assert_receive {:handled, {:mob_event, _, :compose, %{phase: :began, text: "n"}}}, 200
+
+      assert_receive {:handled, {:mob_event, _, :compose, %{phase: :updating, text: "ni"}}},
+                     200
+
+      assert_receive {:handled, {:mob_event, _, :compose, %{phase: :committed, text: "你"}}},
+                     200
+    end
+
+    test "began → cancelled (user dismissed IME)" do
+      {:ok, screen} = TestScreen.start_link(reply_to: self())
+
+      send(screen, {:compose, :email, %{phase: :began, text: ""}})
+      send(screen, {:compose, :email, %{phase: :cancelled, text: ""}})
+
+      assert_receive {:handled, {:mob_event, _, :compose, %{phase: :began}}}, 200
+      assert_receive {:handled, {:mob_event, _, :compose, %{phase: :cancelled}}}, 200
+    end
+
+    test "screen can implement commit-only filter using on_change + on_compose" do
+      defmodule CommitOnlyScreen do
+        use GenServer
+
+        def start_link(opts), do: GenServer.start_link(__MODULE__, opts, opts)
+
+        def get(pid), do: GenServer.call(pid, :get)
+
+        def init(opts) do
+          {:ok, %{committed: nil, composing: false, raw: nil, reply_to: opts[:reply_to]}}
+        end
+
+        def handle_info({:compose, _id, %{phase: :began}}, state) do
+          {:noreply, %{state | composing: true}}
+        end
+
+        def handle_info({:compose, _id, %{phase: :committed, text: text}}, state) do
+          # Real commit replaces whatever raw text we've been seeing.
+          send(state.reply_to, {:committed, text})
+          {:noreply, %{state | composing: false, committed: text, raw: text}}
+        end
+
+        def handle_info({:compose, _id, %{phase: :cancelled}}, state) do
+          {:noreply, %{state | composing: false}}
+        end
+
+        def handle_info({:compose, _id, %{phase: :updating, text: text}}, state) do
+          {:noreply, %{state | raw: text}}
+        end
+
+        def handle_info({:change, _id, value}, %{composing: true} = state) do
+          # Ignore raw text changes while composing — wait for commit.
+          {:noreply, %{state | raw: value}}
+        end
+
+        def handle_info({:change, _id, value}, state) do
+          send(state.reply_to, {:committed, value})
+          {:noreply, %{state | committed: value}}
+        end
+
+        def handle_call(:get, _from, state), do: {:reply, state, state}
+      end
+
+      {:ok, screen} = CommitOnlyScreen.start_link(reply_to: self())
+
+      # Simulate CJK input flow: keystrokes during composition + final commit.
+      send(screen, {:compose, :email, %{phase: :began, text: "n"}})
+      send(screen, {:change, :email, "n"})
+      send(screen, {:compose, :email, %{phase: :updating, text: "ni"}})
+      send(screen, {:change, :email, "ni"})
+      send(screen, {:compose, :email, %{phase: :committed, text: "你"}})
+
+      # Should receive ONE :committed message — for "你", not "n" or "ni".
+      assert_receive {:committed, "你"}, 200
+      refute_receive {:committed, "n"}, 50
+      refute_receive {:committed, "ni"}, 50
+
+      state = CommitOnlyScreen.get(screen)
+      assert state.committed == "你"
+      assert state.composing == false
+    end
+  end
+
   describe "Mob.Event direct dispatch (no bridge)" do
     test "synthesised event delivered to the test process" do
       addr = Address.new(screen: TestScreen, widget: :button, id: :save)
