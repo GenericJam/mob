@@ -27,8 +27,17 @@ static void* epmd_thread(void *arg) {
 #endif
 
 // Compile-time defaults (simulator). Override via -D flags for device builds.
-#ifndef OTP_ROOT
-#define OTP_ROOT   "/tmp/otp-ios-sim"
+//
+// On simulator the OTP runtime is not bundled in the .app — it's written to a
+// directory on the Mac filesystem that the simulator app can read. The legacy
+// path was hardcoded to /tmp/otp-ios-sim; mob_new ≥ 0.1.20 instead resolves
+// the runtime dir from the MOB_SIM_RUNTIME_DIR env var (passed by mix mob.deploy
+// via simctl's SIMCTL_CHILD_* mechanism) and defaults to ~/.mob/runtime/ios-sim.
+//
+// resolve_sim_otp_root() below handles both paths so old and new projects work
+// against the same compiled mob_beam.m.
+#ifndef OTP_ROOT_LEGACY
+#define OTP_ROOT_LEGACY "/tmp/otp-ios-sim"
 #endif
 #ifndef ERTS_VSN
 #define ERTS_VSN   "erts-16.3"
@@ -36,6 +45,19 @@ static void* epmd_thread(void *arg) {
 #ifndef OTP_RELEASE
 #define OTP_RELEASE "29"
 #endif
+
+// Resolve the simulator's OTP runtime root at startup.
+// Order:
+//   1. MOB_SIM_RUNTIME_DIR env var if set (passed via SIMCTL_CHILD_*)
+//   2. /tmp/otp-ios-sim if it exists (legacy projects, pre-mob_new 0.1.20)
+//   3. /tmp/otp-ios-sim otherwise (final fallback to keep behaviour stable
+//      when nothing else is found — the launching mix mob.deploy is in charge
+//      of setting the env var when the project supports it)
+static const char *resolve_sim_otp_root(void) {
+    const char *env = getenv("MOB_SIM_RUNTIME_DIR");
+    if (env && env[0]) return env;
+    return OTP_ROOT_LEGACY;
+}
 
 void mob_init_ui(void) {
     // SwiftUI: the UI is driven by MobViewModel (Swift ObservableObject).
@@ -103,9 +125,11 @@ void mob_start_beam(const char* app_module) {
     const char *docs_dir = docs_ns ? [docs_ns UTF8String] : "/tmp";
     mob_write_diag(docs_dir, "mob_diag_a_entered.txt", "mob_start_beam entered");
 
-    // On simulator OTP_ROOT is a fixed /tmp path shared with the Mac.
     // On physical device the OTP runtime is bundled inside the .app — resolve
     // the path at runtime so it works regardless of where iOS installs the app.
+    // On simulator the runtime lives on the Mac filesystem; resolve_sim_otp_root()
+    // reads MOB_SIM_RUNTIME_DIR (set by mix mob.deploy via simctl) with a /tmp
+    // fallback for legacy projects.
 #ifdef MOB_BUNDLE_OTP
     NSString *bundle_otp = [[[NSBundle mainBundle] bundlePath]
                              stringByAppendingPathComponent:@"otp"];
@@ -113,7 +137,7 @@ void mob_start_beam(const char* app_module) {
     const char *erts_vsn = ERTS_VSN;
     const char *otp_release = OTP_RELEASE;
 #else
-    const char *otp_root = OTP_ROOT;
+    const char *otp_root = resolve_sim_otp_root();
     const char *erts_vsn = ERTS_VSN;
     const char *otp_release = OTP_RELEASE;
 #endif
