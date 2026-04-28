@@ -31,16 +31,19 @@ defmodule Mob.Device.Android do
 
   use GenServer
 
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc "Subscribe the calling process to Android-specific device events."
+  @spec subscribe() :: :ok
   def subscribe do
     GenServer.call(__MODULE__, {:subscribe, self()})
   end
 
   @doc "Unsubscribe the calling process."
+  @spec unsubscribe() :: :ok
   def unsubscribe do
     GenServer.call(__MODULE__, {:unsubscribe, self()})
   end

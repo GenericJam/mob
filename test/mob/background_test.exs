@@ -8,20 +8,15 @@ defmodule Mob.BackgroundTest do
 
   describe "module API" do
     setup do
-      # function_exported?/3 returns false for unloaded modules. Ensure the
-      # module is loaded before introspecting it — otherwise the assertion is
-      # order-dependent on whatever happened to load Mob.Background earlier.
       Code.ensure_loaded(Mob.Background)
       :ok
     end
 
-    test "keep_alive/0 is exported" do
-      assert function_exported?(Mob.Background, :keep_alive, 0)
-    end
-
-    test "stop/0 is exported" do
-      assert function_exported?(Mob.Background, :stop, 0)
-    end
+    # The "raises when called outside iOS" tests below invoke the actual
+    # functions, which both proves they exist and exercises behaviour. Bare
+    # `function_exported?/3` checks were removed — they only confirm the type
+    # system; the call-and-rescue tests give the same coverage with real
+    # behaviour assertions.
 
     test "keep_alive/0 raises when called outside iOS (delegates to :mob_nif)" do
       # In the test environment mob_nif.so is absent so the module either fails

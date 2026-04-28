@@ -69,6 +69,7 @@ defmodule Mob.Device do
   Start the dispatcher. Called from `Mob.Application` (or the app supervision
   tree). After start, the registered NIF dispatcher pid is this GenServer.
   """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
@@ -102,30 +103,37 @@ defmodule Mob.Device do
   # ── Queries (delegate to NIF) ─────────────────────────────────────────────
 
   @doc "Current battery level (0..100), or -1 if unknown."
+  @spec battery_level() :: integer()
   def battery_level do
     {_state, pct} = :mob_nif.device_battery_state()
     pct
   end
 
   @doc "Current battery state — `:unplugged | :charging | :full | :unknown`."
+  @spec battery_state() :: :unplugged | :charging | :full | :unknown
   def battery_state do
     {state, _pct} = :mob_nif.device_battery_state()
     state
   end
 
   @doc "Current thermal state — `:nominal | :fair | :serious | :critical`."
+  @spec thermal_state() :: :nominal | :fair | :serious | :critical
   def thermal_state, do: :mob_nif.device_thermal_state()
 
   @doc "True if Low Power Mode (iOS) / Power Save Mode (Android) is on."
+  @spec low_power_mode?() :: boolean()
   def low_power_mode?, do: :mob_nif.device_low_power_mode() == true
 
   @doc "True if the app is currently in the foreground."
+  @spec foreground?() :: boolean()
   def foreground?, do: :mob_nif.device_foreground() == true
 
   @doc "OS version string (e.g. \"17.4\")."
+  @spec os_version() :: String.t()
   def os_version, do: to_string(:mob_nif.device_os_version())
 
   @doc "Device model (e.g. \"iPhone\", \"Pixel 8\")."
+  @spec model() :: String.t()
   def model, do: to_string(:mob_nif.device_model())
 
   # ── GenServer ─────────────────────────────────────────────────────────────
@@ -264,6 +272,7 @@ defmodule Mob.Device do
   end
 
   @doc false
+  @spec category_for(atom()) :: category() | :other
   def category_for(event) do
     cond do
       event in @app_events -> :app

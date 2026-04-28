@@ -187,7 +187,14 @@ end
 defimpl Inspect, for: Mob.Event.Address do
   import Inspect.Algebra
 
+  @spec inspect(Mob.Event.Address.t(), Inspect.Opts.t()) :: Inspect.Algebra.t()
   def inspect(addr, _opts) do
-    concat(["#Mob.Event.Address<", Mob.Event.Address.to_string(addr), "@", Integer.to_string(addr.render_id), ">"])
+    concat([
+      "#Mob.Event.Address<",
+      Mob.Event.Address.to_string(addr),
+      "@",
+      Integer.to_string(addr.render_id),
+      ">"
+    ])
   end
 end

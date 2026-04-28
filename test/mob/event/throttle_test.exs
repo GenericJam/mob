@@ -27,8 +27,8 @@ defmodule Mob.Event.ThrottleTest do
     test "all event kinds have a default" do
       for kind <- [:scroll, :drag, :pinch, :rotate, :pointer_move] do
         d = Throttle.default_for(kind)
-        assert is_map(d)
-        assert is_integer(d.throttle_ms)
+        assert is_map(d) and Map.has_key?(d, :throttle_ms)
+        assert is_integer(d.throttle_ms) and d.throttle_ms >= 0
       end
     end
 

@@ -35,16 +35,19 @@ defmodule Mob.Device.IOS do
 
   use GenServer
 
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc "Subscribe the calling process to iOS-specific device events."
+  @spec subscribe() :: :ok
   def subscribe do
     GenServer.call(__MODULE__, {:subscribe, self()})
   end
 
   @doc "Unsubscribe the calling process."
+  @spec unsubscribe() :: :ok
   def unsubscribe do
     GenServer.call(__MODULE__, {:unsubscribe, self()})
   end
@@ -55,6 +58,7 @@ defmodule Mob.Device.IOS do
   Provided for diagnostics. Most code should use `Mob.Device.thermal_state/0`
   which returns a normalized atom shared with Android.
   """
+  @spec raw_thermal_state() :: 0 | 1 | 2 | 3
   def raw_thermal_state do
     case Mob.Device.thermal_state() do
       :nominal -> 0

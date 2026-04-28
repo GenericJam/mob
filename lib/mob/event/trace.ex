@@ -43,6 +43,7 @@ defmodule Mob.Event.Trace do
   Start the tracing table. Idempotent — safe to call multiple times.
   Call once at app startup if you want tracing always available.
   """
+  @spec start() :: :ok
   def start do
     case :ets.whereis(@table) do
       :undefined ->
@@ -57,6 +58,7 @@ defmodule Mob.Event.Trace do
   @doc """
   Stop tracing and tear down the table.
   """
+  @spec stop() :: :ok
   def stop do
     case :ets.whereis(@table) do
       :undefined -> :ok
@@ -82,6 +84,7 @@ defmodule Mob.Event.Trace do
   end
 
   @doc "Unsubscribe the current process."
+  @spec unsubscribe() :: :ok
   def unsubscribe do
     case :ets.whereis(@table) do
       :undefined -> :ok
