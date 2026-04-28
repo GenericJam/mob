@@ -515,6 +515,47 @@ or use the dashboard (`mix mob.server`) which sets it up automatically.
 
 ---
 
+## Toolchain managers
+
+Mob is **tested against [mise](https://mise.jdx.dev/)** for managing Elixir
+and Erlang versions. The repos ship a `.tool-versions` file that mise reads
+automatically.
+
+**asdf** uses the same `.tool-versions` format and should work without
+changes — install Elixir/Erlang the asdf way and you're done. We don't
+actively test it, but no Mob code touches mise or asdf directly; everything
+works off whatever `mix`, `elixir`, `iex`, and `erl` resolve to on your PATH.
+
+**Nix users** need to set a few env vars yourself, since mob_dev's auto-
+detection assumes mise/asdf-style on-disk layouts (e.g. `~/.local/share/mise/
+installs/elixir/...`). Override the defaults from your shell or `direnv`:
+
+| Env var | What it sets | Default if unset |
+|---|---|---|
+| `MOB_ELIXIR_LIB` | Elixir lib dir used to bundle the stdlib into the iOS app | computed from the running BEAM (mise/asdf path) |
+| `MOB_DIR` | Path to the mob library (only needed for `mix mob.new --local`) | resolves from `mob.exs` or `deps/mob` |
+| `MOB_DEV_DIR` | Path to the mob_dev library (only for `--local`) | sibling discovery (`./mob_dev` then `../mob_dev`) |
+| `MOB_CACHE_DIR` | OTP runtime cache for downloaded prebuilt tarballs | `~/.mob/cache/` |
+| `MOB_SIM_RUNTIME_DIR` | iOS simulator's writable OTP root | `~/.mob/runtime/ios-sim/` |
+| `ANDROID_HOME` | Android SDK location | read from `android/local.properties` `sdk.dir` |
+| `JAVA_HOME` | JDK location for Gradle | inherited |
+
+Quick recipe for a Nix user with Elixir from `pkgs.beam.packages.erlang_28.elixir_1_19`:
+
+```sh
+export MOB_ELIXIR_LIB="$(elixir -e 'IO.puts(Path.dirname(to_string(:code.lib_dir(:elixir))))')"
+export MOB_CACHE_DIR="$HOME/.mob/cache"           # or somewhere your Nix gc-roots manage
+export MOB_SIM_RUNTIME_DIR="$HOME/.mob/runtime/ios-sim"
+export ANDROID_HOME="$HOME/Android/Sdk"           # wherever your nixpkgs AndroidSdk lives
+```
+
+`mix mob.cache` and `mix mob.cache --clear` know about both `MOB_CACHE_DIR`
+and `MOB_SIM_RUNTIME_DIR` overrides — if you point them at a project-local
+or sandbox-friendly path, that's also what cache listings and `--clear` will
+target.
+
+---
+
 ## Caches and disk usage
 
 `mix mob.deploy` populates a few machine-wide locations outside your project tree:
