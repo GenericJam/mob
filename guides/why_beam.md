@@ -108,14 +108,18 @@ alive via Mob's iOS background-audio keep-alive. Battery read every ~10 s via
 `mob_nif:battery_level/0`; precise final reading via `ideviceinfo` (USB
 connected briefly at end). 180/180 probe samples succeeded, zero reconnects.
 
-| Mode | Start | End (30 min) | Drain | Rate |
-|------|-------|--------------|-------|------|
-| Default (Nerves tuning) | 100% | 100% | 0% | ~0%/hr |
+| Run | Start | End (30 min, gauge) | End (30 min, precise) | Rate |
+|-----|-------|---------------------|------------------------|------|
+| Default (Nerves tuning) — run 1 | 100% | 100% | 100% | ~0%/hr |
+| Default (Nerves tuning) — run 2 | 100% | 100% | 99%  | ≤2%/hr |
 
-Drain was below the 1% precision floor over 30 minutes — `ideviceinfo
-BatteryCurrentCapacity` confirmed 100% at the precise final read. With the
-screen off and Nerves tuning keeping the schedulers parked, the BEAM is
-effectively free.
+Two independent 30-minute screen-off runs both came in at or below the gauge's
+5% precision floor. The precise `ideviceinfo BatteryCurrentCapacity` reads were
+100% on the first run and 99% on the second — the upper bound is therefore
+about 2%/hr, but both runs are consistent with essentially zero overhead beyond
+what the OS itself draws while the screen is off. With Nerves tuning keeping
+the schedulers parked, running the BEAM for half an hour costs at most one
+percentage point of battery.
 
 ### Android (screen off, background)
 
