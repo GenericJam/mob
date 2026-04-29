@@ -1919,10 +1919,16 @@ static ERL_NIF_TERM nif_device_model(ErlNifEnv* env, int argc, const ERL_NIF_TER
 
 // ── NIF table & load ──────────────────────────────────────────────────────────
 
+// Scheduling notes — see docs/decisions/0001-dirty-nifs.md for the rationale.
+// Short version: four NIFs do real CPU work on the BEAM thread (JSON parse,
+// MobNode tree construction, accessibility-tree walk) and are marked
+// ERL_NIF_DIRTY_JOB_CPU_BOUND so the regular scheduler isn't parked while
+// they run. Everything else stays on a regular scheduler — most JNI calls
+// hand off to the UI thread quickly and don't need dirty dispatch overhead.
 static ErlNifFunc nif_funcs[] = {
     // ── Test harness first (matches iOS nif_funcs[] ordering convention) ──────
-    {"ui_tree",          0, nif_ui_tree,          0},
-    {"ui_debug",         0, nif_ui_debug,         0},
+    {"ui_tree",          0, nif_ui_tree,          ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"ui_debug",         0, nif_ui_debug,         ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"tap",              1, nif_tap,              0},
     {"tap_xy",           2, nif_tap_xy,           0},
     {"type_text",        1, nif_type_text,        0},
@@ -1935,8 +1941,8 @@ static ErlNifFunc nif_funcs[] = {
     {"platform",       0, nif_platform,       0},
     {"log",            1, nif_log,            0},
     {"log",            2, nif_log2,           0},
-    {"set_transition", 1, nif_set_transition, 0},
-    {"set_root",       1, nif_set_root,       0},
+    {"set_transition", 1, nif_set_transition, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"set_root",       1, nif_set_root,       ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"register_tap",   1, nif_register_tap,   0},
     {"clear_taps",     0, nif_clear_taps,     0},
     {"exit_app",       0, nif_exit_app,       0},

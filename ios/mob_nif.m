@@ -4478,10 +4478,30 @@ void mob_send_component_event(int handle, const char* event, const char* payload
     enif_free_env(env);
 }
 
+// Scheduling notes for nif_funcs[] below — see docs/decisions/0001-dirty-nifs.md
+// for the full rationale. Short version: most NIFs here either dispatch_async
+// to the main queue and return in microseconds, or dispatch_sync but read a
+// single property. Those stay on a regular scheduler.
+//
+// Four NIFs do non-trivial CPU work *on the BEAM thread* before any dispatch,
+// or recurse through hundreds of accessibility elements while holding the
+// main queue. They're marked ERL_NIF_DIRTY_JOB_CPU_BOUND so the regular
+// scheduler isn't parked while they run:
+//
+//   * set_root        — JSON parse + MobNode tree construction; called per render
+//   * set_transition  — sibling of set_root, same call pattern
+//   * ui_tree         — recursive UIAccessibility walk (variable, can be 10s of ms)
+//   * ui_debug        — same walk, more output
+//
+// Synthetic-input NIFs (tap_xy, swipe_xy, long_press_xy, type_text, key_press,
+// delete_backward, clear_text) dispatch_sync to the main queue but also do
+// some pre-dispatch work; they're left on regular schedulers for now because
+// the test harness calls them in tight loops and dirty-dispatch overhead would
+// add up. Re-evaluate if benchmarks show scheduler stalls under heavy harness use.
 static ErlNifFunc nif_funcs[] = {
     // ── Test harness (listed first to survive linker dead-code stripping) ──────
-    {"ui_tree",          0, nif_ui_tree,          0},
-    {"ui_debug",         0, nif_ui_debug,         0},
+    {"ui_tree",          0, nif_ui_tree,          ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"ui_debug",         0, nif_ui_debug,         ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"tap",              1, nif_tap,              0},
     {"tap_xy",           2, nif_tap_xy,           0},
     {"type_text",        1, nif_type_text,        0},
@@ -4505,8 +4525,8 @@ static ErlNifFunc nif_funcs[] = {
     {"platform",       0, nif_platform,       0},
     {"log",            1, nif_log,            0},
     {"log",            2, nif_log2,           0},
-    {"set_transition", 1, nif_set_transition, 0},
-    {"set_root",       1, nif_set_root,       0},
+    {"set_transition", 1, nif_set_transition, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"set_root",       1, nif_set_root,       ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"register_tap",   1, nif_register_tap,   0},
     {"clear_taps",     0, nif_clear_taps,     0},
     {"exit_app",       0, nif_exit_app,       0},
