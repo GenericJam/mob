@@ -80,8 +80,12 @@
          device_model/0,
          %% Test harness — native UI inspection and interaction
          ui_tree/0,
+         ui_view_tree/0,
          ui_debug/0,
+         screen_info/0,
          tap/1,
+         ax_action/2,
+         ax_action_at_xy/3,
          tap_xy/2,
          type_text/1,
          delete_backward/0,
@@ -136,8 +140,12 @@
        device_os_version/0,
        device_model/0,
        ui_tree/0,
+       ui_view_tree/0,
        ui_debug/0,
+       screen_info/0,
        tap/1,
+       ax_action/2,
+       ax_action_at_xy/3,
        tap_xy/2,
        type_text/1,
        delete_backward/0,
@@ -214,8 +222,12 @@ device_foreground()               -> erlang:nif_error(not_loaded).
 device_os_version()               -> erlang:nif_error(not_loaded).
 device_model()                    -> erlang:nif_error(not_loaded).
 ui_tree()                         -> erlang:nif_error(not_loaded).
+ui_view_tree()                    -> erlang:nif_error(not_loaded).
 ui_debug()                        -> erlang:nif_error(not_loaded).
+screen_info()                     -> erlang:nif_error(not_loaded).
 tap(_Label)                       -> erlang:nif_error(not_loaded).
+ax_action(_Match, _Action)        -> erlang:nif_error(not_loaded).
+ax_action_at_xy(_X, _Y, _Action)  -> erlang:nif_error(not_loaded).
 tap_xy(_X, _Y)                    -> erlang:nif_error(not_loaded).
 type_text(_Text)                  -> erlang:nif_error(not_loaded).
 delete_backward()                 -> erlang:nif_error(not_loaded).

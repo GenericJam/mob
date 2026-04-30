@@ -71,6 +71,8 @@ static struct {
     jmethodID set_startup_error;
     // ── Test harness ──────────────────────────────────────────────────────────
     jmethodID ui_tree;
+    jmethodID ui_view_tree;
+    jmethodID screen_info;
     jmethodID tap_xy;
     jmethodID tap_by_label;
     jmethodID type_text;
@@ -1467,6 +1469,100 @@ static ERL_NIF_TERM nif_ui_tree(ErlNifEnv* env, int argc, const ERL_NIF_TERM arg
     return list;
 }
 
+// nif_ui_view_tree/0 — returns nested-map UI tree from MobBridge.uiViewTree().
+//
+// Bridge contract: Kotlin side returns a JSON string of the form:
+//   {"type":"root","label":null,"value":null,"frame":[0,0,W,H],"children":[ ... ]}
+// Each child has the same shape. Empty registry returns an empty children list.
+//
+// The JSON is parsed by Mob.Test.tree/1 on the Erlang side (jason decode is fast
+// and avoids hand-rolling a JSON tokenizer in C). Returns {:error, :not_loaded}
+// if MobBridge.uiViewTree() isn't present (early adopter apps without registry).
+static ERL_NIF_TERM nif_ui_view_tree(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    if (!Bridge.ui_view_tree) return enif_make_tuple2(env,
+        enif_make_atom(env, "error"), enif_make_atom(env, "not_loaded"));
+    int att; JNIEnv* jenv = get_jenv(&att);
+    jstring jresult = (jstring)(*jenv)->CallStaticObjectMethod(jenv, Bridge.cls, Bridge.ui_view_tree);
+    ERL_NIF_TERM result = jstring_to_bin(env, jenv, jresult);
+    if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
+    return result;
+}
+
+// nif_screen_info/0 — returns %{width, height, scale, safe_area: %{...}}
+//
+// Width/height are in dp (already px-divided by density on the Kotlin side).
+// scale is the density factor (1.0/1.5/2.0/2.625/3.0/...) — same role as
+// UIScreen.scale on iOS.
+//
+// Bridge contract: MobBridge.screenInfo() returns float[6] = [w, h, scale,
+// safe_top, safe_bottom, safe_left]; safe_right is computed as 0 here for
+// brevity but the Kotlin side should send it once added to the array.
+//
+// Falls back to safe_area-only info if screenInfo() isn't bound (older bridges).
+static ERL_NIF_TERM nif_screen_info(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    int att; JNIEnv* jenv = get_jenv(&att);
+    float vals[7] = {0};  // w, h, scale, top, bottom, left, right
+    if (Bridge.screen_info) {
+        jfloatArray arr = (jfloatArray)(*jenv)->CallStaticObjectMethod(
+            jenv, Bridge.cls, Bridge.screen_info);
+        if (arr) {
+            jsize len = (*jenv)->GetArrayLength(jenv, arr);
+            if (len > 7) len = 7;
+            (*jenv)->GetFloatArrayRegion(jenv, arr, 0, len, vals);
+            (*jenv)->DeleteLocalRef(jenv, arr);
+        }
+    }
+    if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
+
+    ERL_NIF_TERM sa_keys[4] = {
+        enif_make_atom(env, "top"),
+        enif_make_atom(env, "bottom"),
+        enif_make_atom(env, "left"),
+        enif_make_atom(env, "right")
+    };
+    ERL_NIF_TERM sa_vals[4] = {
+        enif_make_double(env, (double)vals[3]),
+        enif_make_double(env, (double)vals[4]),
+        enif_make_double(env, (double)vals[5]),
+        enif_make_double(env, (double)vals[6])
+    };
+    ERL_NIF_TERM safe_area;
+    enif_make_map_from_arrays(env, sa_keys, sa_vals, 4, &safe_area);
+
+    ERL_NIF_TERM keys[4] = {
+        enif_make_atom(env, "width"),
+        enif_make_atom(env, "height"),
+        enif_make_atom(env, "scale"),
+        enif_make_atom(env, "safe_area")
+    };
+    ERL_NIF_TERM vvals[4] = {
+        enif_make_double(env, (double)vals[0]),
+        enif_make_double(env, (double)vals[1]),
+        enif_make_double(env, (double)vals[2]),
+        safe_area
+    };
+    ERL_NIF_TERM result;
+    enif_make_map_from_arrays(env, keys, vvals, 4, &result);
+    return result;
+}
+
+// nif_ax_action/2 and nif_ax_action_at_xy/3 — Android stubs.
+//
+// Both are iOS-only today. Compose semantics walker (the proper Android
+// implementation) is queued under WireTap (see future_developments.md).
+// Return a clear error so callers get `{:error, :not_supported_on_android}`
+// instead of an `:undef` crash.
+static ERL_NIF_TERM nif_ax_action(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    return enif_make_tuple2(env,
+        enif_make_atom(env, "error"),
+        enif_make_atom(env, "not_supported_on_android"));
+}
+static ERL_NIF_TERM nif_ax_action_at_xy(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    return enif_make_tuple2(env,
+        enif_make_atom(env, "error"),
+        enif_make_atom(env, "not_supported_on_android"));
+}
+
 // nif_ui_debug/0 — returns raw uiTree string as a binary (for debugging)
 static ERL_NIF_TERM nif_ui_debug(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     if (!Bridge.ui_tree) return enif_make_tuple2(env,
@@ -1928,7 +2024,11 @@ static ERL_NIF_TERM nif_device_model(ErlNifEnv* env, int argc, const ERL_NIF_TER
 static ErlNifFunc nif_funcs[] = {
     // ── Test harness first (matches iOS nif_funcs[] ordering convention) ──────
     {"ui_tree",          0, nif_ui_tree,          ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"ui_view_tree",     0, nif_ui_view_tree,     ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"ax_action",        2, nif_ax_action,        0},
+    {"ax_action_at_xy",  3, nif_ax_action_at_xy,  0},
     {"ui_debug",         0, nif_ui_debug,         ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"screen_info",      0, nif_screen_info,      0},
     {"tap",              1, nif_tap,              0},
     {"tap_xy",           2, nif_tap_xy,           0},
     {"type_text",        1, nif_type_text,        0},
@@ -2080,6 +2180,8 @@ static int nif_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info) {
         if (!Bridge.field) { (*jenv)->ExceptionClear(jenv); LOGI("nif_load: %s not found (optional)", name); }
 
     CACHE_OPT(ui_tree,        "uiTree",       "()Ljava/lang/String;")
+    CACHE_OPT(ui_view_tree,   "uiViewTree",   "()Ljava/lang/String;")
+    CACHE_OPT(screen_info,    "screenInfo",   "()[F")
     CACHE_OPT(tap_xy,         "tapXy",        "(FF)Z")
     CACHE_OPT(tap_by_label,   "tapByLabel",   "(Ljava/lang/String;)Z")
     CACHE_OPT(type_text,      "typeText",     "(Ljava/lang/String;)Z")

@@ -2881,6 +2881,186 @@ static void ax_walk(void *elem, ErlNifEnv *env, ERL_NIF_TERM *list, int depth) {
 
 
 
+// ── view-tree walker (no AX activation needed) ───────────────────────────────
+//
+// Walks UIView.subviews directly instead of going through the accessibility
+// subsystem. Returns a nested map per node — the "natural" output of a tree
+// walk. No AX activation needed, so this is the path that works without
+// VoiceOver toggled on.
+//
+// Why both ui_tree (AX walk) and ui_view_tree (View walk) coexist:
+//   - ui_tree returns a flat list of accessibility leaves; useful when an
+//     agent wants the same view of the world VoiceOver/XCUITest see.
+//   - ui_view_tree returns the full UIView hierarchy as a nested map,
+//     including non-accessible containers, with frames in window coords.
+//     Strict superset of what AX exposes — class names, hidden subviews,
+//     things AX wouldn't surface.
+
+static const char *classify_view_type(UIView *view) {
+    if ([view isKindOfClass:[UIButton class]])     return "button";
+    if ([view isKindOfClass:[UISwitch class]])     return "switch";
+    if ([view isKindOfClass:[UISlider class]])     return "slider";
+    if ([view isKindOfClass:[UITextField class]])  return "text_field";
+    if ([view isKindOfClass:[UITextView class]])   return "text_field";
+    if ([view isKindOfClass:[UILabel class]])      return "text";
+    if ([view isKindOfClass:[UIImageView class]])  return "image";
+    if ([view isKindOfClass:[UIScrollView class]]) return "scroll";
+    if ([view isKindOfClass:[UIPickerView class]]) return "picker";
+    if ([view isKindOfClass:[UIWindow class]])     return "window";
+    return "view";
+}
+
+static NSString *extract_view_text(UIView *view) {
+    if ([view isKindOfClass:[UIButton class]]) {
+        UIButton *btn = (UIButton *)view;
+        NSString *t = [btn titleForState:UIControlStateNormal];
+        return t.length ? t : btn.titleLabel.text;
+    }
+    if ([view isKindOfClass:[UILabel class]])     return ((UILabel *)view).text;
+    if ([view isKindOfClass:[UITextField class]]) return ((UITextField *)view).text;
+    if ([view isKindOfClass:[UITextView class]])  return ((UITextView *)view).text;
+    if (view.accessibilityLabel.length)           return view.accessibilityLabel;
+    return nil;
+}
+
+static ERL_NIF_TERM build_view_node(ErlNifEnv *env, UIView *view, int depth) {
+    if (!view || depth > 50) return enif_make_atom(env, "nil");
+
+    CGRect win_frame = [view convertRect:view.bounds toView:nil];
+    NSString *text   = extract_view_text(view);
+    NSString *value  = view.accessibilityValue;
+    const char *type_str = classify_view_type(view);
+
+    ERL_NIF_TERM frame = enif_make_tuple4(env,
+        enif_make_double(env, win_frame.origin.x),
+        enif_make_double(env, win_frame.origin.y),
+        enif_make_double(env, win_frame.size.width),
+        enif_make_double(env, win_frame.size.height));
+
+    NSArray *subs = view.subviews;
+    ERL_NIF_TERM children = enif_make_list(env, 0);
+    for (NSInteger i = (NSInteger)subs.count - 1; i >= 0; i--) {
+        ERL_NIF_TERM child = build_view_node(env, subs[i], depth + 1);
+        children = enif_make_list_cell(env, child, children);
+    }
+
+    ERL_NIF_TERM keys[5] = {
+        enif_make_atom(env, "type"),
+        enif_make_atom(env, "label"),
+        enif_make_atom(env, "value"),
+        enif_make_atom(env, "frame"),
+        enif_make_atom(env, "children")
+    };
+    ERL_NIF_TERM vals[5] = {
+        enif_make_atom(env, type_str),
+        nsstring_to_term(env, text),
+        nsstring_to_term(env, value),
+        frame,
+        children
+    };
+    ERL_NIF_TERM result;
+    enif_make_map_from_arrays(env, keys, vals, 5, &result);
+    return result;
+}
+
+static ERL_NIF_TERM nif_ui_view_tree(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    __block ERL_NIF_TERM windows_list = enif_make_list(env, 0);
+    __block CGSize screen_size = CGSizeZero;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        screen_size = [UIScreen mainScreen].bounds.size;
+        NSMutableArray<UIWindow *> *wins = [NSMutableArray array];
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+            if (![s isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *w in [(UIWindowScene *)s windows]) {
+                if (!w.isHidden) [wins addObject:w];
+            }
+        }
+        for (NSInteger i = (NSInteger)wins.count - 1; i >= 0; i--) {
+            ERL_NIF_TERM wnode = build_view_node(env, wins[i], 0);
+            windows_list = enif_make_list_cell(env, wnode, windows_list);
+        }
+    });
+
+    // Synthetic root wrapping all top-level windows. Frame is the screen size
+    // so consumers always have a valid bounding box for the whole UI.
+    ERL_NIF_TERM root_keys[5] = {
+        enif_make_atom(env, "type"),
+        enif_make_atom(env, "label"),
+        enif_make_atom(env, "value"),
+        enif_make_atom(env, "frame"),
+        enif_make_atom(env, "children")
+    };
+    ERL_NIF_TERM root_vals[5] = {
+        enif_make_atom(env, "root"),
+        enif_make_atom(env, "nil"),
+        enif_make_atom(env, "nil"),
+        enif_make_tuple4(env,
+            enif_make_double(env, 0.0),
+            enif_make_double(env, 0.0),
+            enif_make_double(env, screen_size.width),
+            enif_make_double(env, screen_size.height)),
+        windows_list
+    };
+    ERL_NIF_TERM root;
+    enif_make_map_from_arrays(env, root_keys, root_vals, 5, &root);
+    return root;
+}
+
+// ── screen_info/0 — unified screen/safe-area shape ───────────────────────────
+//
+// Returns: %{width, height, scale, safe_area: %{top, bottom, left, right}}
+// Width/height are in logical points (already pre-divided by scale on iOS).
+// Android returns the equivalent with px→dp conversion done in the JNI layer.
+static ERL_NIF_TERM nif_screen_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    __block CGRect bounds = CGRectZero;
+    __block CGFloat scale = 1.0;
+    __block UIEdgeInsets insets = UIEdgeInsetsZero;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        UIScreen *screen = [UIScreen mainScreen];
+        bounds = screen.bounds;
+        scale  = screen.scale;
+        // Pull safe-area from the first visible window we find.
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+            if (![s isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *w in [(UIWindowScene *)s windows]) {
+                if (!w.isHidden) { insets = w.safeAreaInsets; goto done; }
+            }
+        }
+    done:;
+    });
+
+    ERL_NIF_TERM sa_keys[4] = {
+        enif_make_atom(env, "top"),
+        enif_make_atom(env, "bottom"),
+        enif_make_atom(env, "left"),
+        enif_make_atom(env, "right")
+    };
+    ERL_NIF_TERM sa_vals[4] = {
+        enif_make_double(env, insets.top),
+        enif_make_double(env, insets.bottom),
+        enif_make_double(env, insets.left),
+        enif_make_double(env, insets.right)
+    };
+    ERL_NIF_TERM safe_area;
+    enif_make_map_from_arrays(env, sa_keys, sa_vals, 4, &safe_area);
+
+    ERL_NIF_TERM keys[4] = {
+        enif_make_atom(env, "width"),
+        enif_make_atom(env, "height"),
+        enif_make_atom(env, "scale"),
+        enif_make_atom(env, "safe_area")
+    };
+    ERL_NIF_TERM vals[4] = {
+        enif_make_double(env, bounds.size.width),
+        enif_make_double(env, bounds.size.height),
+        enif_make_double(env, scale),
+        safe_area
+    };
+    ERL_NIF_TERM result;
+    enif_make_map_from_arrays(env, keys, vals, 4, &result);
+    return result;
+}
+
 // ── Test harness (ui_tree, tap, tap_xy, type_text, swipe_xy, etc.) ─────────────
 static ERL_NIF_TERM nif_ui_debug(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     load_ax();
@@ -3071,6 +3251,209 @@ static ERL_NIF_TERM nif_tap(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     return enif_make_tuple2(env,
         enif_make_atom(env, "error"),
         enif_make_atom(env, "not_found"));
+}
+
+
+// ── ax_action/2 — invoke an accessibility action on an element ────────────────
+//
+// Finds the first AX element whose label OR value contains `match`, then sends
+// the action selector for `action`. Useful for controls where synthetic touches
+// don't reach the gesture recognizer (sliders, scrolls, modal escapes, etc.).
+//
+// Supported actions:
+//   :increment        → accessibilityIncrement (sliders, steppers, pickers)
+//   :decrement        → accessibilityDecrement
+//   :activate         → accessibilityActivate (same as tap/1, here for symmetry)
+//   :escape           → accessibilityPerformEscape (dismiss popovers/sheets)
+//   :scroll_up        → accessibilityScroll: with UIAccessibilityScrollDirectionUp
+//   :scroll_down      → ... Direction Down
+//   :scroll_left      → ... Direction Left
+//   :scroll_right     → ... Direction Right
+//
+// Returns: :ok | {:error, :not_found} | {:error, :unsupported_action}
+//          | {:error, :action_failed}
+//
+// IMPORTANT: this requires accessibility to be activated (VoiceOver on, or
+// similar AX-client toggle). Same constraint as ui_tree/0.
+static id find_a11y_by_label_or_value(id obj, NSString *target, int depth) {
+    if (!obj || depth > 30) return nil;
+
+    if ([obj respondsToSelector:@selector(isAccessibilityElement)] &&
+        [(id)obj isAccessibilityElement]) {
+        NSString *lbl = [obj respondsToSelector:@selector(accessibilityLabel)]
+                      ? [(id)obj accessibilityLabel] : nil;
+        NSString *val = [obj respondsToSelector:@selector(accessibilityValue)]
+                      ? [(id)obj accessibilityValue] : nil;
+        if ((lbl && [lbl rangeOfString:target].location != NSNotFound) ||
+            (val && [val rangeOfString:target].location != NSNotFound)) {
+            return obj;
+        }
+    }
+
+    if ([obj respondsToSelector:@selector(accessibilityElements)]) {
+        NSArray *elems = [(id)obj accessibilityElements];
+        if (elems.count > 0) {
+            for (id child in elems) {
+                if (child && child != obj) {
+                    id found = find_a11y_by_label_or_value(child, target, depth + 1);
+                    if (found) return found;
+                }
+            }
+            return nil;
+        }
+    }
+    if ([obj respondsToSelector:@selector(accessibilityElementCount)]) {
+        NSInteger count = [(id)obj accessibilityElementCount];
+        if (count != NSNotFound && count > 0) {
+            for (NSInteger i = 0; i < count; i++) {
+                id child = [(id)obj accessibilityElementAtIndex:i];
+                if (child && child != obj) {
+                    id found = find_a11y_by_label_or_value(child, target, depth + 1);
+                    if (found) return found;
+                }
+            }
+            return nil;
+        }
+    }
+    if ([obj isKindOfClass:[UIView class]]) {
+        for (UIView *sub in [(UIView *)obj subviews]) {
+            id found = find_a11y_by_label_or_value(sub, target, depth + 1);
+            if (found) return found;
+        }
+    }
+    return nil;
+}
+
+static ERL_NIF_TERM nif_ax_action(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[0], &bin)) return enif_make_badarg(env);
+    NSString *match = [[NSString alloc] initWithBytes:bin.data length:bin.size
+                                             encoding:NSUTF8StringEncoding];
+    if (!match) return enif_make_badarg(env);
+
+    char action_buf[32] = {0};
+    if (!enif_get_atom(env, argv[1], action_buf, sizeof(action_buf), ERL_NIF_LATIN1))
+        return enif_make_badarg(env);
+    NSString *action = [NSString stringWithUTF8String:action_buf];
+
+    __block id elem = nil;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+                if (win.isHidden) continue;
+                elem = find_a11y_by_label_or_value(win, match, 0);
+                if (elem) return;
+            }
+        }
+    });
+
+    if (!elem) return enif_make_tuple2(env,
+        enif_make_atom(env, "error"), enif_make_atom(env, "not_found"));
+
+    __block BOOL ok = NO;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        if ([action isEqualToString:@"increment"]) {
+            if ([elem respondsToSelector:@selector(accessibilityIncrement)]) {
+                [elem accessibilityIncrement]; ok = YES;
+            }
+        } else if ([action isEqualToString:@"decrement"]) {
+            if ([elem respondsToSelector:@selector(accessibilityDecrement)]) {
+                [elem accessibilityDecrement]; ok = YES;
+            }
+        } else if ([action isEqualToString:@"activate"]) {
+            if ([elem respondsToSelector:@selector(accessibilityActivate)]) {
+                ok = [elem accessibilityActivate];
+            }
+        } else if ([action isEqualToString:@"escape"]) {
+            if ([elem respondsToSelector:@selector(accessibilityPerformEscape)]) {
+                ok = [elem accessibilityPerformEscape];
+            }
+        } else if ([action hasPrefix:@"scroll_"]) {
+            NSString *dir_str = [action substringFromIndex:7];
+            UIAccessibilityScrollDirection dir = 0;
+            if      ([dir_str isEqualToString:@"up"])    dir = UIAccessibilityScrollDirectionUp;
+            else if ([dir_str isEqualToString:@"down"])  dir = UIAccessibilityScrollDirectionDown;
+            else if ([dir_str isEqualToString:@"left"])  dir = UIAccessibilityScrollDirectionLeft;
+            else if ([dir_str isEqualToString:@"right"]) dir = UIAccessibilityScrollDirectionRight;
+            if (dir && [elem respondsToSelector:@selector(accessibilityScroll:)]) {
+                ok = [elem accessibilityScroll:dir];
+            }
+        }
+    });
+
+    if (ok) return enif_make_atom(env, "ok");
+    return enif_make_tuple2(env,
+        enif_make_atom(env, "error"), enif_make_atom(env, "action_failed"));
+}
+
+// ── ax_action_at_xy/3 — invoke an AX action on whatever element is at (x, y) ──
+//
+// Useful when label/value substring matching can't disambiguate (e.g. multiple
+// sliders that all read "50%", a toggle whose accessibility label is empty).
+// Caller looks up coordinates from `ui_tree/0` and points at the exact element.
+//
+// Returns: same as ax_action/2.
+static ERL_NIF_TERM nif_ax_action_at_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    double x, y;
+    if (!enif_get_double(env, argv[0], &x) || !enif_get_double(env, argv[1], &y))
+        return enif_make_badarg(env);
+
+    char action_buf[32] = {0};
+    if (!enif_get_atom(env, argv[2], action_buf, sizeof(action_buf), ERL_NIF_LATIN1))
+        return enif_make_badarg(env);
+    NSString *action = [NSString stringWithUTF8String:action_buf];
+
+    CGPoint pt = CGPointMake((CGFloat)x, (CGFloat)y);
+    __block id elem = nil;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+                if (win.isHidden) continue;
+                elem = find_a11y_at_point(win, pt, 0);
+                if (elem) return;
+            }
+        }
+    });
+
+    if (!elem) return enif_make_tuple2(env,
+        enif_make_atom(env, "error"), enif_make_atom(env, "no_element_at_point"));
+
+    __block BOOL ok = NO;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        if ([action isEqualToString:@"increment"]) {
+            if ([elem respondsToSelector:@selector(accessibilityIncrement)]) {
+                [elem accessibilityIncrement]; ok = YES;
+            }
+        } else if ([action isEqualToString:@"decrement"]) {
+            if ([elem respondsToSelector:@selector(accessibilityDecrement)]) {
+                [elem accessibilityDecrement]; ok = YES;
+            }
+        } else if ([action isEqualToString:@"activate"]) {
+            if ([elem respondsToSelector:@selector(accessibilityActivate)]) {
+                ok = [elem accessibilityActivate];
+            }
+        } else if ([action isEqualToString:@"escape"]) {
+            if ([elem respondsToSelector:@selector(accessibilityPerformEscape)]) {
+                ok = [elem accessibilityPerformEscape];
+            }
+        } else if ([action hasPrefix:@"scroll_"]) {
+            NSString *dir_str = [action substringFromIndex:7];
+            UIAccessibilityScrollDirection dir = 0;
+            if      ([dir_str isEqualToString:@"up"])    dir = UIAccessibilityScrollDirectionUp;
+            else if ([dir_str isEqualToString:@"down"])  dir = UIAccessibilityScrollDirectionDown;
+            else if ([dir_str isEqualToString:@"left"])  dir = UIAccessibilityScrollDirectionLeft;
+            else if ([dir_str isEqualToString:@"right"]) dir = UIAccessibilityScrollDirectionRight;
+            if (dir && [elem respondsToSelector:@selector(accessibilityScroll:)]) {
+                ok = [elem accessibilityScroll:dir];
+            }
+        }
+    });
+
+    if (ok) return enif_make_atom(env, "ok");
+    return enif_make_tuple2(env,
+        enif_make_atom(env, "error"), enif_make_atom(env, "action_failed"));
 }
 
 
@@ -4501,8 +4884,12 @@ void mob_send_component_event(int handle, const char* event, const char* payload
 static ErlNifFunc nif_funcs[] = {
     // ── Test harness (listed first to survive linker dead-code stripping) ──────
     {"ui_tree",          0, nif_ui_tree,          ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"ui_view_tree",     0, nif_ui_view_tree,     ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"ui_debug",         0, nif_ui_debug,         ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"screen_info",      0, nif_screen_info,      0},
     {"tap",              1, nif_tap,              0},
+    {"ax_action",        2, nif_ax_action,        0},
+    {"ax_action_at_xy",  3, nif_ax_action_at_xy,  0},
     {"tap_xy",           2, nif_tap_xy,           0},
     {"type_text",        1, nif_type_text,        0},
     {"delete_backward",  0, nif_delete_backward,  0},
