@@ -23,6 +23,39 @@ exact state, not infer it from pixels.
 
 **The agent should connect to the running Erlang node and ask it directly.**
 
+## Priming the agent
+
+Before the MCP tools and tunnels, give the agent the mental model of the
+project. Each Mob repo has an `AGENTS.md` at its root — a five-minute
+orientation covering what's where, how to drive a running app, and the
+pre-empt-failure rules that come from this team's hard-earned lessons. The
+file is the standard cross-tool entry point (Cursor, Codex, Aider all read
+it; Claude Code reads it via the `CLAUDE.md` reference).
+
+Point your agent at the relevant `AGENTS.md` for the repo it's working in:
+
+- **[`mob/AGENTS.md`](https://github.com/GenericJam/mob/blob/main/AGENTS.md)** —
+  runtime library. The "what is Mob", three-repo topology, and the full
+  "driving apps from your session" reference (Mob.Test, MCP fallbacks,
+  round-trip workflow).
+- **[`mob_dev/AGENTS.md`](https://github.com/GenericJam/mob_dev/blob/main/AGENTS.md)** —
+  build/deploy/devices toolkit. TDD policy and the public-but-undocumented
+  testing seams.
+- **[`mob_new/AGENTS.md`](https://github.com/GenericJam/mob_new/blob/main/AGENTS.md)** —
+  project generator. Template gotchas and the LiveView phoenix-owned-files
+  blocklist.
+
+For multi-repo work, prime with all three. The root `mob/AGENTS.md` is the
+"system view" — the other two link back to it for cross-cutting context.
+
+The files are deliberately short (≤ 200 lines) so agents read them in full
+rather than skimming — that's the difference between a session where the
+agent already knows your conventions and one where it stumbles into them.
+**These docs go stale fast** if the project moves and they don't. The
+top-of-file note in each `AGENTS.md` instructs the agent to update them in
+the same commit as any change that contradicts the guidance — keeping it
+up to date is a contract, not a suggestion.
+
 ## Setting up the MCP tools
 
 The Layer 2 visual tools require two MCP servers to be installed and registered with

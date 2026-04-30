@@ -1,9 +1,20 @@
 # Mob — Agent Instructions
 
-See [`guides/agentic_coding.md`](guides/agentic_coding.md) for a full guide on the
-agent round-trip workflow: how to connect to the running Erlang node, when to use
-`Mob.Test` vs MCP platform tools, and how to avoid the instinct to reach for
-`xcrun simctl` screenshots.
+**Read [`AGENTS.md`](AGENTS.md) first** — it's the 5-minute orientation
+covering repo topology, how to drive a running app from your session
+(Mob.Test, MCP fallbacks), and the pre-empt-failure rules that will save
+you from re-deriving things the team has already learned the hard way.
+This file goes deeper on Claude Code-specific workflow detail.
+
+> **Keep AGENTS.md up to date** when you change repo conventions, add a
+> new piece of CLI surface area, deprecate a workflow, or hit a new
+> gotcha. Out-of-date guidance there causes wrong decisions everywhere
+> downstream — fix it in the same commit, not in a follow-up.
+
+See [`guides/agentic_coding.md`](guides/agentic_coding.md) for the full
+agent round-trip workflow: connecting to the running Erlang node, when
+to use `Mob.Test` vs MCP platform tools, and how to avoid the instinct
+to reach for `xcrun simctl` screenshots.
 
 ---
 
