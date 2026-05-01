@@ -33,11 +33,12 @@ defmodule Mob.DeviceTest do
     # test gives a false sense of coverage and trips Credo's "this test
     # doesn't call any application code" warning.
 
-    test "categories/0 returns the 6 known categories" do
+    test "categories/0 returns the 7 known categories" do
       cats = Device.categories()
       assert :app in cats
       assert :display in cats
       assert :audio in cats
+      assert :appearance in cats
       assert :power in cats
       assert :thermal in cats
       assert :memory in cats
@@ -70,6 +71,10 @@ defmodule Mob.DeviceTest do
       assert Device.category_for(:low_power_mode_changed) == :power
       assert Device.category_for(:thermal_state_changed) == :thermal
       assert Device.category_for(:memory_warning) == :memory
+    end
+
+    test "maps :color_scheme_changed to :appearance" do
+      assert Device.category_for(:color_scheme_changed) == :appearance
     end
 
     test "unknown events fall through to :unknown" do
@@ -107,6 +112,24 @@ defmodule Mob.DeviceTest do
       :ok = GenServer.call(d, {:subscribe, self(), [:power]})
       send(d, {:mob_device, :battery_level_changed, 73})
       assert_receive {:mob_device, :battery_level_changed, 73}, 100
+    end
+
+    test ":appearance subscriber receives :color_scheme_changed with the scheme atom",
+         %{dispatcher: d} do
+      :ok = GenServer.call(d, {:subscribe, self(), [:appearance]})
+
+      send(d, {:mob_device, :color_scheme_changed, :dark})
+      assert_receive {:mob_device, :color_scheme_changed, :dark}, 100
+
+      send(d, {:mob_device, :color_scheme_changed, :light})
+      assert_receive {:mob_device, :color_scheme_changed, :light}, 100
+    end
+
+    test ":appearance is filtered out for subscribers in unrelated categories",
+         %{dispatcher: d} do
+      :ok = GenServer.call(d, {:subscribe, self(), [:thermal]})
+      send(d, {:mob_device, :color_scheme_changed, :dark})
+      refute_receive {:mob_device, :color_scheme_changed, :dark}, 50
     end
 
     test "multiple subscribers all receive matching events", %{dispatcher: d} do

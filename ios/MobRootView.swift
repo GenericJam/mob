@@ -104,6 +104,43 @@ extension MobNode: Identifiable {
     public var id: ObjectIdentifier { ObjectIdentifier(self) }
 }
 
+// Logical icon name → SF Symbol. Logical names are platform-agnostic so the
+// same Elixir tree renders an Apple-styled icon on iOS and a Material-styled
+// icon on Android. Unknown logical names pass through verbatim, letting
+// power users use raw SF Symbol identifiers (e.g. "globe.americas.fill").
+private func sfSymbolName(_ logical: String) -> String {
+    switch logical {
+    case "settings":      return "gear"
+    case "back":          return "chevron.left"
+    case "forward":       return "chevron.right"
+    case "close":         return "xmark"
+    case "add":           return "plus"
+    case "remove":        return "minus"
+    case "edit":          return "pencil"
+    case "check":         return "checkmark"
+    case "chevron_right": return "chevron.right"
+    case "chevron_left":  return "chevron.left"
+    case "chevron_up":    return "chevron.up"
+    case "chevron_down":  return "chevron.down"
+    case "info":          return "info.circle"
+    case "warning":       return "exclamationmark.triangle"
+    case "error":         return "xmark.circle"
+    case "search":        return "magnifyingglass"
+    case "trash":         return "trash"
+    case "share":         return "square.and.arrow.up"
+    case "more":          return "ellipsis"
+    case "menu":          return "line.3.horizontal"
+    case "refresh":       return "arrow.clockwise"
+    case "favorite":      return "heart"
+    case "favorite_filled": return "heart.fill"
+    case "star":          return "star"
+    case "star_filled":   return "star.fill"
+    case "user":          return "person"
+    case "home":          return "house"
+    default:              return logical  // raw SF Symbol pass-through
+    }
+}
+
 extension MobNode {
     var childNodes: [MobNode] {
         children.compactMap { $0 as? MobNode }
@@ -223,6 +260,22 @@ struct MobNodeView: View {
                     .ifLet(node.onTap) { view, tap in
                         view.contentShape(Rectangle()).onTapGesture { tap() }
                     }
+                    .mobGestures(node)
+
+            case .icon:
+                // Resolve logical icon name (e.g. "settings") to the matching
+                // SF Symbol. textSize controls glyph size; textColor controls tint.
+                // node.text serves as accessibility label when set.
+                Image(systemName: sfSymbolName(node.iconName ?? "questionmark"))
+                    .font(.system(size: node.textSize > 0 ? node.textSize : 20))
+                    .foregroundColor(node.textColor.map { Color($0) } ?? Color.primary)
+                    .padding(node.paddingEdgeInsets)
+                    .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
+                    .ifLet(node.onTap) { view, tap in
+                        view.contentShape(Rectangle()).onTapGesture { tap() }
+                    }
+                    .ifLet(node.text) { view, label in view.accessibilityLabel(label) }
+                    .ifLet(node.accessibilityId) { view, id in view.accessibilityIdentifier(id) }
                     .mobGestures(node)
 
             case .button:

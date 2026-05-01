@@ -35,6 +35,7 @@ typedef NS_ENUM(NSInteger, MobNodeType) {
     MobNodeTypeCameraPreview,
     MobNodeTypeWebView,
     MobNodeTypeNativeView,
+    MobNodeTypeIcon,
 };
 
 NS_ASSUME_NONNULL_BEGIN
@@ -194,6 +195,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 // Accessibility — set from the tap tag atom name; read by XCTest / ui_describe_all
 @property (nonatomic, copy, nullable) NSString* accessibilityId;
+
+// Icon — logical name resolved to an SF Symbol on iOS / Material Symbol
+// on Android. textSize and textColor control glyph sizing + tint.
+@property (nonatomic, copy, nullable) NSString* iconName;
 
 // Children
 @property (nonatomic, strong, nonnull) NSMutableArray<MobNode*>* children;

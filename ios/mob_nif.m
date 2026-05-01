@@ -609,6 +609,7 @@ static MobNode* mob_node_from_dict(NSDictionary* dict) {
     else if ([type isEqualToString:@"camera_preview"]) node.nodeType = MobNodeTypeCameraPreview;
     else if ([type isEqualToString:@"web_view"])       node.nodeType = MobNodeTypeWebView;
     else if ([type isEqualToString:@"native_view"])    node.nodeType = MobNodeTypeNativeView;
+    else if ([type isEqualToString:@"icon"])           node.nodeType = MobNodeTypeIcon;
 
     NSDictionary* props = dict[@"props"];
     if ([props isKindOfClass:[NSDictionary class]]) {
@@ -698,6 +699,15 @@ static MobNode* mob_node_from_dict(NSDictionary* dict) {
 
         id placeholder = props[@"placeholder"];
         if (placeholder) node.placeholder = [placeholder isKindOfClass:[NSString class]] ? placeholder : [placeholder description];
+
+        // Icon name — logical key (e.g. "settings"), resolved to an SF Symbol
+        // by MobIconView at render time. iOS-only string parsing here.
+        if (node.nodeType == MobNodeTypeIcon) {
+            id iconName = props[@"name"];
+            if (iconName) node.iconName = [iconName isKindOfClass:[NSString class]]
+                                          ? iconName
+                                          : [iconName description];
+        }
 
         id keyboardType = props[@"keyboard"];
         if ([keyboardType isKindOfClass:[NSString class]]) node.keyboardTypeStr = keyboardType;
