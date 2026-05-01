@@ -121,4 +121,10 @@ void mob_deliver_alert_action(const char* action);
 // Called from beam_jni.c when Kotlin fires a component event via the send callback.
 void mob_send_component_event(int handle, const char* event, const char* payload_json);
 
+// Deliver {:mob_device, :color_scheme_changed, :light | :dark} to the
+// dispatcher pid registered via Mob.Device. Called from beam_jni.c's
+// nativeNotifyColorScheme when MainActivity sees a uiMode flip.
+// `scheme` must be "light" or "dark".
+void mob_send_color_scheme_changed(const char* scheme);
+
 #endif // MOB_BEAM_H

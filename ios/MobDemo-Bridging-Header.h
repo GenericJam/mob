@@ -16,3 +16,8 @@ void mob_deliver_webview_blocked(const char* url_utf8);
 // Implemented in mob_nif.m; looks up the component pid by handle and delivers
 // {:component_event, event, payload_json} to it.
 void mob_send_component_event(int handle, const char* event, const char* payload_json);
+
+// Called from MobRootView.swift's .onChange(of: colorScheme) modifier when
+// the OS appearance toggles (light/dark). Dispatches to Mob.Device subscribers.
+// `scheme` is "light" or "dark".
+void mob_notify_color_scheme(const char* scheme);

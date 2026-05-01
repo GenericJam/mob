@@ -748,6 +748,7 @@ private struct MobImage: View {
 
 public struct MobRootView: View {
     @ObservedObject var model = MobViewModel.shared
+    @Environment(\.colorScheme) private var colorScheme
     @State private var currentRoot: MobNode? = nil
     @State private var currentTransition: String = "none"
 
@@ -809,6 +810,13 @@ public struct MobRootView: View {
             } else {
                 currentRoot = newRoot
             }
+        }
+        // Notify Elixir when the OS appearance toggles so subscribers
+        // (Mob.Device → Mob.Theme.Adaptive consumers) can re-resolve.
+        // SwiftUI re-evaluates `colorScheme` automatically on system change,
+        // so this fires reliably without polling.
+        .onChange(of: colorScheme) { newScheme in
+            mob_notify_color_scheme(newScheme == .dark ? "dark" : "light")
         }
     }
 

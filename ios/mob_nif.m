@@ -1391,6 +1391,22 @@ static ERL_NIF_TERM nif_device_set_dispatcher(ErlNifEnv *env, int argc, const ER
     return enif_make_atom(env, "ok");
 }
 
+// ── color_scheme_changed (driven from MobRootView.swift's onChange) ──────────
+//
+// SwiftUI exposes `\.colorScheme` as an environment value that flips when the
+// system appearance changes. MobRootView attaches a `.onChange(of:colorScheme)`
+// handler that calls into here so we can route the event to Mob.Device
+// subscribers without polling. Use this rather than UITraitChange APIs because
+// SwiftUI handles iOS 13–17 compatibility for us.
+void mob_notify_color_scheme(const char *scheme) {
+    if (!g_device_dispatcher_set || !scheme) return;
+    ErlNifEnv *e = enif_alloc_env();
+    ERL_NIF_TERM payload = enif_make_atom(e, scheme);
+    mob_device_send_atom_payload("mob_device",     "color_scheme_changed", payload, e);
+    mob_device_send_atom_payload("mob_device_ios", "color_scheme_changed", payload, e);
+    enif_free_env(e);
+}
+
 static ERL_NIF_TERM nif_device_battery_state(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     __block UIDeviceBatteryState s = UIDeviceBatteryStateUnknown;
     __block int pct = -1;

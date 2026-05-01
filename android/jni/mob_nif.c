@@ -1995,13 +1995,41 @@ static ERL_NIF_TERM nif_background_stop(ErlNifEnv* env, int argc, const ERL_NIF_
 
 // ── Mob.Device — lifecycle events + queries ─────────────────────────────────
 //
-// Android implementation pending. The Elixir-side API works (subscribe will
-// succeed, no events will fire on Android until ProcessLifecycleObserver
-// + ComponentCallbacks2 are wired up in MainActivity / Application).
-// Query NIFs return reasonable defaults for now.
+// Android implementation is partial — only `:appearance` (color scheme
+// changes from MainActivity.onConfigurationChanged) is wired today. The
+// rest (lifecycle, battery, thermal) requires ProcessLifecycleObserver +
+// ComponentCallbacks2 wiring. Until then the dispatcher pid is stored so
+// what IS wired (color scheme) can deliver, and the query NIFs return
+// reasonable defaults.
+
+static ErlNifPid g_device_dispatcher_pid;
+static int       g_device_dispatcher_set = 0;
+
+static void mob_device_send_atom_payload_android(const char *tag, const char *atom_name,
+                                                 const char *payload_atom_str) {
+    if (!g_device_dispatcher_set) return;
+    ErlNifEnv *e = enif_alloc_env();
+    ERL_NIF_TERM msg = enif_make_tuple3(e,
+        enif_make_atom(e, tag),
+        enif_make_atom(e, atom_name),
+        enif_make_atom(e, payload_atom_str));
+    enif_send(NULL, &g_device_dispatcher_pid, e, msg);
+    enif_free_env(e);
+}
+
+// Called from beam_jni.c's Java_..._MobBridge_nativeNotifyColorScheme
+// stub when MainActivity.onConfigurationChanged sees a uiMode flip.
+// `scheme` must be "light" or "dark".
+void mob_send_color_scheme_changed(const char *scheme) {
+    if (!scheme) return;
+    mob_device_send_atom_payload_android("mob_device", "color_scheme_changed", scheme);
+}
 
 static ERL_NIF_TERM nif_device_set_dispatcher(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
-    // TODO(android): wire ProcessLifecycleObserver + ComponentCallbacks2.
+    ErlNifPid pid;
+    if (!enif_get_local_pid(env, argv[0], &pid)) return enif_make_badarg(env);
+    g_device_dispatcher_pid = pid;
+    g_device_dispatcher_set = 1;
     return enif_make_atom(env, "ok");
 }
 

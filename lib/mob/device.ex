@@ -23,6 +23,7 @@ defmodule Mob.Device do
     `:will_enter_foreground`, `:will_terminate`
   - `:display` — `:screen_off`, `:screen_on`
   - `:audio` — `:audio_interrupted`, `:audio_resumed`, `:audio_route_changed`
+  - `:appearance` — `{:color_scheme_changed, :light | :dark}`
   - `:power` — `{:battery_state_changed, :unplugged | :charging | :full | :unknown}`,
     `{:battery_level_changed, integer}`, `{:low_power_mode_changed, boolean}`
   - `:thermal` — `{:thermal_state_changed, :nominal | :fair | :serious | :critical}`
@@ -44,8 +45,8 @@ defmodule Mob.Device do
 
   use GenServer
 
-  @categories [:app, :display, :audio, :power, :thermal, :memory]
-  @default_categories [:app, :display, :audio, :memory]
+  @categories [:app, :display, :audio, :appearance, :power, :thermal, :memory]
+  @default_categories [:app, :display, :audio, :appearance, :memory]
 
   @app_events [
     :will_resign_active,
@@ -56,11 +57,12 @@ defmodule Mob.Device do
   ]
   @display_events [:screen_off, :screen_on]
   @audio_events [:audio_interrupted, :audio_resumed, :audio_route_changed]
+  @appearance_events [:color_scheme_changed]
   @power_events [:battery_state_changed, :battery_level_changed, :low_power_mode_changed]
   @thermal_events [:thermal_state_changed]
   @memory_events [:memory_warning]
 
-  @type category :: :app | :display | :audio | :power | :thermal | :memory
+  @type category :: :app | :display | :audio | :appearance | :power | :thermal | :memory
   @type event :: atom()
 
   # ── Public API ────────────────────────────────────────────────────────────
@@ -278,6 +280,7 @@ defmodule Mob.Device do
       event in @app_events -> :app
       event in @display_events -> :display
       event in @audio_events -> :audio
+      event in @appearance_events -> :appearance
       event in @power_events -> :power
       event in @thermal_events -> :thermal
       event in @memory_events -> :memory
