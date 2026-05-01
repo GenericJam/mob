@@ -633,14 +633,30 @@ private struct MobTextField: View {
                 if focused { node.onFocus?() }
                 else       { node.onBlur?() }
             }
+            // Sync from parent when the `value:` prop changes externally —
+            // but only if the user isn't actively typing (which would yank
+            // the cursor and overwrite their in-flight edits). This is the
+            // controlled-input fix for the case where Elixir code updates
+            // the bound value via Mob.Socket.assign without user input.
+            .onChange(of: initialText) { newValue in
+                if !isFocused && text != newValue {
+                    text = newValue
+                }
+            }
             .textFieldStyle(.roundedBorder)
             .frame(maxWidth: .infinity)
+            // Only contribute keyboard-toolbar items when THIS field is
+            // focused. Without the `if isFocused` guard, every MobTextField
+            // on the screen contributes its own Done button to the shared
+            // keyboard accessory toolbar — producing N stacked Done buttons
+            // when there are N fields visible. Guarded, only the focused
+            // field's button shows.
             .toolbar {
-                // Always-visible dismiss button — lets users close the keyboard
-                // without triggering on_submit (down-arrow pattern from RN).
                 ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { isFocused = false }
+                    if isFocused {
+                        Spacer()
+                        Button("Done") { isFocused = false }
+                    }
                 }
             }
     }

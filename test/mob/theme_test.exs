@@ -104,4 +104,64 @@ defmodule Mob.ThemeTest do
       assert m.on_primary == :white
     end
   end
+
+  describe "color_scheme/0" do
+    test "returns :light on the host BEAM (NIF not loaded)" do
+      # On the test host the mob_nif NIF is unavailable; the function should
+      # rescue and return :light rather than crashing the caller.
+      assert Theme.color_scheme() == :light
+    end
+  end
+
+  describe "Mob.Theme.Light" do
+    test "theme/0 returns a Theme struct with white background" do
+      t = Mob.Theme.Light.theme()
+      assert %Theme{} = t
+      assert t.background == 0xFFFFFFFF
+    end
+
+    test "on_background is dark for high contrast" do
+      t = Mob.Theme.Light.theme()
+      # near-black text on white is high-contrast (WCAG AAA).
+      <<_::8, r::8, g::8, b::8>> = <<t.on_background::32>>
+      avg = div(r + g + b, 3)
+      assert avg < 64, "expected near-black on_background, got rgb avg #{avg}"
+    end
+  end
+
+  describe "Mob.Theme.Dark" do
+    test "theme/0 returns a Theme struct with near-black background" do
+      t = Mob.Theme.Dark.theme()
+      assert %Theme{} = t
+      <<_::8, r::8, g::8, b::8>> = <<t.background::32>>
+      avg = div(r + g + b, 3)
+      assert avg < 32, "expected near-black background, got rgb avg #{avg}"
+    end
+
+    test "background avoids pure black to reduce OLED smear" do
+      t = Mob.Theme.Dark.theme()
+      <<_::8, r::8, g::8, b::8>> = <<t.background::32>>
+      avg = div(r + g + b, 3)
+      assert avg > 0, "background should not be pure black"
+    end
+
+    test "on_background is light for high contrast" do
+      t = Mob.Theme.Dark.theme()
+      <<_::8, r::8, g::8, b::8>> = <<t.on_background::32>>
+      avg = div(r + g + b, 3)
+      assert avg > 200, "expected near-white on_background, got rgb avg #{avg}"
+    end
+  end
+
+  describe "Mob.Theme.Adaptive" do
+    test "theme/0 returns a Theme struct" do
+      assert %Theme{} = Mob.Theme.Adaptive.theme()
+    end
+
+    test "on the test host (color_scheme/0 → :light) returns the Light theme" do
+      # Without a NIF the underlying color_scheme/0 returns :light, so
+      # Adaptive must resolve to the Light theme exactly.
+      assert Mob.Theme.Adaptive.theme() == Mob.Theme.Light.theme()
+    end
+  end
 end

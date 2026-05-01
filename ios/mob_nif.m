@@ -615,6 +615,17 @@ static MobNode* mob_node_from_dict(NSDictionary* dict) {
         id text = props[@"text"];
         if (text) node.text = [text isKindOfClass:[NSString class]] ? text : [text description];
 
+        // For text_field, `value:` is the controlled-input prop name (matches
+        // the React/SwiftUI convention used in app code and demos). Map it
+        // to `node.text` so MobTextField sees it as initialText. If both
+        // `text:` and `value:` are passed, `value:` wins.
+        if (node.nodeType == MobNodeTypeTextField) {
+            id valueText = props[@"value"];
+            if (valueText) node.text = [valueText isKindOfClass:[NSString class]]
+                                       ? valueText
+                                       : [valueText description];
+        }
+
         id padding = props[@"padding"];
         if (padding) node.padding = [padding doubleValue];
 
@@ -1011,6 +1022,38 @@ static ERL_NIF_TERM nif_exit_app(ErlNifEnv* env, int argc, const ERL_NIF_TERM ar
 
 static ERL_NIF_TERM nif_platform(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     return enif_make_atom(env, "ios");
+}
+
+// ── NIF: color_scheme/0 ──────────────────────────────────────────────────────
+// Returns :light or :dark based on UIUserInterfaceStyle.
+// Falls back to :light when called before any window is on screen.
+
+static ERL_NIF_TERM nif_color_scheme(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    __block UIUserInterfaceStyle style = UIUserInterfaceStyleUnspecified;
+    void (^read)(void) = ^{
+        // Prefer the key window's trait collection (most accurate once the
+        // app is on screen). Fall back to UITraitCollection.current (set
+        // during a render pass) and finally UIScreen.mainScreen for the
+        // earliest startup edge case before any window exists.
+        UIWindow *win = nil;
+        for (UIWindowScene *scene in [UIApplication.sharedApplication.connectedScenes allObjects]) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *w in scene.windows) {
+                if (w.isKeyWindow) { win = w; break; }
+            }
+            if (win) break;
+        }
+        if (win) {
+            style = win.traitCollection.userInterfaceStyle;
+        } else {
+            UIUserInterfaceStyle current_s = UITraitCollection.currentTraitCollection.userInterfaceStyle;
+            style = (current_s != UIUserInterfaceStyleUnspecified)
+                ? current_s
+                : UIScreen.mainScreen.traitCollection.userInterfaceStyle;
+        }
+    };
+    if ([NSThread isMainThread]) read(); else dispatch_sync(dispatch_get_main_queue(), read);
+    return enif_make_atom(env, style == UIUserInterfaceStyleDark ? "dark" : "light");
 }
 
 // ── NIF: battery_level/0 ─────────────────────────────────────────────────────
@@ -4910,6 +4953,7 @@ static ErlNifFunc nif_funcs[] = {
     {"device_os_version",     0, nif_device_os_version,     0},
     {"device_model",          0, nif_device_model,          0},
     {"platform",       0, nif_platform,       0},
+    {"color_scheme",   0, nif_color_scheme,   0},
     {"log",            1, nif_log,            0},
     {"log",            2, nif_log2,           0},
     {"set_transition", 1, nif_set_transition, ERL_NIF_DIRTY_JOB_CPU_BOUND},

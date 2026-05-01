@@ -55,25 +55,38 @@ defmodule Mob.Dist do
   """
   @spec ensure_started(keyword()) :: :ok
   def ensure_started(opts \\ []) do
-    case :mob_nif.platform() do
-      :ios ->
+    cond do
+      release_mode?() ->
+        # App Store / TestFlight build: distribution is disabled at the C
+        # layer (mob_beam.m drops -name/-setcookie when MOB_RELEASE is
+        # defined). Skip Node.start so calling apps don't have to special-case
+        # release vs dev — same call site, no-ops in release.
         :ok
 
-      :android ->
-        base_node = Keyword.fetch!(opts, :node)
-        cookie = Keyword.fetch!(opts, :cookie)
-        delay = Keyword.get(opts, :delay, @default_delay)
-        dist_port = Keyword.get(opts, :dist_port, 9100)
-        node = apply_suffix(base_node, System.get_env("MOB_NODE_SUFFIX"))
+      true ->
+        case :mob_nif.platform() do
+          :ios ->
+            :ok
 
-        if node != base_node do
-          :mob_nif.log("Mob.Dist: node suffix applied — #{base_node} → #{node}")
+          :android ->
+            base_node = Keyword.fetch!(opts, :node)
+            cookie = Keyword.fetch!(opts, :cookie)
+            delay = Keyword.get(opts, :delay, @default_delay)
+            dist_port = Keyword.get(opts, :dist_port, 9100)
+            node = apply_suffix(base_node, System.get_env("MOB_NODE_SUFFIX"))
+
+            if node != base_node do
+              :mob_nif.log("Mob.Dist: node suffix applied — #{base_node} → #{node}")
+            end
+
+            spawn(fn -> start_after(node, cookie, delay, dist_port) end)
+            :ok
         end
-
-        spawn(fn -> start_after(node, cookie, delay, dist_port) end)
-        :ok
     end
   end
+
+  @doc false
+  def release_mode?, do: System.get_env("MOB_RELEASE") == "1"
 
   @doc false
   @spec apply_suffix(node(), String.t() | nil) :: node()

@@ -160,6 +160,26 @@ defmodule Mob.Theme do
   @spec current() :: t()
   def current, do: Application.get_env(:mob, :theme, default())
 
+  @doc """
+  Returns the current OS appearance: `:light` or `:dark`.
+
+  Reads from the platform NIF (`UITraitCollection.userInterfaceStyle` on
+  iOS, `Configuration.uiMode & UI_MODE_NIGHT_MASK` on Android). Falls back
+  to `:light` when running on the host BEAM (no NIF loaded), on platforms
+  that don't expose appearance, or on legacy Android apps that haven't
+  added `MobBridge.getColorScheme()` yet.
+  """
+  @spec color_scheme() :: :light | :dark
+  def color_scheme do
+    case :mob_nif.color_scheme() do
+      :dark -> :dark
+      _ -> :light
+    end
+  rescue
+    # NIF not loaded (host BEAM), wrong arity, or platform doesn't implement
+    _ -> :light
+  end
+
   # ── Token maps (used by Mob.Renderer) ─────────────────────────────────────
 
   @doc false

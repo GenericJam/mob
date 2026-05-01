@@ -17,7 +17,13 @@
 // EPMD compiled into the binary (epmd.c / epmd_srv.c / epmd_cli.c compiled
 // with -Dmain=epmd_ios_main). Only present in device builds; the simulator
 // connects to the Mac's EPMD via the shared network stack.
-#ifdef MOB_BUNDLE_OTP
+//
+// MOB_RELEASE: App Store builds (mix mob.release) drop EPMD entirely so the
+// shipped binary has no distribution surface — Apple is unhappy with apps
+// that listen on arbitrary network ports for remote-code-execution-shaped
+// traffic, and TestFlight review may flag it. The BEAM still boots, the NIF
+// still works, but the app is networkless from a distribution POV.
+#if defined(MOB_BUNDLE_OTP) && !defined(MOB_RELEASE)
 extern int epmd_ios_main(int argc, char **argv);
 static void* epmd_thread(void *arg) {
     char *args[] = {"epmd", NULL};
@@ -313,10 +319,21 @@ void mob_start_beam(const char* app_module) {
     args[ac++] = "-bindir";     args[ac++] = bindir;
     args[ac++] = "-progname";   args[ac++] = "erl";
     args[ac++] = "--";
+#ifndef MOB_RELEASE
+    // Distribution flags. Omitted for App Store builds — see MOB_RELEASE
+    // notes at the top of this file.
     args[ac++] = "-name";       args[ac++] = node_name;
     args[ac++] = "-setcookie";  args[ac++] = "mob_secret";
     args[ac++] = "-kernel"; args[ac++] = "inet_dist_listen_min"; args[ac++] = dist_port_min;
     args[ac++] = "-kernel"; args[ac++] = "inet_dist_listen_max"; args[ac++] = dist_port_max;
+#else
+    // Mark MOB_RELEASE in env so Mob.Dist.ensure_started/1 short-circuits
+    // before trying Node.start (which would fail without -name anyway, but
+    // the env var lets app code probe for release mode without parsing
+    // erl args).
+    setenv("MOB_RELEASE", "1", 1);
+    (void)dist_port_min; (void)dist_port_max; (void)node_name;
+#endif
     args[ac++] = "-noshell";
     args[ac++] = "-noinput";
     args[ac++] = "-boot";   args[ac++] = boot_path;
@@ -339,10 +356,11 @@ void mob_start_beam(const char* app_module) {
         close(log_fd);
     }
 
-#ifdef MOB_BUNDLE_OTP
+#if defined(MOB_BUNDLE_OTP) && !defined(MOB_RELEASE)
     // Start EPMD as a thread so the BEAM can register for distribution.
     // On simulator the Mac's EPMD is reachable via the shared network stack;
     // on device there is no host EPMD, so we run our own in-process.
+    // App Store builds (MOB_RELEASE) drop EPMD entirely.
     pthread_t epmd_t;
     pthread_create(&epmd_t, NULL, epmd_thread, NULL);
     pthread_detach(epmd_t);

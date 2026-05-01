@@ -27,6 +27,7 @@ static struct {
     jmethodID set_root;
     jmethodID move_to_back;
     jmethodID get_safe_area;
+    jmethodID get_color_scheme;
     jmethodID haptic;
     jmethodID clipboard_put;
     jmethodID clipboard_get;
@@ -660,6 +661,29 @@ void _mob_bridge_init_activity(JNIEnv* env, jobject activity) {
 
 static ERL_NIF_TERM nif_platform(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     return enif_make_atom(env, "android");
+}
+
+// ── NIF: color_scheme/0 ──────────────────────────────────────────────────────
+// Returns :light or :dark based on the Activity's current Configuration.uiMode.
+// Returns :light if MobBridge.getColorScheme() isn't compiled into the app
+// (older projects).
+
+static ERL_NIF_TERM nif_color_scheme(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    if (!Bridge.get_color_scheme) return enif_make_atom(env, "light");
+    int att; JNIEnv* jenv = get_jenv(&att);
+    jstring result =
+        (jstring)(*jenv)->CallStaticObjectMethod(jenv, Bridge.cls, Bridge.get_color_scheme);
+    ERL_NIF_TERM atom = enif_make_atom(env, "light");
+    if (result) {
+        const char* str = (*jenv)->GetStringUTFChars(jenv, result, NULL);
+        if (str) {
+            if (strcmp(str, "dark") == 0) atom = enif_make_atom(env, "dark");
+            (*jenv)->ReleaseStringUTFChars(jenv, result, str);
+        }
+        (*jenv)->DeleteLocalRef(jenv, result);
+    }
+    if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
+    return atom;
 }
 
 // ── NIF: log/1 ───────────────────────────────────────────────────────────────
@@ -2039,6 +2063,7 @@ static ErlNifFunc nif_funcs[] = {
     {"swipe_xy",         4, nif_swipe_xy,         0},
     // ── Core mob functions ────────────────────────────────────────────────────
     {"platform",       0, nif_platform,       0},
+    {"color_scheme",   0, nif_color_scheme,   0},
     {"log",            1, nif_log,            0},
     {"log",            2, nif_log2,           0},
     {"set_transition", 1, nif_set_transition, ERL_NIF_DIRTY_JOB_CPU_BOUND},
@@ -2118,6 +2143,15 @@ static int nif_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info) {
 
     Bridge.get_safe_area = (*jenv)->GetStaticMethodID(jenv, Bridge.cls, "getSafeArea", "()[F");
     if (!Bridge.get_safe_area) { LOGE("nif_load: getSafeArea() not found on MobBridge"); return -1; }
+
+    // getColorScheme() is optional — apps that haven't been regenerated since
+    // it was added still load fine; nif_color_scheme falls back to :light.
+    Bridge.get_color_scheme =
+        (*jenv)->GetStaticMethodID(jenv, Bridge.cls, "getColorScheme", "()Ljava/lang/String;");
+    if (!Bridge.get_color_scheme) {
+        LOGI("nif_load: MobBridge.getColorScheme() not found — color_scheme/0 returns :light");
+        (*jenv)->ExceptionClear(jenv);
+    }
 
     Bridge.haptic = (*jenv)->GetStaticMethodID(jenv, Bridge.cls, "haptic", "(Ljava/lang/String;)V");
     if (!Bridge.haptic) { LOGE("nif_load: haptic(String) not found on MobBridge"); return -1; }

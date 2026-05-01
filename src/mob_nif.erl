@@ -2,6 +2,7 @@
 %% ERL_NIF_INIT in mob_nif.c / mob_nif.m registers functions under this module name.
 -module(mob_nif).
 -export([platform/0,
+         color_scheme/0,
          log/1, log/2,
          set_transition/1,
          set_root/1,
@@ -95,6 +96,7 @@
          swipe_xy/4]).
 
 -nifs([platform/0,
+       color_scheme/0,
        log/1, log/2,
        set_transition/1,
        set_root/1,
@@ -176,6 +178,7 @@
 init() -> erlang:load_nif("mob_nif", 0).
 
 platform()                        -> erlang:nif_error(not_loaded).
+color_scheme()                    -> erlang:nif_error(not_loaded).
 log(_Msg)                         -> erlang:nif_error(not_loaded).
 log(_Level, _Msg)                 -> erlang:nif_error(not_loaded).
 set_transition(_Trans)            -> erlang:nif_error(not_loaded).

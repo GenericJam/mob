@@ -601,3 +601,212 @@ adb -s <serial> shell am start -n com.example.<app>/.MainActivity
 Otherwise calls to new NIF functions return `:undef` (BEAM module not
 reloaded) or `:not_loaded` (NIF library cached) even though the new
 artifacts are on disk.
+
+---
+
+## 12. iOS `TextField` ignores `value:` prop updates after first render — **FIXED 2026-05-01**
+
+> **Resolution.** Two-part fix:
+> 1. **`ios/mob_nif.m`** — the prop parser was reading `text:` for all node
+>    types, but app code (and Mob's own demos) pass `value:` for text fields,
+>    matching the React/SwiftUI controlled-input convention. Added a
+>    `MobNodeTypeTextField`-gated read of `props[@"value"]` that maps into
+>    `node.text`. If both `text:` and `value:` are passed, `value:` wins.
+> 2. **`ios/MobRootView.swift`** — added `.onChange(of: initialText)` to
+>    `MobTextField`. When the parent re-renders with a new value AND the
+>    field is *not* currently focused, the SwiftUI `@State` is synced to the
+>    new value. The `!isFocused` guard prevents the cursor from being yanked
+>    while the user is mid-edit.
+>
+> Verified end-to-end on `air_cart_max`: programmatically setting
+> `tank.rate_lb_per_ac = 120.0` from a `handle_info` clause now surfaces in
+> the field on the next render.
+
+
+
+**Symptom** — A `:text_field` rendered with `value: assigns.foo` shows the
+initial value correctly, but subsequent re-renders that change `value:`
+(e.g. via `Mob.Socket.assign(:foo, "100")` from a `handle_info` clause that
+isn't `:change`-driven) do **not** update what the field displays. The
+underlying socket assigns are updated and the rest of the screen
+re-renders, but the field stays stuck at its first-rendered value (or
+empty/placeholder if nothing was set on first render).
+
+Hit while building Air Cart Maximiser (`~/code/air_cart_max`):
+
+```elixir
+# Tank product cycles to "wheat" → set rate to default 100.0 in same handler
+def handle_info({:tap, {:cycle_product, idx}}, socket) do
+  ...
+  new_tanks = List.update_at(cart.tanks, idx, fn t ->
+    %{t | product_id: next_id, rate_lb_per_ac: 100.0}   # set rate here
+  end)
+  {:noreply, Mob.Socket.assign(socket, :cart, %{cart | tanks: new_tanks})}
+end
+
+# Render passes value: from the updated cart
+%{type: :text_field, props: %{value: format_rate(tank.rate_lb_per_ac), ...}}
+```
+
+After cycling, the text field stays empty (showing placeholder "lb/ac")
+even though `cart.tanks[idx].rate_lb_per_ac == 100.0` and other widgets
+reflecting that assigns value (the per-tank "ac/fill" calc, the bottom
+total) update correctly. Only the text field's display is stale.
+
+**Why (suspected)** — iOS `UITextField` is "uncontrolled" — once the field
+is created, its `.text` is owned by the UIKit object and the SwiftUI
+renderer only reads from it via `@State` / `@Binding`. The Mob renderer
+likely creates the field on first render and then never reassigns
+`.text` on subsequent diffs (or the diff matches by position and the
+shouldDiff check skips re-binding the value). User-driven `on_change`
+events still flow correctly because UIKit fires those from the field's
+own state.
+
+**Workaround in app code** — let the user be the source of truth for the
+text. Don't programmatically set values that should appear in a field
+unless they came from a `:change` event. Document defaults in the
+placeholder, not by pre-filling the value.
+
+**Fix options for Mob**
+
+1. **Force the binding to update on diff.** If the diff sees a new
+   `value:` prop that doesn't match the field's current text, explicitly
+   set `.text` (UIKit) or update the `@State` (SwiftUI) before returning.
+   Risk: if the user is mid-edit and the parent re-renders, the field
+   could yank the cursor. Mitigation: only re-set if not first responder.
+
+2. **Document the limitation.** Add a note to the `:text_field` docs that
+   it's user-source-of-truth and `value:` is read only on first render.
+   This matches how iOS-native developers think about UITextField, and
+   keeps the workaround in app code (don't auto-fill).
+
+3. **Add an explicit `controlled?: true` prop.** Opt-in two-way binding
+   for screens that want React-style controlled inputs. Default off (no
+   surprise). Wire path: `controlled?: true` on the props side becomes a
+   `@Binding` on the SwiftUI side instead of a one-shot initial value.
+
+**Where this matters** — any screen with text fields whose value can
+change for reasons other than user typing: programmatic clearing,
+loading from persistence, computed defaults, undo/redo, or cross-field
+auto-population (zip → city kind of thing).
+
+---
+
+## 13. iOS keyboard "Done" toolbar shows one button per `:text_field` on screen — **FIXED 2026-05-01**
+
+> **Resolution.** Wrapped the contents of `MobTextField`'s
+> `ToolbarItemGroup(placement: .keyboard)` in an `if isFocused { ... }`
+> guard. Previously every `MobTextField` in the view tree contributed its
+> own Spacer + Done button to the merged keyboard accessory toolbar.
+> Now only the focused field's button shows.
+>
+> Verified on `air_cart_max` HomeScreen with 4 rate fields visible: was 4
+> stacked Dones, now 1.
+
+
+
+**Symptom** — When a screen has multiple `:text_field` widgets, focusing
+any one of them brings up the iOS keyboard with an accessory toolbar
+showing **one "Done" button per text field on the screen**, all stacked
+horizontally:
+
+```
+[ Done ] [ Done ] [ Done ] [ Done ]
+```
+
+Tapping any Done dismisses the keyboard correctly (eventually — sometimes
+takes two taps). But the visual is confusing — looks like there are
+multiple actions when really they're all the same "dismiss" action.
+
+Reproduced on `~/code/air_cart_max` HomeScreen with 4 tank rows each
+containing a `:text_field` for the rate input. iPhone 17 sim, iOS 26.4.
+
+**Why (suspected)** — Mob's `:text_field` likely attaches a per-field
+`UIToolbar` as the field's `inputAccessoryView`. When iOS shows the
+keyboard for one focused field, it apparently surfaces all visible
+toolbars, not just the focused field's.
+
+More likely: each field's accessory view is the same shared toolbar
+instance and iOS is rendering one `Done` per field in some flow-layout
+parent.
+
+**Workaround** — none. Doesn't break functionality, just looks bad. Users
+learn to tap any of the Dones.
+
+**Fix options**
+
+1. **Single shared accessory view per screen, owned by the screen, not
+   per field.** When any field becomes first responder, attach the one
+   shared toolbar. Detach on blur. Cost: a screen-level coordinator.
+
+2. **Drop the toolbar entirely; rely on `return_key:`** — the on-screen
+   keyboard already has a Done/Return key. The `inputAccessoryView`
+   toolbar is redundant in most cases. Could be opt-in via
+   `accessory_toolbar?: true` for screens that genuinely need it.
+
+3. **Conditional toolbar** — only attach the accessory if the keyboard
+   doesn't natively offer a way to dismiss (e.g. `keyboard: :decimal`
+   on iPhone where the number pad has no return key). For other
+   keyboards, no toolbar.
+
+Recommendation: **(2) drop by default + opt-in flag** is the cleanest.
+The number-pad case from (3) is the only place a toolbar is genuinely
+useful, and even then a single shared toolbar (1) avoids the stacking
+problem.
+
+---
+
+## 14. iOS sim's distribution node name doesn't match `mix mob.connect`'s expectation
+
+**Symptom** — After `mix mob.deploy --native --ios --device <sim-udid>`,
+running `mix mob.connect --no-iex` shows the sim node as a timeout while
+a physical iPhone (also running the same app, deployed earlier) connects
+fine over LAN:
+
+```
+  air_cart_max_ios_78354490@127.0.0.1 ...  ✗     ← sim, expected node
+  air_cart_max_ios@10.0.0.120 ...  ✓             ← physical iPhone
+  ✗ iPhone 17: timed out waiting for air_cart_max_ios_78354490@127.0.0.1
+Connected cluster (1 node(s)):
+  ✓ air_cart_max_ios@10.0.0.120  [port 9101]
+```
+
+The sim's app launches, renders correctly, and is interactive (verified
+via `mcp__ios-simulator__ui_*` tools). It's just not appearing in EPMD
+under the expected name.
+
+**Why (suspected)** — `mix mob.connect` constructs the expected sim node
+name as `<app>_ios_<udid-prefix>@127.0.0.1` (per-sim suffix to avoid
+collision when multiple sims are booted), but the iOS BEAM startup in
+`mob_beam.m` derives its node name differently — possibly just
+`<app>_ios@127.0.0.1` (no suffix) or it picks up a stale env var from
+`SIMCTL_CHILD_*`.
+
+**Impact** — agent can't use `Mob.Test.tap/find/assigns` against the sim,
+which is the recommended primary inspection path per `guides/agentic_coding.md`.
+Falls back to MCP tools (screenshots + AX tree), which work but are
+slower and less precise (per the "Layer 1 first" guidance).
+
+**Workaround for agents** — use the MCP tools (`mcp__ios-simulator__*`) for
+sim verification. Use `Mob.Test` against any connected physical device
+(which gets the simpler `<app>_ios@<lan-ip>` naming).
+
+**Fix options**
+
+1. **Reconcile the naming.** Either `mob_dev/lib/.../connect.ex` should
+   probe both `<app>_ios@127.0.0.1` and `<app>_ios_<udid-prefix>@127.0.0.1`
+   in parallel and use whichever responds, or `mob_beam.m` should always
+   use the per-UDID-prefix form when running under a sim.
+
+2. **Print the actual registered name from the sim's app log.** Even if
+   mob_dev's expectation is wrong, surfacing what the sim is actually
+   registered as would give the user a node name they can use directly.
+
+3. **Make sim distribution opt-out, not opt-in.** Currently sim
+   distribution is best-effort and silently degrades. Make it a hard
+   requirement when `--device <sim-udid>` is passed and surface the
+   mismatch loudly.
+
+**Where this matters** — every dev iteration on a sim. This is the
+agentic-coding loop's foundation; if `Mob.Test` doesn't work against
+the sim, agents lose the fast path and burn cycles on screenshots.
