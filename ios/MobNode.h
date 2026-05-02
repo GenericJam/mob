@@ -153,6 +153,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) BOOL    fillWidth;    // fill parent width (default NO; button default YES)
 @property (nonatomic) CGFloat cornerRadius; // rounded corners in pt (default 0)
 
+// Border (currently honored on box). Both must be set for a border to draw.
+@property (nonatomic, strong, nullable) UIColor* borderColor;
+@property (nonatomic) CGFloat borderWidth;  // pt; default 0 = no border
+
 // image
 @property (nonatomic, copy,   nullable) NSString*  src;
 @property (nonatomic, copy,   nonnull)  NSString*  contentModeStr;   // "fit" | "fill" | "stretch"

@@ -31,6 +31,11 @@ defmodule Mob.Renderer do
   **Radius props** (`:corner_radius`): accept `:radius_sm`, `:radius_md`,
   `:radius_lg`, `:radius_pill` from the active theme.
 
+  **Border** (currently honored on `:box` only): set both `:border_color`
+  (a color token like `:primary` or `:border`) and `:border_width` (an
+  integer pt/dp value, e.g. `1`). When width is 0 or color is unset, no
+  border draws.
+
   **Text size props** (`:text_size`, `:font_size`): token atoms (`:xl`, `:lg`,
   etc.) are multiplied by `theme.type_scale`.
 

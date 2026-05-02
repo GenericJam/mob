@@ -242,6 +242,17 @@ struct MobNodeView: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .padding(node.paddingEdgeInsets)
                 .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
+                .overlay(
+                    // Border opt-in via border_color + border_width on the BEAM side.
+                    // When width is 0 (default) the stroke draws nothing — no perf cost.
+                    // .allowsHitTesting(false) is critical: without it, SwiftUI routes
+                    // taps inside the border's bounding rect to the overlay instead of
+                    // the box's children, swallowing tap events on every nested button.
+                    RoundedRectangle(cornerRadius: node.cornerRadius)
+                        .stroke(node.borderColor.map { Color($0) } ?? Color.clear,
+                                lineWidth: node.borderWidth)
+                        .allowsHitTesting(false)
+                )
                 .ifLet(node.onTap) { view, tap in
                     view.contentShape(Rectangle()).onTapGesture { tap() }
                 }

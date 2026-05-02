@@ -670,6 +670,12 @@ static MobNode* mob_node_from_dict(NSDictionary* dict) {
         id bg = props[@"background"];
         if (bg) node.backgroundColor = color_from_argb((long)[bg longLongValue]);
 
+        id borderColor = props[@"border_color"];
+        if (borderColor) node.borderColor = color_from_argb((long)[borderColor longLongValue]);
+
+        id borderWidth = props[@"border_width"];
+        if (borderWidth) node.borderWidth = [borderWidth doubleValue];
+
         id textColor = props[@"text_color"];
         if (textColor) node.textColor = color_from_argb((long)[textColor longLongValue]);
 
