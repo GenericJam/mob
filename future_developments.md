@@ -462,60 +462,14 @@ it; others will reject it on principle. Both reactions are signal.
 
 ## App Store-compatible release builds (libbeam.a static link)
 
-`mix mob.release` produces a working device-installable `.ipa` today,
-but it fails App Store Connect's automated validator. Four error
-categories, ~17 errors total:
+**This work is now planned and tracked in
+[`app_store_plan.md`](app_store_plan.md).**
 
-1. **Bundled OTP runtime contains `.so`/`.a`/standalone executables**
-   (12 errors, code 90171) — Apple's bundle policy permits exactly one
-   Mach-O per `.app`, no loadable libs. Currently mob copies the entire
-   OTP `lib/` tree into the bundle.
-2. **Test-harness NIFs reference private UIKit selectors** (1 error,
-   code 50) — `tap_xy` / `swipe_xy` / `type_text` etc. in
-   `ios/mob_nif.m` use `_addTouch:forDelayedDelivery:`, `_clearTouches`,
-   `_setHIDEvent:`, etc. App Store auto-scans for these and rejects.
-3. **Info.plist missing `MinimumOSVersion` / `DTPlatformName`** (3 errors)
-4. **IPA `CodeResources` not preserved as symlink** (1 error, code 90071)
+Short version: `mix mob.release` produces a device-installable `.ipa`
+today but fails App Store Connect's automated validator (bundled OTP
+`.so`/`.a` files, private-selector test harness, Info.plist gaps,
+packaging symlink). The static-libbeam approach (already proven in
+`~/code/beam-ios-test`) clears all of it.
 
-The hard one is #1. The proven approach (already validated in
-`~/code/beam-ios-test`):
-
-- Build OTP with `RELEASE_LIBBEAM=yes` → produces `libbeam.a` (~4.3 MB)
-  with all NIFs/drivers compiled in. **Already built for
-  `aarch64-apple-ios` and `aarch64-apple-iossimulator`** at
-  `/Users/kevin/code/otp/bin/<target>/libbeam.a`.
-- Static-link `libbeam.a` + supporting archives (`liberts_internal_r.a`,
-  `libethread.a`, `libzstd.a`, `libepcre.a`, `libryu.a`, `asn1rt_nif.a`)
-  into the main app binary at build time.
-- Bundle only `.beam` bytecode files (Apple is fine with bytecode).
-- Cross-compile any third-party NIFs the app uses (`exqlite` for
-  SQLite-backed apps) as `.a` for the iOS targets, statically linked.
-
-Boot time on the test rig: ~64ms cold start (M4 Pro simulator),
-estimated ~120-180ms on real A18. Faster than React Native hello-world.
-So the static path is also a perf win.
-
-### Scope estimate
-
-- ~half day: rewire `ios/release_device.sh` (or its Elixir-driven
-  equivalent in `mob_dev`) to static-link rather than bundle
-- ~half day: cross-build `exqlite` as `.a` for iOS device + sim targets
-  (build script in mob_dev that `mix mob.release` invokes; cache the
-  output)
-- ~2 hours: wrap test-harness NIFs in `#if !MOB_RELEASE` (the stubs in
-  `mob_nif.erl` can stay and `nif_error` at runtime — test harness
-  isn't supposed to work in release mode anyway)
-- ~1 hour: Info.plist `MinimumOSVersion`/`DTPlatformName` + switch IPA
-  packaging from `zip` to `ditto -c -k --keepParent --sequesterRsrc`
-- ~half day: end-to-end verify on iOS sim + device, then re-attempt
-  App Store Connect upload until validation passes
-- ~half day: tests for the new release path so this doesn't regress
-
-Total: 2-3 days focused work in mob + mob_dev. The hardest unknown
-("can we even ship a static-linked BEAM through App Store?") is
-already resolved by the beam-ios-test prior art.
-
-When this lands, the Known Limitation section in
-`mob_dev/guides/publishing_to_testflight.md` and the corresponding
-section in `mob/guides/publishing.md` get cleaned up, and Mob apps
-become genuinely App Store-shippable.
+Estimate: 2-3 days focused work across `mob` + `mob_dev`. See the
+plan for workstream breakdown, decisions log, and live status.
