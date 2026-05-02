@@ -610,3 +610,52 @@ PKG=com.mob.YOUR_APP
 adb -s SERIAL push "$ELIXIR_EBIN/." /data/data/$PKG/files/otp/lib/elixir/ebin/
 adb -s SERIAL shell "am force-stop $PKG && am start -n $PKG/.MainActivity"
 ```
+
+---
+
+## `:badbool` from `nil and bool` silently kills the screen GenServer
+
+**Symptom**: A specific tap on a Mob app stops working. The button label still updates
+the AX tree on tap (chevron flips on the underlying state), but visible UI doesn't
+re-render. Subsequent taps on the same button do nothing. Killing and restarting the
+app reproduces the same broken state because the trigger is in persisted state
+(`Mob.State` → dets), so the offending render path keeps crashing immediately on
+re-render.
+
+**Root cause**: Elixir has two boolean operator families with different semantics:
+
+- `&&` and `||` are *lazy* — they short-circuit on truthy/falsy and pass through any value.
+- `and`, `or`, and `not` are *strict* — they require booleans on both sides and raise
+  `:badbool` when given `nil` or any non-boolean.
+
+When a render branch like
+
+    selected? = (some_optional_thing && check) and other_flag
+
+evaluates `some_optional_thing` to `nil`, the `&&` short-circuits to `nil`. Then
+`nil and other_flag` raises `{:badbool, :and, nil}`. The render crashes; `Mob.Screen`
+terminates; the screen freezes on its last good frame; the next interaction reproduces
+the crash.
+
+**Fix**: Use `&&` consistently — never mix `&&` and `and` in the same expression
+unless you've explicitly converted the left side to a real boolean (e.g. `!!nil` →
+`false`).
+
+```elixir
+# bad — nil and _ raises :badbool:
+selected? = (ta.fill && fill.product.id == ta.fill.product.id) and ta.locked
+
+# good — fully lazy chain, short-circuits cleanly on nil:
+selected? = ta.locked && ta.fill && fill.product.id == ta.fill.product.id
+```
+
+**Diagnosis**: Look in `adb logcat -s Elixir` (Android) or the iOS console for a
+`gen_server` terminate message naming the screen module and a `:badbool` reason.
+The persisted state survives kill+restart, so the symptom looks like a UI lockup
+rather than a crash.
+
+**Fixed in**: `air_cart_max/lib/air_cart_max/home_screen.ex:936` (`override_menu_section`,
+2026-05-02). Caught after iOS-side red herring (border `.overlay()` was intercepting
+taps, separate fix); the real bug only surfaced when adb logcat showed the gen_server
+terminate on Steve's moto G.
+
