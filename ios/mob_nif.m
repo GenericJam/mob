@@ -2778,6 +2778,25 @@ static ERL_NIF_TERM nif_notify_register_push(ErlNifEnv* env, int argc, const ERL
 }
 
 
+// ════════════════════════════════════════════════════════════════════════════
+// TEST HARNESS — compiled out of release builds (MOB_RELEASE).
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Everything from here through `nif_swipe_xy` exists for the agent test
+// harness (Mob.Test): walk the iOS accessibility tree, query screen
+// geometry, synthesize taps/swipes/text input. The synthetic-input NIFs
+// reach into UIKit's private `_addTouch:`, `_setHIDEvent:`, `_touchesEvent`,
+// `_clearTouches` and friends — which is fine for development and CI but
+// gets the binary auto-rejected by the App Store validator (error code 50:
+// "non-public selectors").
+//
+// Mob.Test's Erlang-side functions remain exported in mob_nif.erl; calling
+// them in a release build raises `:nif_error` cleanly because the
+// nif_funcs[] table further down also wraps the test-harness entries in
+// the same `#if !MOB_RELEASE`. That's by design — the test harness isn't
+// supposed to work in shipped apps.
+#if !MOB_RELEASE
+
 // ── Test harness helpers (a11y walk, nsstring_to_term, AX framework) ───────────
 static ERL_NIF_TERM nsstring_to_term(ErlNifEnv *env, NSString *s) {
     if (!s) return enif_make_atom(env, "nil");
@@ -4558,6 +4577,8 @@ static ERL_NIF_TERM nif_swipe_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
 #endif
 }
 
+#endif  // !MOB_RELEASE — end of test harness block (started near line 2780)
+
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 
@@ -4978,7 +4999,12 @@ void mob_send_component_event(int handle, const char* event, const char* payload
 // the test harness calls them in tight loops and dirty-dispatch overhead would
 // add up. Re-evaluate if benchmarks show scheduler stalls under heavy harness use.
 static ErlNifFunc nif_funcs[] = {
+#if !MOB_RELEASE
     // ── Test harness (listed first to survive linker dead-code stripping) ──────
+    // Compiled out of release builds — Erlang stubs in mob_nif.erl raise
+    // :nif_error when these aren't loaded, which is the right thing for
+    // shipped apps (the harness uses private UIKit APIs and Apple's
+    // App Store validator rejects binaries that reference them).
     {"ui_tree",          0, nif_ui_tree,          ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"ui_view_tree",     0, nif_ui_view_tree,     ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"ui_debug",         0, nif_ui_debug,         ERL_NIF_DIRTY_JOB_CPU_BOUND},
@@ -4993,6 +5019,7 @@ static ErlNifFunc nif_funcs[] = {
     {"clear_text",       0, nif_clear_text,       0},
     {"long_press_xy",    3, nif_long_press_xy,    0},
     {"swipe_xy",         4, nif_swipe_xy,         0},
+#endif
     // ── Core mob functions ───────────────────────────────────────────────────
     {"background_keep_alive", 0, nif_background_keep_alive, 0},
     {"background_stop",       0, nif_background_stop,       0},

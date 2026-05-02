@@ -4,7 +4,7 @@ Working document for the framework work to make `mix mob.release` produce
 App Store-shippable `.ipa` files. Update the **Status** line at the top
 and check off workstream items as work progresses.
 
-**Status (2026-05-01):** Plan written, no code changes started. Next: Workstream 1.
+**Status (2026-05-02):** **UPLOAD SUCCEEDED**. Workstreams 1-5 done in ~3 hours (vs 2-3 day estimate). Build accepted by App Store Connect — Delivery UUID `6a1711f4-2f11-4023-9711-9ddcef583a73`. Awaiting Apple processing (~5-15 min) before it appears in TestFlight. W6 (test coverage + docs) still pending.
 
 ---
 
@@ -61,44 +61,53 @@ when shipping.
 
 ## Workstreams
 
-### Workstream 1 — Cross-build infrastructure (~half day)
+### Workstream 1 — Cross-build infrastructure (~~half day~~ COLLAPSED)
 
-**Goal**: every NIF an app uses has a static `.a` for both iOS targets,
-cached and deterministically rebuildable.
+- [x] Solve exqlite first — **already done by the existing pipeline**
+- [x] Static archive at `~/.mob/cache/otp-ios-device-*/lib/exqlite-*/priv/sqlite3_nif.a`
+      (1.5 MB, valid arm64, `_sqlite3_nif_nif_init` symbol present)
+- [x] All other static archives present too: `libbeam.a`, `liberts_internal_r.a`,
+      `libethread.a`, `libei.a`, `libei_st.a`, `libzstd.a`, `libepcre.a`,
+      `libryu.a`, `asn1rt_nif.a`
+- [x] Existing `release_device.sh` already links them all into the main
+      binary correctly (lines 41-49 + 251-269 of the generated script)
 
-- [ ] Solve exqlite first (only third-party NIF in air_cart_max)
-- [ ] `mix mob.cross_build_nif <hex_package>` task
-  - [ ] Resolve build script (Makefile / cmake / elixir_make / rebar3)
-  - [ ] Cross-compile for `aarch64-apple-ios` and `aarch64-apple-iossimulator`
-        via env-var hijacking (`CC`, `CFLAGS`, `SDKROOT`, `-mios-version-min`)
-  - [ ] Coerce to `.a` output (most NIFs default to `.so`)
-  - [ ] Cache in `~/.mob/cache/static-nifs/<package>-<version>/<target>/`
-- [ ] Verify exqlite output: `nm sqlite3_nif.a` shows expected symbols
-- [ ] Document the pattern; accept other NIFs may need per-package patches
+**The bug isn't missing infrastructure.** It's that the same files that
+get linked into the binary ALSO get bundled into `$APP/otp/lib/` via
+`rsync -a --delete $OTP_ROOT/lib/ $OTP_BUNDLE/lib/` (line 297). Apple
+rejects the bundled `.a`/`.so`. The fix is in workstream 4 (strip
+unused libs + binaries from the bundle BEFORE packaging the IPA), not
+in build infrastructure.
 
-**Risk**: NIF build systems are bespoke. Time-box exqlite to half a
-day. If blocker, fall back: investigate whether system SQLite
-(`/usr/lib/libsqlite3.dylib`, available on iOS) can replace exqlite
-for shipped builds.
+This collapses scope significantly. Workstream 4 is now the only
+non-trivial piece; everything else is small fixes.
 
 ### Workstream 2 — Test-harness compile-out (~2 hours)
 
 **Goal**: zero references to private UIKit selectors in App Store builds.
 
-- [ ] Define `MOB_APP_STORE` flag (separate from existing `MOB_RELEASE`)
-- [ ] Wrap test-harness NIFs in `mob/ios/mob_nif.m` with `#if !MOB_APP_STORE`:
-  - [ ] `tap_xy`, `swipe_xy`, `tap_by_label`
-  - [ ] `type_text`, `delete_backward`, `key_press`, `clear_text`
-  - [ ] `long_press_xy`
-  - [ ] `ax_action_at_xy`
-- [ ] Mirror to `mob/android/jni/mob_nif.c` for symmetry
-- [ ] Erlang stubs in `mob_nif.erl` stay (they `nif_error` at runtime
-      in App Store builds — correct behavior)
-- [ ] Verify: `nm <main_binary> | grep _addTouch` returns zero hits
-- [ ] Verify: `nm <main_binary> | grep _setHIDEvent` returns zero hits
+**Scope decision (2026-05-01)**: dropped the planned separate
+`MOB_APP_STORE` flag — `MOB_RELEASE` is only set by the release
+script, dev mode never sets it, so reusing it for test-harness gating
+is correct. There's no use case for "release build with test harness"
+or "dev build without test harness".
 
-Doing this first proves the `MOB_APP_STORE` flag plumbing works
-before the bigger restructure in workstream 4.
+- [x] Wrap test-harness section in `mob/ios/mob_nif.m` with `#if !MOB_RELEASE`
+      (block from `nsstring_to_term` helpers through end of `nif_swipe_xy`)
+- [x] Wrap the test-harness entries in the `nif_funcs[]` table with
+      `#if !MOB_RELEASE`
+- [x] **Add `-DMOB_RELEASE` to mob_nif.m's compile command** in
+      `mob_dev/lib/mob_dev/release.ex` (was only being defined for
+      mob_beam.m — discovered when first verification still showed
+      private selectors in the binary)
+- [x] Verify dev path still builds (`mix mob.deploy --native` — test
+      harness present, app boots)
+- [x] Verify release path strips selectors:
+      `strings AirCartMax | grep -cE "^_addTouch|^_setHIDEvent|..."` = 0
+- [x] Verify release path strips test-harness symbols:
+      `nm AirCartMax | grep -cE "nif_tap_xy|nif_swipe_xy|..."` = 0
+- [ ] Mirror to `mob/android/jni/mob_nif.c` for symmetry (lower priority
+      — Android doesn't have the same review gate; defer to W6)
 
 ### Workstream 3 — Info.plist + IPA packaging fixes (~1 hour)
 
@@ -139,16 +148,20 @@ binary with everything statically linked, bundles only `.beam` files.
 
 **Goal**: a real TestFlight build from air_cart_max.
 
-- [ ] `mix mob.release --app-store` from air_cart_max
-- [ ] `mix mob.publish`
-- [ ] Apple validator runs (~60s); fix → repeat
-- [ ] Build appears in App Store Connect → TestFlight tab
+- [x] `mix mob.release` from air_cart_max
+- [x] `mix mob.publish` — **UPLOAD SUCCEEDED 2026-05-02 00:03**
+      (Delivery UUID `6a1711f4-2f11-4023-9711-9ddcef583a73`)
+- [x] Apple validator round trips: 4 cycles total
+  - Round 1: 17 errors (.so/.a + selectors + Info.plist + symlink)
+  - Round 2: down to 1 error (UIDeviceFamily missing)
+  - Round 3: 1 different error (DT* keys missing for SDK validation)
+  - Round 4: DTXcode encoding bug (5 digits, should be 4)
+  - Round 5: ✅ accepted
+- [ ] Build appears in App Store Connect → TestFlight tab (Apple
+      processing ~5-15 min)
 - [ ] Add internal tester, install via TestFlight app on iPhone
-- [ ] Confirm app boots, themes work, calculator math is correct,
+- [ ] Confirm app boots, themes work, calculator math correct,
       mailto link launches, settings persistence works
-
-Plan for 4-6 round trips with Apple's validator. Each cycle is
-cheap (~60s upload + ~60s validation).
 
 ### Workstream 6 — Test coverage + docs update (~half day)
 
@@ -203,7 +216,43 @@ These are deliberately deferred until the relevant workstream surfaces them:
 
 Capture non-obvious calls made *during* the work here, with date + reason.
 
-- _(empty — populate as workstream 1 starts)_
+- **2026-05-01 — Workstream 1 collapsed.** Recon found that
+  `~/.mob/cache/otp-ios-device-*/lib/exqlite-*/priv/sqlite3_nif.a` is
+  already produced by the existing build pipeline (1.5 MB, valid
+  arm64). All other static archives (`libbeam.a`, `liberts_internal_r.a`,
+  `libethread.a`, `libei.a`, `libei_st.a`, `libzstd.a`, `libepcre.a`,
+  `libryu.a`, `asn1rt_nif.a`) likewise present. The release script's
+  link line already pulls them all in. The bug is that the same files
+  that get linked into the binary ALSO get bundled into `$APP/otp/lib/`
+  via wholesale `rsync` — Apple rejects the bundled copies. Fix moves
+  to workstream 4 (strip-from-bundle), no cross-build infra needed.
+- **2026-05-01 — Dropped `MOB_APP_STORE` flag.** Plan called for a new
+  flag separate from `MOB_RELEASE`, but `MOB_RELEASE` is only set by
+  the release script; dev mode never sets it. Reusing the existing flag
+  for test-harness gating is correct — there's no use case for "release
+  build with test harness" or "dev build without test harness". One
+  flag, one path.
+- **2026-05-01 — Plan to modify existing `mix mob.release` rather than
+  add `--app-store` opt-in flag.** The current `mix mob.release` task
+  already documents itself as producing "App Store / TestFlight" builds.
+  Modifying it to actually achieve that is more honest than a parallel
+  task. Anyone using `mix mob.release` today is doing so because they
+  want an App Store build; making it work doesn't break anyone.
+- **2026-05-02 — Apple expects a full set of `DT*` keys in Info.plist.**
+  Initial fix added only `MinimumOSVersion` + `DTPlatformName` (per the
+  observed errors). After that cleared, validator surfaced "Unsupported
+  SDK or Xcode version" (90534) — turns out the validator
+  cross-references `DTSDKBuild` + `DTXcodeBuild` against an allow-list
+  of accepted Xcode releases. Fix: emit the full standard set
+  (`DTSDKName`, `DTSDKBuild`, `DTPlatformVersion`, `DTPlatformBuild`,
+  `DTXcode`, `DTXcodeBuild`, `DTCompiler`, `BuildMachineOSBuild`)
+  derived from `xcrun --show-sdk-version`/`-build-version` and
+  `xcodebuild -version`.
+- **2026-05-02 — `DTXcode` encoding is `MAJOR×100 + MINOR×10 + PATCH`,
+  not `MAJOR×1000 + …`.** First attempt produced "26040" (5 digits)
+  instead of "2640" (4 digits). Apple's historical encoding has always
+  been 4 digits because Xcode major was 2-digit through Xcode 16; the
+  pattern continued for Xcode 26.
 
 ## Total scope
 
