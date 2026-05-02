@@ -4,7 +4,7 @@ Working document for the framework work to make `mix mob.release` produce
 App Store-shippable `.ipa` files. Update the **Status** line at the top
 and check off workstream items as work progresses.
 
-**Status (2026-05-02):** **UPLOAD SUCCEEDED**. Workstreams 1-5 done in ~3 hours (vs 2-3 day estimate). Build accepted by App Store Connect — Delivery UUID `6a1711f4-2f11-4023-9711-9ddcef583a73`. Awaiting Apple processing (~5-15 min) before it appears in TestFlight. W6 (test coverage + docs) still pending.
+**Status (2026-05-02):** ✅ **COMPLETE**. Build 7 (`6b078e26-2b49-46e5-821a-b22a17c497f1`) accepted by App Store Connect, processed by Apple, lives in TestFlight. Air Cart Maximizer ships through the store. Total wall time ~4 hours vs 2-3 day estimate. W6 (test coverage + per-feature capability NIF compile-out) still pending as cleanup.
 
 ---
 
@@ -253,6 +253,41 @@ Capture non-obvious calls made *during* the work here, with date + reason.
   instead of "2640" (4 digits). Apple's historical encoding has always
   been 4 digits because Xcode major was 2-digit through Xcode 16; the
   pattern continued for Xcode 26.
+- **2026-05-02 — Apple's POST-upload validator caught ITMS-90683.**
+  The build accepted by `mix mob.publish` was rejected at the next
+  validation stage (the one that runs before TestFlight promotion):
+  `NSCameraUsageDescription` required in Info.plist because the binary
+  references camera APIs. Air Cart Maximizer doesn't itself use the
+  camera, but Mob's framework NIFs (`camera_capture_photo`,
+  `camera_start_preview`, etc. in `mob/ios/mob_nif.m`) do. Apple's
+  scanner sees the API references and demands the strings even when
+  unused at runtime.
+
+  **Immediate fix (air_cart_max)**: re-add the usage strings with
+  honest text explaining "framework dependency, app does not use".
+  Strings only trigger user-visible permission prompts when the API
+  is actually CALLED — declaring them is harmless from a UX POV.
+
+  **Framework follow-up (W6/follow-on)**: track per-feature flags so
+  unused capability NIFs (camera, mic, location, photos, motion) can
+  be compiled out of release builds. Then app Info.plists only need
+  strings for the capabilities they actually opt into.
+- **2026-05-02 — `CFBundleSupportedPlatforms` is required.** Apple
+  error 90562 surfaced after build 6 cleared the secondary scan.
+  Single-element array containing "iPhoneOS" for iOS device builds
+  (or "iPhoneSimulator" for sim). Added to the defensive PlistBuddy
+  block alongside UIDeviceFamily.
+- **2026-05-02 — END-TO-END SUCCESS.** Build 7 accepted by App Store
+  Connect AND processed by Apple AND visible in TestFlight. The
+  framework now ships to App Store. 6 round trips with the validator
+  from initial submission to "Complete":
+    1. 17 errors (the categories from the original audit)
+    2. 1 error (UIDeviceFamily)
+    3. 1 error (DT* set incomplete — added all of them)
+    4. 1 error (DTXcode wrong encoding — 5 digits not 4)
+    5. accepted; secondary scan flagged ITMS-90683 missing usage strings
+    6. accepted; secondary scan flagged 90562 missing CFBundleSupportedPlatforms
+    7. ✅ Complete
 
 ## Total scope
 
