@@ -93,10 +93,8 @@ defmodule Mob.Event.IntegrationTest do
 
       assert_receive {:handled, envelope}, 200
 
-      assert {:mob_event,
-              %Address{widget: :text_field, id: :email},
-              :change,
-              "user@example.com"} = envelope
+      assert {:mob_event, %Address{widget: :text_field, id: :email}, :change, "user@example.com"} =
+               envelope
     end
 
     test "toggle change with boolean" do
@@ -158,14 +156,26 @@ defmodule Mob.Event.IntegrationTest do
     test "scroll event with payload arrives canonical" do
       {:ok, screen} = TestScreen.start_link(reply_to: self())
 
-      send(screen, {:scroll, :main_list,
-                    %{x: 0.0, y: 240.0, dx: 0.0, dy: 8.0, phase: :dragging,
-                      velocity_x: 0.0, velocity_y: 480.0, ts: 12345, seq: 1}})
+      send(
+        screen,
+        {:scroll, :main_list,
+         %{
+           x: 0.0,
+           y: 240.0,
+           dx: 0.0,
+           dy: 8.0,
+           phase: :dragging,
+           velocity_x: 0.0,
+           velocity_y: 480.0,
+           ts: 12345,
+           seq: 1
+         }}
+      )
 
       assert_receive {:handled, envelope}, 200
 
-      assert {:mob_event, %Address{widget: :scroll, id: :main_list},
-              :scroll, %{y: 240.0, dy: 8.0, phase: :dragging}} = envelope
+      assert {:mob_event, %Address{widget: :scroll, id: :main_list}, :scroll,
+              %{y: 240.0, dy: 8.0, phase: :dragging}} = envelope
     end
 
     test "drag with payload" do
@@ -188,7 +198,10 @@ defmodule Mob.Event.IntegrationTest do
       {:ok, screen} = TestScreen.start_link([])
 
       for i <- 1..10 do
-        send(screen, {:scroll, :feed, %{x: 0.0, y: i * 10.0, dx: 0.0, dy: 10.0, phase: :dragging, seq: i}})
+        send(
+          screen,
+          {:scroll, :feed, %{x: 0.0, y: i * 10.0, dx: 0.0, dy: 10.0, phase: :dragging, seq: i}}
+        )
       end
 
       Process.sleep(20)
@@ -222,7 +235,9 @@ defmodule Mob.Event.IntegrationTest do
       send(screen, {:scrolled_past, :crossed_100})
 
       assert_receive {:handled, {:mob_event, %Address{id: :main}, :top_reached, nil}}, 200
-      assert_receive {:handled, {:mob_event, %Address{id: :crossed_100}, :scrolled_past, nil}}, 200
+
+      assert_receive {:handled, {:mob_event, %Address{id: :crossed_100}, :scrolled_past, nil}},
+                     200
     end
   end
 

@@ -42,7 +42,13 @@ defmodule Mob.Event.Throttle do
   @defaults %{
     scroll: %{throttle_ms: 33, debounce_ms: 0, delta_threshold: 1, leading: true, trailing: true},
     drag: %{throttle_ms: 16, debounce_ms: 0, delta_threshold: 1, leading: true, trailing: true},
-    pinch: %{throttle_ms: 16, debounce_ms: 0, delta_threshold: 0.01, leading: true, trailing: true},
+    pinch: %{
+      throttle_ms: 16,
+      debounce_ms: 0,
+      delta_threshold: 0.01,
+      leading: true,
+      trailing: true
+    },
     rotate: %{throttle_ms: 16, debounce_ms: 0, delta_threshold: 1, leading: true, trailing: true},
     pointer_move: %{
       throttle_ms: 33,
@@ -101,15 +107,18 @@ defmodule Mob.Event.Throttle do
 
   defp validate!(config) do
     if not is_integer(config.throttle_ms) or config.throttle_ms < 0 do
-      raise ArgumentError, "throttle must be a non-negative integer (ms), got #{inspect(config.throttle_ms)}"
+      raise ArgumentError,
+            "throttle must be a non-negative integer (ms), got #{inspect(config.throttle_ms)}"
     end
 
     if not is_integer(config.debounce_ms) or config.debounce_ms < 0 do
-      raise ArgumentError, "debounce must be a non-negative integer (ms), got #{inspect(config.debounce_ms)}"
+      raise ArgumentError,
+            "debounce must be a non-negative integer (ms), got #{inspect(config.debounce_ms)}"
     end
 
     if not is_number(config.delta_threshold) or config.delta_threshold < 0 do
-      raise ArgumentError, "delta must be a non-negative number, got #{inspect(config.delta_threshold)}"
+      raise ArgumentError,
+            "delta must be a non-negative number, got #{inspect(config.delta_threshold)}"
     end
 
     if not is_boolean(config.leading), do: raise(ArgumentError, "leading must be a boolean")

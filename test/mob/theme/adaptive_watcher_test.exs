@@ -36,6 +36,7 @@ defmodule Mob.Theme.AdaptiveWatcherTest do
   describe "register_adaptive/1" do
     test "swaps the active adaptive module" do
       {:ok, pid} = AdaptiveWatcher.start_link()
+
       defmodule MockAdaptive do
         def theme, do: Mob.Theme.build(primary: 0xFF112233)
       end

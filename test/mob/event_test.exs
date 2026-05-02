@@ -62,7 +62,10 @@ defmodule Mob.EventTest do
 
     test "delivers via {:component, id}" do
       a = addr()
-      :ok = Event.emit(a, :tap, nil, {:component, :form}, scope(component_chain: [{:form, self()}]))
+
+      :ok =
+        Event.emit(a, :tap, nil, {:component, :form}, scope(component_chain: [{:form, self()}]))
+
       assert_receive {:mob_event, ^a, :tap, nil}
     end
 
@@ -127,7 +130,9 @@ defmodule Mob.EventTest do
   describe "send_test/7" do
     test "delivers a synthesized event" do
       :ok = Event.send_test(self(), MyScreen, :button, :save, :tap)
-      assert_receive {:mob_event, %Address{screen: MyScreen, widget: :button, id: :save}, :tap, nil}
+
+      assert_receive {:mob_event, %Address{screen: MyScreen, widget: :button, id: :save}, :tap,
+                      nil}
     end
 
     test "honors instance and render_id options" do

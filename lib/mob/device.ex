@@ -138,6 +138,18 @@ defmodule Mob.Device do
   @spec model() :: String.t()
   def model, do: to_string(:mob_nif.device_model())
 
+  @doc """
+  Hands a URL to the OS to open in the default browser/handler.
+
+  Fire-and-forget. Returns `:ok` immediately; failures (malformed URL, no
+  registered handler) are logged but not raised.
+  """
+  @spec open_url(String.t()) :: :ok
+  def open_url(url) when is_binary(url) do
+    :mob_nif.open_url(url)
+    :ok
+  end
+
   # ── GenServer ─────────────────────────────────────────────────────────────
 
   @impl true

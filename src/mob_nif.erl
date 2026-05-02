@@ -15,6 +15,7 @@
          clipboard_put/1,
          clipboard_get/0,
          share_text/1,
+         open_url/1,
          %% Permissions
          request_permission/1,
          %% Biometric
@@ -108,6 +109,7 @@
        clipboard_put/1,
        clipboard_get/0,
        share_text/1,
+       open_url/1,
        request_permission/1,
        biometric_authenticate/1,
        location_get_once/0,
@@ -191,6 +193,7 @@ haptic(_Type)                     -> erlang:nif_error(not_loaded).
 clipboard_put(_Text)              -> erlang:nif_error(not_loaded).
 clipboard_get()                   -> erlang:nif_error(not_loaded).
 share_text(_Text)                 -> erlang:nif_error(not_loaded).
+open_url(_Url)                    -> erlang:nif_error(not_loaded).
 request_permission(_Cap)          -> erlang:nif_error(not_loaded).
 biometric_authenticate(_Reason)   -> erlang:nif_error(not_loaded).
 location_get_once()               -> erlang:nif_error(not_loaded).

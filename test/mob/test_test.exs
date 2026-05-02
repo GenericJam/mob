@@ -81,7 +81,14 @@ defmodule Mob.TestTest do
     end
 
     test "leaves with no children still emit one entry" do
-      tree = %{type: :button, label: "Solo", value: nil, frame: {0.0, 0.0, 1.0, 1.0}, children: []}
+      tree = %{
+        type: :button,
+        label: "Solo",
+        value: nil,
+        frame: {0.0, 0.0, 1.0, 1.0},
+        children: []
+      }
+
       assert [{[], node}] = M.flatten_tree(tree)
       assert node.label == "Solo"
     end
@@ -100,16 +107,25 @@ defmodule Mob.TestTest do
         end)
 
       labels = Enum.map(matches, fn {_p, n} -> n.label end)
-      assert "Roll Dice"  in labels
+      assert "Roll Dice" in labels
       assert "Roll again" in labels
       assert length(matches) == 2
     end
 
     test "matches against value as well as label" do
       tree = %{
-        type: :root, label: nil, value: nil, frame: {0.0, 0.0, 1.0, 1.0},
+        type: :root,
+        label: nil,
+        value: nil,
+        frame: {0.0, 0.0, 1.0, 1.0},
         children: [
-          %{type: :text_field, label: "Name", value: "Roll-something", frame: {0.0, 0.0, 1.0, 1.0}, children: []}
+          %{
+            type: :text_field,
+            label: "Name",
+            value: "Roll-something",
+            frame: {0.0, 0.0, 1.0, 1.0},
+            children: []
+          }
         ]
       }
 
@@ -134,7 +150,7 @@ defmodule Mob.TestTest do
 
     test "documented output frame shape is a 4-tuple of floats" do
       {x, y, w, h} = sample_tree().frame
-      for v <- [x, y, w, h], do: assert is_float(v)
+      for v <- [x, y, w, h], do: assert(is_float(v))
     end
 
     test "documented output uses atom :type and :children keys" do

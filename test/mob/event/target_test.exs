@@ -45,12 +45,16 @@ defmodule Mob.Event.TargetTest do
 
     test "errors when not in chain" do
       s = scope(component_chain: [{:form, self()}])
-      assert Target.resolve({:component, :ghost}, s) == {:error, {:component_not_in_ancestors, :ghost}}
+
+      assert Target.resolve({:component, :ghost}, s) ==
+               {:error, {:component_not_in_ancestors, :ghost}}
     end
 
     test "with empty chain, any component lookup fails" do
       s = scope(component_chain: [])
-      assert {:error, {:component_not_in_ancestors, :anything}} = Target.resolve({:component, :anything}, s)
+
+      assert {:error, {:component_not_in_ancestors, :anything}} =
+               Target.resolve({:component, :anything}, s)
     end
   end
 
@@ -84,7 +88,9 @@ defmodule Mob.Event.TargetTest do
 
     test "unregistered name errors" do
       s = scope()
-      assert Target.resolve(:nope_not_registered, s) == {:error, {:not_registered, :nope_not_registered}}
+
+      assert Target.resolve(:nope_not_registered, s) ==
+               {:error, {:not_registered, :nope_not_registered}}
     end
   end
 
@@ -125,7 +131,9 @@ defmodule Mob.Event.TargetTest do
   describe "resolve/2 — invalid forms" do
     test "binary target errors as :invalid_target" do
       s = scope()
-      assert {:error, {:invalid_target, "not a valid target"}} = Target.resolve("not a valid target", s)
+
+      assert {:error, {:invalid_target, "not a valid target"}} =
+               Target.resolve("not a valid target", s)
     end
 
     test "integer target errors as :invalid_target" do

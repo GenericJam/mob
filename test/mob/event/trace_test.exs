@@ -11,9 +11,7 @@ defmodule Mob.Event.TraceTest do
   end
 
   defp addr(opts \\ []) do
-    Address.new(
-      Keyword.merge([screen: TestScreen, widget: :button, id: :save], opts)
-    )
+    Address.new(Keyword.merge([screen: TestScreen, widget: :button, id: :save], opts))
   end
 
   describe "subscribe/0 + dispatch/4 broadcast" do

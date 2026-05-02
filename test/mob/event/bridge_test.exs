@@ -123,8 +123,14 @@ defmodule Mob.Event.BridgeTest do
     test "already-canonical envelope is NOT re-wrapped (passes through)" do
       already =
         {:mob_event,
-         %Address{screen: S, widget: :button, id: :x, component_path: [], instance: nil, render_id: 1},
-         :tap, nil}
+         %Address{
+           screen: S,
+           widget: :button,
+           id: :x,
+           component_path: [],
+           instance: nil,
+           render_id: 1
+         }, :tap, nil}
 
       assert :passthrough = Bridge.legacy_to_canonical(already, MyScreen)
     end

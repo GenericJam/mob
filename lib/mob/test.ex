@@ -388,8 +388,8 @@ defmodule Mob.Test do
   def view_tree(node) do
     case :rpc.call(node, :mob_nif, :ui_view_tree, []) do
       bin when is_binary(bin) -> :json.decode(bin) |> normalize_tree()
-      %{} = m                 -> m
-      other                   -> other
+      %{} = m -> m
+      other -> other
     end
   end
 
@@ -397,20 +397,22 @@ defmodule Mob.Test do
   # Normalize to atom keys so the API is uniform across platforms.
   defp normalize_tree(%{"type" => _} = node) do
     %{
-      type:     normalize_atom(node["type"]),
-      label:    node["label"],
-      value:    node["value"],
-      frame:    case node["frame"] do
-                  [x, y, w, h] -> {x * 1.0, y * 1.0, w * 1.0, h * 1.0}
-                  other        -> other
-                end,
+      type: normalize_atom(node["type"]),
+      label: node["label"],
+      value: node["value"],
+      frame:
+        case node["frame"] do
+          [x, y, w, h] -> {x * 1.0, y * 1.0, w * 1.0, h * 1.0}
+          other -> other
+        end,
       children: Enum.map(node["children"] || [], &normalize_tree/1)
     }
   end
+
   defp normalize_tree(other), do: other
 
   defp normalize_atom(s) when is_binary(s), do: String.to_atom(s)
-  defp normalize_atom(a) when is_atom(a),   do: a
+  defp normalize_atom(a) when is_atom(a), do: a
 
   @doc """
   Return the view tree flattened to a list of `{path, node}` tuples.
@@ -444,12 +446,14 @@ defmodule Mob.Test do
 
   defp do_flatten(%{children: children} = node, path) do
     self_entry = [{path, Map.delete(node, :children)}]
+
     children
     |> Enum.with_index()
     |> Enum.reduce(self_entry, fn {child, i}, acc ->
       do_flatten(child, path ++ [i]) ++ acc
     end)
   end
+
   defp do_flatten(other, path), do: [{path, other}]
 
   @doc """
@@ -534,9 +538,10 @@ defmodule Mob.Test do
   @spec toggle(node(), String.t()) :: :ok | {:error, atom()}
   def toggle(node, label_match) do
     with {:ok, label_y} <- find_label_y(node, label_match),
-         {:ok, {x, y, w, h}} <- find_actionable_below(node, label_y, fn {_t, l, v, _f} ->
-           is_binary(v) and v in ["0", "1"] and to_string(l) == ""
-         end) do
+         {:ok, {x, y, w, h}} <-
+           find_actionable_below(node, label_y, fn {_t, l, v, _f} ->
+             is_binary(v) and v in ["0", "1"] and to_string(l) == ""
+           end) do
       ax_action_at_xy(node, x + w / 2, y + h / 2, :activate)
     end
   end
@@ -564,7 +569,9 @@ defmodule Mob.Test do
            end) do
         {_, _, _, {x, y, w, h}} ->
           ax_action_at_xy(node, x + w / 2, y + h / 2, :activate)
-        _ -> {:error, :button_not_found}
+
+        _ ->
+          {:error, :button_not_found}
       end
     end
   end
@@ -637,19 +644,26 @@ defmodule Mob.Test do
   end
 
   defp do_adjust_slider(_node, _match, _target, 0), do: {:error, :max_steps_exhausted}
+
   defp do_adjust_slider(node, match, target, steps_left) do
-    with {:ok, label_y}              <- find_label_y(node, match),
+    with {:ok, label_y} <- find_label_y(node, match),
          {:ok, {x, y, w, h} = frame} <- find_actionable_below(node, label_y, &slider_predicate/1),
-         {:ok, pct}                  <- pct_from_frame(node, frame) do
+         {:ok, pct} <- pct_from_frame(node, frame) do
       cx = x + w / 2
       cy = y + h / 2
+
       cond do
-        abs(pct - target) < 0.05 -> {:ok, pct}
+        abs(pct - target) < 0.05 ->
+          {:ok, pct}
+
         pct < target ->
-          ax_action_at_xy(node, cx, cy, :increment); Process.sleep(80)
+          ax_action_at_xy(node, cx, cy, :increment)
+          Process.sleep(80)
           do_adjust_slider(node, match, target, steps_left - 1)
+
         true ->
-          ax_action_at_xy(node, cx, cy, :decrement); Process.sleep(80)
+          ax_action_at_xy(node, cx, cy, :decrement)
+          Process.sleep(80)
           do_adjust_slider(node, match, target, steps_left - 1)
       end
     end
@@ -657,6 +671,7 @@ defmodule Mob.Test do
 
   defp slider_predicate({_t, _l, v, _f}),
     do: is_binary(v) and String.contains?(v, "%")
+
   defp slider_predicate(_), do: false
 
   defp pct_from_frame(node, target_frame) do
@@ -666,7 +681,9 @@ defmodule Mob.Test do
           {n, _} -> {:ok, n / 100.0}
           :error -> {:error, :unparseable_value}
         end
-      _ -> {:error, :slider_not_found}
+
+      _ ->
+        {:error, :slider_not_found}
     end
   end
 

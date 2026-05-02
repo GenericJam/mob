@@ -96,7 +96,8 @@ defmodule Mob.Event.AddressTest do
     # structs are special — they're maps, but we reject because they often carry pids
     # and won't survive serialisation cleanly
     test "rejects structs (they're maps but often non-serializable)" do
-      assert {:error, _} = Address.validate_id(%Address{screen: MyScreen, widget: :button, id: :x})
+      assert {:error, _} =
+               Address.validate_id(%Address{screen: MyScreen, widget: :button, id: :x})
     end
   end
 

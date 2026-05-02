@@ -32,6 +32,7 @@ static struct {
     jmethodID clipboard_put;
     jmethodID clipboard_get;
     jmethodID share_text;
+    jmethodID open_url;
     jmethodID request_permission;
     jmethodID biometric_authenticate;
     jmethodID location_get_once;
@@ -926,6 +927,26 @@ static ERL_NIF_TERM nif_clipboard_get(ErlNifEnv* env, int argc, const ERL_NIF_TE
     }
     if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
     return ret;
+}
+
+// ── NIF: open_url/1 ───────────────────────────────────────────────────────────
+
+static ERL_NIF_TERM nif_open_url(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[0], &bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &bin))
+        return enif_make_badarg(env);
+    char* url = (char*)malloc(bin.size + 1);
+    if (!url) return enif_make_atom(env, "error");
+    memcpy(url, bin.data, bin.size);
+    url[bin.size] = 0;
+    int att; JNIEnv* jenv = get_jenv(&att);
+    jstring jurl = (*jenv)->NewStringUTF(jenv, url);
+    free(url);
+    (*jenv)->CallStaticVoidMethod(jenv, Bridge.cls, Bridge.open_url, jurl);
+    (*jenv)->DeleteLocalRef(jenv, jurl);
+    if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
+    return enif_make_atom(env, "ok");
 }
 
 // ── NIF: share_text/1 ─────────────────────────────────────────────────────────
@@ -2104,6 +2125,7 @@ static ErlNifFunc nif_funcs[] = {
     {"clipboard_put",             1, nif_clipboard_put,             0},
     {"clipboard_get",             0, nif_clipboard_get,             0},
     {"share_text",                1, nif_share_text,                0},
+    {"open_url",                  1, nif_open_url,                  0},
     {"request_permission",        1, nif_request_permission,        0},
     {"biometric_authenticate",    1, nif_biometric_authenticate,    0},
     {"location_get_once",         0, nif_location_get_once,         0},
@@ -2192,6 +2214,9 @@ static int nif_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info) {
 
     Bridge.share_text = (*jenv)->GetStaticMethodID(jenv, Bridge.cls, "shareText", "(Ljava/lang/String;)V");
     if (!Bridge.share_text) { LOGE("nif_load: shareText(String) not found on MobBridge"); return -1; }
+
+    Bridge.open_url = (*jenv)->GetStaticMethodID(jenv, Bridge.cls, "openUrl", "(Ljava/lang/String;)V");
+    if (!Bridge.open_url) { LOGE("nif_load: openUrl(String) not found on MobBridge"); return -1; }
 
     #define CACHE(name, sig) \
         Bridge.name = (*jenv)->GetStaticMethodID(jenv, Bridge.cls, #name, sig); \

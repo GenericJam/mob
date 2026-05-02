@@ -162,7 +162,12 @@ defmodule Mob.Event.Address do
   @spec to_string(t()) :: binary()
   def to_string(%__MODULE__{} = a) do
     screen = format_screen(a.screen)
-    path = if a.component_path == [], do: "", else: "/" <> Enum.map_join(a.component_path, "/", &format_id/1)
+
+    path =
+      if a.component_path == [],
+        do: "",
+        else: "/" <> Enum.map_join(a.component_path, "/", &format_id/1)
+
     instance = if is_nil(a.instance), do: "", else: "[" <> format_id(a.instance) <> "]"
     "#{screen}#{path}→#{a.widget}##{format_id(a.id)}#{instance}"
   end

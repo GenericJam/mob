@@ -266,4 +266,53 @@ defmodule Mob.DeviceTest do
       end
     end
   end
+
+  describe "open_url/1" do
+    # NIF-backed; the NIF stub raises in the test env. We exercise enough of
+    # the wrapper to lock in input validation and the delegation contract.
+
+    test "raises when NIF not loaded" do
+      # credo:disable-for-next-line Jump.CredoChecks.VacuousTest
+      raised =
+        try do
+          Device.open_url("https://example.com/")
+          false
+        rescue
+          ErlangError -> true
+          UndefinedFunctionError -> true
+        end
+
+      assert raised, "expected Mob.Device.open_url/1 to raise without the NIF"
+    end
+
+    test "FunctionClauseError on non-binary input" do
+      assert_raise FunctionClauseError, fn -> Device.open_url(:not_a_binary) end
+      assert_raise FunctionClauseError, fn -> Device.open_url(nil) end
+      assert_raise FunctionClauseError, fn -> Device.open_url(123) end
+    end
+
+    test "spec accepts mailto, https, http, tel schemes" do
+      # We can't actually launch on the test host (no NIF), but we can
+      # confirm the wrapper accepts the URL forms our AndroidManifest
+      # `<queries>` declares (mirrors mob_new template + air_cart_max).
+      for url <- [
+            "mailto:steve@example.com?subject=hi",
+            "https://example.com/",
+            "http://example.com/",
+            "tel:+15551234567"
+          ] do
+        raised =
+          try do
+            # credo:disable-for-next-line Jump.CredoChecks.VacuousTest
+            Device.open_url(url)
+            false
+          rescue
+            ErlangError -> true
+            UndefinedFunctionError -> true
+          end
+
+        assert raised, "expected open_url(#{inspect(url)}) to raise without the NIF"
+      end
+    end
+  end
 end

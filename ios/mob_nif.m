@@ -1696,6 +1696,28 @@ static ERL_NIF_TERM nif_clipboard_get(ErlNifEnv* env, int argc, const ERL_NIF_TE
     return enif_make_atom(env, "empty");
 }
 
+// ── NIF: open_url/1 ───────────────────────────────────────────────────────────
+// Hands a URL to the OS to open in the user's default browser/app.
+// Fire-and-forget; returns :ok immediately.
+
+static ERL_NIF_TERM nif_open_url(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[0], &bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &bin))
+        return enif_make_badarg(env);
+
+    NSString* str = [[NSString alloc] initWithBytes:bin.data
+                                             length:bin.size
+                                           encoding:NSUTF8StringEncoding];
+    NSURL* url = [NSURL URLWithString:str];
+    if (!url) return enif_make_badarg(env);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+    });
+    return enif_make_atom(env, "ok");
+}
+
 // ── NIF: share_text/1 ─────────────────────────────────────────────────────────
 // Opens the iOS share sheet with plain text. Fire-and-forget.
 
@@ -4992,6 +5014,7 @@ static ErlNifFunc nif_funcs[] = {
     {"clipboard_put",             1, nif_clipboard_put,             0},
     {"clipboard_get",             0, nif_clipboard_get,             0},
     {"share_text",                1, nif_share_text,                0},
+    {"open_url",                  1, nif_open_url,                  0},
     {"request_permission",        1, nif_request_permission,        0},
     {"biometric_authenticate",    1, nif_biometric_authenticate,    0},
     {"location_get_once",         0, nif_location_get_once,         0},

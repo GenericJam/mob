@@ -330,3 +330,130 @@ distribution before the WebView is told to load from the broker.
 The architecture is interesting *because* it's the same loopback weakness mobile
 platforms have always had — Mob is the first thing that makes it useful instead of
 just dangerous.
+
+---
+
+## Wiretap as agent bridge — Elixir as the workflow layer
+
+The original framing for wiretap was "MCP server for native app testing" — install
+it, talk to it via MCP, ignore that BEAM is inside (analogous to RabbitMQ /
+Supabase). That framing holds for the **runtime** but understates wiretap's value
+when the workflow is agent-driven.
+
+A sharper framing: **wiretap is an agent-augmented native development environment
+that happens to ship a pure native app on eject.** The user writes (or reviews)
+Swift/Kotlin. The agent uses Elixir during the iteration loop. The user is one
+remove from the Elixir, not zero.
+
+**Why agent quality on native is structurally lower (not just a current snapshot)**
+
+Each of these is a 5–10× tax on agent productivity. They compound, and none are
+tractable for a third party to fix:
+
+- Swift's "expression too complex" errors land nowhere near the real problem;
+  Kotlin compile + dex + reinstall is 5–13s per attempt.
+- Test feedback (XCUITest, Espresso) is out-of-process, slow, returns text the
+  LLM has to re-parse.
+- No native equivalent of `Mob.Test.assigns` — agents infer state from rendered
+  pixels, which is lossy and slow.
+- Hot reload doesn't exist; every change is a full rebuild + reinstall + state
+  loss.
+
+The Elixir loop preserves BEAM state across edits, hot-loads in ~500 ms, and
+gives `Mob.Test` exact-state introspection. The structural advantage isn't going
+away on any timeline a vendor controls.
+
+**Implication for wiretap's MCP surface**
+
+If "Elixir as agent bridge" is the value prop, the MCP interface should model the
+*workflow*, not just the primitives. Instead of exposing `mob_tap` / `mob_ui_tree`
+and letting the agent figure out the loop, the high-leverage tools are something
+like:
+
+- `wiretap_prototype <feature spec>` — agent builds Elixir POC + tests, returns
+  "passing"
+- `wiretap_port <feature>` — agent translates POC to native, runs comparison,
+  returns "parity achieved"
+- `wiretap_test <feature>` — re-runs the suite
+
+The native dev sees feature requests turning into PRs. They review the
+Swift/Kotlin (which is what they care about). The Elixir POC is internal
+scaffolding — visible if they want to look, deleted on cutover, never shipped.
+
+This is a different product than "MCP server for native app testing." It's
+closer to "agent-native app builder that happens to ship native."
+
+**Empirical question: is the POC-then-port detour actually faster?**
+
+This is the assumption the whole pitch rests on, and it has not been measured.
+The alternative is straight-to-native: skip the Elixir phase, accept the
+observation gap, and just see how effective an agent can be at writing
+Swift/Kotlin directly with wiretap-driven UI verification.
+
+**Pragmatic methodology: duelling agents.** Skip the rubric. Spawn both paths
+against the same feature spec in parallel and take the first one to reach
+"passing tests + reviewable PR." The race *is* the measurement. No scoring,
+no defect-tracking infrastructure, no judgement calls — wall-clock is the
+honest answer.
+
+This generalises beyond measurement, and that's the bigger insight:
+
+**Duelling as the default agent loop, not just an experiment.** Single-agent
+workflows have a known failure mode — the agent gets stuck on a wrong
+assumption about an API, can't see the bug, and burns iterations flailing
+inside its own context. Two agents starting from different premises
+(POC-with-Elixir-scaffolding vs straight-to-native-from-spec) take different
+code paths, hit different walls, and succeed/fail at different rates. If one
+flails, the other usually makes progress. The user is never blocked on a
+single agent's blind spot.
+
+Trade-offs to keep honest:
+
+- **Cost**: 2× tokens per feature. Real money at scale. Probably worth it for
+  load-bearing features and overkill for trivial CRUD — likely opt-in via a
+  `--dual` flag, with a future mode that auto-enables it for high-stakes specs.
+- **Loser's work isn't wasted.** The POC's `Mob.Test` script is valuable
+  regardless of which path wins — keep it as a regression suite for the
+  feature, even if straight-to-native shipped first. Same in reverse: a
+  successful native impl validates the POC's spec.
+- **Choosing the winner.** If both finish, wall-clock is the tiebreaker, but
+  the human reviewer should see both PRs and pick on style/shape. The
+  pragmatic default is "first to green ships, both stay around for a week as
+  reference."
+- **Spec contamination.** Both agents must get the same feature description
+  with the same level of detail. If one agent has more context the comparison
+  is meaningless and you're back to a single-agent workflow with extra steps.
+
+The honest answer to the original question — POC-then-port vs straight-to-native
+— may turn out to be "depends on the feature" (state-heavy → POC wins,
+platform-API-heavy → native wins). Duelling sidesteps having to predict the
+right answer per feature: it just runs both and lets the world decide. That's
+the same pragmatism that makes the loop robust against flailing.
+
+**UX implication: UI materialises before the code does**
+
+If POC-then-port becomes the default agent path, native devs experience a
+genuinely unusual workflow: they file a feature request and the **UI appears in
+the running app first**, with the Elixir POC behind it. The Swift/Kotlin code
+arrives later, already shaped by tests that pass, and is essentially a
+translation exercise — open to bikeshedding on style and idiom but not on
+behaviour or shape.
+
+This inverts the normal mental model. Today: write code → see UI. With wiretap:
+see UI → write code (or have the code written for you). It will feel uncanny at
+first. Whether that's a feature ("the agent already validated the design, I just
+review the implementation") or a bug ("I lost the design phase, all that's left
+is bikeshedding") depends on the developer's relationship to the craft.
+
+Worth surfacing in early-user docs and watching for friction. Some devs will love
+it; others will reject it on principle. Both reactions are signal.
+
+**What needs to exist for any of this to be testable**
+
+- Wiretap MVP with the per-feature POC-then-port workflow from
+  `docs/decisions/0002-wiretap-poc-then-port.md`.
+- A feature corpus and scoring rubric for the head-to-head measurement.
+- A reference agent loop (Claude Code with the wiretap MCP server) that defaults
+  to POC-then-port but can be flagged into straight-to-native for comparison.
+- A small panel of native devs willing to do side-by-side trials and report
+  qualitative reactions to "UI before code."

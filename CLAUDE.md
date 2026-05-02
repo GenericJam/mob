@@ -18,6 +18,22 @@ to reach for `xcrun simctl` screenshots.
 
 ---
 
+## Pre-commit checklist
+
+Before committing changes, run **all three** in this order:
+
+```bash
+mix test            # full suite must pass (call out any pre-existing flake explicitly)
+mix format          # apply Elixir formatting
+mix credo --strict  # address new issues; pre-existing ones are tracked separately
+```
+
+For native-code changes (iOS `.m`, Android `.kt` / `.c`), Elixir tests don't
+exercise the change. Deploy with `mix mob.deploy --native` and verify
+manually with a screenshot or `Mob.Test` interaction before committing.
+
+---
+
 ## Native App Test Harness — Vision
 
 ### What mob is (beyond the UI framework)
@@ -480,16 +496,6 @@ See [`user_issues.md`](user_issues.md) for a record of real issues encountered b
 beta users, their root causes, and fixes applied. Read this before working on setup,
 deployment, or tooling problems — the same issues recur, especially for Nix users.
 User alias "Nova" = macOS + Nix-managed toolchain throughout.
-
-## Architectural decisions
-
-Cross-cutting decisions that future sessions should know about live in
-[`docs/decisions/`](docs/decisions/). One file per decision, ADR-style. Read the
-relevant one before making changes in the same area:
-
-- [`0001-dirty-nifs.md`](docs/decisions/0001-dirty-nifs.md) — which `mob_nif`
-  functions are marked `ERL_NIF_DIRTY_JOB_CPU_BOUND` and the rationale. Read
-  before adding/changing NIF flags in `ios/mob_nif.m` or `android/jni/mob_nif.c`.
 
 ## Key files
 
