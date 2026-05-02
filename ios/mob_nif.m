@@ -1088,6 +1088,7 @@ static ERL_NIF_TERM nif_color_scheme(ErlNifEnv* env, int argc, const ERL_NIF_TER
 static AVAudioEngine      *g_keep_alive_engine = nil;
 static AVAudioPlayerNode  *g_keep_alive_player = nil;
 static BOOL                g_keep_alive_active = NO; // user intent: should be running
+static id                  g_keep_alive_interruption_observer = nil; // token from addObserverForName, needed for removeObserver
 
 static void keep_alive_start_engine(void) {
     if (g_keep_alive_engine != nil) return;
@@ -1162,7 +1163,10 @@ static ERL_NIF_TERM nif_background_keep_alive(ErlNifEnv* env, int argc, const ER
         // Restart engine after audio session interruptions (e.g. recording ends,
         // phone call ends). InterruptionTypeEnded fires when the session is ours
         // again; we reconfigure and resume the silence loop.
-        [[NSNotificationCenter defaultCenter]
+        // Stash the returned token — block-based observers must be removed
+        // by their token, not by name (passing nil to removeObserver: is
+        // a no-op for the block API).
+        g_keep_alive_interruption_observer = [[NSNotificationCenter defaultCenter]
             addObserverForName:AVAudioSessionInterruptionNotification
                         object:nil
                          queue:[NSOperationQueue mainQueue]
@@ -1186,10 +1190,11 @@ static ERL_NIF_TERM nif_background_keep_alive(ErlNifEnv* env, int argc, const ER
 static ERL_NIF_TERM nif_background_stop(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     dispatch_async(dispatch_get_main_queue(), ^{
         g_keep_alive_active = NO;
-        [[NSNotificationCenter defaultCenter]
-            removeObserver:nil
-                      name:AVAudioSessionInterruptionNotification
-                    object:nil];
+        if (g_keep_alive_interruption_observer) {
+            [[NSNotificationCenter defaultCenter]
+                removeObserver:g_keep_alive_interruption_observer];
+            g_keep_alive_interruption_observer = nil;
+        }
         keep_alive_stop_engine();
         [[AVAudioSession sharedInstance]
             setActive:NO

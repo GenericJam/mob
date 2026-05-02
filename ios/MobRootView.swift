@@ -679,10 +679,10 @@ private struct MobTextField: View {
                 // dismiss for terminal actions; "next" intentionally keeps keyboard open
                 if node.returnKeyStr != "next" { isFocused = false }
             }
-            .onChange(of: text) { newValue in
+            .onChange(of: text) { _, newValue in
                 node.onChangeStr?(newValue)
             }
-            .onChange(of: isFocused) { focused in
+            .onChange(of: isFocused) { _, focused in
                 if focused { node.onFocus?() }
                 else       { node.onBlur?() }
             }
@@ -691,7 +691,7 @@ private struct MobTextField: View {
             // the cursor and overwrite their in-flight edits). This is the
             // controlled-input fix for the case where Elixir code updates
             // the bound value via Mob.Socket.assign without user input.
-            .onChange(of: initialText) { newValue in
+            .onChange(of: initialText) { _, newValue in
                 if !isFocused && text != newValue {
                     text = newValue
                 }
@@ -727,7 +727,7 @@ private struct MobToggle: View {
     var body: some View {
         let label = node.text ?? ""
         Toggle(label, isOn: $isOn)
-            .onChange(of: isOn) { newValue in
+            .onChange(of: isOn) { _, newValue in
                 node.onChangeBool?(newValue)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -746,7 +746,7 @@ private struct MobSlider: View {
 
     var body: some View {
         Slider(value: $value, in: node.minValue...node.maxValue)
-            .onChange(of: value) { newValue in
+            .onChange(of: value) { _, newValue in
                 node.onChangeFloat?(newValue)
             }
             .tint(node.color.map { Color($0) } ?? Color.accentColor)
@@ -856,7 +856,7 @@ public struct MobRootView: View {
             }
         }
         .ignoresSafeArea(.container, edges: [.bottom, .horizontal])
-        .onChange(of: model.rootVersion) { _ in
+        .onChange(of: model.rootVersion) {
             let t = model.transition
             let newRoot = model.root
             let newNavVersion = model.navVersion
@@ -887,7 +887,7 @@ public struct MobRootView: View {
         // (Mob.Device → Mob.Theme.Adaptive consumers) can re-resolve.
         // SwiftUI re-evaluates `colorScheme` automatically on system change,
         // so this fires reliably without polling.
-        .onChange(of: colorScheme) { newScheme in
+        .onChange(of: colorScheme) { _, newScheme in
             mob_notify_color_scheme(newScheme == .dark ? "dark" : "light")
         }
     }
