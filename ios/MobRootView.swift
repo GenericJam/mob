@@ -428,10 +428,233 @@ struct MobNodeView: View {
                     view.padding(node.paddingEdgeInsets)
                 }
 
+            case .canvas:
+                MobCanvasView(node: node)
+                    .padding(node.paddingEdgeInsets)
+
             @unknown default:
                 EmptyView()
             }
         }
+    }
+}
+
+// ── Canvas (Mob.Canvas declarative draw spec) ────────────────────────────────
+// Renders the node.canvasOps array via SwiftUI Canvas. Each op is an
+// NSDictionary with an "op" key plus op-specific fields, pre-resolved by
+// the Elixir renderer (color tokens already converted to ARGB integers).
+
+private struct MobCanvasView: View {
+    let node: MobNode
+
+    var body: some View {
+        Canvas { ctx, size in
+            let ops = node.canvasOps as? [[String: Any]] ?? []
+            for op in ops {
+                drawOp(op, in: &ctx, size: size)
+            }
+        }
+        .frame(
+            width: node.canvasWidth > 0 ? CGFloat(node.canvasWidth) : nil,
+            height: node.canvasHeight > 0 ? CGFloat(node.canvasHeight) : nil
+        )
+    }
+
+    private func drawOp(_ op: [String: Any], in ctx: inout GraphicsContext, size: CGSize) {
+        guard let opName = op["op"] as? String else { return }
+
+        let color = canvasColor(op["color"])
+        let opacity = (op["opacity"] as? Double) ?? 1.0
+        let strokeStyle = canvasStrokeStyle(op)
+        let isFill = (op["fill"] as? Bool) ?? false
+
+        ctx.opacity = opacity
+        defer { ctx.opacity = 1.0 }
+
+        switch opName {
+        case "line":
+            let path = Path { p in
+                p.move(to: CGPoint(x: cgNum(op["x1"]), y: cgNum(op["y1"])))
+                p.addLine(to: CGPoint(x: cgNum(op["x2"]), y: cgNum(op["y2"])))
+            }
+            ctx.stroke(path, with: .color(color), style: strokeStyle)
+
+        case "circle":
+            let r = cgNum(op["r"])
+            let rect = CGRect(x: cgNum(op["x"]) - r, y: cgNum(op["y"]) - r, width: r * 2, height: r * 2)
+            let path = Path(ellipseIn: rect)
+            if isFill { ctx.fill(path, with: .color(color)) }
+            else      { ctx.stroke(path, with: .color(color), style: strokeStyle) }
+
+        case "ellipse":
+            let rx = cgNum(op["rx"])
+            let ry = cgNum(op["ry"])
+            let rect = CGRect(x: cgNum(op["x"]) - rx, y: cgNum(op["y"]) - ry, width: rx * 2, height: ry * 2)
+            let path = Path(ellipseIn: rect)
+            if isFill { ctx.fill(path, with: .color(color)) }
+            else      { ctx.stroke(path, with: .color(color), style: strokeStyle) }
+
+        case "arc":
+            // Mob.Canvas arc convention: degrees, 0° to the right, sweeping clockwise.
+            // SwiftUI Path.addArc uses radians; we negate for clockwise from the start.
+            let center = CGPoint(x: cgNum(op["x"]), y: cgNum(op["y"]))
+            let r = cgNum(op["r"])
+            let start = Angle(degrees: cgDouble(op["start_deg"]))
+            let end = Angle(degrees: cgDouble(op["end_deg"]))
+            let path = Path { p in
+                p.addArc(center: center, radius: r, startAngle: start, endAngle: end, clockwise: false)
+            }
+            ctx.stroke(path, with: .color(color), style: strokeStyle)
+
+        case "rect":
+            let rect = CGRect(
+                x: cgNum(op["x"]),
+                y: cgNum(op["y"]),
+                width: cgNum(op["w"]),
+                height: cgNum(op["h"])
+            )
+            let radius = cgNum(op["radius"])
+            let path: Path = radius > 0
+                ? Path(roundedRect: rect, cornerRadius: radius)
+                : Path(rect)
+            if isFill { ctx.fill(path, with: .color(color)) }
+            else      { ctx.stroke(path, with: .color(color), style: strokeStyle) }
+
+        case "path":
+            guard let pts = op["points"] as? [[Double]], !pts.isEmpty else { return }
+            let closed = (op["closed"] as? Bool) ?? false
+            let path = Path { p in
+                p.move(to: CGPoint(x: pts[0][0], y: pts[0][1]))
+                for pt in pts.dropFirst() {
+                    p.addLine(to: CGPoint(x: pt[0], y: pt[1]))
+                }
+                if closed || isFill { p.closeSubpath() }
+            }
+            if isFill { ctx.fill(path, with: .color(color)) }
+            else      { ctx.stroke(path, with: .color(color), style: strokeStyle) }
+
+        case "text":
+            let str = (op["text"] as? String) ?? ""
+            let size = cgNum(op["size"])
+            let weight = canvasFontWeight(op["weight"] as? String)
+            var text = Text(str).font(.system(size: size, weight: weight))
+            if let family = op["family"] as? String, !family.isEmpty {
+                text = Text(str).font(.custom(family, size: size).weight(weight))
+            }
+            let resolved = ctx.resolve(text.foregroundColor(color))
+            // Anchor: SwiftUI's draw(at:anchor:) takes a UnitPoint.
+            let anchor: UnitPoint = {
+                switch op["anchor"] as? String {
+                case "center": return .leading  // y stays top; horizontal center handled by switching
+                default:       return .topLeading
+                }
+            }()
+            // For horizontal anchor handling we measure first.
+            let measured = resolved.measure(in: CGSize(width: .infinity, height: .infinity))
+            let x = cgNum(op["x"])
+            let y = cgNum(op["y"])
+            let drawX: CGFloat = {
+                switch op["anchor"] as? String {
+                case "center": return x - measured.width / 2
+                case "end":    return x - measured.width
+                default:       return x
+                }
+            }()
+            ctx.draw(resolved, at: CGPoint(x: drawX, y: y), anchor: .topLeading)
+            _ = anchor // anchor variable unused after switching to manual offset; kept to document intent
+
+        case "image":
+            guard let src = op["source"] as? String else { return }
+            if let img = UIImage(named: src) {
+                let rect = CGRect(
+                    x: cgNum(op["x"]),
+                    y: cgNum(op["y"]),
+                    width: cgNum(op["w"]),
+                    height: cgNum(op["h"])
+                )
+                ctx.draw(Image(uiImage: img), in: rect)
+            }
+
+        default:
+            break
+        }
+    }
+}
+
+// ── Canvas helpers ───────────────────────────────────────────────────────────
+
+private func cgNum(_ value: Any?) -> CGFloat {
+    if let d = value as? Double { return CGFloat(d) }
+    if let i = value as? Int { return CGFloat(i) }
+    if let n = value as? NSNumber { return CGFloat(n.doubleValue) }
+    return 0
+}
+
+private func cgDouble(_ value: Any?) -> Double {
+    if let d = value as? Double { return d }
+    if let i = value as? Int { return Double(i) }
+    if let n = value as? NSNumber { return n.doubleValue }
+    return 0
+}
+
+private func canvasColor(_ value: Any?) -> Color {
+    // Pre-resolved ARGB integer from the renderer, or hex string fallback.
+    if let argb = value as? Int {
+        let a = Double((argb >> 24) & 0xFF) / 255.0
+        let r = Double((argb >> 16) & 0xFF) / 255.0
+        let g = Double((argb >>  8) & 0xFF) / 255.0
+        let b = Double((argb >>  0) & 0xFF) / 255.0
+        return Color(red: r, green: g, blue: b, opacity: a)
+    }
+    if let n = value as? NSNumber {
+        return canvasColor(n.intValue)
+    }
+    if let hex = value as? String, hex.hasPrefix("#") {
+        let scanner = Scanner(string: String(hex.dropFirst()))
+        var rgb: UInt64 = 0
+        if scanner.scanHexInt64(&rgb) {
+            let r = Double((rgb >> 16) & 0xFF) / 255.0
+            let g = Double((rgb >>  8) & 0xFF) / 255.0
+            let b = Double((rgb >>  0) & 0xFF) / 255.0
+            return Color(red: r, green: g, blue: b)
+        }
+    }
+    return Color.black
+}
+
+private func canvasStrokeStyle(_ op: [String: Any]) -> StrokeStyle {
+    let width = cgNum(op["width"])
+    let cap: CGLineCap = {
+        switch op["cap"] as? String {
+        case "round":  return .round
+        case "square": return .square
+        default:       return .butt
+        }
+    }()
+    let join: CGLineJoin = {
+        switch op["join"] as? String {
+        case "round": return .round
+        case "bevel": return .bevel
+        default:      return .miter
+        }
+    }()
+    let dash: [CGFloat] = (op["dash"] as? [Any])?.compactMap { cgNum($0) } ?? []
+    return StrokeStyle(
+        lineWidth: width > 0 ? width : 1,
+        lineCap: cap,
+        lineJoin: join,
+        dash: dash
+    )
+}
+
+private func canvasFontWeight(_ name: String?) -> Font.Weight {
+    switch name {
+    case "thin":     return .thin
+    case "light":    return .light
+    case "medium":   return .medium
+    case "semibold": return .semibold
+    case "bold":     return .bold
+    default:         return .regular
     }
 }
 

@@ -36,6 +36,7 @@ typedef NS_ENUM(NSInteger, MobNodeType) {
     MobNodeTypeWebView,
     MobNodeTypeNativeView,
     MobNodeTypeIcon,
+    MobNodeTypeCanvas,
 };
 
 NS_ASSUME_NONNULL_BEGIN
@@ -203,6 +204,14 @@ NS_ASSUME_NONNULL_BEGIN
 // Icon — logical name resolved to an SF Symbol on iOS / Material Symbol
 // on Android. textSize and textColor control glyph sizing + tint.
 @property (nonatomic, copy, nullable) NSString* iconName;
+
+// Canvas — declarative draw-op list from Mob.Canvas. Each entry is an
+// NSDictionary with an "op" key (e.g. "line", "circle") and op-specific
+// fields. Color values arrive pre-resolved (ARGB integers) from the
+// renderer's encode_canvas_op/2.
+@property (nonatomic, strong, nullable) NSArray* canvasOps;
+@property (nonatomic) CGFloat canvasWidth;   // pt; required (>0)
+@property (nonatomic) CGFloat canvasHeight;  // pt; required (>0)
 
 // Children
 @property (nonatomic, strong, nonnull) NSMutableArray<MobNode*>* children;

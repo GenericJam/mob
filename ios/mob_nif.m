@@ -610,6 +610,7 @@ static MobNode* mob_node_from_dict(NSDictionary* dict) {
     else if ([type isEqualToString:@"web_view"])       node.nodeType = MobNodeTypeWebView;
     else if ([type isEqualToString:@"native_view"])    node.nodeType = MobNodeTypeNativeView;
     else if ([type isEqualToString:@"icon"])           node.nodeType = MobNodeTypeIcon;
+    else if ([type isEqualToString:@"canvas"])         node.nodeType = MobNodeTypeCanvas;
 
     NSDictionary* props = dict[@"props"];
     if ([props isKindOfClass:[NSDictionary class]]) {
@@ -961,6 +962,14 @@ static MobNode* mob_node_from_dict(NSDictionary* dict) {
 
         id cameraFacing = props[@"facing"];
         if ([cameraFacing isKindOfClass:[NSString class]]) node.cameraFacing = cameraFacing;
+
+        // canvas props
+        id canvasDraw = props[@"draw"];
+        if ([canvasDraw isKindOfClass:[NSArray class]]) node.canvasOps = canvasDraw;
+        id canvasW = props[@"width"];
+        if (canvasW && node.nodeType == MobNodeTypeCanvas) node.canvasWidth = [canvasW doubleValue];
+        id canvasH = props[@"height"];
+        if (canvasH && node.nodeType == MobNodeTypeCanvas) node.canvasHeight = [canvasH doubleValue];
 
         // webview props
         id webViewUrl = props[@"url"];
