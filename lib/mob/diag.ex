@@ -80,4 +80,56 @@ defmodule Mob.Diag do
         {ok_count, [%{module: module, reason: reason} | failures]}
     end
   end
+
+  @type loaded_snapshot :: %{
+          loaded: [module()],
+          loaded_count: non_neg_integer(),
+          shipped_count: non_neg_integer(),
+          unloaded_in_bundle: [module()],
+          otp_root: String.t() | nil,
+          captured_at: DateTime.t()
+        }
+
+  @doc """
+  Snapshot of what's currently loaded in the running BEAM, plus
+  what's shipped-but-never-loaded (the empirical strip candidates).
+
+  In interactive mode (Mob's default), a module is loaded only when
+  something calls into it. So the loaded set after a representative
+  user session is "what the app actually needs." Anything in the
+  bundle but not in the loaded set is a strong strip candidate.
+
+  Better than tracing for our purposes: zero overhead, no rate-limit
+  worries, no risk of mailbox-overflowing a busy app.
+
+  Workflow:
+
+    1. Deploy the app
+    2. User exercises every flow they care about
+    3. RPC `Mob.Diag.loaded_snapshot/0` from a Mix task
+    4. Cross-reference `:unloaded_in_bundle` with the static audit:
+       shipped + statically-reachable + never-loaded = high-confidence
+       strip candidates.
+
+  Caveats: a flow that wasn't exercised won't show up. Run after a
+  thorough session, not after just opening the app.
+  """
+  @spec loaded_snapshot() :: loaded_snapshot()
+  def loaded_snapshot do
+    loaded = :code.all_loaded() |> Enum.map(fn {m, _path} -> m end) |> MapSet.new()
+
+    shipped =
+      enumerate_beams()
+      |> Enum.map(fn beam -> beam |> Path.basename(".beam") |> String.to_atom() end)
+      |> MapSet.new()
+
+    %{
+      loaded: MapSet.to_list(loaded) |> Enum.sort(),
+      loaded_count: MapSet.size(loaded),
+      shipped_count: MapSet.size(shipped),
+      unloaded_in_bundle: MapSet.difference(shipped, loaded) |> Enum.sort(),
+      otp_root: detect_otp_root(),
+      captured_at: DateTime.utc_now()
+    }
+  end
 end
