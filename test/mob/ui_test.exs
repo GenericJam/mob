@@ -58,4 +58,41 @@ defmodule Mob.UITest do
       assert %{type: :text, props: %{}, children: []} = UI.text(text: "")
     end
   end
+
+  # ── canvas/1 ─────────────────────────────────────────────────────────────────
+
+  describe "canvas/1" do
+    test "type is :canvas" do
+      assert UI.canvas(width: 100, height: 100, draw: []).type == :canvas
+    end
+
+    test "children is always empty — canvas is a leaf node" do
+      assert UI.canvas(width: 100, height: 100, draw: []).children == []
+    end
+
+    test "props carries width / height / draw verbatim" do
+      ops = [%{op: :line, x1: 0, y1: 0, x2: 10, y2: 10, color: :primary}]
+      props = UI.canvas(width: 240, height: 240, draw: ops).props
+      assert props.width == 240
+      assert props.height == 240
+      assert props.draw == ops
+    end
+
+    test "unrecognized props are omitted" do
+      props = UI.canvas(width: 100, height: 100, draw: [], background: "#000").props
+      refute Map.has_key?(props, :background)
+    end
+
+    test "accepts a plain map and produces identical output to the keyword form" do
+      kw = UI.canvas(width: 100, height: 100, draw: [])
+      m = UI.canvas(%{width: 100, height: 100, draw: []})
+      assert kw == m
+    end
+
+    test "accepts Mob.Canvas helper output as draw entries" do
+      import Mob.Canvas
+      ops = [line(0, 0, 10, 10, color: :primary), circle(50, 50, 25, color: :primary)]
+      assert UI.canvas(width: 100, height: 100, draw: ops).props.draw == ops
+    end
+  end
 end

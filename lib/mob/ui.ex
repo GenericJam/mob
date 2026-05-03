@@ -122,4 +122,46 @@ defmodule Mob.UI do
   def native_view(module, %{} = props) when is_atom(module) do
     %{type: :native_view, props: Map.put(props, :module, module), children: []}
   end
+
+  @doc """
+  Returns a `:canvas` leaf node — declarative 2D drawing surface backed
+  by SwiftUI `Canvas` on iOS and Jetpack Compose `Canvas` on Android.
+
+  Coordinates are canvas-local in points/dp, top-left origin.
+
+  ## Props
+
+    * `:width` — canvas width in pt/dp (required)
+    * `:height` — canvas height in pt/dp (required)
+    * `:draw` — list of op maps (required); construct via `Mob.Canvas.line/5`,
+      `Mob.Canvas.circle/4`, etc., or as raw maps with an `:op` key
+
+  Color tokens inside draw ops are resolved against the active theme
+  by `Mob.Renderer` before serialisation, exactly like top-level color
+  props on text/button/etc.
+
+  ## Example
+
+      import Mob.UI
+      import Mob.Canvas
+
+      canvas(width: 240, height: 240, draw: [
+        circle(120, 120, 115, color: :surface_outline, width: 2),
+        line(60, 60, 60, 180, color: :primary, width: 8, cap: :round),
+        line(60, 180, 180, 180, color: :primary, width: 8, cap: :round),
+        line(60, 60, 180, 180, color: :primary, width: 8, cap: :round)
+      ])
+
+  See `Mob.Canvas` for the full op list and modifier reference.
+  """
+  @spec canvas(keyword() | map()) :: map()
+  def canvas(props) when is_list(props), do: canvas(Map.new(props))
+
+  def canvas(%{} = props) do
+    %{
+      type: :canvas,
+      props: Map.take(props, [:width, :height, :draw]),
+      children: []
+    }
+  end
 end

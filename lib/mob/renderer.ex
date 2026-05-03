@@ -441,6 +441,13 @@ defmodule Mob.Renderer do
       {:sticky_when_scrolled_past, %{} = config} ->
         [{"sticky_when_scrolled_past", encode_native_config(config)}]
 
+      # Canvas draw ops — list of op maps. Each op may carry a `:color` field
+      # holding a theme token (`:primary`, `:on_surface`, …) that needs the
+      # same two-step resolution as top-level color props. Walk the list,
+      # resolve color per op, leave everything else untouched.
+      {:draw, ops} when is_list(ops) ->
+        [{"draw", Enum.map(ops, &encode_canvas_op(&1, ctx))}]
+
       {key, value} ->
         [{Atom.to_string(key), resolve_token(key, value, ctx)}]
     end)
@@ -531,4 +538,28 @@ defmodule Mob.Renderer do
     do: Atom.to_string(v)
 
   defp encode_native_value(v), do: v
+
+  # Encode one Mob.Canvas op map for the wire. The `:op` atom becomes a
+  # string ("line"/"circle"/...) so the native dispatch is a string switch.
+  # `:color` is resolved through the same two-step theme path as top-level
+  # color props. Other atom-valued enums (cap, join, anchor, weight) are
+  # stringified for native consumption. Numeric/boolean/string values pass
+  # through. Nested points lists in `:path` ops are already plain [x, y]
+  # arrays after Mob.Canvas.path/2.
+  defp encode_canvas_op(%{op: op_name} = op, ctx) do
+    op
+    |> Map.delete(:op)
+    |> Enum.map(fn
+      {:color, value} -> {"color", resolve_color(value, ctx.colors)}
+      {key, value} when is_atom(key) -> {Atom.to_string(key), encode_canvas_value(value)}
+      {key, value} -> {key, encode_canvas_value(value)}
+    end)
+    |> Map.new()
+    |> Map.put("op", Atom.to_string(op_name))
+  end
+
+  defp encode_canvas_value(v) when is_atom(v) and not is_boolean(v) and not is_nil(v),
+    do: Atom.to_string(v)
+
+  defp encode_canvas_value(v), do: v
 end

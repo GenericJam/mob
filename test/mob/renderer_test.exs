@@ -859,4 +859,91 @@ defmodule Mob.RendererTest do
       refute Map.has_key?(decoded["props"], "style")
     end
   end
+
+  # ── Canvas draw-op encoding ──────────────────────────────────────────────
+  # Canvas's `:draw` prop is a list of op maps, each potentially with an atom
+  # `:color` token that needs the same theme/palette resolution as top-level
+  # color props. These tests pin the wire shape AND the resolution behavior.
+
+  describe "canvas draw-op encoding" do
+    defp canvas_draw(ops) do
+      tree = %{type: :canvas, props: %{width: 100, height: 100, draw: ops}, children: []}
+      MockNIF.reset()
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      :json.decode(json)["props"]["draw"]
+    end
+
+    test "type :canvas serializes as the string \"canvas\"" do
+      tree = %{type: :canvas, props: %{width: 100, height: 100, draw: []}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      assert :json.decode(json)["type"] == "canvas"
+    end
+
+    test "draw is serialized as a JSON array of op objects" do
+      ops = [%{op: :line, x1: 0, y1: 0, x2: 10, y2: 10, color: :primary}]
+      [op] = canvas_draw(ops)
+      assert op["op"] == "line"
+      assert {op["x1"], op["y1"], op["x2"], op["y2"]} == {0, 0, 10, 10}
+    end
+
+    test ":color tokens inside ops resolve through the theme" do
+      Mob.Theme.set(primary: :emerald_500)
+      [op] = canvas_draw([%{op: :line, x1: 0, y1: 0, x2: 1, y2: 1, color: :primary}])
+      # emerald_500 → 0xFF10B981
+      assert op["color"] == 0xFF10B981
+    end
+
+    test ":color hex strings pass through unchanged" do
+      [op] = canvas_draw([%{op: :line, x1: 0, y1: 0, x2: 1, y2: 1, color: "#abcdef"}])
+      assert op["color"] == "#abcdef"
+    end
+
+    test "raw palette atom resolves to ARGB integer" do
+      [op] = canvas_draw([%{op: :circle, x: 10, y: 10, r: 5, color: :red_500}])
+      assert op["color"] == 0xFFF44336
+    end
+
+    test "atom enums (cap, join, anchor, weight) become strings" do
+      ops = [
+        %{op: :line, x1: 0, y1: 0, x2: 1, y2: 1, color: :primary, cap: :round},
+        %{op: :path, points: [[0, 0], [1, 1]], color: :primary, join: :bevel},
+        %{op: :text, x: 0, y: 0, text: "hi", color: :primary, size: 12, anchor: :center}
+      ]
+
+      [line_op, path_op, text_op] = canvas_draw(ops)
+      assert line_op["cap"] == "round"
+      assert path_op["join"] == "bevel"
+      assert text_op["anchor"] == "center"
+    end
+
+    test "numeric and boolean op fields pass through untouched" do
+      [op] =
+        canvas_draw([
+          %{op: :rect, x: 1, y: 2, w: 3, h: 4, color: :primary, fill: true, radius: 8}
+        ])
+
+      assert op["fill"] == true
+      assert op["radius"] == 8
+      assert op["w"] == 3
+    end
+
+    test "path points serialize as an array of [x, y] arrays" do
+      ops = [%{op: :path, points: [[0, 0], [10, 20], [30, 40]], color: :primary}]
+      [op] = canvas_draw(ops)
+      assert op["points"] == [[0, 0], [10, 20], [30, 40]]
+    end
+
+    test "Mob.Canvas helper output round-trips through the renderer" do
+      Mob.Theme.set(primary: :emerald_500)
+      import Mob.Canvas
+      ops = [line(0, 0, 100, 100, color: :primary, width: 4, cap: :round)]
+      [op] = canvas_draw(ops)
+      assert op["op"] == "line"
+      assert op["color"] == 0xFF10B981
+      assert op["width"] == 4
+      assert op["cap"] == "round"
+    end
+  end
 end
