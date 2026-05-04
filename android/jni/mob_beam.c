@@ -10,11 +10,73 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <pthread.h>
+#include <stdint.h>
 #include "mob_beam.h"
 
 #define LOG_TAG "MobBeam"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+// ── BEAM stdout/stderr → logcat ──────────────────────────────────────────
+// Without this, anything the BEAM writes to stderr (including ** crash
+// reports from Logger and the boot script's :application.start/2 errors)
+// is silently dropped on Android. Wire stdout + stderr to a pipe and read
+// them on a detached thread, emitting each line under the "BEAMout" tag.
+// One-shot: called once from mob_init_bridge before any BEAM code runs.
+//
+// See beam_crash.md (Incident #1) for the case that motivated this.
+
+static void* mob_beam_log_reader(void* arg) {
+    int fd = (int)(intptr_t)arg;
+    char buf[4096];
+    char line[4096];
+    int line_pos = 0;
+    ssize_t n;
+    while ((n = read(fd, buf, sizeof(buf))) > 0) {
+        for (ssize_t i = 0; i < n; i++) {
+            char c = buf[i];
+            if (c == '\n' || line_pos >= (int)sizeof(line) - 1) {
+                line[line_pos] = '\0';
+                if (line_pos > 0) {
+                    __android_log_write(ANDROID_LOG_INFO, "BEAMout", line);
+                }
+                line_pos = 0;
+            } else if (c != '\r') {
+                line[line_pos++] = c;
+            }
+        }
+    }
+    return NULL;
+}
+
+static void mob_capture_beam_stdio(void) {
+    int pipe_fds[2];
+    if (pipe(pipe_fds) != 0) {
+        LOGE("mob_capture_beam_stdio: pipe() failed: %s", strerror(errno));
+        return;
+    }
+    if (dup2(pipe_fds[1], STDOUT_FILENO) < 0)
+        LOGE("mob_capture_beam_stdio: dup2 stdout failed: %s", strerror(errno));
+    if (dup2(pipe_fds[1], STDERR_FILENO) < 0)
+        LOGE("mob_capture_beam_stdio: dup2 stderr failed: %s", strerror(errno));
+    close(pipe_fds[1]);
+
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, mob_beam_log_reader,
+                       (void*)(intptr_t)pipe_fds[0]) != 0) {
+        LOGE("mob_capture_beam_stdio: pthread_create failed: %s", strerror(errno));
+        close(pipe_fds[0]);
+        return;
+    }
+    pthread_detach(tid);
+
+    // Disable buffering so output reaches the pipe immediately, not on
+    // exit (which we never reach for a long-running BEAM).
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+    LOGI("mob_capture_beam_stdio: piping stdout/stderr to logcat (tag: BEAMout)");
+}
 
 #define ERTS_VSN    "erts-16.3"
 
@@ -33,6 +95,10 @@ void mob_ui_cache_class(JNIEnv* env, const char* bridge_class) {
 extern void _mob_bridge_init_activity(JNIEnv* env, jobject activity);
 
 void mob_init_bridge(JNIEnv* env, jobject activity) {
+    // Capture BEAM stdio first so any startup errors (NIF load failures,
+    // application:start/2 crashes) land in logcat instead of /dev/null.
+    mob_capture_beam_stdio();
+
     g_activity = (*env)->NewGlobalRef(env, activity);
     _mob_bridge_init_activity(env, g_activity);
 
