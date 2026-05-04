@@ -225,7 +225,14 @@ struct MobNodeView: View {
                 .mobGestures(node)
 
             case .row:
-                HStack(spacing: 0) {
+                let alignment: VerticalAlignment = {
+                    switch node.rowAlign {
+                    case "top":    return .top
+                    case "bottom": return .bottom
+                    default:       return .center
+                    }
+                }()
+                HStack(alignment: alignment, spacing: 0) {
                     ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in MobNodeView(node: child) }
                 }
                 .padding(node.paddingEdgeInsets)
@@ -236,27 +243,7 @@ struct MobNodeView: View {
                 .mobGestures(node)
 
             case .box:
-                ZStack(alignment: .topLeading) {
-                    ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in MobNodeView(node: child) }
-                }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(node.paddingEdgeInsets)
-                .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
-                .overlay(
-                    // Border opt-in via border_color + border_width on the BEAM side.
-                    // When width is 0 (default) the stroke draws nothing — no perf cost.
-                    // .allowsHitTesting(false) is critical: without it, SwiftUI routes
-                    // taps inside the border's bounding rect to the overlay instead of
-                    // the box's children, swallowing tap events on every nested button.
-                    RoundedRectangle(cornerRadius: node.cornerRadius)
-                        .stroke(node.borderColor.map { Color($0) } ?? Color.clear,
-                                lineWidth: node.borderWidth)
-                        .allowsHitTesting(false)
-                )
-                .ifLet(node.onTap) { view, tap in
-                    view.contentShape(Rectangle()).onTapGesture { tap() }
-                }
-                .mobGestures(node)
+                MobBox(node: node)
 
             case .label:
                 Text(node.text ?? "")
@@ -436,6 +423,56 @@ struct MobNodeView: View {
                 EmptyView()
             }
         }
+    }
+}
+
+// ── Box ──────────────────────────────────────────────────────────────────────
+// Extracted from MobNodeView so the conditional sizing chain doesn't blow
+// past SwiftUI's type-inference budget. When fixedWidth is set the box
+// uses that exact width; otherwise it stretches to fill maxWidth (the
+// original behavior). Same logic for fixedHeight (otherwise content-sized).
+//
+// The fixed-width path is what makes circular ring cells possible without
+// a dedicated primitive — set width: N, height: N, corner_radius: N/2,
+// border_color + border_width and the box renders as a ring.
+private struct MobBox: View {
+    let node: MobNode
+
+    var body: some View {
+        let stack = ZStack(alignment: .topLeading) {
+            ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
+                MobNodeView(node: child)
+            }
+        }
+
+        return Group {
+            if node.fixedWidth > 0 {
+                stack.frame(
+                    width: CGFloat(node.fixedWidth),
+                    height: node.fixedHeight > 0 ? CGFloat(node.fixedHeight) : nil,
+                    alignment: .topLeading
+                )
+            } else {
+                stack.frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        }
+        .padding(node.paddingEdgeInsets)
+        .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
+        .overlay(
+            // Border opt-in via border_color + border_width on the BEAM side.
+            // When width is 0 (default) the stroke draws nothing — no perf cost.
+            // .allowsHitTesting(false) is critical: without it, SwiftUI routes
+            // taps inside the border's bounding rect to the overlay instead of
+            // the box's children, swallowing tap events on every nested button.
+            RoundedRectangle(cornerRadius: node.cornerRadius)
+                .stroke(node.borderColor.map { Color($0) } ?? Color.clear,
+                        lineWidth: node.borderWidth)
+                .allowsHitTesting(false)
+        )
+        .ifLet(node.onTap) { view, tap in
+            view.contentShape(Rectangle()).onTapGesture { tap() }
+        }
+        .mobGestures(node)
     }
 }
 

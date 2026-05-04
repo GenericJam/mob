@@ -26,6 +26,7 @@
         _checked       = NO;
         _axis            = @"vertical";
         _showIndicator   = YES;
+        _rowAlign        = @"center";
         _keyboardTypeStr = @"default";
         _returnKeyStr    = @"done";
         _contentModeStr  = @"fit";

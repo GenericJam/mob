@@ -143,6 +143,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nonnull)   NSString*  axis;          // "vertical" | "horizontal"
 @property (nonatomic)                  BOOL       showIndicator; // default YES
 
+// Row vertical alignment — "top" | "center" (default) | "bottom"
+@property (nonatomic, copy, nonnull)   NSString*  rowAlign;
+
 // Spacer — fixedSize == 0 means fill available space
 @property (nonatomic)                  CGFloat    fixedSize;
 

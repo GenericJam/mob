@@ -692,6 +692,9 @@ static MobNode* mob_node_from_dict(NSDictionary* dict) {
         id axis = props[@"axis"];
         if ([axis isKindOfClass:[NSString class]]) node.axis = axis;
 
+        id rowAlign = props[@"align"];
+        if ([rowAlign isKindOfClass:[NSString class]]) node.rowAlign = rowAlign;
+
         id showIndicator = props[@"show_indicator"];
         if (showIndicator) node.showIndicator = [showIndicator boolValue];
 
