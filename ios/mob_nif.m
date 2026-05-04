@@ -692,8 +692,19 @@ static MobNode* mob_node_from_dict(NSDictionary* dict) {
         id axis = props[@"axis"];
         if ([axis isKindOfClass:[NSString class]]) node.axis = axis;
 
-        id rowAlign = props[@"align"];
-        if ([rowAlign isKindOfClass:[NSString class]]) node.rowAlign = rowAlign;
+        // `align` plays two roles depending on node type — the Mob renderer
+        // sets the same string and the iOS side picks the relevant
+        // interpretation per case (rowAlign for HStack, boxAlign for ZStack).
+        id alignProp = props[@"align"];
+        if ([alignProp isKindOfClass:[NSString class]]) {
+            node.rowAlign = alignProp;
+            node.boxAlign = alignProp;
+        }
+
+        id offsetX = props[@"offset_x"];
+        if (offsetX) node.offsetX = [offsetX doubleValue];
+        id offsetY = props[@"offset_y"];
+        if (offsetY) node.offsetY = [offsetY doubleValue];
 
         id showIndicator = props[@"show_indicator"];
         if (showIndicator) node.showIndicator = [showIndicator boolValue];

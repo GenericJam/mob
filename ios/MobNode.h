@@ -146,6 +146,17 @@ NS_ASSUME_NONNULL_BEGIN
 // Row vertical alignment — "top" | "center" (default) | "bottom"
 @property (nonatomic, copy, nonnull)   NSString*  rowAlign;
 
+// Box content alignment — "top_leading" (default) | "center" | "top_center" |
+// "bottom_leading" | "bottom_center" | "bottom_trailing" | "top_trailing".
+// Affects how a box's children are placed within its frame; relevant when
+// the box has explicit width/height larger than the children.
+@property (nonatomic, copy, nonnull)   NSString*  boxAlign;
+
+// Per-node offset applied as .offset(x:y:) on iOS / Modifier.offset on
+// Compose. Useful for absolute positioning within an aligned box. Default 0.
+@property (nonatomic) CGFloat offsetX;
+@property (nonatomic) CGFloat offsetY;
+
 // Spacer — fixedSize == 0 means fill available space
 @property (nonatomic)                  CGFloat    fixedSize;
 

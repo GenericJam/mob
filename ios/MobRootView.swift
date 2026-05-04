@@ -423,6 +423,10 @@ struct MobNodeView: View {
                 EmptyView()
             }
         }
+        // Per-node offset — applied uniformly to every node type. Default is
+        // (0, 0) which is a no-op. Used by SquareTriangle's hexagonal
+        // snowflake to position rings absolutely within a center-aligned box.
+        .offset(x: CGFloat(node.offsetX), y: CGFloat(node.offsetY))
     }
 }
 
@@ -439,7 +443,9 @@ private struct MobBox: View {
     let node: MobNode
 
     var body: some View {
-        let stack = ZStack(alignment: .topLeading) {
+        let alignment: Alignment = boxAlignmentFromString(node.boxAlign)
+
+        let stack = ZStack(alignment: alignment) {
             ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
                 MobNodeView(node: child)
             }
@@ -450,10 +456,10 @@ private struct MobBox: View {
                 stack.frame(
                     width: CGFloat(node.fixedWidth),
                     height: node.fixedHeight > 0 ? CGFloat(node.fixedHeight) : nil,
-                    alignment: .topLeading
+                    alignment: alignment
                 )
             } else {
-                stack.frame(maxWidth: .infinity, alignment: .topLeading)
+                stack.frame(maxWidth: .infinity, alignment: alignment)
             }
         }
         .padding(node.paddingEdgeInsets)
@@ -473,6 +479,23 @@ private struct MobBox: View {
             view.contentShape(Rectangle()).onTapGesture { tap() }
         }
         .mobGestures(node)
+        // (offset is applied uniformly by MobNodeView's body; not here)
+    }
+}
+
+private func boxAlignmentFromString(_ s: String) -> Alignment {
+    switch s {
+    case "center":          return .center
+    case "top":             return .top
+    case "top_center":      return .top
+    case "top_trailing":    return .topTrailing
+    case "leading":         return .leading
+    case "trailing":        return .trailing
+    case "bottom":          return .bottom
+    case "bottom_leading":  return .bottomLeading
+    case "bottom_center":   return .bottom
+    case "bottom_trailing": return .bottomTrailing
+    default:                return .topLeading
     }
 }
 

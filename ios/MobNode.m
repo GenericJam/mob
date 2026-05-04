@@ -27,6 +27,9 @@
         _axis            = @"vertical";
         _showIndicator   = YES;
         _rowAlign        = @"center";
+        _boxAlign        = @"top_leading";
+        _offsetX         = 0.0;
+        _offsetY         = 0.0;
         _keyboardTypeStr = @"default";
         _returnKeyStr    = @"done";
         _contentModeStr  = @"fit";
