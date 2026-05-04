@@ -550,7 +550,7 @@ private struct MobCanvasView: View {
                 }
             }()
             // For horizontal anchor handling we measure first.
-            let measured = resolved.measure(in: CGSize(width: .infinity, height: .infinity))
+            let measured = resolved.measure(in: CGSize(width: CGFloat.infinity, height: CGFloat.infinity))
             let x = cgNum(op["x"])
             let y = cgNum(op["y"])
             let drawX: CGFloat = {
