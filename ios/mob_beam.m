@@ -12,6 +12,7 @@
 #include <ifaddrs.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/stat.h>
 #include "mob_beam.h"
 
 // EPMD compiled into the binary (epmd.c / epmd_srv.c / epmd_cli.c compiled
@@ -53,15 +54,48 @@ static void* epmd_thread(void *arg) {
 #endif
 
 // Resolve the simulator's OTP runtime root at startup.
-// Order:
+//
+// Resolution order:
 //   1. MOB_SIM_RUNTIME_DIR env var if set (passed via SIMCTL_CHILD_*)
-//   2. /tmp/otp-ios-sim if it exists (legacy projects, pre-mob_new 0.1.20)
-//   3. /tmp/otp-ios-sim otherwise (final fallback to keep behaviour stable
-//      when nothing else is found — the launching mix mob.deploy is in charge
-//      of setting the env var when the project supports it)
-static const char *resolve_sim_otp_root(void) {
+//   2. ~/.mob/runtime/ios-sim if that path contains <app_module>/ — the new
+//      canonical location written by `mix mob.cache` and `mix mob.deploy`
+//   3. /tmp/otp-ios-sim — legacy fallback for projects whose ios/build.sh
+//      predates MOB_SIM_RUNTIME_DIR support (pre-mob_new 0.1.20)
+//
+// app_module is required for #2 so we don't pick a runtime that has no
+// matching <app>.app inside (which is what causes the silent "BEAM exits
+// 135ms after Starting BEAM" symptom — see common_fixes.md).
+//
+// Without #2, launches outside `mix mob.deploy` (Springboard tap, Xcode Run,
+// `xcrun simctl launch`, MCP launch_app) inherit no env vars and resolve to
+// /tmp/otp-ios-sim regardless of where the runtime actually lives. ERTS then
+// fails to start the named app and aborts to stderr — which iOS sim doesn't
+// route to os_log, so the failure is invisible.
+static const char *resolve_sim_otp_root(const char *app_module) {
     const char *env = getenv("MOB_SIM_RUNTIME_DIR");
     if (env && env[0]) return env;
+
+    // iOS sim apps inherit HOME pointing to the per-app sandbox container
+    // (…/CoreSimulator/Devices/<udid>/data/Containers/Data/Application/<uuid>),
+    // not the Mac user's home. The simulator runtime exposes the host's home
+    // via SIMULATOR_HOST_HOME — that's the path that contains
+    // ~/.mob/runtime/ios-sim. Fall back to HOME so this still works when the
+    // binary runs outside simctl (e.g. raw test harness on the Mac).
+    const char *home = getenv("SIMULATOR_HOST_HOME");
+    if (!home || !home[0]) home = getenv("HOME");
+    if (home && app_module && app_module[0]) {
+        static char new_default[1024];
+        snprintf(new_default, sizeof(new_default),
+                 "%s/.mob/runtime/ios-sim", home);
+
+        char check[1280];
+        snprintf(check, sizeof(check), "%s/%s", new_default, app_module);
+        struct stat st;
+        if (stat(check, &st) == 0 && S_ISDIR(st.st_mode)) {
+            return new_default;
+        }
+    }
+
     return OTP_ROOT_LEGACY;
 }
 
@@ -143,7 +177,7 @@ void mob_start_beam(const char* app_module) {
     const char *erts_vsn = ERTS_VSN;
     const char *otp_release = OTP_RELEASE;
 #else
-    const char *otp_root = resolve_sim_otp_root();
+    const char *otp_root = resolve_sim_otp_root(app_module);
     const char *erts_vsn = ERTS_VSN;
     const char *otp_release = OTP_RELEASE;
 #endif

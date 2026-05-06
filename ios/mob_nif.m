@@ -964,6 +964,9 @@ static MobNode* mob_node_from_dict(NSDictionary* dict) {
         id fillWidth = props[@"fill_width"];
         if (fillWidth) node.fillWidth = [fillWidth boolValue];
 
+        id fillHeight = props[@"fill_height"];
+        if (fillHeight) node.fillHeight = [fillHeight boolValue];
+
         id placeholderColor = props[@"placeholder_color"];
         if (placeholderColor) node.placeholderColor = color_from_argb((long)[placeholderColor longLongValue]);
 

@@ -137,6 +137,11 @@ private func sfSymbolName(_ logical: String) -> String {
     case "star_filled":   return "star.fill"
     case "user":          return "person"
     case "home":          return "house"
+    case "history":       return "clock.arrow.circlepath"
+    case "list":          return "list.bullet"
+    case "qr_code":       return "qrcode"
+    case "link":          return "link"
+    case "snowflake":     return "snowflake"
     default:              return logical  // raw SF Symbol pass-through
     }
 }
@@ -235,6 +240,11 @@ struct MobNodeView: View {
                 HStack(alignment: alignment, spacing: 0) {
                     ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in MobNodeView(node: child) }
                 }
+                // Without maxWidth: .infinity an HStack hugs its content.
+                // Flex Spacers inside then have nothing to expand into and
+                // centering tricks (spacer / content / spacer) collapse.
+                // Honors `fill_width: true` to match Android's row behaviour.
+                .ifLet(node.fillWidth ? () : nil) { view, _ in view.frame(maxWidth: .infinity) }
                 .padding(node.paddingEdgeInsets)
                 .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
                 .ifLet(node.onTap) { view, tap in
@@ -246,13 +256,23 @@ struct MobNodeView: View {
                 MobBox(node: node)
 
             case .label:
+                // Only span the parent's full width when the caller explicitly
+                // asks (via `fill_width: true` or a non-leading `text_align`).
+                // Defaulting to .frame(maxWidth: .infinity) made every Text
+                // greedily fill its container, which broke centering when a
+                // Text sat inside a row meant to size to its content (the row
+                // would inflate to full width and the box's centering had
+                // nothing to position).
+                let textShouldFill = node.fillWidth || node.textAlign == "center" || node.textAlign == "right"
                 Text(node.text ?? "")
                     .font(node.resolvedFont)
                     .foregroundColor(node.textColor.map { Color($0) } ?? Color.primary)
                     .multilineTextAlignment(node.textAlignEnum)
                     .lineSpacing(node.computedLineSpacing)
                     .kerning(node.letterSpacing)
-                    .frame(maxWidth: .infinity, alignment: node.frameTextAlignment)
+                    .ifLet(textShouldFill ? () : nil) { view, _ in
+                        view.frame(maxWidth: .infinity, alignment: node.frameTextAlignment)
+                    }
                     .padding(node.paddingEdgeInsets)
                     .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
                     .ifLet(node.onTap) { view, tap in
@@ -342,7 +362,11 @@ struct MobNodeView: View {
 
             case .spacer:
                 if node.fixedSize > 0 {
-                    Spacer().frame(minHeight: node.fixedSize, maxHeight: node.fixedSize)
+                    // Constrain both axes so a sized Spacer works as a fixed
+                    // gap in both VStack (column) and HStack (row). Without
+                    // the width constraint, an HStack treats it as flexible
+                    // alongside other Spacers and the layout collapses.
+                    Spacer().frame(width: node.fixedSize, height: node.fixedSize)
                 } else {
                     Spacer()
                 }
@@ -458,6 +482,12 @@ private struct MobBox: View {
                     height: node.fixedHeight > 0 ? CGFloat(node.fixedHeight) : nil,
                     alignment: alignment
                 )
+            } else if node.fillHeight {
+                // fill_height: true is what lets a wrapping box stretch to the
+                // viewport so center alignment lands on the visible midpoint
+                // (e.g. for floating dialogs that need to sit mid-screen
+                // regardless of their sibling's content size).
+                stack.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
             } else {
                 stack.frame(maxWidth: .infinity, alignment: alignment)
             }
@@ -739,7 +769,7 @@ private struct MobTabView: View {
                         .tabItem {
                             Label(
                                 tab["label"] as? String ?? "",
-                                systemImage: tab["icon"] as? String ?? "circle"
+                                systemImage: sfSymbolName(tab["icon"] as? String ?? "circle")
                             )
                         }
                         .tag(tab["id"] as? String ?? "\(index)")

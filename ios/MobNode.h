@@ -166,6 +166,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 // Layout behaviour
 @property (nonatomic) BOOL    fillWidth;    // fill parent width (default NO; button default YES)
+@property (nonatomic) BOOL    fillHeight;   // fill parent height (default NO) — used for full-screen overlays/dialogs
 @property (nonatomic) CGFloat cornerRadius; // rounded corners in pt (default 0)
 
 // Border (currently honored on box). Both must be set for a border to draw.
