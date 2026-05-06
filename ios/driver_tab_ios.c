@@ -35,6 +35,13 @@ void *prim_socket_nif_init(void);
 void *prim_net_nif_init(void);
 void *asn1rt_nif_nif_init(void);
 
+// crypto.c's ERL_NIF_INIT(crypto, ...) generates: crypto_nif_init.
+// Built into the app binary via crypto.a + libcrypto.a (OpenSSL).
+// Same pattern as Android — see driver_tab_android.c for the rationale
+// (Android RTLD_LOCAL hides parent's enif_* symbols from dlopen'd
+// children; iOS App Store likewise rejects dynamic NIFs in the bundle).
+void *crypto_nif_init(void);
+
 // mob_nif.m's ERL_NIF_INIT(mob_nif,...) with -DSTATIC_ERLANG_NIF
 // generates function name: mob_nif_nif_init
 void *mob_nif_nif_init(void);
@@ -56,6 +63,7 @@ ErtsStaticNif erts_static_nif_tab[] = {
     {prim_socket_nif_init,  0, THE_NON_VALUE, NULL},
     {prim_net_nif_init,     0, THE_NON_VALUE, NULL},
     {asn1rt_nif_nif_init,   1, THE_NON_VALUE, NULL},
+    {crypto_nif_init,       1, THE_NON_VALUE, NULL},
     {mob_nif_nif_init,      0, THE_NON_VALUE, NULL},
 #ifdef MOB_STATIC_SQLITE_NIF
     {sqlite3_nif_nif_init,  0, THE_NON_VALUE, NULL},
