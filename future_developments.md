@@ -460,6 +460,80 @@ it; others will reject it on principle. Both reactions are signal.
 
 ---
 
+## iOS 26 Liquid Glass (and future platform design languages)
+
+**Context:** iOS 26 introduces Liquid Glass — Apple's new translucent, material-based
+design language. End users don't know or care what framework is underneath; they want
+apps that look like native apps. Mob's value proposition depends on this being true.
+
+**What Mob gets for free (once the iOS 26 SDK build ships):**
+
+Standard system chrome — navigation bars, tab bars, sheets, alerts, and any UIKit
+component Mob delegates to — adopts Liquid Glass automatically when the app is compiled
+against the iOS 26 SDK and runs on iOS 26. No Mob-specific work required for these.
+The app looks native because it *is* native at the component level.
+
+**What needs explicit Mob work:**
+
+Custom-rendered UI elements — anything Mob draws itself rather than mapping to a UIKit
+primitive — won't get Liquid Glass automatically. Apple provides:
+
+- SwiftUI: `.glassEffect()` modifier and `GlassEffectContainer`
+- UIKit: `UIVisualEffectView` with the new `UIBlurEffect` glass materials
+
+Mob's iOS rendering layer would need to expose these as Mob component primitives
+(e.g., `Mob.UI.glass_container/2`, `Mob.UI.glass_button/2`) so Elixir code can use
+the effect without touching Swift.
+
+**The user story (why this matters):**
+
+A user who builds an app with Mob ships a Liquid Glass app. Their users see a stylish,
+native-feeling product. Nobody asks "what framework is this?" — it just looks right.
+This is the same argument as any other native platform primitive: Mob should surface it
+so app developers get it without thinking about it.
+
+**Current SDK baseline:** Mob targets iOS 17.0 minimum deployment target, Android minSdk 28.
+Liquid Glass requires iOS 26 at runtime, but apps compiled against the iOS 26 SDK
+degrade gracefully on older OS versions — no minimum version bump needed. Mob can
+ship Liquid Glass support without dropping iOS 17–25 users.
+
+**API design:** System chrome adopts Liquid Glass with zero user action. For custom
+components, the `material:` attribute on existing components is the natural fit —
+consistent with how `padding:`, `background:`, and other visual attributes work today:
+
+```elixir
+card(material: :glass) do
+  text("Hello")
+end
+```
+
+The renderer maps `material: :glass` to SwiftUI's `.glassEffect()` on iOS. On Android
+and older iOS versions the attribute is ignored (graceful degradation — no crash, no
+opt-in required from the developer for fallback behavior).
+
+**Action items:**
+
+1. **Compile against iOS 26 SDK** — prerequisite for system chrome to auto-adopt
+   Liquid Glass. This is the highest-leverage step (free benefit, zero Mob API work).
+   Minimum deployment target stays at iOS 17.0.
+2. **Audit Mob's renderer** — identify which components already delegate to UIKit
+   primitives (free) vs. which are custom-drawn (need explicit glass material support).
+3. **Add `material:` attribute support** — wire `material: :glass` through the renderer
+   to SwiftUI's `.glassEffect()` modifier. Start with `card`, `container`, `button`.
+4. **Document in guides** — developers should know Liquid Glass is available and
+   which components support the `material:` attribute.
+
+**Pattern for future design languages:**
+
+This same analysis applies every time Apple or Google ships a new design system
+(Material You, Dynamic Island interactions, etc.). The question is always:
+- Does the system component automatically adopt? (Usually yes — free.)
+- Do custom Mob components need explicit updates? (Usually yes — plan the work.)
+
+Track platform design language updates as a standing item in the Mob release process.
+
+---
+
 ## App Store-compatible release builds (libbeam.a static link)
 
 **This work is now planned and tracked in
