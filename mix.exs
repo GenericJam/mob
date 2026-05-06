@@ -119,7 +119,8 @@ defmodule Mob.MixProject do
       {:nimble_parsec, "~> 1.0"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:jump_credo_checks, "~> 0.1.0", only: [:dev, :test], runtime: false}
+      {:jump_credo_checks, "~> 0.1.0", only: [:dev, :test], runtime: false},
+      {:erlfmt, "~> 1.8", only: :dev, runtime: false}
     ]
   end
 end
