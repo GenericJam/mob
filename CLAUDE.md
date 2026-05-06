@@ -20,12 +20,24 @@ to reach for `xcrun simctl` screenshots.
 
 ## Pre-commit checklist
 
-Before committing changes, run **all three** in this order:
+Before committing changes, run **all** in this order:
 
 ```bash
 mix test            # full suite must pass (call out any pre-existing flake explicitly)
 mix format          # apply Elixir formatting
 mix credo --strict  # address new issues; pre-existing ones are tracked separately
+mix erlfmt --check src/                          # Erlang formatting (src/mob_nif.erl)
+xcrun clang-format --dry-run -Werror \
+  ios/*.m ios/*.c \
+  android/jni/*.c android/jni/*.h               # C/ObjC formatting
+swiftlint ios/                                   # Swift linting (brew install swiftlint)
+```
+
+Auto-fix formatting (don't use for check-only CI):
+```bash
+mix erlfmt --write src/
+xcrun clang-format -i ios/*.m ios/*.c android/jni/*.c android/jni/*.h
+swiftlint --fix ios/
 ```
 
 For native-code changes (iOS `.m`, Android `.kt` / `.c`), Elixir tests don't
