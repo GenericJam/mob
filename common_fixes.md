@@ -1,5 +1,83 @@
 # Common Fixes & Pitfalls
 
+## Android NIFs must be statically linked, never `dlopen`'d
+
+**Symptom**: BEAM's `erlang:load_nif/2` fails on Android with
+`dlopen failed: cannot locate symbol "enif_get_tuple" referenced by ".../foo.so"`.
+Happens for any NIF library shipped as a `.so` rather than a static
+`.a` linked into the app's main native lib (e.g. `libpigeon.so`).
+
+**Root cause**: Android's dynamic linker loads native libs with
+`RTLD_LOCAL` by default — Java's `System.loadLibrary` doesn't take a
+flags arg. The BEAM's `enif_*` API functions are statically linked
+into `libpigeon.so` (via `libbeam.a`). When the BEAM later
+`dlopen`s a NIF, that NIF can't see `libpigeon.so`'s symbols —
+`RTLD_LOCAL` hides them from siblings/children.
+
+**Things that don't fix it (we tried)**:
+
+- `-Wl,--export-dynamic` on the parent's link. Adds symbols to the
+  dynamic symbol table, but Android's loader honours the flags the
+  parent was originally loaded with, not what's marked exported.
+- Re-`dlopen`ing the parent from inside its own JNI code with
+  `RTLD_NOW | RTLD_GLOBAL`. The call returns a non-NULL handle, but
+  subsequent `dlopen`s still can't see the parent's symbols. Per
+  bionic source, `RTLD_GLOBAL` only affects the children of a lib
+  loaded that way; it doesn't retroactively promote a lib already
+  loaded `RTLD_LOCAL`.
+
+**Fix**: build the NIF as a static `.a`, ship it in the OTP tarball at
+`erts-VSN/lib/<name>.a`, and link it into the app's main native lib via
+`target_link_libraries(... -Wl,--whole-archive ${OTP_DIR}/${ERTS_VSN}/lib/<name>.a -Wl,--no-whole-archive ...)`.
+
+For OTP-internal NIFs (`crypto`, `asn1rt_nif`), pass `--enable-static-nifs`
+to OTP `configure` so they're compiled with `-DSTATIC_ERLANG_NIF` and
+registered in the generated `erts_static_nif_tab[]`. The BEAM then
+resolves the NIF via `dlsym(RTLD_DEFAULT, "<modname>_nif_init")`
+without ever calling `dlopen`.
+
+**Implication for app developers**: any custom NIFs added to a mob
+app must follow the same pattern — static `.a` (with
+`-DSTATIC_ERLANG_NIF_LIBNAME=<name>`), linked into the app's
+`CMakeLists.txt`. Dynamic NIF `.so` files won't work on Android.
+
+---
+
+## Cross-compiling OTP for Android on macOS produces empty `.a` archives
+
+**Symptom**: `./otp_build boot --xcomp-conf=./xcomp/erl-xcomp-arm64-android.conf`
+fails at the `erl_call` link step with hundreds of `undefined symbol: ei_*` errors.
+`lib/erl_interface/obj/aarch64-unknown-linux-android/libei.a` exists but is exactly
+**96 bytes** — an empty ar archive containing only the symbol table header.
+Every `.o` file under `obj.mt/<arch>/` and `obj.st/<arch>/` exists fine.
+
+**Root cause**: macOS's BSD `ar` (`/usr/bin/ar`) silently rejects ELF object files
+with `ranlib: warning: archive member 'foo.o' not a mach-o file` and emits an
+empty `.a`. The OTP xcomp configs (`erl-xcomp-arm64-android.conf`, `erl-xcomp-arm-android.conf`,
+etc.) override `CC` and `LD` for the NDK toolchain but leave `AR=ar` and
+`RANLIB=ranlib` as defaults — so they fall through to `/usr/bin/ar`. The `rcv`
+flag still exits 0, so `make` proceeds to the `erl_call` link step where the
+empty libei.a manifests as undefined symbols.
+
+Reproducer:
+```bash
+cd /tmp && touch a.o b.o && /usr/bin/ar rcv test.a a.o b.o
+# warning: archive member 'a.o' not a mach-o file
+ls -la test.a   # → 96 bytes (empty)
+```
+
+**Fix**: Add `AR="llvm-ar"` and `RANLIB="llvm-ranlib"` to the xcomp conf
+(both ship in every NDK toolchain at
+`$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/`). Re-running `./otp_build configure`
+regenerates the per-arch Makefiles with the correct `AR`/`RANLIB`, and libei.a
+fills with the ~70 expected `.o` files (~3.5 MB).
+
+**Fixed in**: `~/code/otp/xcomp/erl-xcomp-arm64-android.conf` (and arm32 conf).
+Should be upstreamed to `otp/xcomp/erl-xcomp-*android.conf` since this affects
+any macOS-host Android cross-build.
+
+---
+
 ## `+C` flags crash BEAM silently on Android (exit(1), no logcat output)
 
 **Symptom**: App exits cleanly with code 1 within ~60ms of `erl_start`. No Erlang code
@@ -658,4 +736,140 @@ rather than a crash.
 2026-05-02). Caught after iOS-side red herring (border `.overlay()` was intercepting
 taps, separate fix); the real bug only surfaced when adb logcat showed the gen_server
 terminate on Steve's moto G.
+
+---
+
+## iOS sim app dies silently when launched without `MOB_SIM_RUNTIME_DIR` (Springboard tap, MCP `launch_app`, Xcode run)
+
+**Symptom**: iOS simulator app exits ~135ms after `mob_start_beam` logs
+`Starting BEAM…`. No Erlang crash dump, no further `[MobBeam]` lines, no error
+in the iOS sim system log. Springboard reports
+`Process exited: <RBSProcessExitContext| voluntary>`. Only `mix mob.deploy`
+launches succeed; tapping the app icon, `xcrun simctl launch <udid> <bundle>`,
+the iOS-Simulator MCP `launch_app` tool, and Xcode's Run button all reproduce
+the silent crash.
+
+**Root cause**: `mob/ios/mob_beam.m::resolve_sim_otp_root()` resolves the OTP
+runtime root to `MOB_SIM_RUNTIME_DIR` env var if set, otherwise *always* to
+`/tmp/otp-ios-sim` — it never checks the new canonical path
+`~/.mob/runtime/ios-sim`. `mix mob.deploy` writes the runtime to
+`~/.mob/runtime/ios-sim/<app>/` (per `MobDev.Paths.sim_runtime_dir/1`) and
+launches via `MobDev.Discovery.IOS.launch_app/3`, which passes
+`SIMCTL_CHILD_MOB_SIM_RUNTIME_DIR=~/.mob/runtime/ios-sim` so the env var is
+set and resolution lands in the right place.
+
+Any other launch path (Springboard, plain `xcrun simctl launch`, MCP, Xcode)
+inherits no env vars from `mix mob.deploy`, so `MOB_SIM_RUNTIME_DIR` is unset
+and `resolve_sim_otp_root()` falls back to `/tmp/otp-ios-sim`. If the legacy
+path is empty or contains a different project's release, BEAM tries to start
+`<app>:start().` from a release that has no `<app>.app` and aborts. ERTS
+boot-time errors go to stderr, which iOS sim doesn't route to `os_log`, so
+nothing is visible.
+
+In our case `/tmp/otp-ios-sim` was a leftover from an older `smoke_test`
+deploy. `square_triangle`'s `[MobBeam] otp_root=/tmp/otp-ios-sim` log line was
+the smoking gun — the new default would have been `~/.mob/runtime/ios-sim`.
+
+**Diagnosis**:
+1. Look for the `[MobBeam] otp_root=…` log line — if it points anywhere other
+   than where `mix mob.deploy` actually wrote (check
+   `~/.mob/runtime/ios-sim/<app>/` for the project's BEAMs), the resolver is
+   wrong.
+2. Confirm `<app>:start().` would fail by listing the release used:
+   `ls $OTP_ROOT/<app_module>/<App>.app` should exist.
+3. The exit is "voluntary" in launchd terms (BEAM calls `abort()` after
+   reporting the boot error to stderr), so no crash report is generated under
+   `~/Library/Logs/DiagnosticReports/`.
+
+**Fix**: `resolve_sim_otp_root()` now takes `app_module` and prefers
+`<host-home>/.mob/runtime/ios-sim` when that path contains an `<app_module>/`
+subdirectory, before falling back to `/tmp/otp-ios-sim`.
+
+**Critical detail — `HOME` is wrong on iOS sim apps**: a launched simulator
+app inherits `HOME` pointing to its per-app sandbox container
+(`…/CoreSimulator/Devices/<udid>/data/Containers/Data/Application/<uuid>`),
+NOT the Mac user's home. The Mac user's home is exposed via
+`SIMULATOR_HOST_HOME`. The resolver checks `SIMULATOR_HOST_HOME` first and
+falls back to `HOME` (which is right only when the binary is invoked outside
+simctl, e.g. from a raw test harness on the Mac). Using `HOME` alone always
+misses, since `<container>/.mob/runtime/ios-sim` never exists.
+
+**Fixed in**: `mob/ios/mob_beam.m::resolve_sim_otp_root` (2026-05-04). Verified
+on `square_triangle` iOS sim — plain `xcrun simctl launch` (no env var) now
+boots BEAM successfully, picks up the right runtime, and joins distribution.
+
+## Play Store install: BEAM fails to start — ERTS helpers not found (`erl_child_setup: : no such file or directory`)
+
+**Symptom**: App works with `adb install` but crashes immediately when installed from
+the Play Store (internal testing or production). Logcat shows:
+
+```
+erl_child_setup: : no such file or directory
+```
+
+or similar ENOENT for `inet_gethost` or `epmd`. The BEAM never starts.
+
+**Root cause**: Play Store delivers apps as split APKs. On Android 6+, the system does
+**not** extract `.so` files from split APKs to `nativeLibraryDir` — they stay inside the
+split APK zip. `mob_beam.c` creates symlinks `erts-VER/bin/<name>` →
+`<nativeLibraryDir>/lib<name>.so`. When `nativeLibraryDir` is empty (Play Store path),
+every symlink is dangling and BEAM's exec calls fail with ENOENT.
+
+**Fix**: `MobBridge.extractBeamHelpersFromSplitApk()` (called from `MobBridge.init()`)
+detects an empty `nativeLibraryDir`, opens the ABI split APK from
+`ApplicationInfo.splitSourceDirs` as a zip, and extracts:
+- `liberl_child_setup.so` → `<filesDir>/otp/erts-VER/bin/erl_child_setup`
+- `libinet_gethost.so` → `<filesDir>/otp/erts-VER/bin/inet_gethost`
+- `libepmd.so` → `<filesDir>/otp/erts-VER/bin/epmd`
+- `libsqlite3_nif.so` → `<filesDir>/otp/lib/exqlite-VER/priv/sqlite3_nif.so`
+
+`mob_beam.c` was patched to `stat` the target before symlinking — if the file already
+exists from extraction, it skips the symlink.
+
+**Does not affect `adb install`**: Full APK install extracts `.so` to `nativeLibraryDir`
+normally. The issue is Play Store split APK delivery only.
+
+**Fixed in**: `MobBridge.kt` (2026-05-04, air_cart_max versionCode 12) and
+`mob/android/jni/mob_beam.c` (2026-05-04). See `extractBeamHelpersFromSplitApk` in
+the generated `MobBridge.kt` for the canonical implementation.
+
+## Play Store install: BEAM starts, black screen — `crypto.app not found` (historical)
+
+**Status**: superseded as of 2026-05-06 by tarballs that ship a real
+`:crypto` NIF (OpenSSL 3.x, statically linked). The black-screen-on-Play
+symptom no longer reproduces with current tarballs; the workarounds
+described below (`patch_crypto_deps!/1` and `add_crypto_stub!/2`) can be
+removed from `release_android.ex` once we're confident no apps still
+depend on the older shim path.
+
+**Original symptom**: App installs from Play Store, does not crash with
+a native signal, but shows only a black screen. Logcat (`adb logcat -s
+Elixir`) shows:
+
+```
+step 5 => {'EXIT',{{badmatch,{error,{crypto,{"no such file or directory","crypto.app"}}}},...}}
+```
+
+**Original root cause**: pre-2026-05 Mob Android OTP releases were
+cross-compiled `--without-ssl`, so the `:crypto` OTP application was
+absent. `ecto`, `phoenix_pubsub`, `plug_crypto`, and others list
+`:crypto` in their `{applications, [...]}` so `ensure_all_started`
+crashed when the application controller called `application:load(crypto)`.
+
+**Original workaround** (now obsolete — leaving for code archeology):
+
+1. `patch_crypto_deps!/1` — walked staging tree's `*.app` files and
+   removed `:crypto` from each `{applications, [...]}`.
+2. `add_crypto_stub!/2` — compiled a minimal `crypto.erl` stub from
+   `mob_dev/priv/android/crypto.erl` (only `strong_rand_bytes/1` via
+   `:rand`) and shipped a `crypto.app` with no `{mod,...}` entry so
+   starting it was a no-op.
+
+Stub used `:rand`, not a cryptographically secure RNG — fine for the
+HTTP-only-loopback dev model, dangerous on the open internet.
+
+**Why it's gone**: the current tarballs static-link real OpenSSL into
+the app's main native lib. Ecto's `strong_rand_bytes/1`, plug_crypto's
+HMAC-SHA256, peer_net's x25519 etc. all just work with the standard
+OTP `:crypto` API. No app-level patching needed.
 

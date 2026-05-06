@@ -113,6 +113,12 @@ void mob_deliver_push_token(jlong pid, const char* token);
 void mob_deliver_notification(jlong pid, const char* json);
 void mob_set_launch_notification(const char* json);
 
+// Deliver WebView events from Java/Kotlin to the registered owner pid.
+// `mob_deliver_webview_message` for postMessage payloads from JS,
+// `mob_deliver_webview_blocked` for navigation attempts to disallowed URLs.
+void mob_deliver_webview_message(jlong pid, const char* json);
+void mob_deliver_webview_blocked(jlong pid, const char* url);
+
 // Deliver {:alert, action_atom} to the registered :mob_screen process.
 // Called from beam_jni.c when a dialog button is tapped.
 void mob_deliver_alert_action(const char* action);

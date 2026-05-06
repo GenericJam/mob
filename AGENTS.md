@@ -170,6 +170,26 @@ These are the things we've burned ourselves on. Following them isn't optional.
     bootstrap), `Logger` output goes to stderr and is invisible. Use
     `:mob_nif.log("message")` for diagnostics during early init.
 
+11. **NIFs on Android must be statically linked, not `dlopen`'d.** Android's
+    `System.loadLibrary` loads native libs `RTLD_LOCAL` by default — the
+    parent's `enif_*` symbols are invisible to subsequently-`dlopen`'d
+    children. The OTP-internal NIFs (`crypto`, `asn1rt_nif`) are built as
+    `.a` archives and linked into the app's main native lib via
+    `--whole-archive`; the BEAM resolves their `nif_init` via
+    `dlsym(RTLD_DEFAULT)` (registered through `--enable-static-nifs` at
+    OTP build time, listed in `erts_static_nif_tab[]`). Any custom NIFs
+    a mob app adds must follow the same pattern. See
+    `mob/common_fixes.md` for symptoms and the dead-end attempts (we
+    tried `-Wl,--export-dynamic` and runtime `RTLD_GLOBAL` self-dlopen;
+    neither works on Android).
+
+12. **`:crypto` on-device is real OpenSSL** (3.x, statically linked).
+    No more shim — old code that special-cased "no crypto on mobile"
+    can be deleted. The deployer's `generate_crypto_shim/0` only fires
+    when a cached OTP runtime *lacks* `lib/crypto-*/ebin/crypto.beam`;
+    current tarballs have it. See `mob/crypto_plan.md` for the rebuild
+    process when bumping OpenSSL.
+
 ## Where to look
 
 | Question | File |

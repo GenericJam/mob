@@ -34,6 +34,15 @@ void *prim_socket_nif_init(void);
 void *prim_net_nif_init(void);
 void *asn1rt_nif_nif_init(void);
 
+// crypto.c's ERL_NIF_INIT(crypto,...) generates: crypto_nif_init.
+// Built into libpigeon.so via crypto.a + libcrypto.a (OpenSSL).
+// Without this entry, the BEAM falls through to dlopen("crypto.so")
+// which fails because Android's RTLD_LOCAL hides libpigeon.so's
+// enif_* symbols from the dlopen'd library. With it, the BEAM
+// resolves crypto via dlsym(RTLD_DEFAULT) and load_nif uses the
+// static path — no dlopen, real OpenSSL.
+void *crypto_nif_init(void);
+
 // mob_nif.c's ERL_NIF_INIT(mob_nif,...) generates: mob_nif_nif_init
 void *mob_nif_nif_init(void);
 
@@ -47,6 +56,7 @@ ErtsStaticNif erts_static_nif_tab[] = {
     {prim_socket_nif_init,  0, THE_NON_VALUE, NULL},
     {prim_net_nif_init,     0, THE_NON_VALUE, NULL},
     {asn1rt_nif_nif_init,   1, THE_NON_VALUE, NULL},
+    {crypto_nif_init,       1, THE_NON_VALUE, NULL},
     {mob_nif_nif_init,      0, THE_NON_VALUE, NULL},
     {NULL,                  0, THE_NON_VALUE, NULL}
 };

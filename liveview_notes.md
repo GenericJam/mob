@@ -156,108 +156,69 @@ JavaScript never executes because `app.js` returns 404.
 
 ---
 
-## Fix 6: Crypto shim — OTP builds for mobile have no OpenSSL NIF
+## Fix 6: Crypto — real OpenSSL static-linked into the app native lib
 
 **Applies to: iOS and Android**
 
-Neither the iOS nor Android OTP build includes `:crypto` (no OpenSSL). Phoenix's
-session system (`plug_crypto`) uses `:crypto.pbkdf2_hmac/5` to derive session keys,
-`:crypto.mac/4` for HMAC verification, and `:crypto.exor/2` for CSRF nonce masking.
-Without these, every request crashes.
+> **Historical note (pre-2026-05):** the OTP tarballs were originally built
+> `--without-ssl` and the Phoenix session system was patched up by a pure-Erlang
+> shim that used MD5 everywhere OpenSSL would have used SHA-256. The
+> shim was a stopgap and was never cryptographically secure — fine for a
+> loopback-only dev server, dangerous on the open internet. **The shim is gone.**
 
-The fix is a pure-Erlang shim compiled with `erlc` on the host and deployed alongside
-the app's BEAM files. `mob_dev` generates and deploys it automatically as part of
-`mix mob.deploy`. Critical exports:
+Mob's tarballs now ship a real `:crypto` NIF backed by statically-linked
+OpenSSL 3.x. Available everywhere `:crypto` would normally be:
 
-- `pbkdf2_hmac/5` — session key derivation (PBKDF2 using HMAC-MD5 as PRF)
-- `exor/2` — XORs two binaries; used by `Plug.CSRFProtection.mask/1`
-- `strong_rand_bytes/1` — delegates to `rand:bytes/1` (OTP 26+)
-- `mac/3,4` — HMAC-MD5; used by plug_crypto for cookie/token verification
-- `hash/2` — delegates to `erlang:md5/1`
+- `:crypto.generate_key/2` — including `:ecdh` over `:x25519`, `:secp256r1`, etc.
+- `:crypto.crypto_one_time_aead/6,7` — ChaCha20-Poly1305, AES-GCM, AES-CCM
+- `:crypto.hash/2` — SHA-256, SHA-384, SHA-512, BLAKE2 family
+- `:crypto.mac/4` — HMAC-SHA-256 etc.
+- `:crypto.pbkdf2_hmac/5` — real PBKDF2-HMAC, any digest
+- `:crypto.exor/2`, `:crypto.strong_rand_bytes/1` — same as host
 
-**Security note:** The shim uses MD5 everywhere OpenSSL would use SHA-256. This is
-intentional — MD5 is available as an Erlang BIF without any NIF. For a loopback-only
-dev server there is no meaningful attack surface. Do not ship this in a production app
-with external network access.
+Plus `:public_key` and `:ssl` BEAMs are bundled, so cert parsing and
+HTTPS clients work.
 
-See `MobDev.Deployer.generate_crypto_shim/0` for the current implementation.
+How it's wired (transparent to app code):
+
+- `lib/crypto-VSN/priv/lib/<arch>/crypto.so` — present in the tarball,
+  but **not** loaded dynamically; kept for tooling that introspects
+  `:code.priv_dir(:crypto)`.
+- `erts-VSN/lib/crypto.a` — OTP's NIF wrapper compiled with
+  `-DSTATIC_ERLANG_NIF`, registered in the BEAM's
+  `erts_static_nif_tab[]` via `--enable-static-nifs` at OTP build time.
+- `erts-VSN/lib/libcrypto.a` — OpenSSL 3.x, no-shared, `-Wl,--gc-sections`-friendly.
+- `mix mob.new`-generated `CMakeLists.txt` (Android) and
+  `ios/build_*.sh` (iOS) link both archives into the app's main native
+  lib. `--whole-archive` for `crypto.a`, regular link for `libcrypto.a`.
+- The BEAM's `erlang:load_nif("crypto", ...)` finds `crypto_nif_init`
+  via `dlsym(RTLD_DEFAULT)` — no `dlopen` of a separate `.so`.
+
+**Why the dlopen path doesn't work on Android**: the app's main native
+lib is loaded `RTLD_LOCAL` by Java's `System.loadLibrary`, so its
+`enif_*` symbols are invisible to subsequently-`dlopen`'d NIFs. See
+`common_fixes.md`'s "Android NIFs must be statically linked" entry.
 
 ---
 
-## Fix 7: xor_bytes must zip pairs, not take the cartesian product
+## Fix 7 / Fix 8: pure-Erlang xor / iodata normalization (historical)
 
-**Applies to: iOS and Android**
-
-The obvious Erlang implementation of byte-wise XOR:
-
-```erlang
-%% WRONG — cartesian product, produces N² bytes
-xor_bytes(A, B) ->
-    list_to_binary([X bxor Y || <<X>> <= A, <<Y>> <= B]).
-```
-
-This generates N² elements (every combination of each byte of A with every byte of
-B), not N (element-wise pairs). In `pbkdf2_iterate`, the accumulator's size grows
-exponentially across iterations, causing the process to hang and eventually OOM.
-
-**Correct implementation — recursive zip:**
-
-```erlang
-xor_bytes(A, B) -> xor_bytes(A, B, []).
-xor_bytes(<<X, Ra/binary>>, <<Y, Rb/binary>>, Acc) ->
-    xor_bytes(Ra, Rb, [X bxor Y | Acc]);
-xor_bytes(<<>>, <<>>, Acc) ->
-    list_to_binary(lists:reverse(Acc)).
-```
+These two fixes were specific to the MD5-based shim. They no longer apply
+since the shim is gone — the real `:crypto` NIF handles iodata
+normalization and bitwise XOR natively. Left as a historical reference;
+if you find similar patterns in another piece of fallback code,
+`iolist_to_binary/1` plus a recursive byte-zip (NOT a binary
+comprehension cartesian product) is the right pattern.
 
 ---
 
-## Fix 8: Normalize iodata inputs in crypto shim
+## Fix 9: SSL/TLS
 
 **Applies to: iOS and Android**
 
-`plug_crypto` passes iodata (lists of binaries, nested lists, etc.), not flat
-binaries, to crypto functions. `erlang:md5/1` accepts iodata but binary pattern
-matching does not.
-
-Normalize all inputs at every entry point:
-
-```erlang
-pbkdf2_hmac(_DigestType, Password, Salt, Iterations, DerivedKeyLen) ->
-    Pwd = iolist_to_binary(Password),
-    S   = iolist_to_binary(Salt),
-    ...
-
-mac(hmac, _HashAlg, Key, Data) ->
-    hmac_md5(iolist_to_binary(Key), iolist_to_binary(Data));
-
-exor(A, B) ->
-    xor_bytes(iolist_to_binary(A), iolist_to_binary(B)).
-```
-
----
-
-## Fix 9: SSL — thousand_island requires :ssl but mobile OTP builds omit it
-
-**Applies to: iOS and Android**
-
-`thousand_island` lists `:ssl` as a required OTP application. iOS OTP doesn't
-include ssl. But ssl is implemented entirely in Erlang (no NIFs), so host macOS
-`.beam` files run identically on the iOS simulator.
-
-Copy ssl from the host OTP in build.sh:
-
-```bash
-HOST_SSL_DIR=$(ls -d ~/.local/share/mise/installs/erlang/*/lib/ssl-* 2>/dev/null \
-    | sort -V | tail -1)
-if [ -n "$HOST_SSL_DIR" ]; then
-    cp "$HOST_SSL_DIR/ebin/"*.beam "$BEAMS_DIR/"
-    cp "$HOST_SSL_DIR/ebin/ssl.app" "$BEAMS_DIR/"
-fi
-```
-
-Note: No TLS sockets are actually opened (loopback HTTP only), but ssl must start
-successfully for thousand_island to boot.
+`:ssl` is in the tarballs (alongside `:crypto` and `:public_key`). HTTPS
+clients work on-device. `thousand_island`'s `:ssl` dependency starts
+cleanly without any custom shim.
 
 ---
 
@@ -428,10 +389,10 @@ am force-stop PKG && am start -n PKG/.MainActivity
 | 3 | `Mob.ComponentRegistry.start_link()` | Crash calling `start_root` |
 | 4 | Route to `PageLive`, not `PageController` | HTTP 500 on every request |
 | 5 | Deploy `priv/static` to BEAMS_DIR | Blank WebView (JS 404) |
-| 6 | Full crypto shim (`pbkdf2_hmac`, `exor`, `mac`, `hash`) | Crash on every request |
-| 7 | Zip pairs in `xor_bytes`, not cartesian product | Process hang / OOM in pbkdf2 |
-| 8 | `iolist_to_binary` on all crypto shim inputs | `ArgumentError` in binary construction |
-| 9 | SSL BEAM files from host OTP | `thousand_island` fails to start |
+| 6 | Real `:crypto` (no shim) — OpenSSL static-linked into native lib | Crash on every request that needs HMAC, hash, AEAD, etc. |
+| 7 | (historical) Zip pairs in `xor_bytes` — N/A with real crypto | — |
+| 8 | (historical) `iolist_to_binary` in crypto shim — N/A with real crypto | — |
+| 9 | `:ssl` shipped in tarball (real, with `:public_key`) | `thousand_island` fails to start |
 | 10 | Glob loop for dep BEAM copy (iOS) / `mob.deploy` (Android) | Missing module errors at runtime |
 
 ### Android-only
@@ -452,6 +413,6 @@ am force-stop PKG && am start -n PKG/.MainActivity
 - `/tmp/lv_test/ios/build.sh` — iOS build script with all shared fixes applied
 - `/tmp/lv_test/android/app/src/main/java/com/mob/lv_test/MobBridge.kt` — Android Compose renderer (fix A1 here)
 - `/tmp/lv_test/android/app/src/main/res/xml/network_security_config.xml` — cleartext whitelist (fix A2)
-- `mob_dev/lib/mob_dev/deployer.ex` — `generate_crypto_shim/0` (fix 6, shared)
+- `mob_dev/lib/mob_dev/deployer.ex` — `real_device_crypto_available?/0` decides whether to skip the legacy shim; `generate_crypto_shim/0` is now a fallback for old cached tarballs only
 - `mob_dev/lib/mob_dev/enable.ex` — `inject_android_network_security_config/1` (fix A2, automated)
 - `mob/lib/mob/ui.ex` — `Mob.UI.webview/1` generates `:web_view` atom (the type A1 must match)

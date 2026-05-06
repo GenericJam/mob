@@ -138,6 +138,31 @@ def handle_info({:push_token, :ios, token}, socket), do: ...
 
 Also: `Mob.Clipboard`, `Mob.Share`, `Mob.Photos`, `Mob.Files`, `Mob.Audio`, `Mob.Motion`, `Mob.Biometric`, `Mob.Scanner`, `Mob.Permissions`.
 
+## What's in the box
+
+The pre-built OTP runtime that ships with each app includes:
+
+- **Real `:crypto`** — OpenSSL 3.x, statically linked into the app's
+  native lib. ECDH (incl. x25519, secp256r1), AEAD (ChaCha20-Poly1305,
+  AES-GCM), SHA-2 hashes, HMAC, PBKDF2, HKDF, real `strong_rand_bytes/1`.
+  No insecure shim, no dlopen.
+- **`:public_key` + `:ssl`** — cert parsing, HTTPS clients,
+  TLS sockets. The whole standard `:ssl` API is available.
+- **Phoenix-compatible** — Phoenix, LiveView, plug_crypto, jose, joken,
+  guardian, oban, and anything else using `:crypto`/`:ssl` works
+  unmodified.
+- **Erlang distribution** — `mix mob.connect` opens an IEx session
+  on-device. Hot-push individual modules with `nl/1`.
+
+Native APIs surfaced via `Mob.*` modules (above) cover camera,
+location, audio, files, biometrics, push, clipboard, share, scanner,
+motion sensors, permissions.
+
+The OTP runtime tarball is ~80 MB compressed; sliced per-arch by
+App Thinning (iOS) and App Bundle (Android) so each user only
+downloads ~25 MB of native runtime, on top of the BEAM bytecode for
+your app.
+
 ## Live development
 
 ```bash

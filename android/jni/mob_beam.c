@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <pthread.h>
+#include <dlfcn.h>
 #include <stdint.h>
 #include "mob_beam.h"
 
@@ -136,6 +137,22 @@ void mob_start_beam(const char* app_module) {
     LOGI("mob_start_beam: NO_BEAM defined, skipping BEAM launch (battery baseline)");
     return;
 #endif
+    // Re-dlopen ourselves with RTLD_GLOBAL so the BEAM's enif_* symbols
+    // (statically linked into this library) are visible when the BEAM
+    // later dlopens a NIF library (e.g. crypto.so). Without this, Android
+    // loads libpigeon.so with RTLD_LOCAL by default, hiding enif_* from
+    // dlopen'd children — crypto.so on_load fails with
+    // `cannot locate symbol enif_get_tuple`.
+    {
+        char self_path[600];
+        snprintf(self_path, sizeof(self_path), "%s/lib%s.so",
+                 s_native_lib_dir, app_module);
+        if (!dlopen(self_path, RTLD_NOW | RTLD_GLOBAL)) {
+            LOGE("mob_start_beam: dlopen self with RTLD_GLOBAL failed: %s", dlerror());
+        } else {
+            LOGI("mob_start_beam: re-dlopened self RTLD_GLOBAL: %s", self_path);
+        }
+    }
     mob_set_startup_phase("Setting up BEAM environment…");
     // Build all paths dynamically from s_files_dir (set in mob_init_bridge).
     char otp_root[560];
@@ -339,8 +356,16 @@ void mob_start_beam(const char* app_module) {
     LOGI("mob_start_beam: starting BEAM with module=%s, argc=%d", app_module, ac);
 
     // Symlink ERTS executables from BINDIR to the native lib dir.
-    // The native lib dir has apk_data_file SELinux label, allowing execve() from
-    // untrusted_app. Plain app_data_file (files/) blocks execute_no_trans.
+    //
+    // When installed via `adb install`, nativeLibraryDir contains the .so files
+    // and the symlink approach works (apk_data_file SELinux label allows execve).
+    //
+    // When installed via Play Store (split APKs), Android does NOT extract .so
+    // files to nativeLibraryDir on modern devices — they stay inside the split APK
+    // zip. In that case MobBridge.extractBeamHelpersFromSplitApk() copies the
+    // binaries directly into erts/bin/ before this point. We detect that scenario
+    // by checking whether the nativeLibDir target exists: if it doesn't, skip the
+    // unlink+symlink so we don't clobber the already-extracted real file.
     if (s_native_lib_dir[0]) {
         static const char* const exes[] = {
             "erl_child_setup", "inet_gethost", "epmd", NULL
@@ -354,11 +379,24 @@ void mob_start_beam(const char* app_module) {
                      "%s/" ERTS_VSN "/bin/%s", otp_root, exes[i]);
             snprintf(lib_path, sizeof(lib_path),
                      "%s/%s", s_native_lib_dir, libs[i]);
-            unlink(bin_path);
-            if (symlink(lib_path, bin_path) == 0) {
-                LOGI("mob_start_beam: symlink %s -> %s", exes[i], lib_path);
+            struct stat lib_st;
+            if (stat(lib_path, &lib_st) == 0) {
+                // nativeLibDir has the file (adb install) — use symlink
+                unlink(bin_path);
+                if (symlink(lib_path, bin_path) == 0) {
+                    LOGI("mob_start_beam: symlink %s -> %s", exes[i], lib_path);
+                } else {
+                    LOGE("mob_start_beam: symlink %s failed: %s", exes[i], strerror(errno));
+                }
             } else {
-                LOGE("mob_start_beam: symlink %s failed: %s", exes[i], strerror(errno));
+                // nativeLibDir empty (Play Store split APK) — MobBridge should have
+                // extracted the binary directly to bin_path; leave it in place.
+                struct stat bin_st;
+                if (stat(bin_path, &bin_st) == 0) {
+                    LOGI("mob_start_beam: symlink %s (extracted from split APK)", exes[i]);
+                } else {
+                    LOGE("mob_start_beam: symlink %s missing from both nativeLibDir and bin/", exes[i]);
+                }
             }
         }
     }
@@ -392,12 +430,25 @@ void mob_start_beam(const char* app_module) {
                     char nif_link[760];
                     snprintf(nif_link, sizeof(nif_link),
                              "%s/sqlite3_nif.so", exqlite_priv);
-                    unlink(nif_link);
-                    if (symlink(nif_target, nif_link) == 0) {
-                        LOGI("mob_start_beam: symlink exqlite NIF -> %s", nif_target);
-                        found = 1;
+                    struct stat nif_lib_st;
+                    if (stat(nif_target, &nif_lib_st) == 0) {
+                        // nativeLibDir has the NIF (adb install) — use symlink
+                        unlink(nif_link);
+                        if (symlink(nif_target, nif_link) == 0) {
+                            LOGI("mob_start_beam: symlink exqlite NIF -> %s", nif_target);
+                            found = 1;
+                        } else {
+                            LOGE("mob_start_beam: symlink exqlite NIF failed: %s", strerror(errno));
+                        }
                     } else {
-                        LOGE("mob_start_beam: symlink exqlite NIF failed: %s", strerror(errno));
+                        // nativeLibDir empty — MobBridge extracted NIF directly to nif_link
+                        struct stat nif_file_st;
+                        if (stat(nif_link, &nif_file_st) == 0) {
+                            LOGI("mob_start_beam: exqlite NIF extracted from split APK");
+                            found = 1;
+                        } else {
+                            LOGE("mob_start_beam: exqlite NIF missing from both nativeLibDir and priv/");
+                        }
                     }
                     break;
                 }
@@ -413,11 +464,21 @@ void mob_start_beam(const char* app_module) {
             mkdir(priv_dir, 0755);
             char nif_link[720];
             snprintf(nif_link, sizeof(nif_link), "%s/sqlite3_nif.so", priv_dir);
-            unlink(nif_link);
-            if (symlink(nif_target, nif_link) == 0) {
-                LOGI("mob_start_beam: symlink sqlite3_nif.so (fallback) -> %s", nif_target);
+            struct stat nif_lib_fb_st;
+            if (stat(nif_target, &nif_lib_fb_st) == 0) {
+                unlink(nif_link);
+                if (symlink(nif_target, nif_link) == 0) {
+                    LOGI("mob_start_beam: symlink sqlite3_nif.so (fallback) -> %s", nif_target);
+                } else {
+                    LOGE("mob_start_beam: symlink sqlite3_nif (fallback) failed: %s", strerror(errno));
+                }
             } else {
-                LOGE("mob_start_beam: symlink sqlite3_nif (fallback) failed: %s", strerror(errno));
+                struct stat nif_fb_file_st;
+                if (stat(nif_link, &nif_fb_file_st) == 0) {
+                    LOGI("mob_start_beam: sqlite3_nif.so (fallback) extracted from split APK");
+                } else {
+                    LOGE("mob_start_beam: sqlite3_nif.so (fallback) missing — NIF load will fail");
+                }
             }
         }
     }
