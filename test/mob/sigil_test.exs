@@ -79,7 +79,8 @@ defmodule Mob.SigilTest do
       node = ~MOB"""
       <Column padding={16}>
         <Text text="hello" />
-      </Column>"""
+      </Column>
+      """
 
       assert node.type == :column
       assert node.props.padding == 16
@@ -94,7 +95,8 @@ defmodule Mob.SigilTest do
         <Text text="one" />
         <Text text="two" />
         <Text text="three" />
-      </Column>"""
+      </Column>
+      """
 
       assert length(node.children) == 3
       assert Enum.map(node.children, & &1.props.text) == ["one", "two", "three"]
@@ -107,7 +109,8 @@ defmodule Mob.SigilTest do
           <Text text="left" />
           <Text text="right" />
         </Row>
-      </Column>"""
+      </Column>
+      """
 
       assert node.type == :column
       [row] = node.children
@@ -123,7 +126,8 @@ defmodule Mob.SigilTest do
           <Button text="A" />
           <Button text="B" />
         </Row>
-      </Column>"""
+      </Column>
+      """
 
       assert length(node.children) == 2
       [text, row] = node.children
@@ -142,7 +146,8 @@ defmodule Mob.SigilTest do
       node = ~MOB"""
       <Column>
         {child}
-      </Column>"""
+      </Column>
+      """
 
       assert length(node.children) == 1
       assert hd(node.children).props.text == "dynamic"
@@ -154,7 +159,8 @@ defmodule Mob.SigilTest do
       node = ~MOB"""
       <Column>
         {Enum.map(items, fn i -> %{type: :text, props: %{text: i}, children: []} end)}
-      </Column>"""
+      </Column>
+      """
 
       assert length(node.children) == 3
       assert Enum.map(node.children, & &1.props.text) == ["a", "b", "c"]
@@ -167,7 +173,8 @@ defmodule Mob.SigilTest do
       <Column>
         <Text text="header" />
         {extra}
-      </Column>"""
+      </Column>
+      """
 
       assert length(node.children) == 2
       assert hd(node.children).type == :text

@@ -5,9 +5,10 @@ defmodule Mob.FormatterTest do
 
   defp fmt(contents, opts \\ []), do: Formatter.format(contents, opts)
 
-  # Inline sigil: no leading newline, content is the raw tag string.
-  # Heredoc sigil: leading + trailing newline wrapping the content.
-  defp heredoc(inner), do: "\n" <> inner <> "\n"
+  # Elixir strips indentation from heredoc content before passing it to the plugin.
+  # The plugin receives trimmed content WITH a trailing "\n" (no leading newline).
+  # The plugin must return content + "\n" so Elixir places """ on its own line.
+  defp heredoc(inner), do: inner <> "\n"
 
   describe "features/1" do
     test "handles the MOB sigil" do
@@ -67,15 +68,13 @@ defmodule Mob.FormatterTest do
   end
 
   describe "heredoc detection" do
-    test "inline content (no leading newline) returns no surrounding newlines" do
+    test "inline content returns no trailing newline" do
       result = fmt("<Text />")
-      refute String.starts_with?(result, "\n")
       refute String.ends_with?(result, "\n")
     end
 
-    test "heredoc content (leading newline) returns surrounding newlines" do
+    test "heredoc content (trailing newline) returns trailing newline" do
       result = fmt(heredoc("<Text />"))
-      assert String.starts_with?(result, "\n")
       assert String.ends_with?(result, "\n")
     end
   end

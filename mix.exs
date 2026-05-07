@@ -42,6 +42,7 @@ defmodule Mob.MixProject do
         "guides/device_capabilities.md": [title: "Device Capabilities"],
         "guides/data.md": [title: "Data & Persistence"],
         "guides/testing.md": [title: "Testing"],
+        "guides/tooling.md": [title: "Tooling & Formatting"],
         "guides/publishing.md": [title: "Publishing to App Store / TestFlight"],
         "guides/troubleshooting.md": [title: "Troubleshooting"],
         "guides/agentic_coding.md": [title: "Agentic Coding"]
@@ -77,6 +78,7 @@ defmodule Mob.MixProject do
           Mob.Notify
         ],
         "Testing & Debugging": [Mob.Test],
+        Tooling: [Mob.Formatter],
         Internals: [Mob.Dist, Mob.NativeLogger, Mob.List, Mob.Sigil]
       ],
       before_closing_body_tag: &before_closing_body_tag/1

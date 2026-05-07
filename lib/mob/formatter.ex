@@ -1,4 +1,56 @@
 defmodule Mob.Formatter do
+  @moduledoc """
+  `mix format` plugin for the `~MOB` sigil.
+
+  Add `Mob.Formatter` to your project's `.formatter.exs` and `mix format` will
+  automatically normalise every `~MOB` sigil in your codebase alongside all other
+  Elixir code:
+
+  ```elixir
+  # .formatter.exs
+  [
+    plugins: [Mob.Formatter],
+    inputs: ["{mix,.formatter}.exs", "{config,lib,test}/**/*.{ex,exs}"]
+  ]
+  ```
+
+  ## What it normalises
+
+  - **Consistent indentation** — children are indented 2 spaces per nesting level.
+  - **Attribute wrapping** — when a tag's inline attributes would exceed `line_length`,
+    each attribute moves to its own line with the closing `/>` or `>` on a separate line.
+  - **Expression children** — `{expr}` slots are indented to match their sibling nodes.
+  - **Idempotent** — running `mix format` twice produces the same result.
+
+  See the [Tooling & Formatting guide](guides/tooling.html) for before/after examples
+  and CI setup instructions.
+
+  ## Configuration
+
+  Respects the standard `line_length` option from `.formatter.exs`:
+
+  ```elixir
+  [
+    plugins: [Mob.Formatter],
+    line_length: 120,
+    inputs: ["{mix,.formatter}.exs", "{config,lib,test}/**/*.{ex,exs}"]
+  ]
+  ```
+
+  The default line length is #{@default_line_length} characters.
+
+  ## Pass-through behaviour
+
+  If the `~MOB` template cannot be parsed (e.g. the file is in a mid-edit incomplete
+  state), the formatter returns the content unchanged rather than raising. `mix format`
+  never breaks a file it cannot fully understand.
+
+  Mismatched open/close tag names (e.g. `<Column>...</Row>`) are silently corrected to
+  use the open tag name. The `~MOB` sigil itself raises a `CompileError` at compile
+  time for mismatched tags, so the formatted file will still surface the error on the
+  next `mix compile`.
+  """
+
   @behaviour Mix.Tasks.Format
 
   @default_line_length 98
@@ -9,13 +61,13 @@ defmodule Mob.Formatter do
   @impl true
   def format(contents, opts) do
     line_length = Keyword.get(opts, :line_length, @default_line_length)
-    heredoc? = String.starts_with?(contents, "\n")
+    heredoc? = opts[:opening_delimiter] == ~s(""") or String.ends_with?(contents, "\n")
     trimmed = String.trim(contents)
 
     case Mob.Sigil.parse_template(trimmed) do
       {:ok, [node], "", _, _, _} ->
         formatted = format_node(node, 0, line_length)
-        if heredoc?, do: "\n" <> formatted <> "\n", else: formatted
+        if heredoc?, do: formatted <> "\n", else: formatted
 
       _ ->
         contents

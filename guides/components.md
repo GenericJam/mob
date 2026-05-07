@@ -439,3 +439,25 @@ bottom_save_tap = {self(), :bottom_save}
 <Button text="Bottom Save" on_tap={bottom_save_tap} />
 """
 ```
+
+---
+
+## Code formatting
+
+`mix format` understands `~MOB` sigils through `Mob.Formatter`, a first-class
+formatter plugin. Generated projects include a `.formatter.exs` that enables it
+automatically:
+
+```elixir
+# .formatter.exs
+[
+  plugins: [Mob.Formatter],
+  inputs: ["{mix,.formatter}.exs", "{config,lib,test}/**/*.{ex,exs}"]
+]
+```
+
+Running `mix format` then normalises indentation, wraps long attribute lists, and
+aligns expression children — in a single pass alongside all other Elixir code.
+
+See [Tooling & Formatting](tooling.md) for the full guide and `Mob.Formatter` for
+the API reference.
