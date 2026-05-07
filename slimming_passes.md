@@ -361,7 +361,7 @@ diminishing returns.
 These came up mid-session. They're small and worth doing before we
 close out, even though they don't fit the size-reduction theme above.
 
-### NDK 27.2.12479018 detection in `mix mob.doctor` and `mix mob.install`
+### NDK 27.2.12479018 detection in `mix mob.doctor` and `mix mob.install` — **shipped 2026-05-07**
 
 **Trigger:** beta user feedback (2026-05-06): they hit
 `undefined symbol: __cxa_allocate_exception` linking pigeon because
@@ -371,33 +371,38 @@ namespace `ne180000`). Their phrasing ("my phone needs NDK r25") is a
 misframe — phones don't drive NDK choice; the bundled `libbeam.a`
 does. They got there through link errors, not a useful diagnostic.
 
-**Mitigation already in place:** `mob_new`'s
-`android/app/build.gradle.eex` template pins
-`ndkVersion '27.2.12479018'` (committed earlier this session). This
-makes gradle pick the right NDK *if it's installed*. The gap is
-detection.
+**Landed (2026-05-07):**
 
-**What's missing:** `mob_dev/lib/mix/tasks/mob.doctor.ex` and
-`mob.install.ex` don't check whether the required NDK exists at
-`$ANDROID_HOME/ndk/27.2.12479018/`. 741 lines of doctor checks; zero
-NDK mentions.
+- `MobDev.NdkVersion` (`mob_dev/lib/mob_dev/ndk_version.ex`) is the
+  single source of truth at `27.2.12479018`. Public API:
+  `recommended/0`, `effective/0`, `override/0`, `installed?/1`,
+  `installed_versions/0`, `recommended_install_path/0`,
+  `project_pinned/1`, `install_command/0`. 12 unit tests.
+- Override precedence: `MOB_ANDROID_NDK_VERSION` env var
+  (machine-static) > `:android_ndk_version` in `mob.exs` (travels
+  with project) > recommended. Override is opt-in — `mob.doctor`
+  warns, doesn't fail; the user owns the resulting ABI debug.
+- `mix mob.doctor` gained `check_android_ndk/0` with a 3-state
+  matrix (✓ recommended installed, ⚠ override active, ✗ recommended
+  missing).
+- `mix mob.install` mirrors the check at onboarding so users see
+  it before their first deploy.
+- `mob_new`'s `android/app/build.gradle.eex` interpolates
+  `<%= ndk_version %>` (was a hardcoded literal); `MobNew.NdkVersion`
+  mirrors the constant and a drift test reads `mob_dev`'s source
+  to enforce equality.
+- `mob_dev/scripts/release/openssl/_lib.sh` centralises
+  `NDK_VERSION` for the five Android cross-compile scripts; each
+  sources it instead of hardcoding the path.
+- `mob/common_fixes.md` "NDK 27 / clang 18 split libc++"
+  documents symptoms, diagnostic, fix, escape hatch, and the
+  three-place lock-step bump procedure.
 
-**Fix shape:**
-1. Constant somewhere (probably `MobDev.Config` or a module attr in
-   `mob_dev`'s native build): `@required_ndk_version "27.2.12479018"`.
-2. `defp check_android_ndk/0` in `mob.doctor.ex`: looks at
-   `<sdk>/ndk/<version>/`, fails loud with the install command:
-   `sdkmanager --install "ndk;27.2.12479018"` (or the GUI path:
-   Android Studio → SDK Manager → SDK Tools → NDK (Side by side) →
-   pick 27.2.12479018).
-3. Same check at `mix mob.install` time so users see it during
-   onboarding, not the first time they try to deploy.
-4. Add a comment to `mob/crypto_plan.md` and the NDK constant
-   reminding future-us: when we rebuild tarballs against a new NDK,
-   the constant in `mob_dev` and the gradle pin in `mob_new` must
-   advance lock-step.
+**Commits:**
 
-**Effort:** ~30–45 min.
+- `mob_dev` `d7475ed` — `MobDev.NdkVersion` + doctor + install wiring
+- `mob_new` `a914810` — template + mirror + drift test
+- `mob_dev` `4ec0cf8` — release scripts source `_lib.sh`
 
 ### Platform-native style refresh (iOS Liquid Glass + Android Material 3 Expressive)
 

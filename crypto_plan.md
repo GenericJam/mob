@@ -371,6 +371,37 @@ provide a symbol OTP expects), we'd rather find it on one target.
 
 ---
 
+## NDK lock-step on tarball rebuild
+
+Mob's `libbeam.a` and the user's `libpigeon.so` must be compiled
+against the *same* NDK or the C++ exception ABI symbols come up
+undefined at link time (libc++ inline namespaces `__ne180000` for
+NDK 27, `__ne140000` for NDK 25 — they don't link). See
+`common_fixes.md` "NDK 27 / clang 18 split libc++" for the symptom
+and fix path.
+
+When we rebuild the Android tarballs against a newer NDK, the
+version constant has to advance in **three places, lock-step**:
+
+1. `mob_dev/lib/mob_dev/ndk_version.ex` — `@recommended` (canonical
+   source for the runtime check in `mix mob.doctor` /
+   `mix mob.install`).
+2. `mob_new/lib/mob_new/ndk_version.ex` — `@recommended` mirror
+   (mob_new is a Mix archive and can't depend on mob_dev at gen
+   time; a drift test reads mob_dev's source file and fails CI if
+   they diverge).
+3. `mob_dev/scripts/release/openssl/_lib.sh` — `NDK_VERSION` default
+   used by every Android cross-compile script (OpenSSL, OTP,
+   crypto static NIF).
+
+Any one of those out of sync and either gradle picks the wrong NDK
+(downstream link errors) or the cross-compile uses the wrong
+toolchain (the very mismatch we ship to detect). The drift test
+covers (1)↔(2) automatically; (3) is on the developer to keep in
+sync. Bump in one commit.
+
+---
+
 ## Where to look first
 
 | Question | File |

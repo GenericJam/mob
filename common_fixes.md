@@ -873,3 +873,89 @@ the app's main native lib. Ecto's `strong_rand_bytes/1`, plug_crypto's
 HMAC-SHA256, peer_net's x25519 etc. all just work with the standard
 OTP `:crypto` API. No app-level patching needed.
 
+---
+
+## NDK 27 / clang 18 split libc++ — `undefined symbol: __cxa_allocate_exception`
+
+**Symptom**: linking the app's `libpigeon.so` against Mob's bundled
+`libbeam.a` fails with one or more of:
+
+```
+undefined symbol: __cxa_allocate_exception
+undefined symbol: __cxa_throw
+undefined symbol: __cxa_begin_catch
+undefined reference to `std::__ne140000::...`
+```
+
+The user's Android Studio shipped NDK 25 (or 26), gradle picked it
+up by default, and `libpigeon.so` got compiled against a different
+libc++ inline namespace than the one baked into Mob's `libbeam.a`.
+
+**Root cause**: NDK 27 ships clang 18, which defaults libc++ to the
+versioned inline namespace `std::__ne180000::`. NDK 25 / clang 14
+uses `std::__ne140000::`. Symbols in those namespaces don't link
+across versions — the C++ exception ABI runtime calls
+(`__cxa_allocate_exception`, `__cxa_throw`, etc.) are emitted by
+the compiler, expected to resolve at link time, and the wrong
+namespace makes them appear undefined.
+
+The bundled OTP tarballs in `~/.mob/cache/otp-android-*` are
+cross-compiled against NDK 27 (see
+`mob_dev/scripts/release/openssl/_lib.sh` `NDK_VERSION=27.2.12479018`).
+Whatever NDK ships in the user's Android Studio determines the
+namespace `libpigeon.so` is built against.
+
+**Diagnostic** — confirm an ABI mismatch on a fresh checkout:
+
+```bash
+# What namespace is libbeam.a built against?
+nm ~/.mob/cache/otp-android-*/erts-*/lib/libbeam.a | grep __ne180000 | head
+# expect hits — those are NDK 27 symbols
+
+# What's gradle picking up locally?
+ls ~/Library/Android/sdk/ndk/
+# expect 27.2.12479018; if you see 25.x or 26.x as the only entry, that's it
+```
+
+**Fix**:
+
+```bash
+sdkmanager --install "ndk;27.2.12479018"
+```
+
+Or via Android Studio → SDK Manager → SDK Tools → NDK (Side by side)
+→ check `27.2.12479018`.
+
+The generated `android/app/build.gradle` already pins
+`ndkVersion '27.2.12479018'`, so once the NDK is installed gradle
+will use it automatically. `mix mob.doctor` reports installed NDKs
+and flags this exact mismatch (since 2026-05-07); `mix mob.install`
+warns at onboarding time.
+
+**Escape hatch** — if you genuinely need a different NDK (legacy
+library, hardware-specific toolchain, etc.):
+
+```elixir
+# mob.exs (travels with the project)
+config :mob_dev, android_ndk_version: "25.1.8937393"
+```
+
+```bash
+# or env var (machine-static)
+export MOB_ANDROID_NDK_VERSION=25.1.8937393
+```
+
+The override means you've opted out of the bundled-OTP libc++ ABI
+guarantee. `libpigeon.so` and `libbeam.a` will not agree on the
+namespace; you'll get the link errors above and you own the debug.
+`mob.doctor` warns; it doesn't fail. See
+`mob_dev/lib/mob_dev/ndk_version.ex` for precedence and rationale.
+
+**When we rebuild OTP tarballs against a newer NDK**: bump in three
+places, lock-step:
+
+1. `mob_dev/lib/mob_dev/ndk_version.ex` — `@recommended`.
+2. `mob_new/lib/mob_new/ndk_version.ex` — `@recommended` (drift
+   test enforces equality).
+3. `mob_dev/scripts/release/openssl/_lib.sh` — `NDK_VERSION` default.
+
