@@ -238,8 +238,25 @@ be referenced by ssl/public_key but isn't actually exercised at
 runtime, where the linker can't prove it's dead without the upstream
 declaration that it doesn't exist.
 
-**Final binary deltas TBD** once tarballs are staged + pigeon
-rebuilt + verified.
+**Pass 4 measured (final binary, post `--gc-sections`):**
+
+| Target | Pass 1 | Pass 4 | Δ vs Pass 1 |
+|---|---:|---:|---:|
+| Android arm64 `libpigeon.so` | 9.25 MB | 9.00 MB | -0.25 MB (-2.7%) |
+| Android arm32 `libpigeon.so` | 5.32 MB | 5.11 MB | -0.21 MB (-3.9%) |
+| iOS sim `Pigeon` | 7.00 MB | 6.78 MB | -0.22 MB (-3.1%) |
+
+**Cumulative deltas vs original baseline:**
+
+| Target | Original | After Pass 4 | Δ |
+|---|---:|---:|---:|
+| Android arm64 `libpigeon.so` | 10.11 MB | 9.00 MB | **-11.0%** |
+| iOS sim `Pigeon` | 8.02 MB | 6.78 MB | **-15.5%** |
+
+Verified pigeon boots through `step 5 => ok` on Android emulator
+(arm64) and iOS simulator after the rebuild. 4 tarballs republished
+to GitHub release `otp-73ba6e0f` (`MobDev.OtpDownloader` auto-redownloads
+once user caches go stale).
 
 ## Pass 4-old — proposal text (kept for context)
 
