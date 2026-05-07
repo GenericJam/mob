@@ -8,7 +8,36 @@ defmodule Mob.MixProject do
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
+      compilers: compilers(Mix.env()) ++ Mix.compilers(),
       deps: deps(),
+      unused: [
+        ignore: [
+          # GenServer / behaviour callbacks (mix_unused can't see them).
+          {:_, :init, 1},
+          {:_, :handle_call, 3},
+          {:_, :handle_cast, 2},
+          {:_, :handle_info, 2},
+          {:_, :handle_continue, 2},
+          {:_, :terminate, 2},
+          {:_, :code_change, 3},
+          # Mob's public render-tree API — every component module exposes
+          # render/1 callable from app code. mix_unused sees no internal
+          # caller because it lives in user apps.
+          {~r/^Mob\..+/, :render, 1},
+          # Screen lifecycle callbacks dispatched by the Mob.Screen
+          # GenServer wrapper.
+          {~r/^Mob\..+/, :mount, 3},
+          {~r/^Mob\..+/, :on_start, 0},
+          {~r/^Mob\..+/, :on_resume, 1},
+          # NIF stub functions in src/mob_nif.erl (apply'd via load_nif).
+          {:mob_nif, :_, :_},
+          # Mob.Test diagnostic API surface — IEx-driven, no internal
+          # caller in mob itself.
+          {~r/^Mob\.Test$/, :_, :_},
+          # Theme accessors — used by user apps via Mob.Theme.<name>.
+          {~r/^Mob\.Theme\..+/, :_, :_}
+        ]
+      ],
       description: "BEAM-on-device mobile framework for Elixir",
       source_url: "https://github.com/genericjam/mob",
       homepage_url: "https://hexdocs.pm/mob",
@@ -122,7 +151,12 @@ defmodule Mob.MixProject do
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:jump_credo_checks, "~> 0.1.0", only: [:dev, :test], runtime: false},
-      {:erlfmt, "~> 1.8", only: :dev, runtime: false}
+      {:erlfmt, "~> 1.8", only: :dev, runtime: false},
+      {:mix_unused, "~> 0.4", only: :dev, runtime: false}
     ]
   end
+
+  # `:unused` only runs in dev. Keeps test/CI logs clean.
+  defp compilers(:dev), do: [:unused]
+  defp compilers(_), do: []
 end
