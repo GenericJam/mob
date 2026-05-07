@@ -75,7 +75,7 @@ defmodule Mob.ScreenStateTest do
       assert :ok = Mob.ScreenState.dump(PersistScreen, socket)
       %{rows: [[vsn, blob]]} = TestRepo.query!("SELECT vsn, data FROM mob_screen_states", [])
       assert vsn == 1
-      assert is_binary(blob)
+      assert is_binary(blob) and byte_size(blob) > 0
     end
 
     test "upserts on second write", %{socket: socket} do

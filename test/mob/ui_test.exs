@@ -90,8 +90,11 @@ defmodule Mob.UITest do
     end
 
     test "accepts Mob.Canvas helper output as draw entries" do
-      import Mob.Canvas
-      ops = [line(0, 0, 10, 10, color: :primary), circle(50, 50, 25, color: :primary)]
+      ops = [
+        Mob.Canvas.line(0, 0, 10, 10, color: :primary),
+        Mob.Canvas.circle(50, 50, 25, color: :primary)
+      ]
+
       assert UI.canvas(width: 100, height: 100, draw: ops).props.draw == ops
     end
   end

@@ -25,7 +25,7 @@ Before committing changes, run **all** in this order:
 ```bash
 mix test            # full suite must pass (call out any pre-existing flake explicitly)
 mix format          # apply Elixir formatting
-mix credo --strict  # address new issues; pre-existing ones are tracked separately
+mix credo --strict  # **whole tree, not just changed files** — pre-existing issues are tracked separately, but new ones (including in tests) must be fixed
 mix erlfmt --check src/                          # Erlang formatting (src/mob_nif.erl)
 xcrun clang-format --dry-run -Werror \
   ios/*.m ios/*.c \

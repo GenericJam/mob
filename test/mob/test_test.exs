@@ -154,8 +154,8 @@ defmodule Mob.TestTest do
     end
 
     test "documented output uses atom :type and :children keys" do
-      assert is_atom(sample_tree().type)
-      assert is_list(sample_tree().children)
+      assert sample_tree().type == :root
+      assert length(sample_tree().children) > 0
     end
   end
 end

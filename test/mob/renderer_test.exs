@@ -937,8 +937,7 @@ defmodule Mob.RendererTest do
 
     test "Mob.Canvas helper output round-trips through the renderer" do
       Mob.Theme.set(primary: :emerald_500)
-      import Mob.Canvas
-      ops = [line(0, 0, 100, 100, color: :primary, width: 4, cap: :round)]
+      ops = [Mob.Canvas.line(0, 0, 100, 100, color: :primary, width: 4, cap: :round)]
       [op] = canvas_draw(ops)
       assert op["op"] == "line"
       assert op["color"] == 0xFF10B981

@@ -86,6 +86,7 @@ defmodule Mob.Dist do
   end
 
   @doc false
+  @spec release_mode?() :: boolean()
   def release_mode?, do: System.get_env("MOB_RELEASE") == "1"
 
   @doc false
