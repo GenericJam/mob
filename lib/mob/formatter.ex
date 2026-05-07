@@ -1,4 +1,6 @@
 defmodule Mob.Formatter do
+  @default_line_length 98
+
   @moduledoc """
   `mix format` plugin for the `~MOB` sigil.
 
@@ -52,8 +54,6 @@ defmodule Mob.Formatter do
   """
 
   @behaviour Mix.Tasks.Format
-
-  @default_line_length 98
 
   @impl true
   def features(_opts), do: [sigils: [:MOB], extensions: []]
