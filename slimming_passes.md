@@ -137,7 +137,37 @@ from Erlang strings. Compose handles its own normalization; SwiftUI
 likewise. The Erlang side may not exercise `:unicode_util` at all in
 practice. Need to confirm before stubbing.
 
-## Pass 3 — `mix_unused` against project source (proposed)
+## Pass 3 — `mix_unused` against project source (✅ shipped, 2026-05-06)
+
+**Mechanic:** `mix_unused` (Hauleth) registered as a dev-only `:unused`
+compiler tracer in both `mob` and `mob_dev`. Flags `def`s never called
+from inside the project.
+
+**Baseline captured** in `mob/dead_code.md`:
+
+| Repo | should-be-private | is-unused | Total |
+|---|---:|---:|---:|
+| `mob_dev` | 72 | 48 | 120 |
+| `mob` | 23 | 164 | 195 |
+
+Two flavors:
+
+- **"should be private"** — `def` only called from within its
+  defining module. Real cleanup. ~95 hits across both repos.
+- **"is unused"** — `def` not called anywhere in the project. In
+  `mob` (a library), most of these are public APIs called by user
+  apps that mix_unused can't see — false positives. In `mob_dev` (an
+  internal tool) they're more likely real.
+
+**Triage strategy in `mob/dead_code.md`** — fix by-module not by-list,
+update ignore list when a hint is a stable false positive, re-run after
+each refactor and look for *new* hints rather than absolute count.
+
+Not bulk-fixed in the same session — that's a focused refactor pass
+needing per-function judgment. The dep + tracer + ignore list +
+baseline are the deliverables.
+
+## Pass 3-old — `mix_unused` proposal text (kept for context)
 
 **Mechanic:** `mix_unused` (Hauleth) does static AST analysis of
 project source and flags public functions that are never called.
@@ -164,7 +194,54 @@ refactors.
 **Risk:** false positives from `apply/2,3`, message dispatch, NIF stubs,
 behaviour callbacks. The ignore list is the long-term cost.
 
-## Pass 4 — OpenSSL feature surgery (proposed, lower priority)
+## Pass 4 — OpenSSL feature surgery (in flight, 2026-05-06)
+
+**Status:** OpenSSL × 4 rebuilt with `no-X` algorithm flags ✅, OTP × 4
+cross-compile + tarball staging in progress. Pigeon verification +
+republish pending.
+
+**Disabled algorithms** (unconditional — every Mob app is safe to
+strip these):
+
+| Bucket | Algorithms |
+|---|---|
+| Legacy hashes | `md2`, `md4`, `mdc2`, `whirlpool`, `rmd160` |
+| Legacy ciphers | `rc2`, `rc4`, `idea`, `cast`, `bf`, `blake2`, `seed`, `aria`, `camellia`, `gost` |
+| Weak / pre-TLS-1.2 | `weak-ssl-ciphers`, `ssl3`, `tls1`, `tls1_1` |
+| Niche TLS variants | `srp`, `psk`, `nextprotoneg` |
+
+**Kept** (real algorithms Mob apps actually exercise):
+
+- **AES (full)** — required by ssl AES-GCM cipher suites + plug_crypto
+  cookies. Don't disable.
+- **SHA-2 family + HKDF** — Phoenix sessions, peer_net Noise XX, TLS.
+- **ChaCha20-Poly1305** — peer_net AEAD + modern TLS suites.
+- **x25519, ECDH, ECDSA** — peer_net handshake + TLS curve negotiation.
+- **RSA, DSA** — X.509 cert verification chain (DSA rare but kept
+  because some root certs still use it).
+- **DH** — TLS DHE cipher suites.
+
+**Pass 4 OpenSSL sizes** (vs Pass 1 baseline):
+
+| Target | Pass 1 | Pass 4 | Δ |
+|---|---:|---:|---:|
+| arm64 | 11.42 MB | 10.82 MB | -0.60 MB |
+| arm32 | 8.43 MB | 7.93 MB | -0.50 MB |
+| iOS sim | 6.16 MB | 5.79 MB | -0.37 MB |
+| iOS device | 7.01 MB | 6.65 MB | -0.36 MB |
+
+These are the **static archive** sizes. The actual final-binary win
+after `--gc-sections` will be smaller still — code that's referenced
+but unused gets dropped at link, regardless of whether OpenSSL
+shipped it. The `no-X` flags are most valuable for code that *might*
+be referenced by ssl/public_key but isn't actually exercised at
+runtime, where the linker can't prove it's dead without the upstream
+declaration that it doesn't exist.
+
+**Final binary deltas TBD** once tarballs are staged + pigeon
+rebuilt + verified.
+
+## Pass 4-old — proposal text (kept for context)
 
 **Mechanic:** OpenSSL Configure supports `no-X` flags for many
 algorithms. We use a tiny slice of OpenSSL: x25519, ChaCha20-Poly1305,
@@ -181,7 +258,47 @@ SHA-256/HKDF, AES-GCM (for ssl), RSA (for X.509 cert verify).
 already removed unreferenced code. This is the long tail; Pass 1
 should already get most of it.
 
-## Pass 5 — Empirical trace harness (already partial — `mix mob.trace_otp`)
+## Pass 5 — Empirical trace harness (✅ remote-trace mode shipped, 2026-05-06)
+
+**Status:** `mix mob.trace_otp --remote <node>` shipped. Captures real
+MFA set hit on a running device during a window of user activity.
+
+**The previous synthetic-harness mode** stays — it characterizes the
+floor of what *any* Elixir/OTP app needs (Enum, String, Process,
+GenServer, etc). The remote mode adds: what does *this specific
+running app* exercise on top of that floor.
+
+**Implementation:**
+
+- `Mob.Diag.mfa_trace/1` — wraps `:erlang.trace_pattern/3` +
+  `:erlang.trace/3` for `duration_ms`, collects unique
+  `{module, function, arity}` set into ETS, returns the dedup'd list.
+  ~1.5–2× runtime slowdown during the window. One trace at a time
+  (process-global tracer).
+- `mix mob.trace_otp --remote <node> --duration <ms> --json out.json`
+  — calls the function via `:rpc`, dumps JSON or prints summary.
+  Self-starts distribution + sets the mob cookie so it works
+  standalone.
+
+**What this enables:**
+
+- **Pass 4 validation** — confirm pigeon never calls `:crypto.rsa_*`
+  before relying on the no-X strip. (5s idle trace already showed
+  zero `:crypto.*` MFAs after boot — pigeon's crypto load is
+  startup-only, before the window opens.)
+- **Future strip-set additions** — same dance that drove Pass 2
+  (compiler + ssh): trace, see what's never touched, strip it,
+  repeat.
+- **App-level OpenSSL profiles** (future) — capture the union of
+  `:crypto.*` MFAs across all real-world Mob apps; that's the strip
+  floor. Apps with stricter needs (no TLS) opt into more aggressive
+  no-X flags.
+
+**Methodology now first-class.** Was ad-hoc curl-and-grep when it
+drove Pass 2; now a documented `mix mob.trace_otp --remote`
+invocation with stable JSON output.
+
+## Pass 5-old — proposal text (kept for context)
 
 **Mechanic:** `mix mob.trace_otp` exists today; it instruments the
 basic Elixir/OTP surface (collections, strings, processes, errors)
