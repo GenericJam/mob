@@ -62,7 +62,49 @@ Pass 1 tarballs. Existing user caches auto-invalidate (no schema
 change needed; `valid_otp_dir?/2` re-downloads when content
 verification mismatches the on-disk metadata).
 
-## Pass 2 — `unicode_util` stub (proposed)
+## Pass 2 — empirical-snapshot strip additions (✅ shipped, 2026-05-06)
+
+**Original proposal: stub `unicode_util` (rejected after analysis).**
+GRiSP nano stubs `unicode_util` because it has no display + no
+user-facing text. Mob apps are emoji-land — grapheme clustering,
+case-insensitive search, normalization all matter. Stubbing breaks
+real user-visible behavior. Pass 2 is intentionally not a stub.
+
+**What we actually did instead:** ran `Mob.Diag.loaded_snapshot/0`
+against a running pigeon iOS-sim build, diffed against shipped beams
+per OTP application:
+
+| App | Shipped | Loaded |
+|---|---:|---:|
+| `compiler-9.0.5` | 59 | **0** |
+| `ssh-5.5.1` | 43 | **0** |
+| `public_key-1.20.2` | 41 | 0 |
+| `ssl-11.5.3` | 78 | 0 |
+| `asn1-5.4.3` | 22 | 0 |
+| `inets-9.6.1` | 63 | 0 (already in strip set) |
+| `sasl-4.3.1` | 17 | 0 |
+
+`compiler` + `ssh` added to the unconditional `prefix_libs` strip set
+(both `MobDev.Release` and `MobDev.NativeBuild`). **~4.4 MB saved**
+on release IPAs and `mix mob.deploy --native --slim` builds.
+
+`public_key`, `ssl`, `asn1`, `sasl` left alone — pigeon doesn't use
+them but other apps in the tree (`air_cart_max` makes HTTPS calls)
+do. Future work: opt-in per-app strip via `mob.exs` config.
+
+**Risk floor:** any app that calls `Code.eval_string/1`,
+`Code.compile_string/1`, `:erl_eval.eval_str/1`, or starts an `:ssh`
+client/server now breaks. None of the apps in this tree do; new apps
+with those needs drop the strip from
+`mob_dev/lib/mob_dev/release.ex` + `native_build.ex`.
+
+**Method matters:** empirical loaded-snapshot beats hand-curating
+strip lists. The dance: deploy → `mob.snapshot_loaded` → diff
+shipped vs loaded → iterate. Anything assumed to be unused that
+actually is shows up in the next iteration's strip-broke-the-build
+log.
+
+## Pass 2-old — `unicode_util` stub (rejected, kept for historical record)
 
 **Mechanic:** OTP's `unicode_util.beam` carries ~500 KB of Unicode
 normalization tables (case-folding, NFC/NFD decomposition, grapheme
