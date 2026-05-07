@@ -54,15 +54,57 @@ defmodule Mob.Screen do
 
   @callback terminate(reason :: term(), socket :: socket()) :: term()
 
-  @optional_callbacks [handle_event: 3, handle_info: 2, terminate: 2]
+  @doc """
+  Serialise assigns for persistence. Return a plain map of the keys you want
+  restored on next launch. Defaults to the full assigns map minus any
+  non-serialisable values (PIDs, references, ports, functions).
 
-  defmacro __using__(_opts) do
+  Only called when `use Mob.Screen, vsn: N` (N > 0) or `persist: true`.
+  """
+  @callback dump_state(assigns :: map()) :: map()
+
+  @doc """
+  Reconstruct assigns from a previously persisted map.
+
+  `stored_vsn` is the version that was current when the data was saved.
+  Match on it to migrate old shapes:
+
+      def load_state(1, stored), do: stored
+      def load_state(0, stored), do: Map.put(stored, :new_field, :default)
+
+  The returned map is merged into the socket's assigns after `mount/3` runs.
+  Only called when stored data exists.
+  """
+  @callback load_state(stored_vsn :: non_neg_integer(), stored :: map()) :: map()
+
+  @doc """
+  Return a stable string key for storing this screen's state.
+
+  Implement when the same screen module holds per-user or parameterised state:
+
+      def screen_key(assigns), do: "\#{__MODULE__}:\#{assigns.user_id}"
+
+  Defaults to the module name string.
+  """
+  @callback screen_key(assigns :: map()) :: String.t()
+
+  @optional_callbacks [handle_event: 3, handle_info: 2, terminate: 2, screen_key: 1]
+
+  defmacro __using__(opts) do
+    vsn = Keyword.get(opts, :vsn, 0)
+    persist = Keyword.get(opts, :persist, vsn > 0)
+
     quote do
       @behaviour Mob.Screen
       import Mob.Sigil
 
-      def handle_info(_message, socket), do: {:noreply, socket}
+      def __mob_vsn__, do: unquote(vsn)
+      def __mob_persist__, do: unquote(persist)
 
+      def dump_state(assigns), do: assigns
+      def load_state(_vsn, stored), do: stored
+
+      def handle_info(_message, socket), do: {:noreply, socket}
       def terminate(_reason, _socket), do: :ok
 
       def handle_event(event, _params, _socket) do
@@ -70,7 +112,7 @@ defmodule Mob.Screen do
                 "Add a handle_event/3 clause to handle it."
       end
 
-      defoverridable handle_info: 2, terminate: 2, handle_event: 3
+      defoverridable dump_state: 1, load_state: 2, handle_info: 2, terminate: 2, handle_event: 3
     end
   end
 
@@ -157,6 +199,11 @@ defmodule Mob.Screen do
 
     case screen_module.mount(params, %{}, socket) do
       {:ok, mounted_socket} ->
+        # Restore persisted assigns after mount so mount always runs cleanly.
+        # safe_area is re-applied from the current socket so a stale device
+        # inset from storage never wins over the live value.
+        loaded_socket = maybe_load_state(screen_module, mounted_socket)
+
         socket =
           if render_mode == :render do
             # Check for a notification that launched the app from a killed state.
@@ -167,11 +214,12 @@ defmodule Mob.Screen do
               json -> send(self(), {:mob_launch_notification, json})
             end
 
-            do_render(screen_module, mounted_socket)
+            do_render(screen_module, loaded_socket)
           else
-            mounted_socket
+            loaded_socket
           end
 
+        if screen_module.__mob_persist__(), do: schedule_state_sync()
         {:ok, {screen_module, socket, [], render_mode}}
 
       {:error, reason} ->
@@ -396,6 +444,17 @@ defmodule Mob.Screen do
     {:noreply, {module, new_socket, nav_history, render_mode}}
   end
 
+  # Periodic state sync — intercepted before the user's handle_info so the
+  # screen module never sees this internal message.
+  def handle_info(:__mob_sync_state__, {module, socket, nav_history, render_mode}) do
+    if module.__mob_persist__() do
+      Mob.ScreenState.dump(module, socket)
+      schedule_state_sync()
+    end
+
+    {:noreply, {module, socket, nav_history, render_mode}}
+  end
+
   def handle_info(message, {module, socket, nav_history, render_mode}) do
     {:noreply, new_socket} = module.handle_info(message, socket)
 
@@ -418,6 +477,7 @@ defmodule Mob.Screen do
 
   @impl GenServer
   def terminate(reason, {module, socket, _nav_history, _render_mode}) do
+    if module.__mob_persist__(), do: Mob.ScreenState.dump(module, socket)
     module.terminate(reason, socket)
   end
 
@@ -553,6 +613,32 @@ defmodule Mob.Screen do
 
       _ ->
         %{source: :local, data: %{}}
+    end
+  end
+
+  # ── State persistence ─────────────────────────────────────────────────────
+
+  @state_sync_interval_ms 30_000
+
+  defp schedule_state_sync do
+    Process.send_after(self(), :__mob_sync_state__, @state_sync_interval_ms)
+  end
+
+  defp maybe_load_state(module, socket) do
+    if module.__mob_persist__() do
+      case Mob.ScreenState.load(module, socket) do
+        {:ok, stored_vsn, raw} ->
+          restored = module.load_state(stored_vsn, raw)
+
+          socket
+          |> Mob.Socket.assign(restored)
+          |> Mob.Socket.assign(:safe_area, socket.assigns.safe_area)
+
+        :not_found ->
+          socket
+      end
+    else
+      socket
     end
   end
 
