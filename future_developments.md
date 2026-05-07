@@ -460,7 +460,13 @@ it; others will reject it on principle. Both reactions are signal.
 
 ---
 
-## iOS 26 Liquid Glass (and future platform design languages)
+## Platform-native style refresh — iOS Liquid Glass + Android Material 3 Expressive
+
+Both platforms shipped a 2025 design refresh almost in lockstep. The
+user story is the same on each side: an app built with Mob looks
+native, including the design refresh, with no per-app design work.
+
+### iOS 26 Liquid Glass
 
 **Context:** iOS 26 introduces Liquid Glass — Apple's new translucent, material-based
 design language. End users don't know or care what framework is underneath; they want
@@ -492,10 +498,59 @@ native-feeling product. Nobody asks "what framework is this?" — it just looks 
 This is the same argument as any other native platform primitive: Mob should surface it
 so app developers get it without thinking about it.
 
-**Current SDK baseline:** Mob targets iOS 17.0 minimum deployment target, Android minSdk 28.
+**Current iOS SDK baseline:** Mob targets iOS 17.0 minimum deployment target.
 Liquid Glass requires iOS 26 at runtime, but apps compiled against the iOS 26 SDK
 degrade gracefully on older OS versions — no minimum version bump needed. Mob can
 ship Liquid Glass support without dropping iOS 17–25 users.
+
+### Android 16 / Material 3 Expressive
+
+**Context:** Google announced Material 3 Expressive at I/O 2025 — the Android-side
+counterpart to Liquid Glass. Where Material You (Android 12, 2021) brought dynamic
+color from the wallpaper, Expressive (2025) brings more variety in component shapes,
+fluid motion specs, and richer color tokens. Available via the Compose
+`androidx.compose.material3` 1.4.x release and intended as the default look for
+Android 16, but the components are SDK-version-tolerant — they render on Android 12+
+without runtime guards (just need a recent Compose).
+
+**What Mob gets for free:**
+
+Standard system chrome and any Compose Material 3 component Mob renders directly
+— buttons, FABs, top app bars, sheets — picks up the new look once the
+`material3` dependency is on 1.4.x. The expressive shape system applies
+automatically inside `MaterialExpressiveTheme` (the new opt-in theme wrapper
+that replaces `MaterialTheme` for apps that want it).
+
+**What needs explicit Mob work:**
+
+- `mob_new`'s `android/app/build.gradle.eex` bumps the `material3` dep to 1.4.x.
+- `mob/android/jni/MobBridge.kt`'s root composable wraps content in
+  `MaterialExpressiveTheme` instead of `MaterialTheme`.
+- Mob's render-tree DSL exposes the new component variants —
+  `extra_large` button sizes, FAB shape morphing, motion duration tokens —
+  through `Mob.UI` primitives so Elixir-side code maps cleanly.
+- Dynamic-color support stays a separate design call. It's already API-level
+  available (Android 12+), but Mob currently uses a fixed palette per theme;
+  switching to wallpaper-derived colors is a UX policy decision, not just a
+  technical one.
+
+**Cross-platform component mapping (the design call):**
+
+Each Mob primitive resolves differently per platform/version. Document the
+mapping in `mob/guides/styling.md` so app developers can see at a glance what
+"a `Mob.UI.button(kind: :primary)`" actually renders on each combination.
+
+| Mob primitive | iOS 26+ | iOS 17–25 | Android 16+ (M3 Expressive) | Android 12–15 (M3) |
+|---|---|---|---|---|
+| Button (primary) | `.glassEffect()` Button | platform Button | Expressive `Button(shape=...)` | M3 `Button` |
+| FAB (large) | iOS 26 toolbar item glass | `Button` (no FAB API) | `ExtendedFloatingActionButton` w/ shape morph | `FloatingActionButton` |
+| Sheet | iOS 26 glass sheet | `.sheet` | M3 `ModalBottomSheet` (expressive shape) | M3 `ModalBottomSheet` |
+| Container (glass / blur) | `GlassEffectContainer` | `Material(.regular)` | Surface w/ expressive elevation token | Surface w/ M3 elevation |
+
+**Current SDK baseline:** iOS 17.0 minimum, Android minSdk 28 (Android 9). Both
+the iOS 26 and Material 3 Expressive opt-ins ship without requiring those
+floors to move — apps stay on the wide compatibility envelope while picking up
+the new look on devices that support it.
 
 **API design:** System chrome adopts Liquid Glass with zero user action. For custom
 components, the `material:` attribute on existing components is the natural fit —

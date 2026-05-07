@@ -399,36 +399,70 @@ NDK mentions.
 
 **Effort:** ~30–45 min.
 
-### iOS SDK bump for Liquid Glass out-of-the-box
+### Platform-native style refresh (iOS Liquid Glass + Android Material 3 Expressive)
 
-**Trigger:** iOS 26 ships Apple's Liquid Glass design language. Our
-`future_developments.md` (committed earlier) describes the user story:
-*"a user who builds an app with Mob ships a Liquid Glass app — nobody
-asks what framework this is, it just looks right."* Today, Mob iOS
-build scripts target `-miphoneos-version-min=17.0` and we're not
-opting into Liquid Glass.
+**Trigger:** Both Apple (iOS 26, Liquid Glass) and Google (Android 16
++ Compose `material3` 1.4.x, Material 3 Expressive) shipped a 2025
+design-language refresh. Same shape: opt-in via newer SDK, graceful
+fallback on older OS versions. `future_developments.md` describes
+the user story for iOS; Android needs the same:
 
-**What's missing:**
-1. iOS deployment target bumped to **17.0 + `@available(iOS 26, *)`
-   guards** in the SwiftUI rendering layer (so older devices keep
-   working, newer ones get Liquid Glass).
-2. `mob/ios/MobRootView.swift` and friends apply `.glassEffect()` /
-   `GlassEffectContainer` modifiers on iOS 26+ (compile-time gate via
-   `if #available(iOS 26.0, *)`).
-3. UIKit primitives in mob get `UIBlurEffect` glass-material variants
-   on the same platform-version gate.
-4. `mob_new`'s iOS template's `Info.plist` and `build.sh.eex` continue
-   to target iOS 17 minimum (for compatibility) but are tested
-   against the iOS 26 SDK.
-5. `mob_dev/build_release.md` notes that the build host needs Xcode
-   ≥26 (the SDK that includes Liquid Glass APIs) — and `mob.doctor`
-   should warn if the host Xcode is older.
+> *"A user who builds an app with Mob ships a Material 3 Expressive
+> app on Android and a Liquid Glass app on iOS. Nobody asks what
+> framework this is — it just looks right on both."*
 
-**Effort:** medium. The compile-time `@available` gates and modifier
-calls are mechanical (~1 hr); the design choice of *which* Mob
-components opt in (sheets, tab bars, custom glass containers, etc.)
-is the design call.
+Today, Mob iOS build scripts target `-miphoneos-version-min=17.0`
+without opting into Liquid Glass; the Compose Material 3 dep is on a
+pre-1.4.x version without expressive components.
 
-**Don't bump min iOS to 26 yet.** That cuts users off from any device
-on iOS 17–25. The right framing is: opt into Liquid Glass on iOS 26+,
-fall back gracefully on older.
+**iOS-side missing:**
+1. iOS deployment target stays at 17.0 with `@available(iOS 26, *)`
+   guards in the SwiftUI rendering layer.
+2. `mob/ios/MobRootView.swift` applies `.glassEffect()` and
+   `GlassEffectContainer` modifiers on iOS 26+ (compile-time gate
+   via `if #available(iOS 26.0, *)`).
+3. UIKit primitives in mob get `UIBlurEffect` glass-material
+   variants on the same platform-version gate.
+4. `mob_new`'s iOS template `Info.plist` and `build.sh.eex` continue
+   to target iOS 17 minimum (compatibility) but build against the
+   iOS 26 SDK.
+5. `mob_dev/build_release.md` notes the build host needs Xcode ≥26;
+   `mob.doctor` warns if older.
+
+**Android-side missing:**
+1. `androidx.compose.material3` bumped to `1.4.x` (or whatever the
+   first version with Expressive is by the time we ship). Pinned in
+   `mob_new`'s `android/app/build.gradle.eex`.
+2. `mob/android/jni/MobBridge.kt`'s root composable wraps content in
+   `MaterialExpressiveTheme` instead of plain `MaterialTheme`. The
+   new theme is opt-in — apps continue to look like vanilla
+   Material 3 if not invoked.
+3. New shape / motion tokens exposed through Mob's render-tree DSL
+   so Elixir-side `Mob.UI.button(:fab, size: :extra_large)` and
+   similar map to expressive variants.
+4. Dynamic-color support: pull `dynamicLightColorScheme(LocalContext.current)`
+   on Android 12+ (already available; no opt-in needed). Mob currently
+   uses a fixed palette per theme — extending this stays a separate
+   design call.
+5. `mob.doctor` warns if compileSdk is below the Material 3
+   Expressive minimum.
+
+**Don't bump min iOS to 26 or min Android to 16.** That cuts off
+users on older devices. The framing on both sides is: opt in on the
+newer OS, fall back gracefully on older.
+
+**Effort:** medium per side, ~3–4 hr total. The mechanical changes
+(modifier calls, theme wrappers) are quick; the design call of
+*which* Mob components opt in to the expressive variants is the work.
+
+**Cross-platform consistency check:** the design choices on both
+sides should map to the same Mob primitives. e.g., a "FAB" surface
+in `Mob.UI` should resolve to:
+- iOS 26+: a `.glassEffect()` button.
+- iOS 17–25: a vanilla SwiftUI `Button` with platform-default style.
+- Android 16+ / `material3` 1.4+: an `ExtendedFloatingActionButton`
+  with expressive shape morphing.
+- Android 12–15: a vanilla `FloatingActionButton`.
+
+Doc this in `mob/guides/styling.md` so app developers see the
+mapping at a glance.
