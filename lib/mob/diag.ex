@@ -132,4 +132,91 @@ defmodule Mob.Diag do
       captured_at: DateTime.utc_now()
     }
   end
+
+  @doc """
+  Captures unique MFAs called during a tracing window from a running app.
+
+  Wraps `:erlang.trace_pattern/3` + `:erlang.trace/3` for `duration_ms`,
+  then collects the unique `{mod, fun, arity}` set into ETS for retrieval.
+
+  Useful for empirical reachability beyond what `loaded_snapshot/0`
+  shows — `loaded_snapshot/0` answers "which modules are loaded";
+  `mfa_trace/1` answers "which functions actually got called during
+  this window." The MFA grain matters for Pass 4 (OpenSSL feature
+  surgery) where the question is "does the app call `crypto:rsa_*` at
+  all" not just "is the `:crypto` module loaded."
+
+  Returns:
+
+      %{
+        mfas: [{:crypto, :crypto_one_time_aead, 6}, ...],
+        modules: [:crypto, :ssl, ...],
+        mfa_count: 1247,
+        module_count: 89,
+        duration_ms: 30_000,
+        captured_at: ~U[...]
+      }
+
+  Limits:
+
+  - `:erlang.trace/3` is process-global. **One trace at a time** —
+    overlapping calls clobber each other.
+  - Holds an ETS table during the window. ~100k events / 60s on an
+    active app, dedup keeps the unique set small.
+  - Tracing has a measurable runtime cost (~1.5–2× slowdown). Don't
+    leave a trace running indefinitely.
+  """
+  @spec mfa_trace(non_neg_integer()) :: %{
+          mfas: [{module(), atom(), arity()}],
+          modules: [module()],
+          mfa_count: non_neg_integer(),
+          module_count: non_neg_integer(),
+          duration_ms: non_neg_integer(),
+          captured_at: DateTime.t()
+        }
+  def mfa_trace(duration_ms \\ 30_000) when is_integer(duration_ms) and duration_ms > 0 do
+    table = :ets.new(:mob_mfa_trace, [:public, :set])
+
+    collector =
+      spawn(fn ->
+        loop = fn loop ->
+          receive do
+            {:trace, _pid, :call, {m, f, args}} when is_list(args) ->
+              :ets.insert(table, {{m, f, length(args)}, true})
+              loop.(loop)
+
+            :stop ->
+              :ok
+
+            _ ->
+              loop.(loop)
+          end
+        end
+
+        loop.(loop)
+      end)
+
+    :erlang.trace_pattern({:_, :_, :_}, [], [:local])
+    :erlang.trace(:all, true, [:call, {:tracer, collector}])
+
+    :timer.sleep(duration_ms)
+
+    :erlang.trace(:all, false, [:call])
+    :erlang.trace_pattern({:_, :_, :_}, false, [:local])
+
+    mfas = :ets.tab2list(table) |> Enum.map(fn {mfa, _} -> mfa end) |> Enum.sort()
+    :ets.delete(table)
+    send(collector, :stop)
+
+    modules = mfas |> Enum.map(fn {m, _, _} -> m end) |> Enum.uniq() |> Enum.sort()
+
+    %{
+      mfas: mfas,
+      modules: modules,
+      mfa_count: length(mfas),
+      module_count: length(modules),
+      duration_ms: duration_ms,
+      captured_at: DateTime.utc_now()
+    }
+  end
 end
