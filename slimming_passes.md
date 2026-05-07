@@ -11,7 +11,7 @@ runtime. Companion to:
 - [`crypto_plan.md`](crypto_plan.md) — companion infrastructure rebuild
   (real crypto static-linked) that Pass 1 piggybacks on.
 
-## Pass 1 — C-side dead-section elimination (in flight, 2026-05-06)
+## Pass 1 — C-side dead-section elimination (✅ shipped, 2026-05-06)
 
 **Source of inspiration:** [GRiSP nano writeup
 (2025-06-11)](https://www.grisp.org/blog/posts/2025-06-11-grisp-nano-codebeam-sto)
@@ -31,11 +31,36 @@ files.
 - Android CMakeLists template + iOS `build.sh.eex` template.
 - iOS-device link in `mob_dev/lib/mob_dev/native_build.ex`.
 
-**Status:** rebuild in progress; size delta to be filled in once
-tarballs republished.
+**Status:** ✅ rebuild + republish complete. Verified pigeon boots
+through `step 5 => ok` on Android emulator (arm64) and iOS simulator
+(arm64).
 
-**Expected win:** GRiSP saw the bulk of their savings here. We expect
-5-15 MB off the final IPA / APK depending on platform.
+**Measured wins (final binary, post `--gc-sections` / `-dead_strip`):**
+
+| Target | Before | After | Δ |
+|---|---|---|---|
+| Android arm64 `libpigeon.so` | 10.11 MB | 9.25 MB | **-0.86 MB (-8.5%)** |
+| iOS sim `Pigeon` binary | 8.02 MB | 7.00 MB | **-1.02 MB (-12.7%)** |
+| Android arm32 `libpigeon.so` | n/a | 5.32 MB | new platform online |
+
+Tarball deltas are smaller (the static `.a` archives went up modestly
+from per-section padding, partially offsetting the BEAM strips):
+
+| Tarball | Before | After |
+|---|---|---|
+| `otp-android-73ba6e0f.tar.gz` | 79.43 MB | 79.09 MB |
+| `otp-android-arm32-73ba6e0f.tar.gz` | 68.49 MB | 68.30 MB |
+| `otp-ios-sim-73ba6e0f.tar.gz` | 54.89 MB | 54.23 MB |
+| `otp-ios-device-73ba6e0f.tar.gz` | 57.07 MB | 56.42 MB |
+
+The right metric is the **shipped binary**, not the source tarball.
+~10% off the iOS app and Android native lib for one config-only change
+is the expected outcome from the GRiSP recipe.
+
+**Republished:** `otp-73ba6e0f` GitHub release re-uploaded with the
+Pass 1 tarballs. Existing user caches auto-invalidate (no schema
+change needed; `valid_otp_dir?/2` re-downloads when content
+verification mismatches the on-disk metadata).
 
 ## Pass 2 — `unicode_util` stub (proposed)
 
