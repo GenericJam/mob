@@ -1805,6 +1805,15 @@ static void mob_send2(const ErlNifPid* pid, const char* a1, const char* a2) {
     enif_free_env(e);
 }
 
+// Build and send {atom1, atom2, atom3} to a pid from any thread.
+static void mob_send3(const ErlNifPid* pid, const char* a1, const char* a2, const char* a3) {
+    ErlNifEnv* e = enif_alloc_env();
+    ERL_NIF_TERM msg = enif_make_tuple3(e,
+        enif_make_atom(e,a1), enif_make_atom(e,a2), enif_make_atom(e,a3));
+    enif_send(NULL, (ErlNifPid*)pid, e, msg);
+    enif_free_env(e);
+}
+
 // Return the root view controller of the key window in the first active scene.
 static UIViewController* mob_root_vc(void) {
     for (UIScene* scene in [UIApplication sharedApplication].connectedScenes) {
@@ -1881,25 +1890,25 @@ static ERL_NIF_TERM nif_request_permission(ErlNifEnv* env, int argc, const ERL_N
             ? AVMediaTypeVideo : AVMediaTypeAudio;
         NSString* capStr = [NSString stringWithUTF8String:cap];
         [AVCaptureDevice requestAccessForMediaType:mtype completionHandler:^(BOOL granted) {
-            mob_send2(&pid, "permission", granted ? "granted" : "denied");
+            mob_send3(&pid, "permission", capStr.UTF8String, granted ? "granted" : "denied");
         }];
     } else if (strcmp(cap, "photo_library") == 0) {
         [PHPhotoLibrary requestAuthorizationForAccessLevel:PHAccessLevelReadWrite
             handler:^(PHAuthorizationStatus status) {
             BOOL ok = (status == PHAuthorizationStatusAuthorized ||
                        status == PHAuthorizationStatusLimited);
-            mob_send2(&pid, "permission", ok ? "granted" : "denied");
+            mob_send3(&pid, "permission", "photo_library", ok ? "granted" : "denied");
         }];
     } else if (strcmp(cap, "location") == 0) {
         // Location permission is requested via CLLocationManager when get_once/start are called.
         // Here we just signal granted for iOS (the actual dialog shows at location call time).
-        mob_send2(&pid, "permission", "granted");
+        mob_send3(&pid, "permission", "location", "granted");
     } else if (strcmp(cap, "notifications") == 0) {
         UNUserNotificationCenter* center = [UNUserNotificationCenter currentNotificationCenter];
         [center requestAuthorizationWithOptions:
             UNAuthorizationOptionAlert | UNAuthorizationOptionSound | UNAuthorizationOptionBadge
             completionHandler:^(BOOL granted, NSError* err) {
-            mob_send2(&pid, "permission", granted ? "granted" : "denied");
+            mob_send3(&pid, "permission", "notifications", granted ? "granted" : "denied");
         }];
     } else {
         return enif_make_badarg(env);
