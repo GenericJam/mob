@@ -75,6 +75,7 @@ defmodule Mob.MixProject do
         "guides/theming.md": [title: "Theming"],
         "guides/navigation.md": [title: "Navigation"],
         "guides/device_capabilities.md": [title: "Device Capabilities"],
+        "guides/push_notifications.md": [title: "Push Notifications"],
         "guides/data.md": [title: "Data & Persistence"],
         "guides/testing.md": [title: "Testing"],
         "guides/tooling.md": [title: "Tooling & Formatting"],

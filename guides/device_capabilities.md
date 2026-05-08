@@ -302,54 +302,28 @@ end
 
 ### Push notifications
 
-Register for push tokens and forward them to your server. A server-side push library (`mob_push`) is in development.
+See the [Push Notifications guide](push_notifications.md) for the full walkthrough — server setup, credential configuration, token handling, delivery lifecycle, and appearance options.
 
-#### Server credentials
-
-**Apple (APNs) — token-based auth (recommended)**
-
-Create a signing key at:
-https://developer.apple.com/account/resources/authkeys/add
-
-Enable "Apple Push Notifications service (APNs)", download the `.p8` file, and note
-the Key ID shown in the portal. One key works across all your apps, both development
-and production environments, and never expires (but can be revoked if compromised).
-
-You need four things server-side:
-- `.p8` key file — downloaded when you create the key (only shown once)
-- Key ID — https://developer.apple.com/account/resources/authkeys/list
-- Team ID — https://developer.apple.com/account (Membership Details section)
-- Bundle ID — https://developer.apple.com/account/resources/identifiers/list
-
-Your server signs a short-lived JWT from these at send time; there is no separate
-token to store. See the APNs documentation for the JWT format.
-
-**Google (FCM)**
-
-Create a Firebase project, then: Project Settings → Service accounts →
-Generate new private key. Drop `google-services.json` into `android/app/` for
-the Android client.
+Quick reference:
 
 ```elixir
 # After :notifications permission is granted:
-Mob.Notify.register_push(socket)
+{:noreply, Mob.Notify.register_push(socket)}
 
-# Receive the device token:
-def handle_info({:push_token, :ios,     token}, socket) do
-  MyApp.Server.register_token(:ios, token)
+# Receive the device token — store it server-side with the platform:
+def handle_info({:push_token, platform, token}, socket) do
+  MyApp.PushTokens.upsert(socket.assigns.user_id, token, platform)
   {:noreply, socket}
 end
 
-def handle_info({:push_token, :android, token}, socket) do
-  MyApp.Server.register_token(:android, token)
-  {:noreply, socket}
-end
-
-# Receive push notifications:
-def handle_info({:notification, %{title: t, body: b, data: d, source: :push}}, socket) do
+# Receive push notifications (foreground, background tap, or killed → tapped):
+def handle_info({:notification, notif}, socket) do
+  # notif["source"] == "push", notif["data"] contains your custom payload
   {:noreply, socket}
 end
 ```
+
+To send from your server, add [`mob_push`](https://hexdocs.pm/mob_push) to your server dependencies.
 
 ## Storage
 
