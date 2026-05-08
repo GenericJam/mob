@@ -47,7 +47,7 @@ static void* epmd_thread(void *arg) {
 #define OTP_ROOT_LEGACY "/tmp/otp-ios-sim"
 #endif
 #ifndef ERTS_VSN
-#define ERTS_VSN   "erts-16.3"
+#define ERTS_VSN   "erts-17.0"
 #endif
 #ifndef OTP_RELEASE
 #define OTP_RELEASE "29"

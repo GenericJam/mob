@@ -79,7 +79,7 @@ static void mob_capture_beam_stdio(void) {
     LOGI("mob_capture_beam_stdio: piping stdout/stderr to logcat (tag: BEAMout)");
 }
 
-#define ERTS_VSN    "erts-16.3"
+#define ERTS_VSN    "erts-17.0"
 
 // Declared in mob_nif.c — caches MobBridge methods on the main thread.
 extern void _mob_ui_cache_class_impl(JNIEnv* env, const char* bridge_class);
