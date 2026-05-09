@@ -483,6 +483,52 @@ void mob_start_beam(const char* app_module) {
         }
     }
 
+    // Symlink libpythonx.so into the pythonx OTP lib structure for the
+    // same reason as exqlite above. Pythonx's NIF on_load does
+    //   path = :filename.join(:code.priv_dir(:pythonx), 'libpythonx')
+    //   :erlang.load_nif(path, 0)
+    // For dlopen to resolve enif_* (defined in the main app native lib)
+    // the .so has to live in the app's namespace — i.e. nativeLibraryDir.
+    // mob_dev's NativeBuild already places libpythonx.so in jniLibs, so
+    // the APK installer extracts it to nativeLibraryDir at install time.
+    // We just symlink into the OTP lib priv/ to make :code.priv_dir
+    // return a path that dlopen can follow.
+    if (s_native_lib_dir[0]) {
+        char pyx_target[560];
+        snprintf(pyx_target, sizeof(pyx_target), "%s/libpythonx.so", s_native_lib_dir);
+
+        struct stat pyx_target_st;
+        if (stat(pyx_target, &pyx_target_st) == 0) {
+            char lib_path[600];
+            snprintf(lib_path, sizeof(lib_path), "%s/lib", otp_root);
+            DIR *d2 = opendir(lib_path);
+            if (d2) {
+                struct dirent *entry;
+                while ((entry = readdir(d2)) != NULL) {
+                    if (strncmp(entry->d_name, "pythonx-", 8) == 0) {
+                        char pyx_priv[700];
+                        snprintf(pyx_priv, sizeof(pyx_priv), "%s/%s/priv",
+                                 lib_path, entry->d_name);
+                        mkdir(pyx_priv, 0755);
+                        char pyx_link[760];
+                        snprintf(pyx_link, sizeof(pyx_link), "%s/libpythonx.so",
+                                 pyx_priv);
+                        unlink(pyx_link);
+                        if (symlink(pyx_target, pyx_link) == 0) {
+                            LOGI("mob_start_beam: symlink pythonx NIF -> %s",
+                                 pyx_target);
+                        } else {
+                            LOGE("mob_start_beam: symlink pythonx NIF failed: %s",
+                                 strerror(errno));
+                        }
+                        break;
+                    }
+                }
+                closedir(d2);
+            }
+        }
+    }
+
     void erl_start(int, char**);
     erl_start(ac, (char**)args);
     mob_set_startup_error("BEAM exited unexpectedly — see logcat (tag: MobBeam) for details");
