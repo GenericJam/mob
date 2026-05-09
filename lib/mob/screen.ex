@@ -384,6 +384,16 @@ defmodule Mob.Screen do
     handle_info(msg, state)
   end
 
+  # Peripheral.* events: a few carry JSON-encoded device records under tags
+  # like `:devices_json`, `:permission_granted_json`, etc. The transport's
+  # own module knows how to decode them; we dispatch through its
+  # `normalize_message/1` (a no-op for events without JSON payloads) before
+  # the user's handle_info sees them.
+  def handle_info({:peripheral, :vendor_usb, _tag, _session, _payload} = msg, state) do
+    normalized = Mob.VendorUsb.normalize_message(msg)
+    handle_info(normalized, state)
+  end
+
   # System back gesture (Android hardware/swipe, iOS edge-pan).
   # Handled here — before the user's handle_info — so every screen gets back
   # navigation for free without implementing anything.

@@ -68,6 +68,14 @@ static struct {
     jmethodID storage_external_files_dir;
     jmethodID background_keep_alive;
     jmethodID background_stop;
+    // ── Peripheral.VendorUsb ─────────────────────────────────────────────────
+    jmethodID vendor_usb_list_devices;
+    jmethodID vendor_usb_request_permission;
+    jmethodID vendor_usb_open;
+    jmethodID vendor_usb_bulk_write;
+    jmethodID vendor_usb_start_reading;
+    jmethodID vendor_usb_stop_reading;
+    jmethodID vendor_usb_close;
     // Cached before nif_load (used during BEAM startup before NIFs are loaded)
     jmethodID set_startup_phase;
     jmethodID set_startup_error;
@@ -2086,6 +2094,223 @@ static ERL_NIF_TERM nif_device_model(ErlNifEnv* env, int argc, const ERL_NIF_TER
     return enif_make_string(env, "Android", ERL_NIF_LATIN1);
 }
 
+// ── Peripheral.VendorUsb ──────────────────────────────────────────────────────
+//
+// Six typed delivery functions, called from JNI thunks (in beam_jni.c) when
+// Kotlin-side USB events fire. They build a 5-tuple
+// {:peripheral, :vendor_usb, tag, session, payload} and send it to pid.
+//
+// session==-1 → atom :nil; session>=0 → integer.
+//
+// devices/permission/opened tags carry a JSON binary payload that the Elixir
+// side decodes via Mob.Peripheral.VendorUsb.normalize_message/1 (mirrors the
+// :mob_file_result JSON-binary precedent for camera/photos/files/audio/scan).
+
+static ERL_NIF_TERM make_session_term(ErlNifEnv* e, int session) {
+    return session < 0 ? enif_make_atom(e, "nil") : enif_make_int(e, session);
+}
+
+void mob_deliver_vendor_usb_devices(jlong jpid, const char* json_array) {
+    ErlNifPid pid = pid_from_long(jpid);
+    ErlNifEnv* e = enif_alloc_env();
+    ErlNifBinary jb;
+    size_t jl = json_array ? strlen(json_array) : 0;
+    enif_alloc_binary(jl, &jb);
+    if (jl) memcpy(jb.data, json_array, jl);
+    ERL_NIF_TERM msg = enif_make_tuple5(e,
+        enif_make_atom(e, "peripheral"),
+        enif_make_atom(e, "vendor_usb"),
+        enif_make_atom(e, "devices_json"),
+        enif_make_atom(e, "nil"),
+        enif_make_binary(e, &jb));
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+}
+
+void mob_deliver_vendor_usb_permission(jlong jpid, int granted, const char* device_json) {
+    ErlNifPid pid = pid_from_long(jpid);
+    ErlNifEnv* e = enif_alloc_env();
+    ErlNifBinary jb;
+    size_t jl = device_json ? strlen(device_json) : 0;
+    enif_alloc_binary(jl, &jb);
+    if (jl) memcpy(jb.data, device_json, jl);
+    ERL_NIF_TERM tag = enif_make_atom(e,
+        granted ? "permission_granted_json" : "permission_denied_json");
+    ERL_NIF_TERM msg = enif_make_tuple5(e,
+        enif_make_atom(e, "peripheral"),
+        enif_make_atom(e, "vendor_usb"),
+        tag,
+        enif_make_atom(e, "nil"),
+        enif_make_binary(e, &jb));
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+}
+
+void mob_deliver_vendor_usb_opened(jlong jpid, int session, const char* device_json) {
+    ErlNifPid pid = pid_from_long(jpid);
+    ErlNifEnv* e = enif_alloc_env();
+    ErlNifBinary jb;
+    size_t jl = device_json ? strlen(device_json) : 0;
+    enif_alloc_binary(jl, &jb);
+    if (jl) memcpy(jb.data, device_json, jl);
+    ERL_NIF_TERM msg = enif_make_tuple5(e,
+        enif_make_atom(e, "peripheral"),
+        enif_make_atom(e, "vendor_usb"),
+        enif_make_atom(e, "opened_json"),
+        make_session_term(e, session),
+        enif_make_binary(e, &jb));
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+}
+
+void mob_deliver_vendor_usb_data(jlong jpid, int session,
+                                  const uint8_t* bytes, size_t nbytes) {
+    ErlNifPid pid = pid_from_long(jpid);
+    ErlNifEnv* e = enif_alloc_env();
+    ErlNifBinary db;
+    enif_alloc_binary(nbytes, &db);
+    if (nbytes && bytes) memcpy(db.data, bytes, nbytes);
+    ERL_NIF_TERM msg = enif_make_tuple5(e,
+        enif_make_atom(e, "peripheral"),
+        enif_make_atom(e, "vendor_usb"),
+        enif_make_atom(e, "data"),
+        make_session_term(e, session),
+        enif_make_binary(e, &db));
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+}
+
+void mob_deliver_vendor_usb_write_complete(jlong jpid, int session, int bytes_written) {
+    ErlNifPid pid = pid_from_long(jpid);
+    ErlNifEnv* e = enif_alloc_env();
+    ERL_NIF_TERM bytes_map = enif_make_new_map(e);
+    ERL_NIF_TERM tmp;
+    enif_make_map_put(e, bytes_map,
+        enif_make_atom(e, "bytes"),
+        enif_make_int(e, bytes_written),
+        &tmp);
+    ERL_NIF_TERM msg = enif_make_tuple5(e,
+        enif_make_atom(e, "peripheral"),
+        enif_make_atom(e, "vendor_usb"),
+        enif_make_atom(e, "write_complete"),
+        make_session_term(e, session),
+        tmp);
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+}
+
+void mob_deliver_vendor_usb_event(jlong jpid, int session,
+                                   const char* tag, const char* reason) {
+    ErlNifPid pid = pid_from_long(jpid);
+    ErlNifEnv* e = enif_alloc_env();
+    ERL_NIF_TERM payload = reason
+        ? enif_make_atom(e, reason)
+        : enif_make_atom(e, "ok");
+    ERL_NIF_TERM msg = enif_make_tuple5(e,
+        enif_make_atom(e, "peripheral"),
+        enif_make_atom(e, "vendor_usb"),
+        enif_make_atom(e, tag ? tag : "error"),
+        make_session_term(e, session),
+        payload);
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+}
+
+// ── Vendor-USB NIFs (thin wrappers over Kotlin static methods) ────────────────
+
+static ERL_NIF_TERM nif_vendor_usb_list_devices(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[0], &bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &bin))
+        return enif_make_badarg(env);
+    char* json = malloc(bin.size + 1);
+    memcpy(json, bin.data, bin.size); json[bin.size] = 0;
+    ErlNifPid pid; enif_self(env, &pid);
+    ERL_NIF_TERM result = call_bridge_pid_str(env, Bridge.vendor_usb_list_devices, pid, json);
+    free(json);
+    return result;
+}
+
+static ERL_NIF_TERM nif_vendor_usb_request_permission(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[0], &bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &bin))
+        return enif_make_badarg(env);
+    char* ref = malloc(bin.size + 1);
+    memcpy(ref, bin.data, bin.size); ref[bin.size] = 0;
+    ErlNifPid pid; enif_self(env, &pid);
+    ERL_NIF_TERM result = call_bridge_pid_str(env, Bridge.vendor_usb_request_permission, pid, ref);
+    free(ref);
+    return result;
+}
+
+static ERL_NIF_TERM nif_vendor_usb_open(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[0], &bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &bin))
+        return enif_make_badarg(env);
+    char* json = malloc(bin.size + 1);
+    memcpy(json, bin.data, bin.size); json[bin.size] = 0;
+    ErlNifPid pid; enif_self(env, &pid);
+    ERL_NIF_TERM result = call_bridge_pid_str(env, Bridge.vendor_usb_open, pid, json);
+    free(json);
+    return result;
+}
+
+static ERL_NIF_TERM nif_vendor_usb_bulk_write(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    int session = 0; int timeout_ms = 1000;
+    if (!enif_get_int(env, argv[0], &session)) return enif_make_badarg(env);
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[1], &bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[1], &bin))
+        return enif_make_badarg(env);
+    if (!enif_get_int(env, argv[2], &timeout_ms)) return enif_make_badarg(env);
+
+    ErlNifPid pid; enif_self(env, &pid);
+    int att; JNIEnv* jenv = get_jenv(&att);
+    jlong jpid;
+    memcpy(&jpid, &pid, sizeof(ErlNifPid) < sizeof(jlong) ? sizeof(ErlNifPid) : sizeof(jlong));
+    jbyteArray jbytes = (*jenv)->NewByteArray(jenv, (jsize)bin.size);
+    (*jenv)->SetByteArrayRegion(jenv, jbytes, 0, (jsize)bin.size, (const jbyte*)bin.data);
+    (*jenv)->CallStaticVoidMethod(jenv, Bridge.cls, Bridge.vendor_usb_bulk_write,
+        jpid, (jint)session, jbytes, (jint)timeout_ms);
+    (*jenv)->DeleteLocalRef(jenv, jbytes);
+    if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_vendor_usb_start_reading(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    int session = 0, chunk_bytes = 4096;
+    if (!enif_get_int(env, argv[0], &session)) return enif_make_badarg(env);
+    if (!enif_get_int(env, argv[1], &chunk_bytes)) return enif_make_badarg(env);
+    ErlNifPid pid; enif_self(env, &pid);
+    int att; JNIEnv* jenv = get_jenv(&att);
+    jlong jpid;
+    memcpy(&jpid, &pid, sizeof(ErlNifPid) < sizeof(jlong) ? sizeof(ErlNifPid) : sizeof(jlong));
+    (*jenv)->CallStaticVoidMethod(jenv, Bridge.cls, Bridge.vendor_usb_start_reading,
+        jpid, (jint)session, (jint)chunk_bytes);
+    if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_vendor_usb_stop_reading(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    int session = 0;
+    if (!enif_get_int(env, argv[0], &session)) return enif_make_badarg(env);
+    int att; JNIEnv* jenv = get_jenv(&att);
+    (*jenv)->CallStaticVoidMethod(jenv, Bridge.cls, Bridge.vendor_usb_stop_reading, (jint)session);
+    if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_vendor_usb_close(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    int session = 0;
+    if (!enif_get_int(env, argv[0], &session)) return enif_make_badarg(env);
+    int att; JNIEnv* jenv = get_jenv(&att);
+    (*jenv)->CallStaticVoidMethod(jenv, Bridge.cls, Bridge.vendor_usb_close, (jint)session);
+    if (att) (*g_jvm)->DetachCurrentThread(g_jvm);
+    return enif_make_atom(env, "ok");
+}
+
 // ── NIF table & load ──────────────────────────────────────────────────────────
 
 // Scheduling notes — see docs/decisions/0001-dirty-nifs.md for the rationale.
@@ -2172,6 +2397,14 @@ static ErlNifFunc nif_funcs[] = {
     {"device_foreground",      0, nif_device_foreground,      0},
     {"device_os_version",      0, nif_device_os_version,      0},
     {"device_model",           0, nif_device_model,           0},
+    // ── Mob.Peripheral.VendorUsb (Android USB host) ───────────────────────────
+    {"vendor_usb_list_devices",      1, nif_vendor_usb_list_devices,      0},
+    {"vendor_usb_request_permission",1, nif_vendor_usb_request_permission,0},
+    {"vendor_usb_open",              1, nif_vendor_usb_open,              0},
+    {"vendor_usb_bulk_write",        3, nif_vendor_usb_bulk_write,        ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"vendor_usb_start_reading",     2, nif_vendor_usb_start_reading,     0},
+    {"vendor_usb_stop_reading",      1, nif_vendor_usb_stop_reading,      0},
+    {"vendor_usb_close",             1, nif_vendor_usb_close,             0},
 };
 
 static int nif_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info) {
@@ -2256,6 +2489,14 @@ static int nif_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info) {
     CACHE(notify_register_push,   "(JLjava/lang/String;)V")
     CACHE(background_keep_alive,  "()V")
     CACHE(background_stop,        "()V")
+    // ── Mob.Peripheral.VendorUsb ──────────────────────────────────────────────
+    CACHE(vendor_usb_list_devices,       "(JLjava/lang/String;)V")
+    CACHE(vendor_usb_request_permission, "(JLjava/lang/String;)V")
+    CACHE(vendor_usb_open,               "(JLjava/lang/String;)V")
+    CACHE(vendor_usb_bulk_write,         "(JI[BI)V")
+    CACHE(vendor_usb_start_reading,      "(JII)V")
+    CACHE(vendor_usb_stop_reading,       "(I)V")
+    CACHE(vendor_usb_close,              "(I)V")
     #undef CACHE
 
     g_launch_notif_mutex = enif_mutex_create("mob_launch_notif_mutex");

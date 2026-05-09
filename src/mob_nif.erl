@@ -94,7 +94,15 @@
          key_press/1,
          clear_text/0,
          long_press_xy/3,
-         swipe_xy/4]).
+         swipe_xy/4,
+         %% Peripheral.VendorUsb (Android USB host; iOS returns :unsupported)
+         vendor_usb_list_devices/1,
+         vendor_usb_request_permission/1,
+         vendor_usb_open/1,
+         vendor_usb_bulk_write/3,
+         vendor_usb_start_reading/2,
+         vendor_usb_stop_reading/1,
+         vendor_usb_close/1]).
 
 -nifs([platform/0,
        color_scheme/0,
@@ -173,7 +181,15 @@
        webview_go_back/0,
        %% Native view components
        register_component/1,
-       deregister_component/1]).
+       deregister_component/1,
+       %% Peripheral.VendorUsb
+       vendor_usb_list_devices/1,
+       vendor_usb_request_permission/1,
+       vendor_usb_open/1,
+       vendor_usb_bulk_write/3,
+       vendor_usb_start_reading/2,
+       vendor_usb_stop_reading/1,
+       vendor_usb_close/1]).
 
 -on_load(init/0).
 
@@ -254,3 +270,11 @@ webview_can_go_back()                       -> erlang:nif_error(not_loaded).
 webview_go_back()                           -> erlang:nif_error(not_loaded).
 register_component(_Pid)                    -> erlang:nif_error(not_loaded).
 deregister_component(_Handle)              -> erlang:nif_error(not_loaded).
+%% Peripheral.VendorUsb
+vendor_usb_list_devices(_FilterJson)        -> erlang:nif_error(not_loaded).
+vendor_usb_request_permission(_Ref)         -> erlang:nif_error(not_loaded).
+vendor_usb_open(_OptsJson)                  -> erlang:nif_error(not_loaded).
+vendor_usb_bulk_write(_Session, _Bytes, _TimeoutMs) -> erlang:nif_error(not_loaded).
+vendor_usb_start_reading(_Session, _ChunkBytes)     -> erlang:nif_error(not_loaded).
+vendor_usb_stop_reading(_Session)                   -> erlang:nif_error(not_loaded).
+vendor_usb_close(_Session)                          -> erlang:nif_error(not_loaded).

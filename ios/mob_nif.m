@@ -5039,6 +5039,64 @@ void mob_send_component_event(int handle, const char* event, const char* payload
 // some pre-dispatch work; they're left on regular schedulers for now because
 // the test harness calls them in tight loops and dirty-dispatch overhead would
 // add up. Re-evaluate if benchmarks show scheduler stalls under heavy harness use.
+
+// ── Mob.Peripheral.VendorUsb (iOS stubs) ──────────────────────────────────────
+//
+// iOS exposes no public USB-host API equivalent to Android's UsbManager.
+// All seven NIFs below send {:peripheral, :vendor_usb, :error, nil, :unsupported}
+// back to the caller and return :ok. Cross-platform screens see the error
+// event and degrade gracefully via Mob.Peripheral.capabilities/0.
+
+static void send_vendor_usb_unsupported(ErlNifPid pid) {
+    ErlNifEnv* e = enif_alloc_env();
+    ERL_NIF_TERM msg = enif_make_tuple5(e,
+        enif_make_atom(e, "peripheral"),
+        enif_make_atom(e, "vendor_usb"),
+        enif_make_atom(e, "error"),
+        enif_make_atom(e, "nil"),
+        enif_make_atom(e, "unsupported"));
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+}
+
+static ERL_NIF_TERM nif_vendor_usb_list_devices(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifPid pid; enif_self(env, &pid);
+    send_vendor_usb_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_vendor_usb_request_permission(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifPid pid; enif_self(env, &pid);
+    send_vendor_usb_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_vendor_usb_open(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifPid pid; enif_self(env, &pid);
+    send_vendor_usb_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_vendor_usb_bulk_write(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifPid pid; enif_self(env, &pid);
+    send_vendor_usb_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_vendor_usb_start_reading(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifPid pid; enif_self(env, &pid);
+    send_vendor_usb_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_vendor_usb_stop_reading(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_vendor_usb_close(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    return enif_make_atom(env, "ok");
+}
+
 static ErlNifFunc nif_funcs[] = {
 #if !MOB_RELEASE
     // ── Test harness (listed first to survive linker dead-code stripping) ──────
@@ -5124,6 +5182,14 @@ static ErlNifFunc nif_funcs[] = {
     {"webview_go_back",     0, nif_webview_go_back,     0},
     {"register_component",   1, nif_register_component,   0},
     {"deregister_component", 1, nif_deregister_component, 0},
+    // ── Mob.Peripheral.VendorUsb (iOS stubs — emit :unsupported) ──────────────
+    {"vendor_usb_list_devices",       1, nif_vendor_usb_list_devices,       0},
+    {"vendor_usb_request_permission", 1, nif_vendor_usb_request_permission, 0},
+    {"vendor_usb_open",               1, nif_vendor_usb_open,               0},
+    {"vendor_usb_bulk_write",         3, nif_vendor_usb_bulk_write,         0},
+    {"vendor_usb_start_reading",      2, nif_vendor_usb_start_reading,      0},
+    {"vendor_usb_stop_reading",       1, nif_vendor_usb_stop_reading,       0},
+    {"vendor_usb_close",              1, nif_vendor_usb_close,              0},
 };
 
 static int nif_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info) {

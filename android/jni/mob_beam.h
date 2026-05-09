@@ -119,6 +119,19 @@ void mob_set_launch_notification(const char* json);
 void mob_deliver_webview_message(jlong pid, const char* json);
 void mob_deliver_webview_blocked(jlong pid, const char* url);
 
+// Deliver vendor_usb (Mob.VendorUsb / USB host) events. Each builds a 5-tuple
+// {:peripheral, :vendor_usb, tag, session, payload} and posts it to pid.
+// devices / permission / opened carry a JSON binary, decoded Elixir-side.
+void mob_deliver_vendor_usb_devices(jlong pid, const char* json_array);
+void mob_deliver_vendor_usb_permission(jlong pid, int granted, const char* device_json);
+void mob_deliver_vendor_usb_opened(jlong pid, int session, const char* device_json);
+void mob_deliver_vendor_usb_data(jlong pid, int session,
+                                  const uint8_t* bytes, size_t nbytes);
+void mob_deliver_vendor_usb_write_complete(jlong pid, int session, int bytes_written);
+void mob_deliver_vendor_usb_event(jlong pid, int session,
+                                   const char* tag,    // "closed" | "disconnected" | "error"
+                                   const char* reason); // atom-safe ASCII or NULL
+
 // Deliver {:alert, action_atom} to the registered :mob_screen process.
 // Called from beam_jni.c when a dialog button is tapped.
 void mob_deliver_alert_action(const char* action);
