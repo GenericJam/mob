@@ -456,9 +456,15 @@ here, not in commit messages.
   (e.g. `priv/generated/driver_tab_ios.c`). Mob's library-shipped driver_tabs
   become reference snapshots / smoke-test fixtures only. Per-app keeps each
   app's table tied to its actual `:static_nifs` set.
-- **Zig version pin**: pinned to current stable at the point Phase 1 lands.
-  Captured in `.tool-versions` in all three repos. Bump deliberately, like
-  the OTP pin. Phase 0 doesn't use Zig at all.
+- **Zig version pin**: started at 0.15.2 stable (Phase 1, used `zig cc`
+  only). Bumped to 0.17.0-dev.269+ebff43698 nightly at Phase 2 because
+  `zig build` on macOS 26.x (Sequoia/26 SDK) is broken in 0.15.x — even
+  an empty `pub fn main() void {}` fails to link with missing libSystem
+  symbols (`__availability_version_check`, `_realpath$DARWIN_EXTSN`,
+  etc.). Nightly has the macOS 26 fix. Plan: switch to a Zig stable that
+  contains the fix when one exists (likely 0.17.0). Captured in
+  `.tool-versions` across all three repos. Bump deliberately, like the
+  OTP pin.
 - **Igniter version**: pin to latest stable when Phase 3 starts; track
   upstream releases.
 - **Branch strategy**: one worktree per phase per repo. Branch names follow
