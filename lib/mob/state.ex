@@ -106,6 +106,33 @@ defmodule Mob.State do
     GenServer.call(__MODULE__, {:delete, key})
   end
 
+  @doc """
+  Return all `{key, value}` pairs whose key matches `pattern`.
+
+  `pattern` is a key-shape with `:_` placeholders for parts that vary —
+  e.g. `{:peer_profile, :_}` to fetch every peer profile that an app has
+  stored under `{:peer_profile, <pubkey>}` keys. Useful when an app uses
+  a tagged-tuple key convention to namespace records and wants to walk
+  the namespace.
+
+      # All peer profiles
+      Mob.State.match({:peer_profile, :_})
+      #=> [{{:peer_profile, <<...>>}, %{...}}, ...]
+
+  Reads directly from DETS without going through the GenServer call
+  loop — fine for occasional listings (UI mounts, tests). Don't call it
+  in a tight loop.
+  """
+  @spec match(term()) :: [{term(), term()}]
+  def match(pattern) do
+    case :dets.match_object(@table, {pattern, :_}) do
+      list when is_list(list) -> list
+      _ -> []
+    end
+  rescue
+    ArgumentError -> []
+  end
+
   # ── GenServer ──────────────────────────────────────────────────────────────
 
   @impl true

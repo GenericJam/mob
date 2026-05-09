@@ -85,4 +85,44 @@ defmodule Mob.StateTest do
       assert Mob.State.delete(:nonexistent) == :ok
     end
   end
+
+  describe "match/1" do
+    test "returns all entries for an exact key" do
+      Mob.State.put(:theme, :citrus)
+      assert Mob.State.match(:theme) == [{:theme, :citrus}]
+    end
+
+    test "returns all entries whose key matches a tagged-tuple pattern" do
+      pubkey_a = :crypto.strong_rand_bytes(32)
+      pubkey_b = :crypto.strong_rand_bytes(32)
+
+      Mob.State.put({:peer_profile, pubkey_a}, %{name: "Alice"})
+      Mob.State.put({:peer_profile, pubkey_b}, %{name: "Bob"})
+      Mob.State.put(:unrelated, "noise")
+
+      results = Mob.State.match({:peer_profile, :_})
+
+      assert length(results) == 2
+
+      pubkeys =
+        results
+        |> Enum.map(fn {{:peer_profile, pk}, _value} -> pk end)
+        |> Enum.sort()
+
+      assert pubkeys == Enum.sort([pubkey_a, pubkey_b])
+    end
+
+    test "returns [] when no key matches the pattern" do
+      Mob.State.put(:something_else, 1)
+      assert Mob.State.match({:peer_profile, :_}) == []
+    end
+
+    test "returns [] gracefully when called before the State GenServer is up" do
+      # Stop the State process; the rescued ArgumentError path keeps
+      # `match/1` from raising in pre-boot or test-teardown windows.
+      GenServer.stop(Mob.State)
+
+      assert Mob.State.match({:peer_profile, :_}) == []
+    end
+  end
 end
