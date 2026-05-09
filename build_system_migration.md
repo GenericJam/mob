@@ -1,0 +1,465 @@
+# Build System Migration Plan
+
+> Multi-month refactor moving Mob's build pipeline to a layered architecture:
+> Mix (developer CLI) → Igniter (Elixir-side scaffolding) → Zig build (native
+> compile orchestration) → Xcode/Gradle (platform packaging). Touches all three
+> repos. Sequenced to ship value at every checkpoint.
+
+**Status:** Greenlit 2026-05-09. Begin after the in-flight `pythonx-support`
+work merges to master in `mob_dev` and `mob_new`.
+
+---
+
+## Why
+
+Today's build pipeline is shell scripts + hand-edited C tables + regex-patched
+Phoenix generation. Three pain points that compound as the NIF surface grows:
+
+1. **Adding a new static NIF requires touching `driver_tab_ios.c`,
+   `driver_tab_android.c`, every `build.sh` template, and `mix.exs` deps by
+   hand.** No single source of truth, easy to drift between platforms.
+2. **Build complexity lives in shell.** Every per-platform conditional, every
+   `xcrun` invocation, every NDK path translation is bash. We just spent days
+   debugging the OTP 29 rebuild because shell-script options handling doesn't
+   compose. With the agent-runtime / JS sandbox / Pythonx work coming, the
+   options matrix multiplies; bash won't survive that.
+3. **`mix mob.new --liveview`'s Phoenix patches are regex.** Already broke twice
+   in the OTP 29 rebuild (`:re.import/1` and the Elixir version drift). The
+   regex approach is structurally fragile — needs to be AST-aware.
+
+The migration target solves all three with the right tool per layer:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Mix         — developer-facing CLI (mix mob.deploy, etc.)   │
+└──────────────────────────────────────────────────────────────┘
+              │                                  │
+              ▼                                  ▼
+┌──────────────────────────┐    ┌────────────────────────────────┐
+│  Igniter                 │    │  Native build orchestration    │
+│  Elixir AST scaffolding  │    │  (Xcode / Gradle for packaging)│
+└──────────────────────────┘    └────────────────────────────────┘
+                                              │
+                                              ▼
+                                ┌────────────────────────────────┐
+                                │  Zig build                     │
+                                │  Cross-platform compile +      │
+                                │  options matrix + caching      │
+                                └────────────────────────────────┘
+                                              │
+                            ┌─────────────────┼─────────────────┐
+                            ▼                 ▼                 ▼
+                        ┌───────┐         ┌───────┐         ┌───────┐
+                        │  zig  │         │ cargo │         │zig cc │
+                        │       │         │       │         │  (C)  │
+                        └───────┘         └───────┘         └───────┘
+```
+
+Each layer owns one concern. None tries to do another's job.
+
+---
+
+## Repos affected
+
+| Repo      | Weight     | Why                                                        |
+|-----------|------------|-------------------------------------------------------------|
+| `mob`     | Light      | Driver_tab generalizes; Android C → Zig in Phase 6        |
+| `mob_dev` | Heavy      | Owns most Mix tasks + release scripts                      |
+| `mob_new` | Heaviest   | Owns build.sh templates + LV patcher (most lines changed)  |
+
+---
+
+## Phase plan
+
+Each phase is **independently shippable**. Stopping after any phase leaves the
+codebase strictly improved. Estimates assume one engineer working focused.
+
+### Phase 0 — Manifest foundation (1–2 weeks)
+
+Set up the substrate that everything else builds on. Pure win, low risk, no new
+tools committed yet.
+
+**Deliverables:**
+
+- `:static_nifs` config block schema added to `mob.exs` (defined in `mob_dev`)
+- `mix mob.regen_driver_tab` task in `mob_dev` that produces
+  `driver_tab_ios.c` + `driver_tab_android.c` from the manifest
+- `mob`'s existing `driver_tab_*.c` files become base templates with extension
+  points (or get reduced to "this is generated, do not edit" if fully replaced)
+- `mob_new` build templates updated to compile the per-app generated driver_tab
+- `mix mob.regen_driver_tab` runs as part of `mix compile` so files stay in sync
+- `mob.doctor` warns about manifest drift
+- Smoke test: fresh `mix mob.new` → `mix mob.deploy --native` produces working
+  app with byte-equivalent driver_tab to today's hand-edited version
+
+**Repo touch:** mob (driver_tab pattern), mob_dev (task + schema), mob_new
+(template updates).
+
+**Stop criterion:** Manual driver_tab editing is eliminated. No tool commitments
+beyond Elixir.
+
+### Phase 1 — `zig cc` as drop-in C compiler (half-day to 1 week)
+
+Lowest-risk Zig commitment. Validates the toolchain decision before bigger
+commits.
+
+**Deliverables:**
+
+- `mob.doctor` checks for `zig` on PATH; warns if missing
+- `scripts/release/*.sh` in `mob_dev` swap `xcrun cc` / NDK clang for
+  `zig cc -target ...`
+- `mob_new`'s `priv/templates/mob.new/ios/build.sh.eex` + LV equivalent in
+  `lib/mob_new/live_view_patcher.ex` swap `CC` to `zig cc`
+- Smoke test: full deploy on iOS sim + Android emulator; produced binaries
+  byte-equivalent or behaviorally identical
+- `.tool-versions` in all three repos pins a Zig version (treat like the OTP
+  pin — bump deliberately)
+
+**Repo touch:** mob_dev (release scripts), mob_new (build templates).
+**No mob changes.**
+
+**Stop criterion:** Single C toolchain across all platforms. If `zig cc`
+doesn't pan out for some target, half-day spike already revealed it.
+
+### Phase 2 — `build.sh` → `build.zig` for one platform first (3–6 weeks)
+
+Pick **iOS sim vanilla** as the first target because it's the simplest path
+with the tightest reference. Validate end-to-end. Then expand to LV iOS,
+Android arm64, Android arm32, iOS device — one platform per ~1 week.
+
+**Deliverables:**
+
+- `priv/templates/mob.new/ios/build.zig.eex` template in `mob_new`
+- Mob_dev's `mob.deploy --native` invokes Zig build via the platform's outer
+  packager (xcodebuild for iOS, gradle for Android)
+- `build.sh` files kept as `build.sh.legacy.eex` for one release cycle as
+  rollback
+- Per-platform smoke tests: `mix mob.new` + `mix mob.deploy --native` produces
+  working app; the migration runs after the existing-platform tests pass
+- Incremental builds genuinely incremental (validated via timing — should be
+  seconds for no-op rebuild)
+
+**Repo touch:** mob_new (build templates, biggest chunk of work),
+mob_dev (deploy task changes minimally), mob (none).
+
+**Stop criterion:** `build.sh` no longer used. Cross-compile orchestration is
+declarative + cached + composable.
+
+### Phase 3 — `mix mob.add_nif` Igniter task (2–3 weeks)
+
+Greenfield Igniter usage. No migration cost. Becomes the template for migrating
+`mob.enable` and `mob.new --liveview` later.
+
+**Deliverables:**
+
+- `mix mob.add_nif <name> [--type elixir-only|c|zigler|rustler]` in `mob_dev`
+- Adds Hex dep if needed; updates `mob.exs` static_nifs manifest
+- Generates Elixir stub module via Igniter (AST-aware)
+- Generates per-language native source skeleton (templated text)
+- Composes with `mix mob.regen_driver_tab` so the manifest update produces
+  updated driver_tab in one flow
+- Documentation in mob_dev's README + AGENTS.md
+
+**Repo touch:** mob_dev (new task + native templates), mob_new (possibly NIF
+source templates if shared).
+
+**Stop criterion:** Adding a new NIF is one CLI call, not five manual edits.
+
+### Phase 4 — `mix mob.enable <feature>` migrates to Igniter (3–4 weeks total, one feature at a time)
+
+The current `mob.enable` does string-based file editing for AndroidManifest.xml,
+.entitlements, etc. Migrating to Igniter for the Elixir parts + structured
+file ops for non-Elixir parts removes a class of bugs.
+
+**Deliverables (per feature):**
+
+- Refactor each `mob.enable` feature handler to compose Igniter operations
+- Elixir-side modifications go through Igniter AST
+- Non-Elixir files (XML manifests, plists) stay text-level but use Igniter's
+  `create_new_file/3` / `update_file/3` for consistency
+- Tests cover each feature's end state from a clean project
+
+**Order:** start with the simplest features (camera, photo_library) before
+hitting the complex ones (notifications, liveview). Each is its own commit.
+
+**Repo touch:** mob_dev (one feature handler at a time).
+
+**Stop criterion:** All `mob.enable` features use Igniter consistently.
+
+### Phase 5 — `mix mob.new --liveview` migrates to Igniter (3–4 weeks)
+
+The regex-patched Phoenix flow we already debugged twice (`:re.import/1` and
+the Elixir version drift in the OTP 29 rebuild). Highest-value rewrite —
+biggest fragility removed.
+
+**Deliverables:**
+
+- `lib/mob_new/live_view_patcher.ex` rewritten to use Igniter for Elixir AST
+  modifications (replace every `Regex.replace`/`Regex.compile!` on Elixir code)
+- Non-Elixir patches (esbuild config, package.json, root.html.heex injections)
+  stay text-level but contained in dedicated helpers
+- Regression test exercises the full LV generation flow end-to-end
+- Smoke test: `mix mob.new my_lv --liveview` → `mix mob.install` → `mix
+  mob.deploy --native --device <emulator>` boots cleanly on Android + iOS sim
+
+**Repo touch:** mob_new (live_view_patcher.ex, the most complex single file
+in the repo).
+
+**Stop criterion:** No more regex-patched Elixir source in the LV generator.
+
+### Phase 6 — Polish (ongoing, ship incrementally)
+
+The longer-tail improvements. Each is independently valuable; none gates the
+others.
+
+**6a — `driver_tab.zig` comptime-generated from manifest:**
+- Convert `driver_tab_*.c` to `driver_tab.zig`
+- Use Zig comptime to build the static array from a generated `static_nifs.zig`
+- Eliminates the regen step entirely; the table builds itself at Zig compile
+- Touches: mob (driver_tab files), mob_new (build.zig references new file)
+
+**6b — Migrate Android C to Zig:**
+- `mob/android/jni/mob_nif.c` (~2300 lines) → Zig
+- `mob/android/jni/mob_beam.c` (~540 lines) → Zig
+- iOS Objective-C stays as-is — ARC handles memory; ObjC's Cocoa idiom is right
+- Touches: mob primarily
+
+**6c — OTP rebuild scripts → `build.zig`:**
+- `scripts/release/openssl/build_crypto_static_*.sh` → Zig build
+- `scripts/release/xcompile_*.sh` → Zig build
+- `scripts/release/tarball_*.sh` → Zig build (or stay shell — these are simpler)
+- Touches: mob_dev
+
+---
+
+## Per-repo summary
+
+### `mob`
+
+Lightest weight. Most phases are transparent. Direct involvement:
+
+- **Phase 0**: driver_tab files become templates with extension points
+- **Phase 6a**: driver_tab → comptime Zig
+- **Phase 6b**: Android C → Zig (~3000 lines, the biggest single change to mob
+  in this migration)
+
+`mob/ios/*.{m,h}` (Objective-C) **stays as-is** through the entire migration.
+ARC + Cocoa idioms are right; rewriting in Zig would be worse.
+
+### `mob_dev`
+
+Most distinct changes — owns Mix tasks and release scripts:
+
+- **Phase 0**: `mob.regen_driver_tab` + manifest schema + `mob.doctor` checks
+- **Phase 1**: release scripts use `zig cc`
+- **Phase 2**: deploy task invokes Zig build via xcodebuild/gradle
+- **Phase 3**: `mob.add_nif` (new Igniter task)
+- **Phase 4**: `mob.enable` feature-by-feature migration to Igniter
+- **Phase 6c**: release scripts → `build.zig`
+
+Tasks that **don't migrate**: `mob.doctor`, `mob.icon`, `mob.devices`,
+`mob.connect`, `mob.push`, `mob.provision`. They work; they don't fit either
+new tool.
+
+### `mob_new`
+
+Heaviest absolute change — owns the build templates and LV generator:
+
+- **Phase 0**: build templates reference per-app generated driver_tab
+- **Phase 1**: `build.sh.eex` templates use `zig cc`
+- **Phase 2**: `build.sh.eex` → `build.zig.eex` (vanilla iOS, then LV iOS,
+  then Android variants) — most lines changed across the migration
+- **Phase 5**: `lib/mob_new/live_view_patcher.ex` rewrites to Igniter
+- **Phase 6a**: build templates reference comptime-generated driver_tab.zig
+
+---
+
+## Coordination concerns
+
+A few cross-repo invariants that need careful handling because mistakes in
+these compound across all three repos:
+
+### 1. Manifest schema is one definition, three users
+
+The `:static_nifs` block in user apps' `mob.exs` is read by:
+- `mob_dev`'s `mix mob.regen_driver_tab`
+- `mob_dev`'s `mix mob.deploy --native`
+- `mob_new`'s build templates
+
+**Schema changes are breaking changes for both other repos.** Bump versions
+in lockstep. Document the schema in mob_dev's README and link from the others.
+
+### 2. Zig version pin is three `.tool-versions` files
+
+When you bump Zig (treat like OTP version bumps — deliberate, tested), bump in
+all three repos in lockstep. Mismatched Zig pins between repos will cause
+generated projects to fail compilation in non-obvious ways.
+
+### 3. mob_new generates references to mob's source
+
+Build templates in mob_new reference `${MOB_DIR}/ios/mob_nif.m` etc. **If
+mob's file layout changes** (e.g., Phase 6b moves `mob/android/jni/*.c` to
+`*.zig`), every mob_new build template needs to reference new paths in the
+**same release** that lands the mob change.
+
+### 4. Hex publish order
+
+For each release that crosses repos:
+1. Publish `mob` to Hex first (lowest in dep tree)
+2. Then `mob_dev` (depends on Hex `mob`)
+3. Then `mob_new` (depends on Hex `mob` + `mob_dev`)
+
+When schema or shared layout changes, lockstep publish. When isolated changes,
+out-of-order is fine because dep version constraints (`{:mob, "~> 0.5"}`) accept
+ranges.
+
+### 5. Worktree-driven parallel execution
+
+This migration is multi-month. Multiple agents may work on independent phases
+in parallel. **All work happens in worktrees** (see Worktree section in each
+repo's CLAUDE.md). Coordinate phase ownership via this doc — don't have two
+agents on the same phase simultaneously.
+
+---
+
+## Risk management
+
+### Working code is precious
+
+The shell-script build pipeline has been debugged through two real-world
+incidents (the OTP 28.0 regex bug and the OTP 29.0-rc3 ERTS bump). It works.
+**Replacing it has real regression risk.**
+
+Mitigations baked into the plan:
+
+- **Keep `build.sh.legacy.eex` for one release cycle** after Phase 2 lands the
+  Zig replacement. Easy rollback if the Zig version has unexpected issues.
+- **Validate via byte-equivalence first.** First Phase 2 platform should
+  produce a binary that runs identically to the shell-script version. Hash
+  the binaries; diff what's different; explain every difference.
+- **CI tests at every phase boundary.** Phase 0 adds a test asserting
+  `mob.regen_driver_tab` produces stable output. Phase 2 adds a test that
+  `mix mob.deploy --native` produces working apps for each platform.
+
+### Zig 0.x churn
+
+Zig is pre-1.0. Every Zig version may break `build.zig`. Mitigations:
+
+- Pin Zig in `.tool-versions` like OTP. Treat version bumps as deliberate
+  events, not auto-updates.
+- Plan to budget ~1 person-week per year on Zig version migrations. This is
+  the explicit cost of being on pre-1.0.
+- If Zig 1.0 ships during this migration, plan to reach a consistent
+  pre-1.0 baseline first, then upgrade in one coordinated step.
+
+### Don't migrate working tasks just for consistency
+
+`mix mob.doctor`, `mix mob.icon`, `mix mob.devices`, etc. **stay as-is**.
+They don't benefit from Igniter or Zig build. Rewriting working code for
+consistency's sake is how scope creeps. Leave them.
+
+---
+
+## Branch strategy
+
+**Use `master` once the in-flight `pythonx-support` branches merge.** This
+migration is a multi-month sequenced effort; keeping it on master with phase
+branches off master gives clean history. Each phase = one PR.
+
+**Pythonx-support coordination**: Phase 0 and Phase 1 are isolated enough to
+proceed on a parallel branch alongside Pythonx if Pythonx is still active. From
+Phase 2 onward, the migration starts touching mob_new build templates where
+Pythonx work also lives — at that point, serialize behind Pythonx merge.
+
+**Worktree-per-phase**: each phase's work happens in its own worktree to
+allow parallel agents on different phases without stepping on each other. See
+`Worktrees` section in each repo's CLAUDE.md for the convention.
+
+---
+
+## Recommended sequencing across repos for each phase
+
+Per phase, what order to land changes to avoid mid-flight breakage:
+
+**Phase 0 (manifest + regen):**
+1. `mob_dev`: define schema + write `mix mob.regen_driver_tab`
+2. `mob`: update `driver_tab_*.c` to be base templates
+3. `mob_new`: update generated `mob.exs` template + build.sh templates
+4. Smoke test: fresh `mix mob.new` → deploy works
+
+**Phase 1 (zig cc):**
+1. `mob_dev`: add zig check to mob.doctor + swap CC in release scripts
+2. `mob_new`: swap CC in build templates
+3. Smoke test on both platforms
+
+**Phase 2 (build.sh → build.zig):**
+1. `mob_new`: implement build.zig.eex for one platform (iOS sim vanilla)
+2. Validate byte-equivalence with smoke test
+3. Expand to next platform; repeat
+4. Last step: remove `build.sh.legacy.eex` after one release cycle
+
+**Phase 3+ (Igniter migrations):**
+- Per-task migrations land independently. Order by current pain.
+
+---
+
+## Success criteria
+
+The migration is complete when:
+
+1. **Single source of truth**: every NIF appears once in `mob.exs`'s
+   `:static_nifs` block; no hand-edited driver_tab anywhere.
+2. **Single C toolchain**: `zig cc` is the C compiler driver across all four
+   cross-compile targets. No `xcrun cc` / NDK-clang invocations remaining.
+3. **Single build orchestrator**: native compile invoked via Zig build (with
+   Xcode/Gradle wrapping for app-bundle assembly). No `build.sh` files in
+   `mob_new` templates.
+4. **Igniter-driven scaffolding**: `mob.new --liveview`, `mob.enable`, and
+   `mob.add_nif` all use Igniter for Elixir AST work.
+5. **Tests are green** across all three repos at every phase boundary.
+6. **Smoke test passes** end-to-end on all four cross-compile targets after
+   each phase.
+
+Optional (Phase 6) target state:
+
+7. **Driver_tab is comptime-generated** from a manifest in Zig source.
+8. **Android NIF code is Zig** (`mob/android/jni/*.zig`).
+9. **OTP rebuild orchestration** lives in `build.zig`, not shell.
+
+---
+
+## Estimated scope
+
+- **Single engineer, full sequence**: ~6 months
+- **Two engineers in parallel** (most phases are independent): ~3–4 months
+- **Phases 0–2 only** (highest leverage, defensible stopping point): ~2–3 months
+
+Sustained maintenance after migration: roughly equivalent to today's burden,
+shifted from "shell script bugs + regex fragility" to "Zig version bumps +
+Igniter task evolution." Net: lower because the new shape is more compositional.
+
+---
+
+## Open questions
+
+These need answers before starting Phase 0. Update this section as they're
+resolved:
+
+- **Manifest format detail**: do we want per-arch overrides in the manifest
+  (e.g., `arch: :ios_device` for the static crypto NIF), or do we keep arch
+  conditionals as preprocessor flags? Both work; the per-arch shape is more
+  declarative.
+- **Driver_tab location**: per-app generated (in app's project), or in
+  mob library shipped as template? Per-app is cleaner; library-template is
+  closer to today's pattern.
+- **Zig version target**: Zig 0.13 is current stable. Zig 0.14 is in
+  development. 1.0 has no firm date. Pin to 0.13.x for the migration; bump
+  deliberately when 1.0 lands.
+- **Igniter version**: Igniter is at 0.x but is more stable than Zig. Pin to
+  current latest; track upstream releases.
+
+---
+
+## Updates
+
+Append progress notes here as phases complete.
