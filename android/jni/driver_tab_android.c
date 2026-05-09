@@ -1,4 +1,14 @@
-// driver_tab_android.c — Static NIF table with mob_nif added.
+// driver_tab_android.c — Reference snapshot of the static NIF table.
+//
+// As of mob 0.5.18 + mob_dev 0.4.x, the source of truth for an app's static
+// NIF table lives in the app's mob.exs `:static_nifs` config and is generated
+// to priv/generated/driver_tab_android.c via `mix mob.regen_driver_tab`. This
+// file remains as a fallback that build templates use when the generated file
+// is absent (i.e. the project hasn't been migrated yet).
+//
+// Keep this file in sync with `MobDev.StaticNifs.default_nifs/0` so the
+// fallback matches the generator's default output.
+//
 // Link BEFORE libbeam.a to override the built-in driver_tab.
 
 #include <stddef.h>
