@@ -440,23 +440,31 @@ Igniter task evolution." Net: lower because the new shape is more compositional.
 
 ---
 
-## Open questions
+## Resolved decisions
 
-These need answers before starting Phase 0. Update this section as they're
-resolved:
+Greenlit 2026-05-09 alongside Phase 0 kickoff. Updates to these decisions go
+here, not in commit messages.
 
-- **Manifest format detail**: do we want per-arch overrides in the manifest
-  (e.g., `arch: :ios_device` for the static crypto NIF), or do we keep arch
-  conditionals as preprocessor flags? Both work; the per-arch shape is more
-  declarative.
-- **Driver_tab location**: per-app generated (in app's project), or in
-  mob library shipped as template? Per-app is cleaner; library-template is
-  closer to today's pattern.
-- **Zig version target**: Zig 0.13 is current stable. Zig 0.14 is in
-  development. 1.0 has no firm date. Pin to 0.13.x for the migration; bump
-  deliberately when 1.0 lands.
-- **Igniter version**: Igniter is at 0.x but is more stable than Zig. Pin to
-  current latest; track upstream releases.
+- **Pythonx-support coordination**: merged to master in all three repos on
+  2026-05-09 (mob 0.5.18, mob_dev 0.4.0, mob_new 0.2.0). Migration starts on
+  the unified master.
+- **Manifest format**: per-arch overrides live **in the data**, not as
+  preprocessor flags. A NIF entry can specify `archs: [:all]` (default) or
+  `archs: [:ios_device, :ios_sim]` etc. More declarative; both Igniter and
+  the eventual Zig comptime generator can read it without parsing C macros.
+- **Driver_tab location**: **per-app generated**, written to the app's project
+  (e.g. `priv/generated/driver_tab_ios.c`). Mob's library-shipped driver_tabs
+  become reference snapshots / smoke-test fixtures only. Per-app keeps each
+  app's table tied to its actual `:static_nifs` set.
+- **Zig version pin**: pinned to current stable at the point Phase 1 lands.
+  Captured in `.tool-versions` in all three repos. Bump deliberately, like
+  the OTP pin. Phase 0 doesn't use Zig at all.
+- **Igniter version**: pin to latest stable when Phase 3 starts; track
+  upstream releases.
+- **Branch strategy**: one worktree per phase per repo. Branch names follow
+  `migration/phase-<N>-<slug>` (e.g. `migration/phase-0-manifest`). Each
+  phase = one PR per affected repo, merged in the order in "Recommended
+  sequencing".
 
 ---
 
