@@ -510,7 +510,14 @@ Apple framework module maps under -fmodules — Phase 1 finding).
   - iter 5: + final link via xcrun swiftc system command. Produces the
     Mach-O binary directly. build.sh shrank from ~390 → ~325 lines.
 
-  Remaining for iOS sim vanilla: move .app bundle assembly + simctl
-  install out of build.sh into a Mix task (so `mix mob.deploy --native`
-  is the orchestrator the plan envisions). Then expand to LV iOS, then
-  Android (CMake → build.zig is the next big chunk).
+  - iter 6: bundle + simctl install moved out of build.sh into
+    `MobDev.NativeBuild`. build.sh ends at `=== Native build complete ===`
+    after `zig build binary`. Mix takes over: simulator pick (`--device`
+    or detect booted), .app bundle assembly, optional `xcrun actool`,
+    `xcrun simctl install`. First concrete realization of the layered
+    architecture from the plan diagram (Mix → Zig build → Apple
+    packagers).
+
+  iOS sim vanilla now matches the plan's target architecture. Remaining
+  Phase 2 work: expand the same pattern to LV iOS, then Android arm64
+  (CMake → build.zig is the next big chunk), then arm32, then iOS device.
