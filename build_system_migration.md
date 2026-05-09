@@ -477,3 +477,40 @@ here, not in commit messages.
 ## Updates
 
 Append progress notes here as phases complete.
+
+### 2026-05-09
+
+**Phase 0 complete.** `MobDev.StaticNifs` schema + `mix mob.regen_driver_tab`
+task in mob_dev (0.4.x). Per-app `priv/generated/driver_tab_<plat>.c` is the
+source of truth; mob's library copies stay as fallback for unmigrated
+projects. `mob.doctor` warns on drift. Smoke test: full deploy on iPhone 17
+Pro sim with both fallback and per-app paths.
+
+**Phase 1 complete.** Pinned zig 0.15.2 in `.tool-versions` lockstep across
+mob/mob_dev/mob_new. `mob.doctor` checks for zig on PATH. iOS sim build
+template uses `zig cc` for plain `.c` (driver_tab_ios.c, enif_keepalive.c)
+and Apple's `xcrun cc` for `.m` files (zig's bundled clang can't build
+Apple framework module maps under -fmodules — Phase 1 finding).
+
+**Phase 2 in progress** — iOS sim vanilla complete through link.
+
+  - 2026-05-09: bumped zig pin to 0.17.0-dev nightly. Zig 0.15.x can't
+    link the build runner itself on macOS 26.x — even an empty
+    `pub fn main() void {}` fails with missing libSystem symbols. The
+    nightly has the fix; planning to switch to a zig stable that ships
+    the macOS 26 fix when one is released (likely 0.17.0).
+
+  - iter 1: build.zig owns driver_tab_ios.c compile.
+  - iter 2: + enif_keepalive.c compile.
+  - iter 3: + 5 ObjC compiles via xcrun cc system commands
+    (MobNode/mob_nif/mob_beam/AppDelegate/beam_main).
+  - iter 4: + Swift compile via xcrun swiftc system command. Swift→ObjC
+    header dependency wired through the build graph via
+    `addPrefixedDirectoryArg("-I", swift_h.dirname())`.
+  - iter 5: + final link via xcrun swiftc system command. Produces the
+    Mach-O binary directly. build.sh shrank from ~390 → ~325 lines.
+
+  Remaining for iOS sim vanilla: move .app bundle assembly + simctl
+  install out of build.sh into a Mix task (so `mix mob.deploy --native`
+  is the orchestrator the plan envisions). Then expand to LV iOS, then
+  Android (CMake → build.zig is the next big chunk).
