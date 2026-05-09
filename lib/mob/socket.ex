@@ -3,7 +3,10 @@ defmodule Mob.Socket do
   The socket struct passed through all Mob.Screen and Mob.Component callbacks.
 
   Holds two things:
-  - `assigns` — the public data map your `render/1` function reads from `@assigns`
+  - `assigns` — the public data map your `render/1` function reads via
+    `assigns.foo` (the `~MOB` sigil does not support Phoenix HEEx's
+    `@foo` shortcut — `@foo` inside `render/1` resolves to a module
+    attribute, which is almost always `nil`)
   - `__mob__` — internal Mob metadata (screen module, platform, view refs, nav stack)
 
   You interact with a socket via `assign/2` and `assign/3`. Never mutate `__mob__`
