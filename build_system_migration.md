@@ -518,6 +518,25 @@ Apple framework module maps under -fmodules — Phase 1 finding).
     architecture from the plan diagram (Mix → Zig build → Apple
     packagers).
 
-  iOS sim vanilla now matches the plan's target architecture. Remaining
-  Phase 2 work: expand the same pattern to LV iOS, then Android arm64
-  (CMake → build.zig is the next big chunk), then arm32, then iOS device.
+  iOS sim vanilla now matches the plan's target architecture.
+
+  - iter 7: LV iOS template ported to the same `zig build binary` +
+    Mix bundle pattern. `live_view_patcher.ex`'s inline build.sh
+    string lost ~85 lines of duplicated native build glue; LV-specific
+    parts (Phoenix asset build, crypto shim erlc, host ssl beam copy,
+    priv/static + priv/repo copies) stay in build.sh as non-native
+    concerns. Smoke-tested with `mix mob.new lv --liveview` end-to-end
+    on iPhone 17 Pro sim — 837 BEAM files (Phoenix deps), Mach-O
+    binary at ios/zig-out/, app launches.
+
+  - Android Phase 0 validation (no new code): deployed phase2f_smoke
+    to emulator-5556 with Phase 0's per-app
+    `priv/generated/driver_tab_android.c` resolved by the
+    CMakeLists.txt `if(EXISTS ...)` fallback. APK built via
+    Gradle → CMake → NDK clang, BEAM pushed, app started. Confirms the
+    Phase 0 substrate works on Android end-to-end. CMake → build.zig
+    swap is still pending Phase 2 work.
+
+  Remaining Phase 2 work: Android arm64 (CMake → build.zig is the next
+  big chunk; Gradle's CMake plugin would need to be replaced or wrapped
+  to invoke `zig build`), then arm32, then iOS device.
