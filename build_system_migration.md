@@ -537,6 +537,19 @@ Apple framework module maps under -fmodules — Phase 1 finding).
     Phase 0 substrate works on Android end-to-end. CMake → build.zig
     swap is still pending Phase 2 work.
 
-  Remaining Phase 2 work: Android arm64 (CMake → build.zig is the next
-  big chunk; Gradle's CMake plugin would need to be replaced or wrapped
-  to invoke `zig build`), then arm32, then iOS device.
+  - iter 8: Android arm64 + arm32 — driver_tab_android.c moves into a
+    new `android/app/src/main/jni/build.zig`. Per-ABI invocation:
+    arm64-v8a → aarch64-linux-android, armeabi-v7a → arm-linux-androideabi.
+    Mix's NativeBuild invokes `zig build c-objects` once per ABI before
+    `gradle_assemble`; outputs land at
+    `android/app/build/zig-out/<abi>/driver_tab_android.o`.
+    CMakeLists.txt grew a three-tier fallback (zig-out .o → Phase 0 .c
+    → mob's reference .c) so non-Mix invocations (Android Studio "Sync
+    Project") still work. Smoke-tested on emulator-5556 — APK built,
+    BEAM started, full UI rendered.
+
+  Remaining Phase 2 work: expand the Android build.zig to absorb
+  mob_nif.c, mob_beam.c, beam_jni.c, then the link step (currently
+  CMake's `add_library` + `target_link_libraries`). Then iOS device,
+  which needs Phase 2 treatment plus the codesign / provisioning
+  profile / devicectl install glue (currently shell-only).
