@@ -72,7 +72,23 @@ defmodule Mob.Dist do
             base_node = Keyword.fetch!(opts, :node)
             cookie = Keyword.fetch!(opts, :cookie)
             delay = Keyword.get(opts, :delay, @default_delay)
-            dist_port = Keyword.get(opts, :dist_port, 9100)
+            # Resolution order:
+            #   1. explicit `:dist_port` opt (overrides everything)
+            #   2. MOB_DIST_PORT env (set by Android launcher from the
+            #      `mob_dist_port` intent extra — carries the per-device
+            #      port mob_dev's Tunnel allocated)
+            #   3. 9100 default
+            #
+            # Without (2), every device's BEAM listened on 9100 regardless
+            # of which host port mob_dev forwarded; for any non-zero device
+            # index the EPMD-broadcast port and the actual forward target
+            # disagreed, leaving the second device's BEAM unreachable from
+            # the Mac side.
+            dist_port =
+              Keyword.get(opts, :dist_port) ||
+                env_dist_port() ||
+                9100
+
             node = apply_suffix(base_node, System.get_env("MOB_NODE_SUFFIX"))
 
             if node != base_node do
@@ -104,6 +120,24 @@ defmodule Mob.Dist do
         [name, host] -> :"#{name}_#{suffix}@#{host}"
         [name] -> :"#{name}_#{suffix}"
       end
+    end
+  end
+
+  @doc false
+  @spec env_dist_port() :: pos_integer() | nil
+  def env_dist_port do
+    case System.get_env("MOB_DIST_PORT") do
+      nil ->
+        nil
+
+      "" ->
+        nil
+
+      raw ->
+        case Integer.parse(raw) do
+          {port, ""} when port > 0 and port < 65_536 -> port
+          _ -> nil
+        end
     end
   end
 
