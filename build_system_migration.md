@@ -580,10 +580,22 @@ Apple framework module maps under -fmodules — Phase 1 finding).
     -L paths, libc-provisioning rejection, libstdc++ vs libc++
     naming, -lm for math, SONAME wiring, IMPORTED_SONAME).
 
+  - iter 11: sqlite3_nif compile + link into build.zig. The exqlite
+    NIF's link explicitly pulls lib<app>.so so its DT_NEEDED entry
+    carries the SONAME — Android's loader maps lib<app>.so first and
+    enif_* symbols resolve at runtime. (First attempt used
+    --allow-shlib-undefined and skipped the explicit link; the link
+    succeeded but runtime dlopen failed with "cannot locate symbol
+    enif_make_int".) Smoke-tested on emulator-5556: both .so files in
+    jniLibs, BEAM started, both Repo migrations ran, exqlite loaded,
+    full UI rendered.
+
+    **Phase 2 Android is now CMake-free for the compile/link path.**
+    CMake still configures the build (Gradle requires a CMakeLists.txt
+    for externalNativeBuild), but its add_library blocks only execute
+    as fallbacks when build.zig didn't run.
+
   Remaining Phase 2 work:
-    - iter 11: sqlite3_nif also moves into build.zig (currently a
-      second `add_library` in CMake — uses NDK clang directly so the
-      libc-provisioning issue doesn't apply).
     - iter 12: iOS device — needs Phase 2 treatment plus the
       codesign / provisioning profile / devicectl install glue
       (currently shell-only via `mob_dev/lib/mob_dev/native_build.ex`
