@@ -550,6 +550,54 @@ User alias "Nova" = macOS + Nix-managed toolchain throughout.
 - `ios/mob_beam.m` — iOS BEAM launcher
 - `android/jni/mob_beam.c` — Android BEAM launcher
 
+## Transport-handler reentrancy: spawn before calling back into the GenServer
+
+If your app registers a wire handler (e.g. via `Pigeon.Transport.expose/2`)
+that the transport invokes via `Pythonx.send_tagged_object` →
+`handle_info({:rns_packet, ...}, state)` → `dispatch_inbound`, **don't
+run the handler synchronously inside that GenServer's process** if the
+handler might call back into the same GenServer.
+
+Concrete bug we hit in Pigeon: an inbound `:hello` envelope ran
+`Pigeon.Handlers.on_hello/2` synchronously inside
+`Pigeon.Transport.Reticulum.Server.handle_info/2`. `on_hello` reciprocated
+by calling `Handlers.push_hello/1` → `Transport.send/3` →
+`GenServer.call(Pigeon.Transport.Reticulum.Server, ...)` — but we were
+already inside that GenServer's `handle_info`. Erlang refuses a process
+calling itself with `:calling_self` and the GenServer crashes:
+
+    {:calling_self, {GenServer, :call, [Pigeon.Transport.Reticulum.Server,
+                                        {:send, ..., :hello, ...}, 10000]}}
+
+The mistake is conceptually simple — synchronous reentrancy from a
+handler that holds the GenServer's mailbox lock — but the symptom is
+mystifying: messages arrive, handler logs fire, then the GenServer
+silently terminates and the supervisor restarts it without you
+noticing the cycle.
+
+**Fix pattern**: wrap each handler invocation in a `spawn` so the
+handler's call-chain runs in its own process and can re-enter the
+transport without deadlocking. Pair with a `try/rescue + Logger.error`
+so the spawned process doesn't die silently:
+
+    spawn(fn ->
+      try do
+        fun.(sender_pubkey, payload)
+      rescue
+        e ->
+          Logger.error(
+            "[transport] handler #{name} crashed: " <>
+              Exception.format(:error, e, __STACKTRACE__)
+          )
+      end
+    end)
+
+Applies to any transport-style GenServer that dispatches incoming
+events to user-registered callbacks. Using a `Task.Supervisor` is
+cleaner once the app already has one; for a leaf transport the bare
+`spawn` is fine — handlers are idempotent and don't need restart
+semantics.
+
 ## Connecting an IEx session to a running mob app (Mac → device BEAM)
 
 Drive any running mob app from a Mac-side IEx via Erlang

@@ -87,4 +87,57 @@ defmodule Mob.DistTest do
                :test_nif_android_zy22cr
     end
   end
+
+  describe "env_dist_port/0" do
+    setup do
+      # Save+restore so test order doesn't matter and env mutations don't
+      # leak into other tests in the same VM.
+      previous = System.get_env("MOB_DIST_PORT")
+
+      on_exit(fn ->
+        case previous do
+          nil -> System.delete_env("MOB_DIST_PORT")
+          val -> System.put_env("MOB_DIST_PORT", val)
+        end
+      end)
+
+      :ok
+    end
+
+    test "returns nil when MOB_DIST_PORT is unset" do
+      System.delete_env("MOB_DIST_PORT")
+      assert Mob.Dist.env_dist_port() == nil
+    end
+
+    test "returns nil when MOB_DIST_PORT is empty" do
+      System.put_env("MOB_DIST_PORT", "")
+      assert Mob.Dist.env_dist_port() == nil
+    end
+
+    test "parses a valid port number" do
+      System.put_env("MOB_DIST_PORT", "9101")
+      assert Mob.Dist.env_dist_port() == 9101
+    end
+
+    test "rejects non-numeric values" do
+      System.put_env("MOB_DIST_PORT", "abc")
+      assert Mob.Dist.env_dist_port() == nil
+    end
+
+    test "rejects out-of-range port numbers" do
+      System.put_env("MOB_DIST_PORT", "0")
+      assert Mob.Dist.env_dist_port() == nil
+
+      System.put_env("MOB_DIST_PORT", "65536")
+      assert Mob.Dist.env_dist_port() == nil
+
+      System.put_env("MOB_DIST_PORT", "-1")
+      assert Mob.Dist.env_dist_port() == nil
+    end
+
+    test "rejects mixed numeric+text" do
+      System.put_env("MOB_DIST_PORT", "9101abc")
+      assert Mob.Dist.env_dist_port() == nil
+    end
+  end
 end
