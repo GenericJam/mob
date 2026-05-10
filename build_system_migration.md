@@ -545,11 +545,33 @@ Apple framework module maps under -fmodules — Phase 1 finding).
     `android/app/build/zig-out/<abi>/driver_tab_android.o`.
     CMakeLists.txt grew a three-tier fallback (zig-out .o → Phase 0 .c
     → mob's reference .c) so non-Mix invocations (Android Studio "Sync
-    Project") still work. Smoke-tested on emulator-5556 — APK built,
-    BEAM started, full UI rendered.
+    Project") still work. Smoke-tested on emulator-5556.
 
-  Remaining Phase 2 work: expand the Android build.zig to absorb
-  mob_nif.c, mob_beam.c, beam_jni.c, then the link step (currently
-  CMake's `add_library` + `target_link_libraries`). Then iOS device,
-  which needs Phase 2 treatment plus the codesign / provisioning
-  profile / devicectl install glue (currently shell-only).
+  - iter 9: All four Android C compiles (mob_nif.c, mob_beam.c,
+    beam_jni.c, driver_tab_android.c) into build.zig. CMake's
+    `add_library` becomes a `.o`-only target with explicit
+    `LINKER_LANGUAGE C` (CMake can't infer linker driver from .o
+    sources alone). Four NDK discoveries needed to make zig cc + NDK
+    headers play together:
+      1. zig 0.17 needs API-versioned target via target query's
+         `os_version_min`, not `aarch64-linux-android24` CLI form.
+      2. NDK header search: `--sysroot=$NDK_SYSROOT` plus two
+         `-isystem` paths — `$SYSROOT/usr/include` (jni.h, android/*)
+         and `$SYSROOT/usr/include/<arch-triple>` (sys/, linux/, etc.).
+      3. `-fPIC` required (zig cc doesn't add it; NDK clang does).
+      4. NDK sysroot path is detected from
+         `$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/<host>`
+         where host is `darwin-x86_64` even on Apple Silicon.
+
+  Remaining Phase 2 work:
+    - iter 10: Android link → build.zig (replaces CMake's
+      `target_link_libraries` against libbeam.a / liberts_internal_r.a /
+      libcrypto.a / -landroid -llog -lz -lc++_static -lc++abi).
+      Output target: a per-ABI `lib<app>.so` Gradle picks up via
+      `jniLibs.srcDirs`.
+    - iter 11: sqlite3_nif also moves into build.zig (currently a
+      second `add_library` in CMake).
+    - iter 12: iOS device — needs Phase 2 treatment plus the
+      codesign / provisioning profile / devicectl install glue
+      (currently shell-only via `mob_dev/lib/mob_dev/native_build.ex`
+      `build_ios_physical`).
