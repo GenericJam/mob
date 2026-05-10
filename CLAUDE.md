@@ -549,3 +549,110 @@ User alias "Nova" = macOS + Nix-managed toolchain throughout.
 - `android/jni/mob_nif.c` — Android NIF implementation (JNI bridge)
 - `ios/mob_beam.m` — iOS BEAM launcher
 - `android/jni/mob_beam.c` — Android BEAM launcher
+
+## Connecting an IEx session to a running mob app (Mac → device BEAM)
+
+Drive any running mob app from a Mac-side IEx via Erlang
+distribution. Beats `adb shell input tap` for anything
+state-related — you get full RPC into the device BEAM.
+
+### The happy path (single device)
+
+```bash
+cd /path/to/your_mob_app
+
+mix mob.connect            # starts IEx connected to all devices
+# or
+mix mob.connect --no-iex   # sets up tunnels, prints node names, exits
+```
+
+Then from any other IEx (or one-shot script) on the Mac:
+
+```bash
+elixir --name probe@127.0.0.1 --cookie mob_secret -e '
+node = :"your_app_android_<suffix>@127.0.0.1"
+Node.connect(node)
+:rpc.call(node, YourApp.Module, :function, [args])
+'
+```
+
+The cookie defaults to `:mob_secret` (set by `Mob.Dist.ensure_started`
+in your app's `on_start/0`). `--name` (long names) is required when
+the device node uses a numeric host like `@10.0.0.120`.
+
+### Multi-Android limitation (mob_dev current behaviour)
+
+`mob_dev` derives the Android dist node name from the device's IP,
+which is identical (`10.0.2.x`) for every emulator. Two emulators
+both try to register `your_app_android_emulator36x5x10x0` in EPMD
+and the second fails with `eaddrinuse`. Symptom in
+`mix mob.connect` output:
+
+```
+sdk_gphone64_arm64: timed out waiting for your_app_android_emulator36x5x10x0@127.0.0.1
+```
+
+Workarounds:
+1. Only have one emulator running.
+2. Pick the emulator you care about and verify the other side via
+   `adb logcat`.
+
+### Fixing adb-forward port mismatch
+
+`mob_dev` assigns dist ports by index (`9100` for the first device,
+`9101` for the second, …) but EPMD broadcasts the *device-side*
+port (always `9100`). When EPMD says "node X is at port 9100",
+your IEx connects to `localhost:9100` — which may be an `adb
+forward` to a different device, or to nothing. Symptom:
+
+```elixir
+Node.connect(:"your_app_android_<suffix>@127.0.0.1")
+#=> false
+```
+
+Repoint `localhost:9100` at the device whose BEAM you want:
+
+```bash
+adb forward --list                           # see what's there
+adb -s <serial> forward tcp:9100 tcp:9100    # 9100 host → 9100 device
+```
+
+For physical-device-on-Wi-Fi targets (iPhone, real Android), the
+node name uses the device IP directly (`@10.0.0.120`) and dist
+goes through real network — no adb-forward dance required.
+
+### Inspecting state that contains opaque resources
+
+Several mob/Pigeon operations return values containing opaque NIF
+resources (e.g. `Pythonx.Object`, ETS table refs). These cannot
+cross Erlang distribution: `:rpc.call/4` will fail with `:badrpc`
+on the way back. Pattern: do the resource-touching work *on the
+device side* and return primitives (strings, maps, ints).
+
+Example — bad (returns `Pythonx.Object`, dies on dist boundary):
+
+```elixir
+:rpc.call(node, Pythonx, :eval, [src, %{}])  # returns {Pythonx.Object, _}; cannot serialize
+```
+
+Good — wrap in a helper module compiled into the app:
+
+```elixir
+defmodule YourApp.IexHelpers do
+  def python_state do
+    {obj, _} = Pythonx.eval("...", %{})
+    Jason.decode!(Pythonx.decode(obj))   # plain map; safe to ship
+  end
+end
+```
+
+Then `:rpc.call(node, YourApp.IexHelpers, :python_state, [])` works.
+Pigeon has `Pigeon.IexHelpers` exactly for this purpose — copy
+that pattern when adding device-side debugging surfaces.
+
+### What to reach for first
+
+Write small named functions in `<your_app>.IexHelpers`, push with
+`mix mob.deploy`, call by RPC. That keeps the Mac-side script
+minimal and debuggable, and the helpers double as documentation
+of the operations you actually need.
