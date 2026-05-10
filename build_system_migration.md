@@ -678,6 +678,18 @@ Apple framework module maps under -fmodules — Phase 1 finding).
     Smoke-tested LV (Phoenix 1.7) and vanilla mob on Kevin's iPhone:
     both deploy clean.
 
+  - iter 13e: timing validation. Measured no-change rebuild on iOS
+    sim (vanilla phase2q_smoke project): 2m12s end-to-end. Time is
+    dominated by:
+      - OTP runtime rsync to `~/.mob/runtime/ios-sim` (~195 MB)
+      - exqlite NIF cross-compile (always re-runs)
+      - .app bundle rebuild (full rsync of OTP into the bundle)
+    All three are operations the old shell pipeline did unconditionally
+    too — iter 13b/c preserves the original semantics, no regression.
+    Future caching wins (skip rsync when sources unchanged, mtime-
+    gated exqlite recompile, content-hashed bundle reuse) are out of
+    scope for Phase 2 cleanup; tracked as separate optimization work.
+
   **Phase 2 is COMPLETE.** Every target — iOS sim vanilla, iOS sim
   LiveView, Android arm64, Android arm32, Android sqlite3_nif, iOS
   device — has its native compile + link in build.zig and its
