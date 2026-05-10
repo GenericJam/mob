@@ -636,9 +636,53 @@ Apple framework module maps under -fmodules — Phase 1 finding).
     install. The Mix-driven path resolved an install-acceptance issue
     the shell flow had hit at the device-trust layer.
 
+  - iter 13a: slim_step pipeline restored in Elixir (was a TODO in
+    iter 12d's bundle/codesign migration). Mirrors the original shell
+    version: apple binaries strip, prefix libs strip, foreign apps
+    strip, dedup versions, src+headers strip, beam chunk strip via
+    `:beam_lib.strip_release/1`. Gated on `MOB_SLIM=1` to keep dev
+    iteration fast (the strip pass adds ~5-10s).
+
+  - iter 13b: iOS sim build glue → Mix. The generated
+    `ios/build.sh.eex` template (288 lines) is gone. All iOS-sim
+    build glue (mix compile, BEAM copies, exqlite NIF cross-compile,
+    Pythonx framework + cross-compile, crypto shim for LV,
+    ssl beams from host OTP for LV, Phoenix asset build for LV,
+    Ecto migration copy, Elixir/EEx stdlib copy, OTP runtime sync,
+    enif_keepalive generation, zig binary build, .app bundle, simctl
+    install) now flows through MobDev.NativeBuild. LV detection gates
+    on `assets/` at project root (not on transitive phoenix_live_view
+    dep — vanilla mob pulls it in too). Smoke-tested LV (Phoenix 1.7)
+    and vanilla mob projects on both iOS sim and physical iPhone.
+    Companion mob_new commit removes `liveview_build_sh_content/2`
+    and the build.sh template.
+
+  - iter 13c: eliminate `build_device.sh`. Same model as iter 13b but
+    for iOS device. `generate_build_device_sh/2` (~520 lines) is gone;
+    `build_ios_physical/2` is now a `with` chain over Mix helpers.
+    Reuses iter 13b helpers verbatim (compile, beam copy, exqlite OTP
+    lib, crypto shim, Elixir/EEx stdlib, migrations, Phoenix assets,
+    enif_keepalive). Adds device-specific helpers:
+    cross_compile_exqlite_nif_device (static .a, iphoneos arm64);
+    maybe_setup_pythonx_device (Python.framework rsync +
+    libpythonx.so for iphoneos arm64); maybe_install_ssl_shim
+    (LV-only full SSL stub); copy_otp_libs_for_phoenix (runtime_tools,
+    asn1, public_key from host OTP); install_app_in_otp_lib (so
+    Plug.Static's :code.lib_dir resolves); copy_mob_logos_to_otp_root;
+    patch_epmd_source (idempotent NO_DAEMON guard);
+    generate_erl_errno_compat_stub; zig_build_binary_ios_device.
+    Stale references swept: `has_ios_project?/0` in mob.doctor +
+    mob.install now checks `ios/build.zig`; doctor python3/rsync
+    rationale + battery_bench docstring updated; enable.ex's
+    detect_stale_pythonx_templates drops the obsolete build.sh entries.
+    Smoke-tested LV (Phoenix 1.7) and vanilla mob on Kevin's iPhone:
+    both deploy clean.
+
   **Phase 2 is COMPLETE.** Every target — iOS sim vanilla, iOS sim
   LiveView, Android arm64, Android arm32, Android sqlite3_nif, iOS
   device — has its native compile + link in build.zig and its
-  bundle/install in Mix (or Gradle for Android). Shell scripts are
-  glue (asset copies, mix compile orchestration, exqlite NIF special
-  cases), not native build orchestration.
+  bundle/install in Mix (or Gradle for Android). Both
+  `ios/build.sh.eex` and runtime-generated `build_device.sh` are
+  gone. The iOS path no longer uses shell scripts at all; build
+  orchestration lives in Elixir (`mob_dev/lib/mob_dev/native_build.ex`)
+  and Zig (`build.zig` / `build_device.zig`).
