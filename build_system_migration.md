@@ -563,14 +563,27 @@ Apple framework module maps under -fmodules — Phase 1 finding).
          `$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/<host>`
          where host is `darwin-x86_64` even on Apple Silicon.
 
+  - iter 10: Android link → build.zig produces per-ABI lib<app>.so
+    via NDK clang (zig cc handles compile; switching to NDK clang for
+    the link sidesteps zig's "unable to provide libc for target"
+    rejection on Android). Output lands in
+    `android/app/src/main/jniLibs/<abi>/` where Gradle's default
+    jniLibs.srcDirs scan picks it up. CMakeLists.txt adds an IMPORTED
+    target so sqlite3_nif's link still finds the SONAME — without
+    `IMPORTED_SONAME` matching `-Wl,-soname` from the build.zig link,
+    sqlite3_nif's DT_NEEDED carries the absolute build-host path and
+    runtime dlopen fails. Smoke-tested on emulator-5556: BEAM started,
+    Repo migrations ran, exqlite NIF loaded, full UI rendered.
+
+    Seven NDK + zig discoveries logged in the iter 10 commit message
+    (`-Wl,--allow-multiple-definition` unsupported, sysroot-relative
+    -L paths, libc-provisioning rejection, libstdc++ vs libc++
+    naming, -lm for math, SONAME wiring, IMPORTED_SONAME).
+
   Remaining Phase 2 work:
-    - iter 10: Android link → build.zig (replaces CMake's
-      `target_link_libraries` against libbeam.a / liberts_internal_r.a /
-      libcrypto.a / -landroid -llog -lz -lc++_static -lc++abi).
-      Output target: a per-ABI `lib<app>.so` Gradle picks up via
-      `jniLibs.srcDirs`.
     - iter 11: sqlite3_nif also moves into build.zig (currently a
-      second `add_library` in CMake).
+      second `add_library` in CMake — uses NDK clang directly so the
+      libc-provisioning issue doesn't apply).
     - iter 12: iOS device — needs Phase 2 treatment plus the
       codesign / provisioning profile / devicectl install glue
       (currently shell-only via `mob_dev/lib/mob_dev/native_build.ex`
