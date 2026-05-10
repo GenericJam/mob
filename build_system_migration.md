@@ -595,8 +595,22 @@ Apple framework module maps under -fmodules — Phase 1 finding).
     for externalNativeBuild), but its add_library blocks only execute
     as fallbacks when build.zig didn't run.
 
-  Remaining Phase 2 work:
-    - iter 12: iOS device — needs Phase 2 treatment plus the
-      codesign / provisioning profile / devicectl install glue
-      (currently shell-only via `mob_dev/lib/mob_dev/native_build.ex`
-      `build_ios_physical`).
+  - iter 12: iOS device build_device.zig — sister to ios/build.zig
+    targeting iphoneos. Compiles the same 7 standard sources (5 ObjC,
+    1 Swift, driver_tab + enif_keepalive) for arm64-apple-ios17.0 with
+    SDK iphoneos. mob_beam.m gets -DMOB_BUNDLE_OTP / -DERTS_VSN /
+    -DOTP_RELEASE; driver_tab gets optional -DMOB_STATIC_SQLITE_NIF
+    via the sqlite_static option. EPMD compile, erl_errno_id_compat
+    stub, the link, .app bundle, codesign, and devicectl install all
+    stay in build_device.sh for this iter — they migrate as iter 12b/c.
+
+    Smoke-tested via pythonx_ios_spike on a real iPhone: build pipeline
+    end-to-end works — all 8 .o files produced as Mach-O 64-bit arm64
+    (device, not simulator), link succeeded, .app bundled, codesign
+    signed all 66 Python lib-dynload + Python framework + libpythonx.so
+    + the main binary. Install hit a provisioning-profile error on the
+    device — orthogonal to the build pipeline.
+
+  **Phase 2 native compile + link is now in build.zig for every target
+  except: EPMD on iOS device, the iOS device link, iOS device bundle,
+  iOS device codesign, iOS device install.** Iter 12b/c tackle those.
