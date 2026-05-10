@@ -611,6 +611,34 @@ Apple framework module maps under -fmodules — Phase 1 finding).
     + the main binary. Install hit a provisioning-profile error on the
     device — orthogonal to the build pipeline.
 
-  **Phase 2 native compile + link is now in build.zig for every target
-  except: EPMD on iOS device, the iOS device link, iOS device bundle,
-  iOS device codesign, iOS device install.** Iter 12b/c tackle those.
+  - iter 12b: EPMD + erl_errno_id_compat into build_device.zig.
+    12 .o files now flow through build.zig (5 ObjC + 1 Swift + 2 plain
+    C + 3 EPMD + 1 errno shim).
+
+  - iter 12c: iOS device link → build_device.zig. xcrun swiftc with
+    OTP/crypto static libs + optional sqlite3_nif.a + frameworks +
+    -dead_strip → Mach-O binary at ios/zig-out/<display_name>.
+
+  - iter 12d: bundle + codesign + devicectl install → Mix. ~180 lines
+    of bundle/codesign/install glue moved out of build_device.sh into
+    Elixir. The Mix-driven flow includes:
+      - .app bundle assembly (PlistBuddy CFBundleIdentifier/Executable
+        /Name patches, conditional actool for AppIcon)
+      - OTP runtime bundling (rsync lib/releases/<app>/python/ + logos
+        + ERTS_VSN/bin dir)
+      - Slim strip (placeholder; TODO to port the shell version)
+      - Provisioning profile embed (checks both Xcode UserData + older
+        MobileDevice paths)
+      - Codesign bottom-up (Python lib-dynload .so → Python.framework
+        → libpythonx.so → .app with entitlements)
+      - devicectl install
+    Smoke-tested on Kevin's iPhone: full end-to-end success including
+    install. The Mix-driven path resolved an install-acceptance issue
+    the shell flow had hit at the device-trust layer.
+
+  **Phase 2 is COMPLETE.** Every target — iOS sim vanilla, iOS sim
+  LiveView, Android arm64, Android arm32, Android sqlite3_nif, iOS
+  device — has its native compile + link in build.zig and its
+  bundle/install in Mix (or Gradle for Android). Shell scripts are
+  glue (asset copies, mix compile orchestration, exqlite NIF special
+  cases), not native build orchestration.
