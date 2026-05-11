@@ -678,6 +678,64 @@ Apple framework module maps under -fmodules — Phase 1 finding).
     Smoke-tested LV (Phoenix 1.7) and vanilla mob on Kevin's iPhone:
     both deploy clean.
 
+  - iter 13d: release scripts → zig cc — **researched, blocked, deferred**.
+    Goal was to swap `xcrun -sdk … cc` (and Android NDK clang) for
+    `zig cc -target …` in `scripts/release/xcomp/erl-xcomp-*.conf` so
+    the OTP tarball is built with the same toolchain the dev path uses.
+
+    **What works:**
+    - zig cc 0.17.0-dev compiles + links iOS sim/device executables
+      with these specific flags (verified via standalone hello-world):
+        `zig cc -target aarch64-ios-simulator -nostdlibinc \`
+        `       -isysroot $SDK -isystem $SDK/usr/include -L$SDK/usr/lib`
+      The `-nostdlibinc` is required because zig's bundled stdlib
+      headers don't match iOS; `-isystem $SDK/usr/include` provides
+      Apple's iOS SDK headers explicitly (NOT picked up via
+      `-isysroot` alone in zig 0.17.0-dev).
+    - With these flags, OTP's autoconf passes `checking whether the
+      C compiler works... yes` for every subdir.
+    - Several OTP libraries (erl_interface, ei) build cleanly.
+
+    **What blocks:**
+    - zig cc tries to provide its own libc++ when `-lc++` is in
+      LDFLAGS, which fails for iOS sim with cascade of "unknown type
+      mbstate_t / wint_t / size_t" errors against zig's bundled
+      libcxx headers (zig doesn't ship iOS-sim libc fragments).
+      Workaround: drop `-lc++` from LDFLAGS — works for OTP since
+      `--disable-jit --without-wx` removes the only C++ surfaces.
+    - After getting past configure + early lib builds, OTP's
+      emulator build fails:
+        `gmake[4]: *** No rule to make target 'stdbool.h', needed by`
+        `'obj/aarch64-apple-iossimulator/opt/emu/erl_main.o'.  Stop.`
+      Root cause: OTP's emulator Makefile.in uses `-MM -MG` for its
+      custom dep-generation pass (`$(SED_DEPEND) $@.tmp > $@`). With
+      zig cc, `-MM` outputs only user headers + zig's stdbool.h
+      absolute path (`/Users/kevin/zig/.../include/stdbool.h`),
+      which OTP's SED_DEPEND step rewrites to a bare basename that
+      then has no make-rule to satisfy it. Apple's clang outputs
+      similar absolute paths but OTP's SED_DEPEND was tuned to its
+      output format. Patching OTP's emulator dep machinery to
+      tolerate zig's output format is OTP-internal engineering, not
+      Phase 1 cleanup work.
+    - Android: zig 0.17.0-dev rejects `aarch64-linux-android24` as
+      `UnknownApplicationBinaryInterface`. Workarounds (musl target
+      + NDK sysroot) don't survive OTP's autoconf feature tests.
+
+    **Decision:** iter 13d is **deferred indefinitely**. The dev path
+    already uses zig cc for everything that matters (driver_tab,
+    enif_keepalive, the link via xcrun swiftc — see iter 1-12). The
+    release path runs once per OTP version bump (rare) and
+    successfully produces working tarballs with `xcrun cc` + NDK
+    clang. Pushing the swap through would require:
+      1. patching OTP's emulator Makefile.in dep generation, OR
+      2. building a `zig-cc-wrapper` shell that translates zig's dep
+         output into OTP-friendly format
+    Neither is justified by the marginal benefit (one-fewer
+    toolchain on the release machine, which is Kevin's Mac that
+    already has Xcode + NDK). Revisit when zig has first-class Apple
+    SDK + Android NDK support, or if a future OTP cleanup makes the
+    emulator dep machinery less custom.
+
   - iter 13e: timing validation. Measured no-change rebuild on iOS
     sim (vanilla phase2q_smoke project): 2m12s end-to-end. Time is
     dominated by:
