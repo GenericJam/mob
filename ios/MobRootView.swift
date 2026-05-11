@@ -1050,6 +1050,13 @@ private struct MobToggle: View {
                 node.onChangeBool?(newValue)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            // issues.md #8: SwiftUI's Toggle("Label", …) initializer does
+            // not propagate the label string into the underlying control's
+            // accessibilityLabel — the AX tree exposes the visual Text as
+            // a separate node and the Switch as a button with empty label.
+            // Setting it here lets `Mob.Test.toggle(node, "Notifications")`
+            // find the toggle via plain label match.
+            .accessibilityLabel(label)
     }
 }
 
@@ -1064,12 +1071,31 @@ private struct MobSlider: View {
     }
 
     var body: some View {
+        // issues.md #7: SwiftUI's plain Slider doesn't emit AX adjustable
+        // actions unless `.accessibilityAdjustableAction` is attached. Without
+        // it, VoiceOver users (and `Mob.Test.adjust_slider/4` which calls the
+        // same AX API) see :ok back from increment/decrement but the value
+        // never changes. Default step is (max - min) / 10 — the same default
+        // VoiceOver picks for native UISlider when no explicit step is set.
+        let step = (node.maxValue - node.minValue) / 10.0
         Slider(value: $value, in: node.minValue...node.maxValue)
             .onChange(of: value) { _, newValue in
                 node.onChangeFloat?(newValue)
             }
             .tint(node.color.map { Color($0) } ?? Color.accentColor)
             .frame(maxWidth: .infinity)
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment:
+                    value = Swift.min(value + step, node.maxValue)
+                    node.onChangeFloat?(value)
+                case .decrement:
+                    value = Swift.max(value - step, node.minValue)
+                    node.onChangeFloat?(value)
+                @unknown default:
+                    break
+                }
+            }
     }
 }
 
