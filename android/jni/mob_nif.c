@@ -20,18 +20,38 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// ── NIFs defined in mob_nif.zig (Phase 6b iter 3a) ────────────────────────────
+// ── NIFs defined in mob_nif.zig ───────────────────────────────────────────────
 // The Zig file exports these with the standard NIF C-ABI signature; the
 // static nif_funcs[] table below references them by symbol name. As later
 // sub-iters port more NIFs, they get added to this extern block — eventually
 // (iter 3d) the whole table moves to Zig and these externs go away.
+// iter 3a:
 extern ERL_NIF_TERM nif_platform(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 extern ERL_NIF_TERM nif_log(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 extern ERL_NIF_TERM nif_log2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+// iter 3b — test harness:
+extern ERL_NIF_TERM nif_ui_tree(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+extern ERL_NIF_TERM nif_ui_view_tree(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+extern ERL_NIF_TERM nif_screen_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+extern ERL_NIF_TERM nif_ui_debug(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+extern ERL_NIF_TERM nif_ax_action(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+extern ERL_NIF_TERM nif_ax_action_at_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+extern ERL_NIF_TERM nif_tap(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+extern ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+extern ERL_NIF_TERM nif_type_text(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+extern ERL_NIF_TERM nif_delete_backward(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+extern ERL_NIF_TERM nif_key_press(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+extern ERL_NIF_TERM nif_clear_text(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+extern ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+extern ERL_NIF_TERM nif_swipe_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
 
-// ── Cached JNI method IDs ────────────────────────────────────────────────────
-
-static struct {
+// ── Cached JNI method IDs (definition moved to mob_nif.zig in iter 3b) ──────
+// The matching extern struct here is the C view of the same memory the Zig
+// side defines and exports. Field order is load-bearing — drift here will
+// silently mis-resolve method IDs at runtime. When a Bridge field is added
+// or removed, BOTH this declaration AND the BridgeMethods extern struct in
+// mob_nif.zig must change together.
+struct BridgeMethods {
     jclass cls;
     jmethodID set_root;
     jmethodID move_to_back;
@@ -91,7 +111,13 @@ static struct {
     jmethodID clear_text;
     jmethodID long_press_xy;
     jmethodID swipe_xy;
-} Bridge;
+};
+extern struct BridgeMethods Bridge;
+
+// JNI thread-attach helper (definition moved to mob_nif.zig). The senders
+// + feature NIFs still in this file call it like before; the function
+// itself is now exported with C ABI from Zig.
+extern JNIEnv *get_jenv(int *attached);
 
 // ── Tap handle registry ───────────────────────────────────────────────────────
 // Cleared before every render. Max 256 tappable elements per frame.
@@ -609,17 +635,7 @@ void mob_handle_back(void) {
     enif_free_env(env);
 }
 
-// ── JNI helpers ──────────────────────────────────────────────────────────────
-
-static JNIEnv *get_jenv(int *attached) {
-    JNIEnv *env = NULL;
-    *attached = 0;
-    if ((*g_jvm)->GetEnv(g_jvm, (void **)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
-        (*g_jvm)->AttachCurrentThread(g_jvm, &env, NULL);
-        *attached = 1;
-    }
-    return env;
-}
+// ── JNI helpers (get_jenv moved to mob_nif.zig in iter 3b) ──────────────────
 
 // ── Cache MobBridge class (called from mob_beam.c) ───────────────────────────
 
@@ -1478,431 +1494,13 @@ static ERL_NIF_TERM nif_notify_register_push(ErlNifEnv *env, int argc, const ERL
     return call_bridge_pid_str(env, Bridge.notify_register_push, pid, NULL);
 }
 
-// ── NIF table & load ─────────────────────────────────────────────────────────
-
-// ── Test harness NIFs ─────────────────────────────────────────────────────────
-//
-// Android implementation notes vs iOS:
-//   - View tree walk uses android.view.View hierarchy (Compose exposes Views)
-//   - Touch injection via DecorView.dispatchTouchEvent — no INJECT_EVENTS needed
-//   - Text input via InputConnection.commitText — works for Compose TextField
-//   - All blocking operations use CountDownLatch on the Kotlin side;
-//     from C we just call the JNI method which blocks until the latch fires
-//   - Coordinates in dp (density-independent pixels), matching iOS convention
-
-// Helper: jstring → ERL_NIF_TERM binary (UTF-8). Deletes local ref.
-static ERL_NIF_TERM jstring_to_bin(ErlNifEnv *env, JNIEnv *jenv, jstring js) {
-    if (!js)
-        return enif_make_atom(env, "nil");
-    const char *utf = (*jenv)->GetStringUTFChars(jenv, js, NULL);
-    if (!utf)
-        return enif_make_atom(env, "nil");
-    size_t len = strlen(utf);
-    ErlNifBinary bin;
-    enif_alloc_binary(len, &bin);
-    memcpy(bin.data, utf, len);
-    (*jenv)->ReleaseStringUTFChars(jenv, js, utf);
-    (*jenv)->DeleteLocalRef(jenv, js);
-    return enif_make_binary(env, &bin);
-}
-
-// Helper: make a binary term from a C string (does NOT delete jstring).
-static ERL_NIF_TERM cstr_to_bin(ErlNifEnv *env, const char *s, size_t len) {
-    ErlNifBinary bin;
-    enif_alloc_binary(len, &bin);
-    memcpy(bin.data, s, len);
-    return enif_make_binary(env, &bin);
-}
-
-// nif_ui_tree/0 — returns [{type_atom, label_binary, value_binary, {x,y,w,h}}, ...]
-//
-// Calls MobBridge.uiTree() which returns a newline-separated string:
-//   type|label|value|x|y|w|h\n...
-// Parses that into a list of 4-tuples matching the iOS ui_tree format.
-static ERL_NIF_TERM nif_ui_tree(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    if (!Bridge.ui_tree)
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                enif_make_atom(env, "not_loaded"));
-
-    int att;
-    JNIEnv *jenv = get_jenv(&att);
-    jstring jresult = (jstring)(*jenv)->CallStaticObjectMethod(jenv, Bridge.cls, Bridge.ui_tree);
-    if (!jresult) {
-        if (att)
-            (*g_jvm)->DetachCurrentThread(g_jvm);
-        return enif_make_list(env, 0);
-    }
-
-    const char *raw = (*jenv)->GetStringUTFChars(jenv, jresult, NULL);
-    ERL_NIF_TERM list = enif_make_list(env, 0);
-
-    // Parse lines in reverse (we'll reverse the list at the end)
-    // Format per line: type|label|value|x|y|w|h
-    const char *p = raw;
-    // Collect all lines into a temp array first (we build list in reverse for efficiency)
-    // Simple approach: walk forward, build list, reverse at end
-    ERL_NIF_TERM items[512];
-    int count = 0;
-
-    while (*p && count < 512) {
-        // Find end of line
-        const char *nl = strchr(p, '\n');
-        if (!nl)
-            break;
-        size_t line_len = nl - p;
-        char line[512];
-        if (line_len >= sizeof(line)) {
-            p = nl + 1;
-            continue;
-        }
-        memcpy(line, p, line_len);
-        line[line_len] = 0;
-        p = nl + 1;
-
-        // Split on '|': type, label, value, x, y, w, h
-        char *fields[7];
-        int nf = 0;
-        char *tok = line;
-        for (int i = 0; i < 7; i++) {
-            fields[i] = tok;
-            char *sep = (i < 6) ? strchr(tok, '|') : NULL;
-            if (sep) {
-                *sep = 0;
-                tok = sep + 1;
-                nf++;
-            } else {
-                nf = i + 1;
-                break;
-            }
-        }
-        if (nf < 7)
-            continue;
-
-        double x = atof(fields[3]);
-        double y = atof(fields[4]);
-        double w = atof(fields[5]);
-        double h = atof(fields[6]);
-
-        ERL_NIF_TERM frame =
-            enif_make_tuple4(env, enif_make_double(env, x), enif_make_double(env, y),
-                             enif_make_double(env, w), enif_make_double(env, h));
-
-        // label and value: non-empty → binary, empty → atom nil
-        size_t llen = strlen(fields[1]);
-        size_t vlen = strlen(fields[2]);
-        ERL_NIF_TERM label =
-            llen > 0 ? cstr_to_bin(env, fields[1], llen) : enif_make_atom(env, "nil");
-        ERL_NIF_TERM value =
-            vlen > 0 ? cstr_to_bin(env, fields[2], vlen) : enif_make_atom(env, "nil");
-
-        items[count++] = enif_make_tuple4(env, enif_make_atom(env, fields[0]), label, value, frame);
-    }
-
-    (*jenv)->ReleaseStringUTFChars(jenv, jresult, raw);
-    (*jenv)->DeleteLocalRef(jenv, jresult);
-    if (att)
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-
-    // Build list from items array (forward order)
-    list = enif_make_list(env, 0);
-    for (int i = count - 1; i >= 0; i--)
-        list = enif_make_list_cell(env, items[i], list);
-    return list;
-}
-
-// nif_ui_view_tree/0 — returns nested-map UI tree from MobBridge.uiViewTree().
-//
-// Bridge contract: Kotlin side returns a JSON string of the form:
-//   {"type":"root","label":null,"value":null,"frame":[0,0,W,H],"children":[ ... ]}
-// Each child has the same shape. Empty registry returns an empty children list.
-//
-// The JSON is parsed by Mob.Test.tree/1 on the Erlang side (jason decode is fast
-// and avoids hand-rolling a JSON tokenizer in C). Returns {:error, :not_loaded}
-// if MobBridge.uiViewTree() isn't present (early adopter apps without registry).
-static ERL_NIF_TERM nif_ui_view_tree(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    if (!Bridge.ui_view_tree)
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                enif_make_atom(env, "not_loaded"));
-    int att;
-    JNIEnv *jenv = get_jenv(&att);
-    jstring jresult =
-        (jstring)(*jenv)->CallStaticObjectMethod(jenv, Bridge.cls, Bridge.ui_view_tree);
-    ERL_NIF_TERM result = jstring_to_bin(env, jenv, jresult);
-    if (att)
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    return result;
-}
-
-// nif_screen_info/0 — returns %{width, height, scale, safe_area: %{...}}
-//
-// Width/height are in dp (already px-divided by density on the Kotlin side).
-// scale is the density factor (1.0/1.5/2.0/2.625/3.0/...) — same role as
-// UIScreen.scale on iOS.
-//
-// Bridge contract: MobBridge.screenInfo() returns float[6] = [w, h, scale,
-// safe_top, safe_bottom, safe_left]; safe_right is computed as 0 here for
-// brevity but the Kotlin side should send it once added to the array.
-//
-// Falls back to safe_area-only info if screenInfo() isn't bound (older bridges).
-static ERL_NIF_TERM nif_screen_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    int att;
-    JNIEnv *jenv = get_jenv(&att);
-    float vals[7] = {0}; // w, h, scale, top, bottom, left, right
-    if (Bridge.screen_info) {
-        jfloatArray arr =
-            (jfloatArray)(*jenv)->CallStaticObjectMethod(jenv, Bridge.cls, Bridge.screen_info);
-        if (arr) {
-            jsize len = (*jenv)->GetArrayLength(jenv, arr);
-            if (len > 7)
-                len = 7;
-            (*jenv)->GetFloatArrayRegion(jenv, arr, 0, len, vals);
-            (*jenv)->DeleteLocalRef(jenv, arr);
-        }
-    }
-    if (att)
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-
-    ERL_NIF_TERM sa_keys[4] = {enif_make_atom(env, "top"), enif_make_atom(env, "bottom"),
-                               enif_make_atom(env, "left"), enif_make_atom(env, "right")};
-    ERL_NIF_TERM sa_vals[4] = {
-        enif_make_double(env, (double)vals[3]), enif_make_double(env, (double)vals[4]),
-        enif_make_double(env, (double)vals[5]), enif_make_double(env, (double)vals[6])};
-    ERL_NIF_TERM safe_area;
-    enif_make_map_from_arrays(env, sa_keys, sa_vals, 4, &safe_area);
-
-    ERL_NIF_TERM keys[4] = {enif_make_atom(env, "width"), enif_make_atom(env, "height"),
-                            enif_make_atom(env, "scale"), enif_make_atom(env, "safe_area")};
-    ERL_NIF_TERM vvals[4] = {enif_make_double(env, (double)vals[0]),
-                             enif_make_double(env, (double)vals[1]),
-                             enif_make_double(env, (double)vals[2]), safe_area};
-    ERL_NIF_TERM result;
-    enif_make_map_from_arrays(env, keys, vvals, 4, &result);
-    return result;
-}
-
-// nif_ax_action/2 and nif_ax_action_at_xy/3 — Android stubs.
-//
-// Both are iOS-only today. Compose semantics walker (the proper Android
-// implementation) is queued under WireTap (see future_developments.md).
-// Return a clear error so callers get `{:error, :not_supported_on_android}`
-// instead of an `:undef` crash.
-static ERL_NIF_TERM nif_ax_action(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                            enif_make_atom(env, "not_supported_on_android"));
-}
-static ERL_NIF_TERM nif_ax_action_at_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                            enif_make_atom(env, "not_supported_on_android"));
-}
-
-// nif_ui_debug/0 — returns raw uiTree string as a binary (for debugging)
-static ERL_NIF_TERM nif_ui_debug(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    if (!Bridge.ui_tree)
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                enif_make_atom(env, "not_loaded"));
-    int att;
-    JNIEnv *jenv = get_jenv(&att);
-    jstring jresult = (jstring)(*jenv)->CallStaticObjectMethod(jenv, Bridge.cls, Bridge.ui_tree);
-    ERL_NIF_TERM result = jstring_to_bin(env, jenv, jresult);
-    if (att)
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    return result;
-}
-
-// nif_tap/1 — tap by accessibility label binary
-static ERL_NIF_TERM nif_tap(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    if (!Bridge.tap_by_label)
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                enif_make_atom(env, "not_loaded"));
-    ErlNifBinary bin;
-    if (!enif_inspect_binary(env, argv[0], &bin))
-        return enif_make_badarg(env);
-    char *label = (char *)malloc(bin.size + 1);
-    if (!label)
-        return enif_make_atom(env, "error");
-    memcpy(label, bin.data, bin.size);
-    label[bin.size] = 0;
-
-    int att;
-    JNIEnv *jenv = get_jenv(&att);
-    jstring jlabel = (*jenv)->NewStringUTF(jenv, label);
-    free(label);
-    jboolean ok = (*jenv)->CallStaticBooleanMethod(jenv, Bridge.cls, Bridge.tap_by_label, jlabel);
-    (*jenv)->DeleteLocalRef(jenv, jlabel);
-    if (att)
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    return ok ? enif_make_atom(env, "ok")
-              : enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                 enif_make_atom(env, "no_element_with_label"));
-}
-
-// nif_tap_xy/2 — tap at (x, y) dp coordinates
-static ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    if (!Bridge.tap_xy)
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                enif_make_atom(env, "not_loaded"));
-    double x, y;
-    if (!enif_get_double(env, argv[0], &x)) {
-        int ix;
-        if (!enif_get_int(env, argv[0], &ix))
-            return enif_make_badarg(env);
-        x = ix;
-    }
-    if (!enif_get_double(env, argv[1], &y)) {
-        int iy;
-        if (!enif_get_int(env, argv[1], &iy))
-            return enif_make_badarg(env);
-        y = iy;
-    }
-
-    int att;
-    JNIEnv *jenv = get_jenv(&att);
-    jboolean ok =
-        (*jenv)->CallStaticBooleanMethod(jenv, Bridge.cls, Bridge.tap_xy, (jfloat)x, (jfloat)y);
-    if (att)
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    return ok ? enif_make_atom(env, "ok")
-              : enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                 enif_make_atom(env, "dispatch_failed"));
-}
-
-// nif_type_text/1 — type text into the focused view
-static ERL_NIF_TERM nif_type_text(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    if (!Bridge.type_text)
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                enif_make_atom(env, "not_loaded"));
-    ErlNifBinary bin;
-    if (!enif_inspect_binary(env, argv[0], &bin))
-        return enif_make_badarg(env);
-    char *text = (char *)malloc(bin.size + 1);
-    if (!text)
-        return enif_make_atom(env, "error");
-    memcpy(text, bin.data, bin.size);
-    text[bin.size] = 0;
-
-    int att;
-    JNIEnv *jenv = get_jenv(&att);
-    jstring jtext = (*jenv)->NewStringUTF(jenv, text);
-    free(text);
-    jboolean ok = (*jenv)->CallStaticBooleanMethod(jenv, Bridge.cls, Bridge.type_text, jtext);
-    (*jenv)->DeleteLocalRef(jenv, jtext);
-    if (att)
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    return ok ? enif_make_atom(env, "ok")
-              : enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                 enif_make_atom(env, "no_first_responder"));
-}
-
-// nif_delete_backward/0 — delete one character backward
-static ERL_NIF_TERM nif_delete_backward(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    if (!Bridge.delete_backward)
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                enif_make_atom(env, "not_loaded"));
-    int att;
-    JNIEnv *jenv = get_jenv(&att);
-    jboolean ok = (*jenv)->CallStaticBooleanMethod(jenv, Bridge.cls, Bridge.delete_backward);
-    if (att)
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    return ok ? enif_make_atom(env, "ok")
-              : enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                 enif_make_atom(env, "no_first_responder"));
-}
-
-// nif_key_press/1 — not yet implemented on Android (no KeyCharacterMap lookup)
-static ERL_NIF_TERM nif_key_press(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                            enif_make_atom(env, "not_implemented"));
-}
-
-// nif_clear_text/0 — select-all + delete in the focused view
-static ERL_NIF_TERM nif_clear_text(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    if (!Bridge.clear_text)
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                enif_make_atom(env, "not_loaded"));
-    int att;
-    JNIEnv *jenv = get_jenv(&att);
-    jboolean ok = (*jenv)->CallStaticBooleanMethod(jenv, Bridge.cls, Bridge.clear_text);
-    if (att)
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    return ok ? enif_make_atom(env, "ok")
-              : enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                 enif_make_atom(env, "no_first_responder"));
-}
-
-// nif_long_press_xy/3 — long press at (x, y) for duration_ms milliseconds
-static ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    if (!Bridge.long_press_xy)
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                enif_make_atom(env, "not_loaded"));
-    double x, y;
-    int dur;
-    if (!enif_get_double(env, argv[0], &x)) {
-        int ix;
-        if (!enif_get_int(env, argv[0], &ix))
-            return enif_make_badarg(env);
-        x = ix;
-    }
-    if (!enif_get_double(env, argv[1], &y)) {
-        int iy;
-        if (!enif_get_int(env, argv[1], &iy))
-            return enif_make_badarg(env);
-        y = iy;
-    }
-    if (!enif_get_int(env, argv[2], &dur))
-        return enif_make_badarg(env);
-
-    int att;
-    JNIEnv *jenv = get_jenv(&att);
-    jboolean ok = (*jenv)->CallStaticBooleanMethod(jenv, Bridge.cls, Bridge.long_press_xy,
-                                                   (jfloat)x, (jfloat)y, (jlong)dur);
-    if (att)
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    return ok ? enif_make_atom(env, "ok")
-              : enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                 enif_make_atom(env, "dispatch_failed"));
-}
-
-// nif_swipe_xy/4 — swipe from (x1,y1) to (x2,y2) in dp
-static ERL_NIF_TERM nif_swipe_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    if (!Bridge.swipe_xy)
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                enif_make_atom(env, "not_loaded"));
-    double x1, y1, x2, y2;
-    if (!enif_get_double(env, argv[0], &x1)) {
-        int i;
-        if (!enif_get_int(env, argv[0], &i))
-            return enif_make_badarg(env);
-        x1 = i;
-    }
-    if (!enif_get_double(env, argv[1], &y1)) {
-        int i;
-        if (!enif_get_int(env, argv[1], &i))
-            return enif_make_badarg(env);
-        y1 = i;
-    }
-    if (!enif_get_double(env, argv[2], &x2)) {
-        int i;
-        if (!enif_get_int(env, argv[2], &i))
-            return enif_make_badarg(env);
-        x2 = i;
-    }
-    if (!enif_get_double(env, argv[3], &y2)) {
-        int i;
-        if (!enif_get_int(env, argv[3], &i))
-            return enif_make_badarg(env);
-        y2 = i;
-    }
-
-    int att;
-    JNIEnv *jenv = get_jenv(&att);
-    jboolean ok = (*jenv)->CallStaticBooleanMethod(jenv, Bridge.cls, Bridge.swipe_xy, (jfloat)x1,
-                                                   (jfloat)y1, (jfloat)x2, (jfloat)y2);
-    if (att)
-        (*g_jvm)->DetachCurrentThread(g_jvm);
-    return ok ? enif_make_atom(env, "ok")
-              : enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                 enif_make_atom(env, "dispatch_failed"));
-}
+// ── Test harness NIFs moved to mob_nif.zig (Phase 6b iter 3b) ────────────────
+// nif_ui_tree, nif_ui_view_tree, nif_screen_info, nif_ui_debug,
+// nif_ax_action{,_at_xy}, nif_tap, nif_tap_xy, nif_type_text,
+// nif_delete_backward, nif_key_press, nif_clear_text, nif_long_press_xy,
+// nif_swipe_xy + the jstring_to_bin / cstr_to_bin helpers used only by
+// them now live in mob_nif.zig. The nif_funcs[] table below resolves them
+// via the extern declarations near the top of this file.
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 

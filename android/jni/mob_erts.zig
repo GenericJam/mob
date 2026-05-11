@@ -10,7 +10,10 @@
 //!
 //! Phase 6b iter 3a introduces this file. It declares only what iter 3a's
 //! NIFs (nif_platform, nif_log, nif_log2) need; later iters extend it as
-//! their ported NIFs require more of the ERL_NIF surface.
+//! their ported NIFs require more of the ERL_NIF surface. iter 3b adds the
+//! list / tuple / map constructors, enif_get_int / enif_get_double,
+//! enif_alloc_binary, and enif_inspect_iolist_as_binary for the test
+//! harness NIFs.
 //!
 //! Authoritative reference: OTP 27+ `erl_nif.h` and `erl_nif_api_funcs.h`.
 
@@ -70,11 +73,45 @@ pub extern fn enif_make_badarg(env: ?*ErlNifEnv) ERL_NIF_TERM;
 pub extern fn enif_make_binary(env: ?*ErlNifEnv, bin: *ErlNifBinary) ERL_NIF_TERM;
 pub extern fn enif_make_string(env: ?*ErlNifEnv, str: [*:0]const u8, enc: ErlNifCharEncoding) ERL_NIF_TERM;
 
+// List construction (iter 3b).
+//
+// `enif_make_list` in C is variadic with a count prefix; we expose the
+// non-variadic `enif_make_list_from_array` and `enif_make_list_cell`
+// (prepend) primitives. Fixed-arity helpers below are built on top.
+pub extern fn enif_make_list_cell(env: ?*ErlNifEnv, car: ERL_NIF_TERM, cdr: ERL_NIF_TERM) ERL_NIF_TERM;
+pub extern fn enif_make_list_from_array(env: ?*ErlNifEnv, arr: [*]const ERL_NIF_TERM, cnt: c_uint) ERL_NIF_TERM;
+
+// Tuple construction (iter 3b). `enif_make_tuple` is variadic; the
+// non-variadic `enif_make_tuple_from_array` is the underlying primitive.
+pub extern fn enif_make_tuple_from_array(env: ?*ErlNifEnv, arr: [*]const ERL_NIF_TERM, cnt: c_uint) ERL_NIF_TERM;
+
+// Map construction (iter 3b). Returns 1 on success, 0 on duplicate key.
+// `keys` and `values` are parallel arrays of length `cnt`; `*map_out` is
+// populated on success.
+pub extern fn enif_make_map_from_arrays(
+    env: ?*ErlNifEnv,
+    keys: [*]const ERL_NIF_TERM,
+    values: [*]const ERL_NIF_TERM,
+    cnt: usize,
+    map_out: *ERL_NIF_TERM,
+) c_int;
+
+// Binary allocation (iter 3b). Returns 1 on success, 0 on OOM. The caller
+// owns `bin.data` until it's wrapped via `enif_make_binary`, after which
+// BEAM owns it.
+pub extern fn enif_alloc_binary(size: usize, bin: *ErlNifBinary) c_int;
+
 // ── Term inspectors ───────────────────────────────────────────────────────
 
 /// Returns 1 on success, 0 on failure. Fills `bin` with the binary's
 /// {size, data} view (no copy).
 pub extern fn enif_inspect_binary(env: ?*ErlNifEnv, term: ERL_NIF_TERM, bin: *ErlNifBinary) c_int;
+
+/// Returns 1 on success, 0 on failure. Like enif_inspect_binary, but
+/// accepts an iolist (list of binaries/integers) and materialises a
+/// contiguous binary view. Used when callers can pass either a plain
+/// binary or an iolist (e.g. set_root/1).
+pub extern fn enif_inspect_iolist_as_binary(env: ?*ErlNifEnv, term: ERL_NIF_TERM, bin: *ErlNifBinary) c_int;
 
 /// Returns 1 on success, 0 on failure. Reads an Erlang charlist into a
 /// fixed-size C string buffer (NUL-terminated on success).
@@ -96,6 +133,12 @@ pub extern fn enif_get_atom(
     enc: ErlNifCharEncoding,
 ) c_int;
 
+/// Read an integer term. Returns 1 on success, 0 on failure.
+pub extern fn enif_get_int(env: ?*ErlNifEnv, term: ERL_NIF_TERM, ip: *c_int) c_int;
+
+/// Read a double term. Returns 1 on success, 0 on failure.
+pub extern fn enif_get_double(env: ?*ErlNifEnv, term: ERL_NIF_TERM, dp: *f64) c_int;
+
 // ── Convenience wrappers ──────────────────────────────────────────────────
 // Idiomatic Zig surface over the bare extern fns. Keeps NIF bodies tight.
 
@@ -113,4 +156,43 @@ pub inline fn ok(env: ?*ErlNifEnv) ERL_NIF_TERM {
 /// sites read symmetrically.
 pub inline fn badarg(env: ?*ErlNifEnv) ERL_NIF_TERM {
     return enif_make_badarg(env);
+}
+
+/// Build an N-tuple from a comptime-known list of terms. Mirrors the C
+/// `enif_make_tupleN` inlines but works for any arity via the underlying
+/// `enif_make_tuple_from_array` primitive.
+pub inline fn makeTuple(env: ?*ErlNifEnv, elems: anytype) ERL_NIF_TERM {
+    const arr: [elems.len]ERL_NIF_TERM = elems;
+    return enif_make_tuple_from_array(env, &arr, elems.len);
+}
+
+/// `{:error, Reason}` 2-tuple convenience.
+pub inline fn errorTuple(env: ?*ErlNifEnv, reason: ERL_NIF_TERM) ERL_NIF_TERM {
+    return makeTuple(env, .{ enif_make_atom(env, "error"), reason });
+}
+
+/// Build a proper Erlang list from a slice of terms.
+pub inline fn makeList(env: ?*ErlNifEnv, items: []const ERL_NIF_TERM) ERL_NIF_TERM {
+    return enif_make_list_from_array(env, items.ptr, @intCast(items.len));
+}
+
+/// Build a map from parallel key/value slices. Returns null on duplicate
+/// key (matches the C convention of `enif_make_map_from_arrays` returning 0).
+pub inline fn makeMap(env: ?*ErlNifEnv, keys: []const ERL_NIF_TERM, values: []const ERL_NIF_TERM) ?ERL_NIF_TERM {
+    std.debug.assert(keys.len == values.len);
+    var out: ERL_NIF_TERM = undefined;
+    if (enif_make_map_from_arrays(env, keys.ptr, values.ptr, keys.len, &out) == 0) return null;
+    return out;
+}
+
+/// Read a numeric term as a double, accepting either a double or an integer
+/// term. Returns null if neither path succeeds. Mirrors a common pattern
+/// in the test harness NIFs where Erlang callers may pass `100` or `100.0`
+/// interchangeably for coordinates.
+pub inline fn getNumber(env: ?*ErlNifEnv, term: ERL_NIF_TERM) ?f64 {
+    var d: f64 = 0;
+    if (enif_get_double(env, term, &d) != 0) return d;
+    var i: c_int = 0;
+    if (enif_get_int(env, term, &i) != 0) return @floatFromInt(i);
+    return null;
 }
