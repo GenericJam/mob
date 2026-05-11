@@ -1176,13 +1176,60 @@ something useful even if the total project pauses.
     Android end-to-end smoke deploy deferred to bundle with the
     next sub-iter so we test once over a meaningful slice.
 
-  - iter 3b (planned): port the test harness NIFs — `ui_tree/0`,
-    `ui_view_tree/0`, `screen_info/0`, `tap/1`, `tap_xy/2`,
-    `type_text/1`, `delete_backward/0`, `key_press/1`,
-    `clear_text/0`, `long_press_xy/3`, `swipe_xy/4`. These are
-    largely independent of the cached MobBridge struct (they
-    look up their methods on demand or cache lazily) so they
-    slice cleanly.
+  - iter 3b (test harness + cached Bridge + get_jenv): the big
+    coordination move. Ported in one shot:
+
+      • cached `BridgeMethods` extern struct (52 method-ID fields)
+        — moved to mob_nif.zig as `pub export var Bridge`; the C
+        side keeps a matching `struct BridgeMethods` declaration +
+        `extern struct BridgeMethods Bridge` so the senders (iter
+        3c) and feature NIFs (iter 3d) still in C can read it.
+        Field order is load-bearing — any future change has to
+        land in both files together.
+      • `get_jenv` (the thread-attach helper that ~25 C-side
+        callers use) — moved with C-ABI export so existing call
+        sites are unaffected.
+      • 13 test harness NIFs: `ui_tree`, `ui_view_tree`,
+        `screen_info`, `ui_debug`, `ax_action{,_at_xy}` (Android
+        stubs), `tap`, `tap_xy`, `type_text`, `delete_backward`,
+        `key_press` (Android stub), `clear_text`, `long_press_xy`,
+        `swipe_xy`. Coordinates in dp, matching iOS.
+      • `jstring_to_bin` / `cstr_to_bin` helpers (Zig-private —
+        only the test harness used them).
+
+    FFI binding extensions:
+
+      • mob_zig.zig: typed previously-opaque JNI vtable slots
+        (GetStaticMethodID, CallStaticObjectMethod / BooleanMethod
+        / VoidMethod as variadic, NewStringUTF, DeleteLocalRef,
+        ExceptionClear, GetArrayLength, GetFloatArrayRegion).
+        Added padding for the intervening Array* slots so the
+        layout up to GetFloatArrayRegion matches AOSP jni.h
+        slot-for-slot. Wrappers (getStaticMethodID, newStringUTF,
+        deleteLocalRef, exceptionClear, getArrayLength,
+        getFloatArrayRegion) + extern malloc/free for the
+        unbounded-binary path in nif_tap / nif_type_text.
+      • mob_erts.zig: enif_make_list_cell, enif_make_list_from_array,
+        enif_make_tuple_from_array, enif_make_map_from_arrays,
+        enif_alloc_binary, enif_inspect_iolist_as_binary,
+        enif_get_int, enif_get_double + convenience wrappers
+        (makeTuple, makeList, makeMap, errorTuple, getNumber).
+
+    mob_nif.c net change: -409 lines (the static Bridge struct,
+    get_jenv, jstring_to_bin/cstr_to_bin, 13 NIF defs replaced
+    by the named-struct declaration, extern block expansion, and
+    a pointer comment).
+
+    Verified: standalone `zig build-obj -target
+    aarch64-linux-android.24` produces a clean mob_nif.o with 19
+    exported symbols (Bridge, get_jenv, 17 nif_* — 3 from iter 3a
+    + 13 test harness + 1 ax_action_at_xy stub) and 20 undefined
+    refs that all resolve at production link (enif_* / libc / liblog
+    / g_jvm from mob_beam.zig). mob_nif.c passes clang-format.
+    702/702 mob tests + 224/224 mob_new tests + credo strict
+    clean. mob_new template needs no change this iter — mob_nif.zig
+    source spec was wired in iter 3a and new NIFs are internal
+    to that file.
   - iter 3c (planned): the concurrency-heavy core — cached
     MobBridge method ID struct, tap/component handle registries,
     per-handle throttle state, all `mob_send_*` event senders.
