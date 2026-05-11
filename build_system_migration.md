@@ -756,3 +756,31 @@ Apple framework module maps under -fmodules — Phase 1 finding).
   gone. The iOS path no longer uses shell scripts at all; build
   orchestration lives in Elixir (`mob_dev/lib/mob_dev/native_build.ex`)
   and Zig (`build.zig` / `build_device.zig`).
+
+## Phase 3 — `mix mob.add_nif` (in progress)
+
+Greenfield Igniter usage. First commit to Igniter as a dep; lays the
+groundwork for the Phase 4/5 rewrites by validating the AST-aware
+generator pattern on a small, self-contained task.
+
+  - iter 1: scaffold task. `mix mob.add_nif <name> [--type elixir-only|c]`
+    creates `lib/<app>/nifs/<name>.ex` (Elixir stub via
+    `Igniter.Project.Module.create_module`), appends
+    `%{module: :<name>, archs: [:all]}` to `mob.exs`'s `:static_nifs`
+    via `Igniter.Project.Config.modify_config_code/5`, and (with
+    `--type c`) drops a `c_src/<name>.c` skeleton with
+    `ERL_NIF_INIT(<name>, ...)` pre-wired. Validates name is
+    snake_case + length-bounded; `--type` is `elixir-only` or `c`
+    (zigler/rustler land in later iters that pull in those Hex deps).
+    Idempotent — re-running with the same name skips file writes and
+    keeps the existing list entry. Drive-by fix: `mix mob.regen_driver_tab`
+    was reading from `Application.get_env(:mob_dev, :static_nifs, [])`
+    but mob.exs is not auto-imported into Mix application env, so the
+    user's `:static_nifs` entries never reached driver_tab. Switched
+    regen to `MobDev.Config.load_mob_config()` matching every other
+    mob_dev task. Smoke-tested against `phase2q_smoke`: deploy added
+    one NIF, regen produced driver_tab containing the entry, second
+    add appended to the existing list cleanly. 20 new tests covering
+    validation/stub/append/idempotence/C-skeleton/notice paths.
+    `igniter ~> 0.8` added to mob_dev deps (the Phase 3 dep
+    commitment). 850/850 tests pass on mob_dev master.
