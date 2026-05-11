@@ -20,6 +20,15 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
+// ── NIFs defined in mob_nif.zig (Phase 6b iter 3a) ────────────────────────────
+// The Zig file exports these with the standard NIF C-ABI signature; the
+// static nif_funcs[] table below references them by symbol name. As later
+// sub-iters port more NIFs, they get added to this extern block — eventually
+// (iter 3d) the whole table moves to Zig and these externs go away.
+extern ERL_NIF_TERM nif_platform(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+extern ERL_NIF_TERM nif_log(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+extern ERL_NIF_TERM nif_log2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]);
+
 // ── Cached JNI method IDs ────────────────────────────────────────────────────
 
 static struct {
@@ -676,11 +685,13 @@ void _mob_bridge_init_activity(JNIEnv *env, jobject activity) {
     LOGI("_mob_bridge_init_activity: MobBridge.init called");
 }
 
-// ── NIF: platform/0 ──────────────────────────────────────────────────────────
-
-static ERL_NIF_TERM nif_platform(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    return enif_make_atom(env, "android");
-}
+// ── NIFs moved to mob_nif.zig (Phase 6b iter 3a) ─────────────────────────────
+// `nif_platform/0`, `nif_log/1`, `nif_log/2` (+ the atom_to_android_priority
+// helper that only `nif_log/2` used) are now defined in mob_nif.zig. The
+// nif_funcs[] table below references them via the extern declarations near
+// the top of this file. Behaviour is byte-for-byte equivalent — same atom
+// names, same priority mapping, same 4 KB truncation, same fallback to
+// `enif_get_string` for charlists.
 
 // ── NIF: color_scheme/0 ──────────────────────────────────────────────────────
 // Returns :light or :dark based on the Activity's current Configuration.uiMode.
@@ -707,52 +718,6 @@ static ERL_NIF_TERM nif_color_scheme(ErlNifEnv *env, int argc, const ERL_NIF_TER
     if (att)
         (*g_jvm)->DetachCurrentThread(g_jvm);
     return atom;
-}
-
-// ── NIF: log/1 ───────────────────────────────────────────────────────────────
-
-static ERL_NIF_TERM nif_log(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    char buf[4096] = {0};
-    ErlNifBinary bin;
-    if (enif_inspect_binary(env, argv[0], &bin)) {
-        size_t len = bin.size < sizeof(buf) - 1 ? bin.size : sizeof(buf) - 1;
-        memcpy(buf, bin.data, len);
-        buf[len] = 0;
-    } else if (!enif_get_string(env, argv[0], buf, sizeof(buf), ERL_NIF_LATIN1)) {
-        return enif_make_badarg(env);
-    }
-    __android_log_print(ANDROID_LOG_INFO, "Elixir", "%s", buf);
-    return enif_make_atom(env, "ok");
-}
-
-// ── NIF: log/2 ───────────────────────────────────────────────────────────────
-
-static int atom_to_android_priority(ErlNifEnv *env, ERL_NIF_TERM level_atom) {
-    char level[16];
-    if (!enif_get_atom(env, level_atom, level, sizeof(level), ERL_NIF_LATIN1))
-        return ANDROID_LOG_INFO;
-    if (strcmp(level, "debug") == 0)
-        return ANDROID_LOG_DEBUG;
-    if (strcmp(level, "warning") == 0)
-        return ANDROID_LOG_WARN;
-    if (strcmp(level, "error") == 0)
-        return ANDROID_LOG_ERROR;
-    return ANDROID_LOG_INFO;
-}
-
-static ERL_NIF_TERM nif_log2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    char buf[4096] = {0};
-    int priority = atom_to_android_priority(env, argv[0]);
-    ErlNifBinary bin;
-    if (enif_inspect_binary(env, argv[1], &bin)) {
-        size_t len = bin.size < sizeof(buf) - 1 ? bin.size : sizeof(buf) - 1;
-        memcpy(buf, bin.data, len);
-        buf[len] = 0;
-    } else if (!enif_get_string(env, argv[1], buf, sizeof(buf), ERL_NIF_LATIN1)) {
-        return enif_make_badarg(env);
-    }
-    __android_log_print(priority, "Elixir", "%s", buf);
-    return enif_make_atom(env, "ok");
 }
 
 // ── NIF: set_root/1 ──────────────────────────────────────────────────────────
