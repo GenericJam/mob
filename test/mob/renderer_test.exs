@@ -866,6 +866,16 @@ defmodule Mob.RendererTest do
   # color props. These tests pin the wire shape AND the resolution behavior.
 
   describe "canvas draw-op encoding" do
+    setup do
+      # Two tests in this describe call `Mob.Theme.set(primary: :emerald_500)`
+      # to verify draw-op token resolution. Without an on_exit reset the
+      # mutated theme persisted into later tests (e.g. the "style token
+      # resolution" describe's `assert background == 0xFF2196F3` started
+      # asserting against whatever color the theme leaked).
+      on_exit(fn -> Application.delete_env(:mob, :theme) end)
+      :ok
+    end
+
     defp canvas_draw(ops) do
       tree = %{type: :canvas, props: %{width: 100, height: 100, draw: ops}, children: []}
       MockNIF.reset()
