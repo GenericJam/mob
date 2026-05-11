@@ -1230,11 +1230,55 @@ something useful even if the total project pauses.
     clean. mob_new template needs no change this iter — mob_nif.zig
     source spec was wired in iter 3a and new NIFs are internal
     to that file.
-  - iter 3c (planned): the concurrency-heavy core — cached
-    MobBridge method ID struct, tap/component handle registries,
-    per-handle throttle state, all `mob_send_*` event senders.
-    Must coordinate with beam_jni.c which is the C-side caller
-    of the public sender API.
+  - iter 3c (senders + handle registries): the concurrency-heavy
+    core. mob_nif.c is 1500 lines after this iter — 41% reduction
+    from the 2568 it started at iter 3a, and the native code is
+    now 56% Zig. Moved:
+
+      • Handle registries: `TapHandle` extern struct (with per-
+        handle throttle state) + `tap_handles[256]` + `tap_mutex`
+        + `tap_handle_next`; `ComponentHandle` + `component_handles[64]`
+        + `component_mutex`. `g_transition` (per-render transition
+        snapshot consumed by set_root).
+      • `mob_nif_init_state` — exported initializer that nif_load
+        (still in C) calls during BEAM init. Replaces the inline
+        `enif_mutex_create` pair that used to live in nif_load.
+      • 25 sender functions: `mob_send_tap`,
+        `mob_send_component_event`, `mob_send_change_{str,bool,float}`,
+        `mob_send_{focus,blur,submit,select,compose}`, the gesture
+        senders (long_press, double_tap, swipe_{left,right,up,down,
+        with_direction}), the throttled Tier-1 senders
+        (scroll/drag/pinch/rotate/pointer_move with seq + ts_ms +
+        the began/ended phase-boundary bypass), the Tier-2 single-
+        fire (scroll_began/_ended/_settled, top_reached,
+        scrolled_past), and `mob_handle_back`.
+      • Throttle infrastructure: `throttleCheck` (replaces C
+        `mob_throttle_check_a` — same throttle_ms / delta_threshold
+        / seq-bump semantics), `buildScrollMap`, `isPhaseBoundary`.
+        `snapTap` / `sendEvent` / `sendChange` are internal helpers
+        that lock the mutex, snapshot pid + tag + seq, then drop
+        the lock before `enif_send` so we never block delivery
+        with the mutex held.
+      • 6 NIFs that touch the registries: `nif_set_root`,
+        `nif_register_tap`, `nif_clear_taps`, `nif_set_transition`,
+        `nif_register_component`, `nif_deregister_component`.
+
+    FFI extensions:
+
+      • mob_erts.zig: enif_send, enif_self, enif_make_copy,
+        enif_alloc_env, enif_free_env, enif_mutex_create / _lock /
+        _unlock, enif_get_local_pid, enif_whereis_pid,
+        enif_make_int64 / _uint64, enif_get_tuple. The full
+        process-hop + mutex surface.
+      • mob_zig.zig: clock_gettime + CLOCK_MONOTONIC + nowNs()
+        wrapper for the throttle path's monotonic timestamps.
+
+    Verified: standalone `zig build-obj -target
+    aarch64-linux-android.24` produces a clean mob_nif.o with 55
+    exported symbols (Bridge + get_jenv + mob_nif_init_state + 25
+    senders + mob_handle_back + 23 nif_*). 702/702 mob tests +
+    credo strict clean + clang-format clean. mob_nif.c lost ~666
+    lines net.
   - iter 3d (planned): remaining feature NIFs — storage, WebView,
     alert/action_sheet/toast, native view components, background
     lifecycle, Mob.Device. Moves the `ErlNifFunc nif_funcs[]`
