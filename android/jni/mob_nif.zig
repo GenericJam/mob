@@ -1536,15 +1536,31 @@ inline fn freeCString(p: ?[*:0]u8) void {
 
 /// Pack an ErlNifPid into a jlong for the JNI-side delivery handle. Kotlin
 /// hands it back unchanged when it calls one of the mob_deliver_* hooks;
-/// we round-trip via `pidFromLong`. ErlNifPid is `{ ERL_NIF_TERM pid; }`
-/// which is `c_ulong` on aarch64 — same size as jlong — so a bitcast is
-/// equivalent to the C `memcpy(&jpid, &pid, sizeof(...))` pattern.
+/// we round-trip via `pidFromLong`.
+///
+/// Size mismatch handling: on aarch64 ERL_NIF_TERM is c_ulong = u64,
+/// same width as jlong (i64), so a @bitCast is a true reinterpret. On
+/// armeabi-v7a (32-bit ARM) ERL_NIF_TERM is u32 but jlong is still i64,
+/// so we zero-extend on the way out and truncate on the way back. This
+/// mirrors the C original's `memcpy(min(sizeof(ErlNifPid), sizeof(jlong)))`
+/// dance — the high 32 bits of the jlong carry no information on 32-bit
+/// ARM, they just round-trip whatever Kotlin saw.
 inline fn pidToJlong(pid: erts.ErlNifPid) jni.JLong {
-    return @bitCast(pid.pid);
+    if (@sizeOf(erts.ERL_NIF_TERM) == @sizeOf(jni.JLong)) {
+        return @bitCast(pid.pid);
+    }
+    // 32-bit ARM: zero-extend the u32 pid into the low 32 bits of i64.
+    return @intCast(pid.pid);
 }
 
 inline fn pidFromLong(jpid: jni.JLong) erts.ErlNifPid {
-    return .{ .pid = @bitCast(jpid) };
+    if (@sizeOf(erts.ERL_NIF_TERM) == @sizeOf(jni.JLong)) {
+        return .{ .pid = @bitCast(jpid) };
+    }
+    // 32-bit ARM: take the low 32 bits of the jlong. The high bits are
+    // whatever Kotlin's been passing around — discard them.
+    const low: u32 = @truncate(@as(u64, @bitCast(jpid)));
+    return .{ .pid = low };
 }
 
 /// Call `MobBridge.<method>(pid_long, arg)` — the standard shape for

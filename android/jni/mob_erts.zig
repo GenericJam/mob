@@ -151,8 +151,40 @@ pub extern fn enif_alloc_binary(size: usize, bin: *ErlNifBinary) c_int;
 
 // 64-bit integer constructors (iter 3c). Used by the throttled gesture/
 // scroll/drag/pinch senders for monotonic timestamps and sequence numbers.
-pub extern fn enif_make_int64(env: ?*ErlNifEnv, i: i64) ERL_NIF_TERM;
-pub extern fn enif_make_uint64(env: ?*ErlNifEnv, i: u64) ERL_NIF_TERM;
+//
+// Symbol-name twist: OTP's `erl_nif_api_funcs.h` does
+//
+//     #if SIZEOF_LONG == 8
+//     #  define enif_make_int64  enif_make_long
+//     #  define enif_make_uint64 enif_make_ulong
+//     #endif
+//
+// On aarch64-android (LP64 — `long` is 8 bytes) the real symbols in
+// libbeam.a are `enif_make_long` / `enif_make_ulong`; `enif_make_int64`
+// is just a preprocessor alias. Zig doesn't run the C preprocessor, so
+// `extern fn enif_make_int64` would look for a literal symbol that
+// doesn't exist on 64-bit and dlopen would fail at app launch with
+// `cannot locate symbol "enif_make_int64"`.
+//
+// On armeabi-v7a (ILP32 — `long` is 4 bytes) the alias doesn't fire and
+// `enif_make_int64` is a real symbol. We pick the right linker name at
+// comptime via `@extern`.
+const enif_make_int64_fn = @extern(
+    *const fn (?*ErlNifEnv, i64) callconv(.c) ERL_NIF_TERM,
+    .{ .name = if (@sizeOf(c_long) == 8) "enif_make_long" else "enif_make_int64" },
+);
+const enif_make_uint64_fn = @extern(
+    *const fn (?*ErlNifEnv, u64) callconv(.c) ERL_NIF_TERM,
+    .{ .name = if (@sizeOf(c_long) == 8) "enif_make_ulong" else "enif_make_uint64" },
+);
+
+pub inline fn enif_make_int64(env: ?*ErlNifEnv, i: i64) ERL_NIF_TERM {
+    return enif_make_int64_fn(env, i);
+}
+
+pub inline fn enif_make_uint64(env: ?*ErlNifEnv, i: u64) ERL_NIF_TERM {
+    return enif_make_uint64_fn(env, i);
+}
 
 // Term-env hop (iter 3c). enif_send delivers a message to a pid; the
 // `msg_env` must be a "process-independent" env allocated via
