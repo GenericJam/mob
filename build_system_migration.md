@@ -954,3 +954,61 @@ runs. Two iters closed it.
   (Phase 6 polish — comptime driver_tab.zig, Android C → Zig,
   release-script zig cc swap deferred from Phase 1) is independently
   valuable but not blocking.
+
+## Phase 6a — `driver_tab.zig` comptime-generated (in progress)
+
+The plan called for moving driver_tab from generated C to generated
+Zig with comptime structure replacing `#ifdef` preprocessor gates.
+Shipped in three iters across all three repos; end-to-end Zig path
+validated on phase2q_smoke.
+
+  - iter 1 (mob): hand-coded `driver_tab_{ios,android}.zig` as
+    reference impl. Validates Zig's `export` keyword produces the
+    C-ABI symbols libbeam.a expects (`erts_static_nif_tab`,
+    `driver_tab`, `erts_init_static_drivers`). Standalone-compile
+    against all three targets — aarch64-ios-simulator,
+    aarch64-ios, aarch64-linux-android — all produce the right
+    symbol layout. Comptime `if (sqlite_static) ... else ...`
+    replaces the C `#ifdef MOB_STATIC_SQLITE_NIF`.
+
+  - iter 2 (mob_new): build.zig template gains `addZigObject`
+    helper paralleling `addCObject`. driver_tab call site
+    auto-detects file extension and routes to the right helper.
+
+  - iter 3 (mob_dev + mob_new + mob):
+      * mob_dev: `MobDev.StaticNifs.generate/3` accepts
+        `format: :c | :zig` (defaults to :c). The Zig output mirrors
+        the hand-coded reference from iter 1, with comptime gates
+        for guarded NIFs. `mix mob.regen_driver_tab --format zig`
+        writes `priv/generated/driver_tab_{ios,android}.zig`.
+        `MobDev.NativeBuild`'s three driver_tab resolution sites
+        prefer .zig over .c in priv/generated, falling back to mob's
+        reference files in either extension.
+      * mob_new: build_device.zig template gets the same
+        addZigObject helper plus `b.addOptions(sqlite_static)` for
+        the device path. build.zig (sim) provides
+        sqlite_static=false so the same .zig file compiles
+        unconditionally for both targets.
+      * mob: `ios/driver_tab_ios.zig` switches `sqlite_static` from
+        iter-1's hardcoded false to
+        `@import("build_options").sqlite_static`.
+
+    Smoke test on phase2q_smoke: regen --format zig + clean
+    `mix mob.deploy --native --device <sim>` succeeded. The
+    `.zig-cache/o/<hash>/driver_tab_ios.o` has the expected C-ABI
+    exports (`_erts_static_nif_tab`, `_driver_tab`,
+    `_erts_init_static_drivers`). Happy discovery: Zig's
+    `addCSourceFile` auto-detects .zig extension and routes to the
+    Zig compiler internally, so older project build.zig files
+    (without an `addZigObject` helper) keep working unchanged when
+    they receive a .zig driver_tab path.
+
+    7 new StaticNifs tests covering both formats including round-
+    trip `zig ast-check` of generated output. 882/882 mob_dev tests,
+    224/224 mob_new tests pass.
+
+  Phase 6a is functionally complete — Zig is a first-class
+  driver_tab format end-to-end. Optional follow-ups (subsequent
+  iters): wire `mix mob.regen_driver_tab` into `mix compile` so the
+  regen step disappears from user workflow entirely; default new
+  projects to Zig driver_tab via `mix mob.new`.
