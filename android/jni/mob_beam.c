@@ -1,22 +1,22 @@
 // mob_beam.c — Mob BEAM launcher and JNI bridge initialisation.
 // Extracted from the per-app beam_jni.c stub so app code stays minimal.
 
-#include <jni.h>
+#include "mob_beam.h"
 #include <android/log.h>
+#include <dirent.h>
+#include <dlfcn.h>
+#include <errno.h>
+#include <jni.h>
+#include <pthread.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#include <errno.h>
-#include <unistd.h>
 #include <sys/stat.h>
-#include <dirent.h>
-#include <pthread.h>
-#include <dlfcn.h>
-#include <stdint.h>
-#include "mob_beam.h"
+#include <time.h>
+#include <unistd.h>
 
 #define LOG_TAG "MobBeam"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 // ── BEAM stdout/stderr → logcat ──────────────────────────────────────────
@@ -28,7 +28,7 @@
 //
 // See beam_crash.md (Incident #1) for the case that motivated this.
 
-static void* mob_beam_log_reader(void* arg) {
+static void *mob_beam_log_reader(void *arg) {
     int fd = (int)(intptr_t)arg;
     char buf[4096];
     char line[4096];
@@ -64,8 +64,7 @@ static void mob_capture_beam_stdio(void) {
     close(pipe_fds[1]);
 
     pthread_t tid;
-    if (pthread_create(&tid, NULL, mob_beam_log_reader,
-                       (void*)(intptr_t)pipe_fds[0]) != 0) {
+    if (pthread_create(&tid, NULL, mob_beam_log_reader, (void *)(intptr_t)pipe_fds[0]) != 0) {
         LOGE("mob_capture_beam_stdio: pthread_create failed: %s", strerror(errno));
         close(pipe_fds[0]);
         return;
@@ -79,23 +78,23 @@ static void mob_capture_beam_stdio(void) {
     LOGI("mob_capture_beam_stdio: piping stdout/stderr to logcat (tag: BEAMout)");
 }
 
-#define ERTS_VSN    "erts-17.0"
+#define ERTS_VSN "erts-17.0"
 
 // Declared in mob_nif.c — caches MobBridge methods on the main thread.
-extern void _mob_ui_cache_class_impl(JNIEnv* env, const char* bridge_class);
+extern void _mob_ui_cache_class_impl(JNIEnv *env, const char *bridge_class);
 
 // Native lib dir and app files dir — populated in mob_init_bridge, used in mob_start_beam.
 static char s_native_lib_dir[512] = {0};
-static char s_files_dir[512]      = {0};
+static char s_files_dir[512] = {0};
 
-void mob_ui_cache_class(JNIEnv* env, const char* bridge_class) {
+void mob_ui_cache_class(JNIEnv *env, const char *bridge_class) {
     _mob_ui_cache_class_impl(env, bridge_class);
 }
 
 // Declared in mob_nif.c — the cached Bridge.cls global ref.
-extern void _mob_bridge_init_activity(JNIEnv* env, jobject activity);
+extern void _mob_bridge_init_activity(JNIEnv *env, jobject activity);
 
-void mob_init_bridge(JNIEnv* env, jobject activity) {
+void mob_init_bridge(JNIEnv *env, jobject activity) {
     // Capture BEAM stdio first so any startup errors (NIF load failures,
     // application:start/2 crashes) land in logcat instead of /dev/null.
     mob_capture_beam_stdio();
@@ -108,13 +107,12 @@ void mob_init_bridge(JNIEnv* env, jobject activity) {
     // allows execve() from untrusted_app, unlike files in app_data_file.
     jclass ctx_cls = (*env)->FindClass(env, "android/content/Context");
     jmethodID get_app_info = (*env)->GetMethodID(env, ctx_cls, "getApplicationInfo",
-                                                   "()Landroid/content/pm/ApplicationInfo;");
+                                                 "()Landroid/content/pm/ApplicationInfo;");
     jobject app_info = (*env)->CallObjectMethod(env, activity, get_app_info);
     jclass app_info_cls = (*env)->FindClass(env, "android/content/pm/ApplicationInfo");
-    jfieldID fid = (*env)->GetFieldID(env, app_info_cls, "nativeLibraryDir",
-                                       "Ljava/lang/String;");
+    jfieldID fid = (*env)->GetFieldID(env, app_info_cls, "nativeLibraryDir", "Ljava/lang/String;");
     jstring jdir = (*env)->GetObjectField(env, app_info, fid);
-    const char* dir = (*env)->GetStringUTFChars(env, jdir, NULL);
+    const char *dir = (*env)->GetStringUTFChars(env, jdir, NULL);
     snprintf(s_native_lib_dir, sizeof(s_native_lib_dir), "%s", dir);
     (*env)->ReleaseStringUTFChars(env, jdir, dir);
     LOGI("mob_init_bridge: native lib dir = %s", s_native_lib_dir);
@@ -125,13 +123,13 @@ void mob_init_bridge(JNIEnv* env, jobject activity) {
     jclass file_cls = (*env)->FindClass(env, "java/io/File");
     jmethodID get_path = (*env)->GetMethodID(env, file_cls, "getPath", "()Ljava/lang/String;");
     jstring jfiles_path = (*env)->CallObjectMethod(env, files_dir_obj, get_path);
-    const char* files_path = (*env)->GetStringUTFChars(env, jfiles_path, NULL);
+    const char *files_path = (*env)->GetStringUTFChars(env, jfiles_path, NULL);
     snprintf(s_files_dir, sizeof(s_files_dir), "%s", files_path);
     (*env)->ReleaseStringUTFChars(env, jfiles_path, files_path);
     LOGI("mob_init_bridge: files dir = %s", s_files_dir);
 }
 
-void mob_start_beam(const char* app_module) {
+void mob_start_beam(const char *app_module) {
 #ifdef NO_BEAM
     // Config A: baseline measurement — stock Android activity, BEAM never launched.
     LOGI("mob_start_beam: NO_BEAM defined, skipping BEAM launch (battery baseline)");
@@ -145,8 +143,7 @@ void mob_start_beam(const char* app_module) {
     // `cannot locate symbol enif_get_tuple`.
     {
         char self_path[600];
-        snprintf(self_path, sizeof(self_path), "%s/lib%s.so",
-                 s_native_lib_dir, app_module);
+        snprintf(self_path, sizeof(self_path), "%s/lib%s.so", s_native_lib_dir, app_module);
         if (!dlopen(self_path, RTLD_NOW | RTLD_GLOBAL)) {
             LOGE("mob_start_beam: dlopen self with RTLD_GLOBAL failed: %s", dlerror());
         } else {
@@ -176,11 +173,11 @@ void mob_start_beam(const char* app_module) {
     char crash_dump[560];
     snprintf(crash_dump, sizeof(crash_dump), "%s/erl_crash.dump", s_files_dir);
 
-    setenv("BINDIR",   bindir,      1);
-    setenv("ROOTDIR",  otp_root,    1);
-    setenv("PROGNAME", "erl",       1);
-    setenv("EMU",      "beam",      1);
-    setenv("HOME",         s_files_dir, 1);
+    setenv("BINDIR", bindir, 1);
+    setenv("ROOTDIR", otp_root, 1);
+    setenv("PROGNAME", "erl", 1);
+    setenv("EMU", "beam", 1);
+    setenv("HOME", s_files_dir, 1);
     setenv("MOB_DATA_DIR", s_files_dir, 1);
 
     // MOB_BEAMS_DIR — the directory where app BEAMs (and priv/) are deployed.
@@ -199,8 +196,8 @@ void mob_start_beam(const char* app_module) {
     // is computed here from getFilesDir() at runtime (the path includes the
     // Android user ID which is not predictable at compile time).
     setenv("MOB_BEAMS_DIR", beams_dir, 1);
-    setenv("ERL_CRASH_DUMP",         crash_dump, 1);
-    setenv("ERL_CRASH_DUMP_SECONDS", "30",       1);
+    setenv("ERL_CRASH_DUMP", crash_dump, 1);
+    setenv("ERL_CRASH_DUMP_SECONDS", "30", 1);
 
     char eval_expr[280];
     snprintf(eval_expr, sizeof(eval_expr), "%s:start().", app_module);
@@ -211,26 +208,24 @@ void mob_start_beam(const char* app_module) {
     // These are overridden at runtime if beams_dir/mob_beam_flags exists.
 #ifdef BEAM_USE_CUSTOM_FLAGS
 #include "mob_beam_flags.h"
-    static const char* s_default_flags[] = { BEAM_EXTRA_FLAGS NULL };
+    static const char *s_default_flags[] = {BEAM_EXTRA_FLAGS NULL};
 #elif defined(BEAM_UNTUNED)
-    static const char* s_default_flags[] = { NULL };
+    static const char *s_default_flags[] = {NULL};
 #elif defined(BEAM_SBWT_ONLY)
-    static const char* s_default_flags[] = {
-        "-sbwt", "none", "-sbwtdcpu", "none", "-sbwtdio", "none", NULL
-    };
+    static const char *s_default_flags[] = {"-sbwt",    "none", "-sbwtdcpu", "none",
+                                            "-sbwtdio", "none", NULL};
 #else
     // Default and BEAM_FULL_NERVES both use full Nerves-style tuning.
-    static const char* s_default_flags[] = {
-        "-S", "1:1", "-SDcpu", "1:1", "-SDio", "1", "-A", "1",
-        "-sbwt", "none", "-sbwtdcpu", "none", "-sbwtdio", "none", NULL
-    };
+    static const char *s_default_flags[] = {"-S",        "1:1",  "-SDcpu",   "1:1",   "-SDio",
+                                            "1",         "-A",   "1",        "-sbwt", "none",
+                                            "-sbwtdcpu", "none", "-sbwtdio", "none",  NULL};
 #endif
 
     // Runtime override: read whitespace-separated flags from beams_dir/mob_beam_flags.
     // Written by `mix mob.deploy --schedulers N` or `--beam-flags "..."`.
-    static char   s_flags_buf[512]        = {0};
-    static const char* s_runtime_flags[64] = {NULL};
-    static int    s_runtime_flag_count    = 0;
+    static char s_flags_buf[512] = {0};
+    static const char *s_runtime_flags[64] = {NULL};
+    static int s_runtime_flag_count = 0;
     {
         char flags_path[640];
         snprintf(flags_path, sizeof(flags_path), "%s/mob_beam_flags", beams_dir);
@@ -242,41 +237,54 @@ void mob_start_beam(const char* app_module) {
             s_runtime_flag_count = 0;
             char *p = s_flags_buf;
             while (*p && s_runtime_flag_count < 63) {
-                while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
-                if (!*p) break;
+                while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
+                    p++;
+                if (!*p)
+                    break;
                 s_runtime_flags[s_runtime_flag_count++] = p;
-                while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
-                if (*p) *p++ = '\0';
+                while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
+                    p++;
+                if (*p)
+                    *p++ = '\0';
             }
             s_runtime_flags[s_runtime_flag_count] = NULL;
-            LOGI("mob_start_beam: loaded %d runtime flags from %s", s_runtime_flag_count, flags_path);
+            LOGI("mob_start_beam: loaded %d runtime flags from %s", s_runtime_flag_count,
+                 flags_path);
         }
     }
 
-    const char** selected_flags = (s_runtime_flag_count > 0)
-        ? s_runtime_flags
-        : s_default_flags;
+    const char **selected_flags = (s_runtime_flag_count > 0) ? s_runtime_flags : s_default_flags;
 
     char boot_path[580];
     snprintf(boot_path, sizeof(boot_path), "%s/releases/29/start_clean", otp_root);
 
-    static const char* args[128];
+    static const char *args[128];
     int ac = 0;
     args[ac++] = "beam";
-    for (int i = 0; selected_flags[i]; i++) args[ac++] = selected_flags[i];
+    for (int i = 0; selected_flags[i]; i++)
+        args[ac++] = selected_flags[i];
     args[ac++] = "--";
-    args[ac++] = "-root";     args[ac++] = otp_root;
-    args[ac++] = "-bindir";   args[ac++] = bindir;
-    args[ac++] = "-progname"; args[ac++] = "erl";
+    args[ac++] = "-root";
+    args[ac++] = otp_root;
+    args[ac++] = "-bindir";
+    args[ac++] = bindir;
+    args[ac++] = "-progname";
+    args[ac++] = "erl";
     args[ac++] = "--";
     args[ac++] = "-noshell";
     args[ac++] = "-noinput";
-    args[ac++] = "-boot";     args[ac++] = boot_path;
-    args[ac++] = "-pa";       args[ac++] = elixir_dir;
-    args[ac++] = "-pa";       args[ac++] = logger_dir;
-    args[ac++] = "-pa";       args[ac++] = eex_dir;
-    args[ac++] = "-pa";       args[ac++] = beams_dir;
-    args[ac++] = "-eval";     args[ac++] = eval_expr;
+    args[ac++] = "-boot";
+    args[ac++] = boot_path;
+    args[ac++] = "-pa";
+    args[ac++] = elixir_dir;
+    args[ac++] = "-pa";
+    args[ac++] = logger_dir;
+    args[ac++] = "-pa";
+    args[ac++] = eex_dir;
+    args[ac++] = "-pa";
+    args[ac++] = beams_dir;
+    args[ac++] = "-eval";
+    args[ac++] = eval_expr;
     args[ac] = NULL;
 
     // ── Cold-start race condition fix ────────────────────────────────────────
@@ -328,12 +336,12 @@ void mob_start_beam(const char* app_module) {
     //     native thread that was never attached would set needs_detach == 1.
     if (g_jvm && g_activity) {
         mob_set_startup_phase("Waiting for window focus…");
-        JNIEnv* env2 = NULL;
-        int needs_detach = ((*g_jvm)->GetEnv(g_jvm, (void**)&env2, JNI_VERSION_1_6) != JNI_OK);
+        JNIEnv *env2 = NULL;
+        int needs_detach = ((*g_jvm)->GetEnv(g_jvm, (void **)&env2, JNI_VERSION_1_6) != JNI_OK);
         if (needs_detach)
             (*g_jvm)->AttachCurrentThread(g_jvm, &env2, NULL);
 
-        jclass    act_cls   = (*env2)->GetObjectClass(env2, g_activity);
+        jclass act_cls = (*env2)->GetObjectClass(env2, g_activity);
         jmethodID has_focus = (*env2)->GetMethodID(env2, act_cls, "hasWindowFocus", "()Z");
         int waited = 0;
         const int max_wait = 3000; /* ms — fall through if focus never arrives */
@@ -367,18 +375,13 @@ void mob_start_beam(const char* app_module) {
     // by checking whether the nativeLibDir target exists: if it doesn't, skip the
     // unlink+symlink so we don't clobber the already-extracted real file.
     if (s_native_lib_dir[0]) {
-        static const char* const exes[] = {
-            "erl_child_setup", "inet_gethost", "epmd", NULL
-        };
-        static const char* const libs[] = {
-            "liberl_child_setup.so", "libinet_gethost.so", "libepmd.so", NULL
-        };
+        static const char *const exes[] = {"erl_child_setup", "inet_gethost", "epmd", NULL};
+        static const char *const libs[] = {"liberl_child_setup.so", "libinet_gethost.so",
+                                           "libepmd.so", NULL};
         char bin_path[512], lib_path[512];
         for (int i = 0; exes[i]; i++) {
-            snprintf(bin_path, sizeof(bin_path),
-                     "%s/" ERTS_VSN "/bin/%s", otp_root, exes[i]);
-            snprintf(lib_path, sizeof(lib_path),
-                     "%s/%s", s_native_lib_dir, libs[i]);
+            snprintf(bin_path, sizeof(bin_path), "%s/" ERTS_VSN "/bin/%s", otp_root, exes[i]);
+            snprintf(lib_path, sizeof(lib_path), "%s/%s", s_native_lib_dir, libs[i]);
             struct stat lib_st;
             if (stat(lib_path, &lib_st) == 0) {
                 // nativeLibDir has the file (adb install) — use symlink
@@ -395,7 +398,8 @@ void mob_start_beam(const char* app_module) {
                 if (stat(bin_path, &bin_st) == 0) {
                     LOGI("mob_start_beam: symlink %s (extracted from split APK)", exes[i]);
                 } else {
-                    LOGE("mob_start_beam: symlink %s missing from both nativeLibDir and bin/", exes[i]);
+                    LOGE("mob_start_beam: symlink %s missing from both nativeLibDir and bin/",
+                         exes[i]);
                 }
             }
         }
@@ -424,12 +428,11 @@ void mob_start_beam(const char* app_module) {
             while ((entry = readdir(d)) != NULL) {
                 if (strncmp(entry->d_name, "exqlite-", 8) == 0) {
                     char exqlite_priv[700];
-                    snprintf(exqlite_priv, sizeof(exqlite_priv),
-                             "%s/%s/priv", lib_path, entry->d_name);
+                    snprintf(exqlite_priv, sizeof(exqlite_priv), "%s/%s/priv", lib_path,
+                             entry->d_name);
                     mkdir(exqlite_priv, 0755);
                     char nif_link[760];
-                    snprintf(nif_link, sizeof(nif_link),
-                             "%s/sqlite3_nif.so", exqlite_priv);
+                    snprintf(nif_link, sizeof(nif_link), "%s/sqlite3_nif.so", exqlite_priv);
                     struct stat nif_lib_st;
                     if (stat(nif_target, &nif_lib_st) == 0) {
                         // nativeLibDir has the NIF (adb install) — use symlink
@@ -447,7 +450,8 @@ void mob_start_beam(const char* app_module) {
                             LOGI("mob_start_beam: exqlite NIF extracted from split APK");
                             found = 1;
                         } else {
-                            LOGE("mob_start_beam: exqlite NIF missing from both nativeLibDir and priv/");
+                            LOGE("mob_start_beam: exqlite NIF missing from both nativeLibDir and "
+                                 "priv/");
                         }
                     }
                     break;
@@ -470,7 +474,8 @@ void mob_start_beam(const char* app_module) {
                 if (symlink(nif_target, nif_link) == 0) {
                     LOGI("mob_start_beam: symlink sqlite3_nif.so (fallback) -> %s", nif_target);
                 } else {
-                    LOGE("mob_start_beam: symlink sqlite3_nif (fallback) failed: %s", strerror(errno));
+                    LOGE("mob_start_beam: symlink sqlite3_nif (fallback) failed: %s",
+                         strerror(errno));
                 }
             } else {
                 struct stat nif_fb_file_st;
@@ -507,19 +512,15 @@ void mob_start_beam(const char* app_module) {
                 while ((entry = readdir(d2)) != NULL) {
                     if (strncmp(entry->d_name, "pythonx-", 8) == 0) {
                         char pyx_priv[700];
-                        snprintf(pyx_priv, sizeof(pyx_priv), "%s/%s/priv",
-                                 lib_path, entry->d_name);
+                        snprintf(pyx_priv, sizeof(pyx_priv), "%s/%s/priv", lib_path, entry->d_name);
                         mkdir(pyx_priv, 0755);
                         char pyx_link[760];
-                        snprintf(pyx_link, sizeof(pyx_link), "%s/libpythonx.so",
-                                 pyx_priv);
+                        snprintf(pyx_link, sizeof(pyx_link), "%s/libpythonx.so", pyx_priv);
                         unlink(pyx_link);
                         if (symlink(pyx_target, pyx_link) == 0) {
-                            LOGI("mob_start_beam: symlink pythonx NIF -> %s",
-                                 pyx_target);
+                            LOGI("mob_start_beam: symlink pythonx NIF -> %s", pyx_target);
                         } else {
-                            LOGE("mob_start_beam: symlink pythonx NIF failed: %s",
-                                 strerror(errno));
+                            LOGE("mob_start_beam: symlink pythonx NIF failed: %s", strerror(errno));
                         }
                         break;
                     }
@@ -529,8 +530,8 @@ void mob_start_beam(const char* app_module) {
         }
     }
 
-    void erl_start(int, char**);
-    erl_start(ac, (char**)args);
+    void erl_start(int, char **);
+    erl_start(ac, (char **)args);
     mob_set_startup_error("BEAM exited unexpectedly — see logcat (tag: MobBeam) for details");
     LOGE("mob_start_beam: erl_start returned (unexpected)");
 }

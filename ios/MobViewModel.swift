@@ -7,7 +7,7 @@ import Combine
 @objc public class MobViewModel: NSObject, ObservableObject {
     @objc public static let shared = MobViewModel()
 
-    @Published public var root: MobNode? = nil
+    @Published public var root: MobNode?
     /// Increments on every setRoot call; views use onChange(of: rootVersion) to
     /// trigger withAnimation rather than watching root directly (root identity
     /// may change even for same-screen re-renders).
@@ -23,7 +23,7 @@ import Combine
     /// Current startup phase message shown while BEAM is initialising.
     @Published public var startupPhase: String = "Starting…"
     /// Non-nil when a fatal startup error has occurred; the error screen stalls here.
-    @Published public var startupError: String? = nil
+    @Published public var startupError: String?
 
     @objc public func setRoot(_ node: MobNode?, transition: String) {
         DispatchQueue.main.async {
