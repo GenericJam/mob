@@ -859,3 +859,44 @@ per-feature text-mutation logic is small enough to wrap uniformly.
     872/872 mob_dev tests pass on master. Smoke-tested on
     phase2q_smoke: `mix mob.enable photo_library --yes` added the
     plist key cleanly with the expected notice about Android.
+
+  - iter 2: AST-aware pythonx dep injection. Replaces
+    `MobDev.Enable.inject_pythonx_dep/1` (regex on mix.exs source)
+    with `Igniter.Project.Deps.add_dep({:pythonx, "~> 0.4"})` — parses
+    the project's `defp deps do [...]` AST and appends in-place,
+    idempotent automatically. Liveview's `mob_screen.ex` and python's
+    `python_paths.ex` generation already went through
+    `Igniter.Project.Module.create_module` in iter 1, so this closes
+    the last text-on-Elixir manipulation in `mob.enable`. The
+    remaining text-level patches (JS, HEEX, plist, AndroidManifest)
+    are non-Elixir source and stay text-level — AST tooling for those
+    isn't a win. Drive-by fix: `mix mob.enable` was reading the
+    on-disk mix.exs for app name, which under `Igniter.test_project`
+    saw mob_dev's own app name; switched to
+    `Igniter.Project.Application.app_name/1` with on-disk fallback.
+    3 new tests under the python describe; 875/875 mob_dev tests pass.
+
+  - iter 3: docs. `README.md` gains a top-level
+    `mix mob.enable <feature>` section with a per-feature surface
+    table (iOS / Android / Elixir columns) and the diff-preview UX
+    notes. The Mix tasks index gains a `mob.enable` row.
+    `AGENTS.md` adds three gotchas: how to add a new feature
+    (dispatch + handler + valid_features list, plus when to reach for
+    AST-aware Igniter helpers vs text-level `update_file`); file
+    discovery in `Enable.Igniter` must use Igniter's view of the
+    filesystem (not raw `File.exists?`) so `test_project` virtualized
+    files are findable; app name reads should go through
+    `Igniter.Project.Application.app_name/1` rather than the on-disk
+    mix.exs.
+
+  **Phase 4 is COMPLETE.** `mix mob.enable` is fully Igniter-driven;
+  all seven features route through `MobDev.Enable.Igniter` handlers
+  with diff preview, atomic apply, and idempotent semantics. AST-aware
+  Igniter helpers (`Project.Deps.add_dep`, `Project.Module.create_module`,
+  `Project.Config.modify_config_code`) cover every Elixir-source
+  mutation in the enable path; the regex-on-mix.exs sweep that the
+  plan flagged as the highest fragility is gone. 875/875 mob_dev
+  tests pass on master.
+
+  Phase 5 (the `mob.new --liveview` generator rewrite — biggest
+  remaining fragility per the plan) is next.
