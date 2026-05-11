@@ -900,3 +900,57 @@ per-feature text-mutation logic is small enough to wrap uniformly.
 
   Phase 5 (the `mob.new --liveview` generator rewrite — biggest
   remaining fragility per the plan) is next.
+
+## Phase 5 — `mob.new --liveview` AST rewrite (COMPLETE)
+
+The plan called this "highest-value rewrite — biggest fragility removed."
+On audit, the actual surface was smaller than expected: the file is
+923 lines, but most of it is string templates that generate FRESH
+Elixir files (mob_screen.ex, page_live.ex, repo.ex, …), not regex
+patches against existing source. The one remaining regex-on-Elixir
+was `inject_deps/3` — patching the user's mix.exs after `mix phx.new`
+runs. Two iters closed it.
+
+  - iter 1: AST-aware `inject_deps` via Sourceror. The old version
+    matched `defp deps do\\s*\\[` and inserted dep tuples at the head
+    of the list. Brittle when phx.new's mix.exs varied across Phoenix
+    versions or formatter configs — and we had debugged it twice
+    already (`:re.import/1` + Elixir version drift in the OTP 29
+    rebuild). The new flow:
+      - `Sourceror.parse_string(content)` — full AST with comments.
+      - `Macro.prewalk` walks to `def(p) deps do [...] end`.
+      - Append the parsed dep tuples to the list.
+      - `Sourceror.to_string(ast)` — round-trip back to source.
+    Idempotency now scans the AST for `:mob` declarations regardless
+    of indentation or trailing-comma shape. Bails out safely (returns
+    content unchanged) when the deps function uses an unmatched shape
+    like `defp deps, do: [...]` shorthand.
+
+    `sourceror ~> 1.0` added to mob_new deps. Chose direct Sourceror
+    over Igniter because Igniter's `Project.Deps.add_dep` is tied to
+    igniter state + the full Igniter.Mix.Task lifecycle, both overkill
+    for a one-shot patch from inside a regular Mix.Task generator.
+    Same underlying AST machinery, simpler boundary.
+
+    3 new tests covering the new AST cases (empty deps list,
+    shorthand form no-op, round-trip parse to validate output is
+    still legal Elixir) plus the existing 4 inject_deps tests
+    unchanged. 224/224 mob_new tests pass.
+
+  - iter 2: docs. AGENTS.md gotchas gains two bullets — one on the
+    AST-vs-regex convention for future maintainers, one on
+    sourceror's archive-size cost. README unchanged (inject_deps is
+    internal, not user-facing API).
+
+  **Phase 5 is COMPLETE.** The "regex-patched Elixir source in the
+  LV generator" stop criterion is hit. The remaining regex usage in
+  `live_view_patcher.ex` operates on JavaScript (`inject_mob_hook`)
+  and HEEX (`inject_mob_bridge_element`) source — both non-Elixir
+  and not in scope for AST tooling. The `insert_hooks_before_closing`
+  helper that wires MobHook into the LiveSocket call already uses
+  brace-depth line tracking instead of regex, by design.
+
+  Build-system migration phases 0-5 are complete. Remaining work
+  (Phase 6 polish — comptime driver_tab.zig, Android C → Zig,
+  release-script zig cc swap deferred from Phase 1) is independently
+  valuable but not blocking.
