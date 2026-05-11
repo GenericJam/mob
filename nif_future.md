@@ -136,3 +136,93 @@ the kind of thing the build rebuild can address as part of "what
 gets shipped to the device" rather than as point patches in app
 code or per-consumer monkey-patches. Worth keeping them in mind as
 test cases when the new build pipeline reaches the deploy step.
+
+---
+
+## 4. iOS device build skips `copy_project_python_wheels`  (verified 2026-05-11, **FIXED 2026-05-11**)
+
+**Resolution**: `mob_dev` `lib/mob_dev/native_build.ex` —
+`copy_project_python_wheels/1` generalised (param renamed
+`assets_root` → `python_root`, docstring covers both platforms) and
+wired into both `maybe_setup_pythonx_sim/5` (right after the
+lib-dynload `copy_dir!`) and `maybe_setup_pythonx_device/5` (right
+after the lib-dynload `cp_r!`). Both call sites pass
+`<otp_root>/python` as the root — same `lib/python3.13/site-packages/`
+suffix as Android, so the helper works unchanged. The historical
+notes below are kept for context.
+
+---
+
+### Original report
+
+
+**Refines item 3 above** — the cryptography cross-compile spike isn't
+actually required. RNS gracefully falls back to its internal pure-
+Python crypto provider when `cryptography` isn't importable (see
+`RNS/Cryptography/Provider.py`), and `lxmf` is pure-Python on top of
+RNS. So the wheel set we actually need on iOS is just `rns + lxmf`
+(both pure-Python, ~few MB total), plus `pyserial` + `pycparser` if
+any project uses them.
+
+**The gap**: Android's `copy_python_assets/1` already does
+`copy_project_python_wheels(assets_root)` after dropping stdlib +
+lib-dynload into the APK. iOS *simulator's* `ios/build.sh` (the
+project-local one mob_dev does NOT regenerate) was patched in the
+Pigeon session to do the same into `<otp_root>/python/lib/python3.13/
+site-packages/`. iOS *device's* auto-generated `build_device.sh`
+(produced by `MobDev.NativeBuild.generate_build_device_sh/2`) bundles
+Python.framework + stdlib + lib-dynload but never copies
+`priv/python_wheels/*` in. Result: device boots, hits `import RNS`,
+crashes with `ModuleNotFoundError: No module named 'RNS'`, app
+appears stuck on the launch spinner.
+
+**Workaround for manual dev cycles**: after a build, find the staged
+`Pigeon.app` (under `$TMPDIR/mob_ios_device_*`), copy
+`priv/python_wheels/{rns,lxmf,pyserial,pycparser}/.` into
+`Pigeon.app/otp/python/lib/python3.13/site-packages/`, re-sign with
+the in-build `mob_device.entitlements` file, then `xcrun devicectl
+device install app`. Verified working on iPhone SE 3rd gen
+(00008110-001E1C3A34F8401E) on 2026-05-11.
+
+**What the build rebuild should do**: add a wheel-copy step to the
+iOS device path mirroring Android's. The cleanest spot is right
+after the `cp -R "$PYTHON_LIB_DYNLOAD" "$OTP_ROOT/python/lib/
+python3.13/lib-dynload"` line in the build_device.sh template (or
+its Zig successor — `ios/build_device.zig` is where this naturally
+lives after Phase 2 iter 12). Same shape as Android, same wheel
+source (`priv/python_wheels/<wheel>/`), same destination layout
+(`<otp_bundle>/python/lib/python3.13/site-packages/<wheel-contents>`).
+
+---
+
+## 5. iOS device default relay host  (verified 2026-05-11)
+
+**Symptom**: Pigeon (or any mob app using a Mac-based dev relay) on
+physical iOS gets `[Errno 61] Connection refused` for the relay
+TCPInterface. `127.0.0.1` resolves to the *phone's* loopback, not the
+developer's Mac — different from the iOS simulator (which shares the
+host network stack via XPC) and Android emulator (which has the
+`10.0.2.2` host-loopback alias).
+
+**Where the bad default came from**: `Pigeon.App.on_start/0`
+hard-codes a platform-aware default of `127.0.0.1` for iOS and
+`10.0.2.2` for Android via `Pigeon.PythonPaths.detect/1`. Both are
+*simulator/emulator* defaults; neither works on real hardware.
+
+**Workaround for now**: rely on AutoInterface multicast over LAN
+(verified working — iPhone SE 3rd gen reached the bridge via shared
+Wi-Fi). Set `PIGEON_RELAY_HOST` to the Mac's actual LAN IP when
+explicit relay routing is needed.
+
+**What's needed**: detect "physical device" vs "simulator/emulator"
+at build time (or compute the Mac's LAN IP and stamp it into the
+build env) so the in-app default is right by default. The detection
+is already in `Pigeon.PythonPaths.detect/1` (returns `:ios` for
+both sim and device today — that's the bug); split into `:ios_sim`
+vs `:ios_device` or surface the Mac's LAN IP via a build-time env
+var the way `MOB_IOS_TEAM_ID` etc. flow today.
+
+Both items 4 and 5 are small mob_dev template changes. Either land
+them as point fixes in build_device.sh / build_device.zig templates,
+or fold them into Phase 2 iter 12d's bundle-assembly + provisioning
+move into Mix proper.
