@@ -71,6 +71,15 @@ pub extern fn closedir(dirp: *DIR) c_int;
 pub extern fn nanosleep(req: *const Timespec, rem: ?*Timespec) c_int;
 pub extern fn snprintf(buf: [*]u8, size: usize, fmt: [*:0]const u8, ...) c_int;
 
+// libc allocator. We use `std.heap.c_allocator` in only one spot (test
+// harness NIFs that copy a binary into a NUL-terminated buffer for
+// NewStringUTF), and Zig 0.17 refuses to compile `std.heap.c_allocator`
+// without `linkLibC()` on the module. Production builds link libc via
+// the NDK clang link step anyway, so calling malloc/free directly is
+// equivalent and skips the link-time guard.
+pub extern fn malloc(size: usize) ?*anyopaque;
+pub extern fn free(ptr: ?*anyopaque) void;
+
 pub const _IONBF: c_int = 2;
 
 pub const FILE = opaque {};
@@ -179,7 +188,7 @@ pub const JNINativeInterface = extern struct {
     ExceptionDescribe: ?*anyopaque,
 
     // 17-22: exception finish, refs
-    ExceptionClear: ?*anyopaque,
+    ExceptionClear: ?*const fn (env: *JNIEnv) callconv(.c) void,
     FatalError: ?*anyopaque,
     PushLocalFrame: ?*anyopaque,
     PopLocalFrame: ?*anyopaque,
@@ -187,7 +196,7 @@ pub const JNINativeInterface = extern struct {
     DeleteGlobalRef: ?*const fn (env: *JNIEnv, gref: JObject) callconv(.c) void,
 
     // 23-26: local ref slots
-    DeleteLocalRef: ?*anyopaque,
+    DeleteLocalRef: ?*const fn (env: *JNIEnv, obj: JObject) callconv(.c) void,
     IsSameObject: ?*anyopaque,
     NewLocalRef: ?*anyopaque,
     EnsureLocalCapacity: ?*anyopaque,
@@ -295,13 +304,15 @@ pub const JNINativeInterface = extern struct {
     SetFloatField: ?*anyopaque,
     SetDoubleField: ?*anyopaque,
 
-    // 114-152: static stuff + string ops — pad as opaque, we don't use them
-    // in mob_beam.zig (mob_nif iters will likely need GetStaticMethodID etc.).
-    GetStaticMethodID: ?*anyopaque,
-    CallStaticObjectMethod: ?*anyopaque,
+    // 114-152: GetStaticMethodID + CallStaticXxxMethod variants. Phase 6b
+    // iter 3b types the slots mob_nif.zig calls (GetStaticMethodID + the
+    // variadic ObjectMethod / BooleanMethod / VoidMethod); the rest stay
+    // opaque until a later iter needs them.
+    GetStaticMethodID: ?*const fn (env: *JNIEnv, cls: JClass, name: [*:0]const u8, sig: [*:0]const u8) callconv(.c) JMethodID,
+    CallStaticObjectMethod: ?*const fn (env: *JNIEnv, cls: JClass, mid: JMethodID, ...) callconv(.c) JObject,
     CallStaticObjectMethodV: ?*anyopaque,
     CallStaticObjectMethodA: ?*anyopaque,
-    CallStaticBooleanMethod: ?*anyopaque,
+    CallStaticBooleanMethod: ?*const fn (env: *JNIEnv, cls: JClass, mid: JMethodID, ...) callconv(.c) JBoolean,
     CallStaticBooleanMethodV: ?*anyopaque,
     CallStaticBooleanMethodA: ?*anyopaque,
     CallStaticByteMethod: ?*anyopaque,
@@ -325,7 +336,7 @@ pub const JNINativeInterface = extern struct {
     CallStaticDoubleMethod: ?*anyopaque,
     CallStaticDoubleMethodV: ?*anyopaque,
     CallStaticDoubleMethodA: ?*anyopaque,
-    CallStaticVoidMethod: ?*anyopaque,
+    CallStaticVoidMethod: ?*const fn (env: *JNIEnv, cls: JClass, mid: JMethodID, ...) callconv(.c) void,
     CallStaticVoidMethodV: ?*anyopaque,
     CallStaticVoidMethodA: ?*anyopaque,
     GetStaticFieldID: ?*anyopaque,
@@ -355,18 +366,64 @@ pub const JNINativeInterface = extern struct {
     GetStringLength: ?*anyopaque,
     GetStringChars: ?*anyopaque,
     ReleaseStringChars: ?*anyopaque,
-    NewStringUTF: ?*anyopaque,
+    NewStringUTF: ?*const fn (env: *JNIEnv, utf: [*:0]const u8) callconv(.c) JString,
     GetStringUTFLength: ?*anyopaque,
 
     // 169-170: GetStringUTFChars / ReleaseStringUTFChars — we use these
     GetStringUTFChars: ?*const fn (env: *JNIEnv, str: JString, is_copy: ?*JBoolean) callconv(.c) ?[*:0]const u8,
     ReleaseStringUTFChars: ?*const fn (env: *JNIEnv, str: JString, utf: [*:0]const u8) callconv(.c) void,
 
-    // The remaining ~60 slots (array ops, monitor enter/exit, GetJavaVM,
-    // NewWeakGlobalRef, etc.) are not used by mob_beam.zig — add when an
-    // iter needs them. Leaving them out is fine because we never read past
-    // the declared slots: as long as the layout up to the last USED slot
-    // matches jni.h, the unused tail can be anything.
+    // 171: GetArrayLength — typed (used by nif_screen_info).
+    GetArrayLength: ?*const fn (env: *JNIEnv, arr: JObject) callconv(.c) JInt,
+
+    // 172-178: ObjectArray + primitive-array constructors — unused.
+    NewObjectArray: ?*anyopaque,
+    GetObjectArrayElement: ?*anyopaque,
+    SetObjectArrayElement: ?*anyopaque,
+    NewBooleanArray: ?*anyopaque,
+    NewByteArray: ?*anyopaque,
+    NewCharArray: ?*anyopaque,
+    NewShortArray: ?*anyopaque,
+
+    // 179-187: more New*Array + Get*ArrayElements.
+    NewIntArray: ?*anyopaque,
+    NewLongArray: ?*anyopaque,
+    NewFloatArray: ?*anyopaque,
+    NewDoubleArray: ?*anyopaque,
+    GetBooleanArrayElements: ?*anyopaque,
+    GetByteArrayElements: ?*anyopaque,
+    GetCharArrayElements: ?*anyopaque,
+    GetShortArrayElements: ?*anyopaque,
+    GetIntArrayElements: ?*anyopaque,
+
+    // 188-203: remaining Get*ArrayElements + all Release*ArrayElements +
+    // Get*ArrayRegion entries up through GetFloatArrayRegion. We need
+    // GetFloatArrayRegion (slot 203) typed for nif_screen_info /
+    // nif_safe_area; everything between stays opaque.
+    GetLongArrayElements: ?*anyopaque,
+    GetFloatArrayElements: ?*anyopaque,
+    GetDoubleArrayElements: ?*anyopaque,
+    ReleaseBooleanArrayElements: ?*anyopaque,
+    ReleaseByteArrayElements: ?*anyopaque,
+    ReleaseCharArrayElements: ?*anyopaque,
+    ReleaseShortArrayElements: ?*anyopaque,
+    ReleaseIntArrayElements: ?*anyopaque,
+    ReleaseLongArrayElements: ?*anyopaque,
+    ReleaseFloatArrayElements: ?*anyopaque,
+    ReleaseDoubleArrayElements: ?*anyopaque,
+    GetBooleanArrayRegion: ?*anyopaque,
+    GetByteArrayRegion: ?*anyopaque,
+    GetCharArrayRegion: ?*anyopaque,
+    GetShortArrayRegion: ?*anyopaque,
+    GetIntArrayRegion: ?*anyopaque,
+    GetLongArrayRegion: ?*anyopaque,
+    GetFloatArrayRegion: ?*const fn (env: *JNIEnv, arr: JObject, start: JInt, len: JInt, buf: [*]f32) callconv(.c) void,
+
+    // The remaining ~30 slots (Get/Set*ArrayRegion tail, RegisterNatives,
+    // MonitorEnter/Exit, GetJavaVM, NewWeakGlobalRef, ExceptionCheck,
+    // DirectByteBuffer ops, GetObjectRefType) are not used by mob_nif.zig
+    // today. Add when a later iter needs them — the rule is "match jni.h
+    // up to the last USED slot".
 };
 
 /// JavaVM vtable — used for GetEnv / AttachCurrentThread / DetachCurrentThread.
@@ -426,6 +483,32 @@ pub inline fn releaseStringUTFChars(env: *JNIEnv, str: JString, utf: [*:0]const 
 
 pub inline fn newGlobalRef(env: *JNIEnv, obj: JObject) JObject {
     return env.*.NewGlobalRef.?(env, obj);
+}
+
+// ── Static method helpers (added in iter 3b) ───────────────────────────────
+
+pub inline fn getStaticMethodID(env: *JNIEnv, cls: JClass, name: [*:0]const u8, sig: [*:0]const u8) JMethodID {
+    return env.*.GetStaticMethodID.?(env, cls, name, sig);
+}
+
+pub inline fn newStringUTF(env: *JNIEnv, utf: [*:0]const u8) JString {
+    return env.*.NewStringUTF.?(env, utf);
+}
+
+pub inline fn deleteLocalRef(env: *JNIEnv, obj: JObject) void {
+    env.*.DeleteLocalRef.?(env, obj);
+}
+
+pub inline fn exceptionClear(env: *JNIEnv) void {
+    env.*.ExceptionClear.?(env);
+}
+
+pub inline fn getArrayLength(env: *JNIEnv, arr: JObject) JInt {
+    return env.*.GetArrayLength.?(env, arr);
+}
+
+pub inline fn getFloatArrayRegion(env: *JNIEnv, arr: JObject, start: JInt, len: JInt, buf: [*]f32) void {
+    env.*.GetFloatArrayRegion.?(env, arr, start, len, buf);
 }
 
 pub inline fn getEnv(vm: *JavaVM, version: JInt) ?*JNIEnv {
