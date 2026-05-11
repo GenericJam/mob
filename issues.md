@@ -4,7 +4,13 @@ Tracked items not yet addressed. Each section captures the symptom, why it
 happens, and what a fix would look like — so the next session can pick one
 up without re-deriving context.
 
-## 1. Disable `phoenix_live_reload` on iOS device builds
+## 1. Disable `phoenix_live_reload` on iOS device builds — **FIXED 2026-05-10**
+
+> **Resolution.** `mob_new`'s `mob_live_app_content/4` (LiveViewPatcher)
+> now sets `code_reloader: false`, `watchers: []`, `live_reload: false`
+> in the on-device endpoint config. Newly-generated LV projects pick this
+> up automatically; existing projects need a one-line edit in their
+> `mob_app.ex`.
 
 **Symptom** — `beam_stdout.log` on launch:
 ```
@@ -37,7 +43,12 @@ when running on-device (it's a dev-only dep anyway).
 
 ---
 
-## 2. Silence `:esbuild` / `:tailwind` startup warnings on-device
+## 2. Silence `:esbuild` / `:tailwind` startup warnings on-device — **FIXED 2026-05-10**
+
+> **Resolution.** Option (a) — `Application.put_env(:esbuild, :version, "0.25.0")`
+> + `:tailwind, :version, "3.4.6"` set in `mob_app.ex` before
+> `ensure_all_started`. Versions match Phoenix 1.7's defaults; bump
+> alongside `mix phx.new` upgrades.
 
 **Symptom** — same log:
 ```
@@ -125,7 +136,23 @@ later (intermittent disconnects under load).
 
 ---
 
-## 4. LiveView port 4200 collides across multiple installed Mob LV apps
+## 4. LiveView port 4200 collides across multiple installed Mob LV apps — **FIXED 2026-05-10**
+
+> **Resolution.** Recommendation #1 from below: hash the app name into
+> `4200..4999` for the on-device default. Implementation lives in
+> `mob_new`'s `mob_live_app_content/4`:
+>
+> ```elixir
+> defp default_liveview_port do
+>   4200 + :erlang.phash2(:<app_name>, 800)
+> end
+> ```
+>
+> Generated `mob.exs` ships `# config :mob, liveview_port: 4200`
+> commented out — uncomment to pin a specific value (e.g. for a test
+> harness that hardcodes a port). `Mob.LiveView.local_url/1` reads
+> the env automatically, so the WebView URL stays in sync with the
+> resolved port without further changes.
 
 **Symptom** — second LV app fails to start with:
 ```
@@ -207,7 +234,12 @@ regenerate).
 
 ---
 
-## 5. `mix mob.deploy --native --ios` silently prefers iPhone over sim
+## 5. `mix mob.deploy --native --ios` silently prefers iPhone over sim — **FIXED 2026-05-10**
+
+> **Resolution.** Option #1 (the recommended one): when
+> `auto_detect_physical_ios/0` picks an iPhone and a sim is also booted,
+> it now prints the alternative `--device <short-id>` invocation so the
+> user can target the sim explicitly. Default behavior unchanged.
 
 **Symptom** — `mix mob.deploy --native --ios` builds and installs on the
 physical iPhone, never the booted simulator. No log line indicates the
