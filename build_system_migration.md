@@ -1352,3 +1352,63 @@ something useful even if the total project pauses.
     run — it bundles best as its own verification commit so the
     test path is explicit about exercising the all-Zig finale.
     Once that's green, Phase 6b is complete.
+
+  - iter 3d verification (smoke deploy, 2026-05-11):
+    **Phase 6b complete.** End-to-end deploy of a freshly-
+    generated `mob_smoke_6b` project against emulator-5556
+    (aarch64-android.24) succeeded: full Zig pipeline cross-
+    compiled for both arm64-v8a and armeabi-v7a, NDK clang linked
+    cleanly, APK installed, OTP runtime + 382 BEAMs pushed, BEAM
+    booted into `Mob NIF loaded (Compose backend)`. The cold-start
+    race fix from iter 2's mob_beam.zig fired correctly
+    (`waited 1750 ms for window focus`); SELinux symlink dance
+    for the ERTS bins + exqlite NIF succeeded; `nif_load` cached
+    all required + optional method IDs.
+
+    Four latent bugs surfaced at the boundary and were fixed
+    before the green run:
+
+      * `mob_new` build template — Zig module `.pic = true`
+        missing on `createModule`. `mob_beam.zig`'s `default_flags`
+        comptime array of pointers to string literals emitted
+        R_AARCH64_ABS64 relocations against local symbols, which
+        ld.lld refused in a shared library. The pure-compile
+        `zig build-obj` standalone check didn't catch this — the
+        relocations are only validated at link time.
+      * `mob_new` build template — `addLink` produced the cp step
+        that installs `lib<app>.so` into jniLibs/ but didn't
+        return it. `addExqliteLink` referenced the installed path
+        as a plain string arg (not a LazyPath), so the two link
+        steps raced and exqlite's clang errored out with `no
+        such file`. Fix: `addLink` returns the cp step;
+        `addExqliteLink.depends_on` carries the edge.
+      * `mob_erts.zig` — bare `extern fn enif_make_int64` /
+        `enif_make_uint64` failed dlopen with `cannot locate
+        symbol "enif_make_int64"`. OTP's `erl_nif_api_funcs.h`
+        does `#define enif_make_int64 enif_make_long` when
+        `SIZEOF_LONG == 8`; on aarch64-android (LP64) the real
+        libbeam.a symbol is `enif_make_long`. Zig doesn't run
+        the C preprocessor — fixed by switching to `@extern`
+        with comptime symbol-name selection (`enif_make_long`
+        on 64-bit, `enif_make_int64` on 32-bit where the alias
+        doesn't fire).
+      * `mob_nif.zig` — `pidToJlong` / `pidFromLong`'s `@bitCast`
+        failed to compile on armeabi-v7a: ERL_NIF_TERM is u32
+        there but jlong is always i64. Fixed with a comptime
+        `@sizeOf` branch: bitcast on 64-bit, zero-extend/truncate
+        on 32-bit. Matches the C original's `memcpy(min(sizeof))`
+        dance.
+
+    Lesson: **the pure-compile standalone check pattern caught
+    every compile error but no link error and no runtime error.**
+    For future iters touching the Zig native build, plan on the
+    end-to-end smoke deploy as a separate verification step —
+    object compile and test-suite pass are necessary but not
+    sufficient. The mob_new template's `mix test --only lint`
+    pipeline could grow a "zig build emit-relocatable" step that
+    actually links, which would have caught the PIC bug
+    pre-merge; queued as a follow-up.
+
+    Bugs fixed in: mob `50f87bb` (mob_erts.zig + mob_nif.zig),
+    mob_new `481bcd5` (build.zig.eex template). Smoke-tested
+    project preserved at `/tmp/mob_smoke_6b/` for inspection.
