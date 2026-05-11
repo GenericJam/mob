@@ -1050,3 +1050,32 @@ validated on phase2q_smoke.
   Optional further follow-ups (not required for Phase 6a closure):
   wire `mix mob.regen_driver_tab` into `mix compile` so the regen
   step disappears from user workflow entirely.
+
+## Phase 6b — Android C → Zig (in progress)
+
+The plan: migrate Android's `mob_nif.c` (~2570 lines) and
+`mob_beam.c` (~540 lines) — about 3100 lines of C with non-trivial
+JNI ergonomics — to Zig. Done incrementally so each iter ships
+something useful even if the total project pauses.
+
+  - iter 1 (toolchain plumbing): mob_new's Android build.zig template
+    gets the `addZigObject` helper and auto-detects file extension
+    in its source iteration loop. Same pattern the iOS templates use
+    (Phase 6a iter 2-3). The four sources Android handles —
+    driver_tab_android, mob_nif, mob_beam, beam_jni — can each be
+    `.zig` or `.c` now without touching the call site.
+
+    `b.option` help-string + header comment updated to acknowledge
+    `.{zig,c}` extension. mob_dev's NativeBuild already resolves
+    `driver_tab_android.zig` over `.c` since Phase 6a iter 3, so the
+    full chain works end-to-end without further mob_dev work.
+
+    Verified: rendered Android build.zig.eex through EEx +
+    `zig ast-check` passes; full Android native build through
+    `mix mob.deploy --native --device <emu>` succeeds against
+    phase2q_smoke with the new template. 224/224 mob_new tests pass.
+
+    Iter 1 ships only the build plumbing. The real translation
+    (mob_beam.c → mob_beam.zig as iter 2; mob_nif.c → mob_nif.zig
+    across several iters as iter 3+) starts from a known-working
+    toolchain.
