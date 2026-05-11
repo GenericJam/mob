@@ -67,11 +67,11 @@ extern fn crypto_nif_init() callconv(.c) ?*anyopaque;
 extern fn mob_nif_nif_init() callconv(.c) ?*anyopaque;
 
 // exqlite's sqlite3_nif is linked statically on device only. The build
-// system passes a comptime flag to opt in (wired through build.zig in
-// iter 2). For now `sqlite_static` is a plain comptime constant — its
-// default is false (the simulator path), and device builds will
-// override at compile time via the build module options system.
-const sqlite_static: bool = false;
+// system threads the flag in via `b.addOptions()` in build_device.zig
+// (iter 3); see addZigObject. For simulator builds the option module
+// either isn't provided OR has sqlite_static = false.
+const build_options = @import("build_options");
+const sqlite_static = build_options.sqlite_static;
 extern fn sqlite3_nif_nif_init() callconv(.c) ?*anyopaque;
 
 // ── Static driver table ────────────────────────────────────────────────────
