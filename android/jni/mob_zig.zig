@@ -71,6 +71,20 @@ pub extern fn closedir(dirp: *DIR) c_int;
 pub extern fn nanosleep(req: *const Timespec, rem: ?*Timespec) c_int;
 pub extern fn snprintf(buf: [*]u8, size: usize, fmt: [*:0]const u8, ...) c_int;
 
+/// POSIX clock identifiers. We only use CLOCK_MONOTONIC for throttle
+/// timestamps in the gesture/scroll/drag/pinch sender path — it ticks
+/// forward at a constant rate regardless of wall-clock NTP adjustments.
+pub const CLOCK_MONOTONIC: c_int = 1;
+pub extern fn clock_gettime(clk_id: c_int, tp: *Timespec) c_int;
+
+/// Monotonic nanoseconds since boot. Wrapper that hides the timespec
+/// dance. Used by the throttle path in the senders.
+pub fn nowNs() i64 {
+    var ts: Timespec = .{ .tv_sec = 0, .tv_nsec = 0 };
+    _ = clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1_000_000_000 + ts.tv_nsec;
+}
+
 // libc allocator. We use `std.heap.c_allocator` in only one spot (test
 // harness NIFs that copy a binary into a NUL-terminated buffer for
 // NewStringUTF), and Zig 0.17 refuses to compile `std.heap.c_allocator`

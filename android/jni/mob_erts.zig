@@ -101,6 +101,41 @@ pub extern fn enif_make_map_from_arrays(
 // BEAM owns it.
 pub extern fn enif_alloc_binary(size: usize, bin: *ErlNifBinary) c_int;
 
+// 64-bit integer constructors (iter 3c). Used by the throttled gesture/
+// scroll/drag/pinch senders for monotonic timestamps and sequence numbers.
+pub extern fn enif_make_int64(env: ?*ErlNifEnv, i: i64) ERL_NIF_TERM;
+pub extern fn enif_make_uint64(env: ?*ErlNifEnv, i: u64) ERL_NIF_TERM;
+
+// Term-env hop (iter 3c). enif_send delivers a message to a pid; the
+// `msg_env` must be a "process-independent" env allocated via
+// enif_alloc_env / freed via enif_free_env after the send returns.
+// Terms in `msg_env` must originate there or be copied in via
+// enif_make_copy.
+pub extern fn enif_alloc_env() ?*ErlNifEnv;
+pub extern fn enif_free_env(env: ?*ErlNifEnv) void;
+pub extern fn enif_make_copy(dst: ?*ErlNifEnv, src_term: ERL_NIF_TERM) ERL_NIF_TERM;
+pub extern fn enif_send(
+    caller_env: ?*ErlNifEnv,
+    to_pid: *const ErlNifPid,
+    msg_env: ?*ErlNifEnv,
+    msg: ERL_NIF_TERM,
+) c_int;
+pub extern fn enif_self(caller_env: ?*ErlNifEnv, pid: *ErlNifPid) ?*ErlNifPid;
+
+// Pid resolution (iter 3c).
+pub extern fn enif_get_local_pid(env: ?*ErlNifEnv, term: ERL_NIF_TERM, pid: *ErlNifPid) c_int;
+pub extern fn enif_whereis_pid(env: ?*ErlNifEnv, name: ERL_NIF_TERM, pid: *ErlNifPid) c_int;
+
+// Tuple inspectors (iter 3c).
+pub extern fn enif_get_tuple(env: ?*ErlNifEnv, tpl: ERL_NIF_TERM, arity: *c_int, array: *[*]const ERL_NIF_TERM) c_int;
+
+// Mutex (iter 3c). enif_mutex_create allocates; destroy + try-lock omitted
+// — Mob only uses simple lock/unlock pairs and the mutexes live for the
+// lifetime of the BEAM process (no destroy needed).
+pub extern fn enif_mutex_create(name: [*:0]const u8) ?*ErlNifMutex;
+pub extern fn enif_mutex_lock(mtx: ?*ErlNifMutex) void;
+pub extern fn enif_mutex_unlock(mtx: ?*ErlNifMutex) void;
+
 // ── Term inspectors ───────────────────────────────────────────────────────
 
 /// Returns 1 on success, 0 on failure. Fills `bin` with the binary's

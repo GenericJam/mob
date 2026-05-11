@@ -9,15 +9,20 @@
 //! Sub-iter sequence:
 //!   * iter 3a: 3 standalone NIFs — platform/0, log/1, log/2. No JNI, no
 //!     shared state. Proved the cross-language linkage pattern.
-//!   * iter 3b (this iter): test harness NIFs (ui_tree, ui_view_tree,
-//!     screen_info, tap, tap_xy, type_text, delete_backward, key_press,
-//!     clear_text, long_press_xy, swipe_xy, ax_action stubs, ui_debug)
-//!     + the cached `Bridge` MobBridge method-ID struct + `get_jenv` (the
-//!     thread-attach helper). Moving Bridge/get_jenv here unblocks the
-//!     remaining sub-iters — both senders (iter 3c) and the feature NIFs
-//!     (iter 3d) reach into the same struct.
-//!   * iter 3c: event senders + tap/component handle registries +
-//!     per-handle throttle state.
+//!   * iter 3b: test harness NIFs (ui_tree, ui_view_tree, screen_info,
+//!     tap, tap_xy, type_text, delete_backward, key_press, clear_text,
+//!     long_press_xy, swipe_xy, ax_action stubs, ui_debug) + the cached
+//!     `Bridge` MobBridge method-ID struct + `get_jenv` (the thread-
+//!     attach helper).
+//!   * iter 3c (this iter): event senders (mob_send_* family — tap,
+//!     change, focus/blur/submit/select/compose, gestures, throttled
+//!     scroll/drag/pinch/rotate/pointer_move, scroll-began/ended/settled,
+//!     back), tap + component handle registries with their mutexes,
+//!     per-handle throttle state, and the 6 NIFs that touch these
+//!     statics (nif_set_root, nif_register_tap, nif_clear_taps,
+//!     nif_set_transition, nif_register_component, nif_deregister_component).
+//!     The C-side `nif_load` calls `mob_nif_init_state` (exported here)
+//!     to create the mutexes during BEAM init.
 //!   * iter 3d: remaining feature NIFs (storage, WebView, alert,
 //!     action_sheet, toast, native view components, lifecycle,
 //!     Mob.Device). Moves the NIF table itself here. mob_nif.c deleted.
@@ -678,4 +683,738 @@ export fn nif_swipe_xy(
     );
     detachIfAttached(attached);
     return if (ok != 0) erts.ok(env) else errorAtom(env, "dispatch_failed");
+}
+
+// ── Handle registries (Phase 6b iter 3c) ─────────────────────────────────
+//
+// Two pools of per-widget routing slots. The tap registry is cleared every
+// render frame (clear_taps); the component registry is persistent — slots
+// stay live across renders and are explicitly freed by deregister_component.
+//
+// Both pools sit behind mutexes. The mutexes are created lazily by
+// mob_nif_init_state (called from mob_nif.c's nif_load BEAM callback).
+
+const MAX_TAP_HANDLES: usize = 256;
+const MAX_COMPONENT_HANDLES: usize = 64;
+
+/// Per-tap slot: the registered pid, an optional caller-supplied tag, and
+/// the throttle state for high-frequency events. tag_env is non-null while
+/// the slot is in use; clear_taps frees it and nulls it back out.
+const TapHandle = extern struct {
+    pid: erts.ErlNifPid,
+    tag_env: ?*erts.ErlNifEnv,
+    tag: erts.ERL_NIF_TERM,
+
+    // ── Batch 5 throttle state — populated by mob_set_throttle_config ──
+    throttle_ms: c_int,
+    debounce_ms: c_int,
+    delta_threshold: f64,
+    leading: c_int,
+    trailing: c_int,
+    last_emit_ns: i64,
+    last_x: f64,
+    last_y: f64,
+    seq: u64,
+};
+
+const ComponentHandle = extern struct {
+    pid: erts.ErlNifPid,
+    active: c_int,
+};
+
+var tap_handles: [MAX_TAP_HANDLES]TapHandle = @splat(std.mem.zeroes(TapHandle));
+var tap_handle_next: c_int = 0;
+var tap_mutex: ?*erts.ErlNifMutex = null;
+/// Snapshotted by nif_set_root; written by nif_set_transition. Guarded by
+/// tap_mutex (the C original reused that mutex rather than allocating a
+/// second one — keep the lock geometry the same).
+var g_transition: [16]u8 = blk: {
+    var buf: [16]u8 = @splat(0);
+    buf[0] = 'n';
+    buf[1] = 'o';
+    buf[2] = 'n';
+    buf[3] = 'e';
+    break :blk buf;
+};
+
+var component_handles: [MAX_COMPONENT_HANDLES]ComponentHandle = @splat(std.mem.zeroes(ComponentHandle));
+var component_mutex: ?*erts.ErlNifMutex = null;
+
+/// Initialise both mutexes. Called from mob_nif.c's nif_load BEAM callback
+/// — must run once before any sender or NIF that locks them. Returns 0
+/// on success, -1 on failure (matches the C nif_load return convention).
+pub export fn mob_nif_init_state() callconv(.c) c_int {
+    tap_mutex = erts.enif_mutex_create("mob_tap_mutex") orelse return -1;
+    component_mutex = erts.enif_mutex_create("mob_component_mutex") orelse return -1;
+    return 0;
+}
+
+// ── Sender helpers ───────────────────────────────────────────────────────
+// All senders share the same shape: lock tap_mutex, validate the handle
+// is in use (slot index in range AND tag_env non-null), copy the pid + tag
+// out under the lock, then build and deliver the message to that pid in a
+// freshly allocated env. The lock is dropped before enif_send so we don't
+// hold it across a potentially-blocking send.
+
+/// Snapshot a TapHandle's routing under the tap_mutex. Returns null if
+/// the handle is unused/out of range. The boolean flag pulls seq too —
+/// only the throttled-event senders care about that.
+const TapSnap = struct {
+    pid: erts.ErlNifPid,
+    tag: erts.ERL_NIF_TERM,
+    seq: u64,
+};
+
+fn snapTap(handle: c_int) ?TapSnap {
+    erts.enif_mutex_lock(tap_mutex);
+    defer erts.enif_mutex_unlock(tap_mutex);
+    if (handle < 0 or handle >= tap_handle_next) return null;
+    const h = &tap_handles[@intCast(handle)];
+    if (h.tag_env == null) return null;
+    return TapSnap{ .pid = h.pid, .tag = h.tag, .seq = h.seq };
+}
+
+/// `{:event, tag}` — used by focus/blur/submit/select and the gesture
+/// senders that don't carry a payload.
+fn sendEvent(handle: c_int, comptime atom_name: [:0]const u8) void {
+    const snap = snapTap(handle) orelse return;
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, atom_name.ptr),
+        erts.enif_make_copy(env, snap.tag),
+    });
+    var pid = snap.pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+/// `{:change, tag, value}` — used by the three change senders below. The
+/// value term must originate in the same env we're delivering through.
+fn sendChange(handle: c_int, value_term: erts.ERL_NIF_TERM) void {
+    const snap = snapTap(handle) orelse return;
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, "change"),
+        erts.enif_make_copy(env, snap.tag),
+        erts.enif_make_copy(env, value_term),
+    });
+    var pid = snap.pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+// ── Tap + change senders ────────────────────────────────────────────────
+
+/// Called from beam_jni.c's `nativeSendTap` JNI stub. Sends `{:tap, tag}`
+/// to the pid registered for `handle`.
+pub export fn mob_send_tap(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "tap");
+}
+
+pub export fn mob_send_change_str(handle: c_int, utf8: [*:0]const u8) callconv(.c) void {
+    const tmp = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(tmp);
+    var bin: erts.ErlNifBinary = undefined;
+    const len = std.mem.span(utf8).len;
+    _ = erts.enif_alloc_binary(len, &bin);
+    @memcpy(bin.data[0..len], utf8[0..len]);
+    const term = erts.enif_make_binary(tmp, &bin);
+    sendChange(handle, term);
+}
+
+pub export fn mob_send_change_bool(handle: c_int, bool_val: c_int) callconv(.c) void {
+    const tmp = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(tmp);
+    const term = erts.enif_make_atom(tmp, if (bool_val != 0) "true" else "false");
+    sendChange(handle, term);
+}
+
+pub export fn mob_send_change_float(handle: c_int, value: f64) callconv(.c) void {
+    const tmp = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(tmp);
+    const term = erts.enif_make_double(tmp, value);
+    sendChange(handle, term);
+}
+
+// ── Focus / blur / submit / select / compose ────────────────────────────
+
+pub export fn mob_send_focus(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "focus");
+}
+pub export fn mob_send_blur(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "blur");
+}
+pub export fn mob_send_submit(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "submit");
+}
+pub export fn mob_send_select(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "select");
+}
+
+/// `{:compose, tag, %{text, phase}}` — IME composition events. phase is
+/// began | updating | committed | cancelled (the latter two are terminal).
+pub export fn mob_send_compose(handle: c_int, text: ?[*:0]const u8, phase: [*:0]const u8) callconv(.c) void {
+    const snap = snapTap(handle) orelse return;
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+
+    const text_cstr: [*:0]const u8 = text orelse "";
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_atom(env, "text"),
+        erts.enif_make_atom(env, "phase"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_string(env, text_cstr, erts.ERL_NIF_LATIN1),
+        erts.enif_make_atom(env, phase),
+    };
+    const payload = erts.makeMap(env, &keys, &vals) orelse return;
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, "compose"),
+        erts.enif_make_copy(env, snap.tag),
+        payload,
+    });
+    var pid = snap.pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+// ── Gesture senders (Batch 4) ───────────────────────────────────────────
+// Per-widget opt-in — only handles with a registered tag emit. Direction-
+// aware swipes go through mob_send_swipe_with_direction; the legacy fixed
+// directions stay around for any beam_jni.c stubs that haven't migrated.
+
+pub export fn mob_send_long_press(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "long_press");
+}
+pub export fn mob_send_double_tap(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "double_tap");
+}
+pub export fn mob_send_swipe_left(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "swipe_left");
+}
+pub export fn mob_send_swipe_right(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "swipe_right");
+}
+pub export fn mob_send_swipe_up(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "swipe_up");
+}
+pub export fn mob_send_swipe_down(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "swipe_down");
+}
+
+pub export fn mob_send_swipe_with_direction(handle: c_int, direction: [*:0]const u8) callconv(.c) void {
+    const snap = snapTap(handle) orelse return;
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, "swipe"),
+        erts.enif_make_copy(env, snap.tag),
+        erts.enif_make_atom(env, direction),
+    });
+    var pid = snap.pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+// ── Throttle infrastructure (Batch 5 Tier 1) ────────────────────────────
+// Per-handle throttle + delta-threshold gating, mirroring iOS. Phase
+// boundaries (began/ended) bypass the throttle so the BEAM always sees
+// the start + stop of a gesture even when intermediate samples are
+// dropped.
+
+pub export fn mob_set_throttle_config(
+    handle: c_int,
+    throttle_ms: c_int,
+    debounce_ms: c_int,
+    delta_threshold: f64,
+    leading: c_int,
+    trailing: c_int,
+) callconv(.c) void {
+    erts.enif_mutex_lock(tap_mutex);
+    defer erts.enif_mutex_unlock(tap_mutex);
+    if (handle < 0 or handle >= tap_handle_next) return;
+    const h = &tap_handles[@intCast(handle)];
+    if (h.tag_env == null) return;
+    h.throttle_ms = throttle_ms;
+    h.debounce_ms = debounce_ms;
+    h.delta_threshold = delta_threshold;
+    h.leading = leading;
+    h.trailing = trailing;
+}
+
+/// Returns true if this sample should emit (and updates last_emit_ns +
+/// last_x/y + seq under the mutex). `default_throttle_ms` and
+/// `default_delta` are the gesture-specific defaults applied when the
+/// per-handle config left those fields at 0.
+fn throttleCheck(handle: c_int, x: f64, y: f64, default_throttle_ms: i32, default_delta: f64) bool {
+    erts.enif_mutex_lock(tap_mutex);
+    defer erts.enif_mutex_unlock(tap_mutex);
+    if (handle < 0 or handle >= tap_handle_next) return false;
+    const h = &tap_handles[@intCast(handle)];
+    if (h.tag_env == null) return false;
+
+    const throttle_ms: i32 = if (h.throttle_ms != 0) h.throttle_ms else default_throttle_ms;
+    const delta_threshold: f64 = if (h.delta_threshold > 0) h.delta_threshold else default_delta;
+
+    const now_ns = jni.nowNs();
+    const dx = x - h.last_x;
+    const dy = y - h.last_y;
+    const dist = @abs(dx) + @abs(dy);
+
+    if (h.last_emit_ns > 0 and throttle_ms > 0) {
+        const elapsed_ms = @divTrunc(now_ns - h.last_emit_ns, 1_000_000);
+        if (elapsed_ms < throttle_ms) return false;
+    }
+    if (h.last_emit_ns > 0 and dist < delta_threshold) return false;
+
+    h.last_emit_ns = now_ns;
+    h.last_x = x;
+    h.last_y = y;
+    h.seq +%= 1; // wrap on overflow; matches C's `++` on unsigned long long
+    return true;
+}
+
+inline fn isPhaseBoundary(phase: [*:0]const u8) bool {
+    const span = std.mem.span(phase);
+    return std.mem.eql(u8, span, "began") or std.mem.eql(u8, span, "ended");
+}
+
+/// Build the scroll/drag payload map. Caller owns `env`.
+fn buildScrollMap(
+    env: ?*erts.ErlNifEnv,
+    x: f64,
+    y: f64,
+    dx: f64,
+    dy: f64,
+    vx: f64,
+    vy: f64,
+    phase: [*:0]const u8,
+    ts_ms: i64,
+    seq: u64,
+) erts.ERL_NIF_TERM {
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_atom(env, "x"),
+        erts.enif_make_atom(env, "y"),
+        erts.enif_make_atom(env, "dx"),
+        erts.enif_make_atom(env, "dy"),
+        erts.enif_make_atom(env, "velocity_x"),
+        erts.enif_make_atom(env, "velocity_y"),
+        erts.enif_make_atom(env, "phase"),
+        erts.enif_make_atom(env, "ts"),
+        erts.enif_make_atom(env, "seq"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_double(env, x),
+        erts.enif_make_double(env, y),
+        erts.enif_make_double(env, dx),
+        erts.enif_make_double(env, dy),
+        erts.enif_make_double(env, vx),
+        erts.enif_make_double(env, vy),
+        erts.enif_make_atom(env, phase),
+        erts.enif_make_int64(env, ts_ms),
+        erts.enif_make_uint64(env, seq),
+    };
+    return erts.makeMap(env, &keys, &vals) orelse erts.atom(env, "error");
+}
+
+pub export fn mob_send_scroll(
+    handle: c_int,
+    x: f64,
+    y: f64,
+    dx: f64,
+    dy: f64,
+    vx: f64,
+    vy: f64,
+    phase: [*:0]const u8,
+) callconv(.c) void {
+    if (!isPhaseBoundary(phase) and !throttleCheck(handle, x, y, 33, 1.0)) return;
+    const snap = snapTap(handle) orelse return;
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const ts_ms = @divTrunc(jni.nowNs(), 1_000_000);
+    const payload = buildScrollMap(env, x, y, dx, dy, vx, vy, phase, ts_ms, snap.seq);
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, "scroll"),
+        erts.enif_make_copy(env, snap.tag),
+        payload,
+    });
+    var pid = snap.pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+pub export fn mob_send_drag(
+    handle: c_int,
+    x: f64,
+    y: f64,
+    dx: f64,
+    dy: f64,
+    phase: [*:0]const u8,
+) callconv(.c) void {
+    if (!isPhaseBoundary(phase) and !throttleCheck(handle, x, y, 16, 1.0)) return;
+    const snap = snapTap(handle) orelse return;
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const ts_ms = @divTrunc(jni.nowNs(), 1_000_000);
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_atom(env, "x"),
+        erts.enif_make_atom(env, "y"),
+        erts.enif_make_atom(env, "dx"),
+        erts.enif_make_atom(env, "dy"),
+        erts.enif_make_atom(env, "phase"),
+        erts.enif_make_atom(env, "ts"),
+        erts.enif_make_atom(env, "seq"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_double(env, x),
+        erts.enif_make_double(env, y),
+        erts.enif_make_double(env, dx),
+        erts.enif_make_double(env, dy),
+        erts.enif_make_atom(env, phase),
+        erts.enif_make_int64(env, ts_ms),
+        erts.enif_make_uint64(env, snap.seq),
+    };
+    const payload = erts.makeMap(env, &keys, &vals) orelse return;
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, "drag"),
+        erts.enif_make_copy(env, snap.tag),
+        payload,
+    });
+    var pid = snap.pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+pub export fn mob_send_pinch(handle: c_int, scale: f64, velocity: f64, phase: [*:0]const u8) callconv(.c) void {
+    if (!isPhaseBoundary(phase) and !throttleCheck(handle, scale, 0, 16, 0.01)) return;
+    const snap = snapTap(handle) orelse return;
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const ts_ms = @divTrunc(jni.nowNs(), 1_000_000);
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_atom(env, "scale"),
+        erts.enif_make_atom(env, "velocity"),
+        erts.enif_make_atom(env, "phase"),
+        erts.enif_make_atom(env, "ts"),
+        erts.enif_make_atom(env, "seq"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_double(env, scale),
+        erts.enif_make_double(env, velocity),
+        erts.enif_make_atom(env, phase),
+        erts.enif_make_int64(env, ts_ms),
+        erts.enif_make_uint64(env, snap.seq),
+    };
+    const payload = erts.makeMap(env, &keys, &vals) orelse return;
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, "pinch"),
+        erts.enif_make_copy(env, snap.tag),
+        payload,
+    });
+    var pid = snap.pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+pub export fn mob_send_rotate(handle: c_int, degrees: f64, velocity: f64, phase: [*:0]const u8) callconv(.c) void {
+    if (!isPhaseBoundary(phase) and !throttleCheck(handle, degrees, 0, 16, 1.0)) return;
+    const snap = snapTap(handle) orelse return;
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const ts_ms = @divTrunc(jni.nowNs(), 1_000_000);
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_atom(env, "degrees"),
+        erts.enif_make_atom(env, "velocity"),
+        erts.enif_make_atom(env, "phase"),
+        erts.enif_make_atom(env, "ts"),
+        erts.enif_make_atom(env, "seq"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_double(env, degrees),
+        erts.enif_make_double(env, velocity),
+        erts.enif_make_atom(env, phase),
+        erts.enif_make_int64(env, ts_ms),
+        erts.enif_make_uint64(env, snap.seq),
+    };
+    const payload = erts.makeMap(env, &keys, &vals) orelse return;
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, "rotate"),
+        erts.enif_make_copy(env, snap.tag),
+        payload,
+    });
+    var pid = snap.pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+pub export fn mob_send_pointer_move(handle: c_int, x: f64, y: f64) callconv(.c) void {
+    if (!throttleCheck(handle, x, y, 33, 4.0)) return;
+    const snap = snapTap(handle) orelse return;
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const ts_ms = @divTrunc(jni.nowNs(), 1_000_000);
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_atom(env, "x"),
+        erts.enif_make_atom(env, "y"),
+        erts.enif_make_atom(env, "ts"),
+        erts.enif_make_atom(env, "seq"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_double(env, x),
+        erts.enif_make_double(env, y),
+        erts.enif_make_int64(env, ts_ms),
+        erts.enif_make_uint64(env, snap.seq),
+    };
+    const payload = erts.makeMap(env, &keys, &vals) orelse return;
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, "pointer_move"),
+        erts.enif_make_copy(env, snap.tag),
+        payload,
+    });
+    var pid = snap.pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+// ── Tier 2: semantic single-fire scroll events ──────────────────────────
+
+pub export fn mob_send_scroll_began(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "scroll_began");
+}
+pub export fn mob_send_scroll_ended(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "scroll_ended");
+}
+pub export fn mob_send_scroll_settled(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "scroll_settled");
+}
+pub export fn mob_send_top_reached(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "top_reached");
+}
+pub export fn mob_send_scrolled_past(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "scrolled_past");
+}
+
+// ── Component event sender ──────────────────────────────────────────────
+
+pub export fn mob_send_component_event(
+    handle: c_int,
+    event: [*:0]const u8,
+    payload_json: [*:0]const u8,
+) callconv(.c) void {
+    if (handle < 0 or handle >= @as(c_int, @intCast(MAX_COMPONENT_HANDLES))) return;
+    erts.enif_mutex_lock(component_mutex);
+    const slot = &component_handles[@intCast(handle)];
+    if (slot.active == 0) {
+        erts.enif_mutex_unlock(component_mutex);
+        return;
+    }
+    const pid_copy = slot.pid;
+    erts.enif_mutex_unlock(component_mutex);
+
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, "component_event"),
+        erts.enif_make_string(env, event, erts.ERL_NIF_LATIN1),
+        erts.enif_make_string(env, payload_json, erts.ERL_NIF_LATIN1),
+    });
+    var pid = pid_copy;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+// ── Back gesture ────────────────────────────────────────────────────────
+
+/// Called from beam_jni.c's nativeHandleBack JNI stub when the Android
+/// back gesture fires. Looks up the :mob_screen registered process and
+/// sends {:mob, :back}. Mob.Screen handles popping the nav stack or
+/// exiting the app at root.
+pub export fn mob_handle_back() callconv(.c) void {
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    var pid: erts.ErlNifPid = undefined;
+    if (erts.enif_whereis_pid(env, erts.enif_make_atom(env, "mob_screen"), &pid) != 0) {
+        const msg = erts.makeTuple(env, .{
+            erts.enif_make_atom(env, "mob"),
+            erts.enif_make_atom(env, "back"),
+        });
+        _ = erts.enif_send(null, &pid, env, msg);
+    }
+}
+
+// ── NIFs that touch the tap registry / g_transition / Bridge.set_root ───
+// (Ported alongside the senders so all consumers of these statics are
+// co-located in Zig.)
+
+// nif_set_root/1 — pass JSON node tree to Compose. Snapshots the current
+// `g_transition` (set by nif_set_transition before this call) and resets
+// it to "none" so the next render starts from a clean default.
+export fn nif_set_root(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var bin: erts.ErlNifBinary = undefined;
+    if (erts.enif_inspect_binary(env, argv[0], &bin) == 0 and
+        erts.enif_inspect_iolist_as_binary(env, argv[0], &bin) == 0)
+    {
+        return erts.badarg(env);
+    }
+
+    // Null-terminate for NewStringUTF.
+    const json_ptr: ?*anyopaque = jni.malloc(bin.size + 1) orelse
+        return erts.atom(env, "error");
+    defer jni.free(json_ptr);
+    const json_buf: [*]u8 = @ptrCast(json_ptr);
+    @memcpy(json_buf[0..bin.size], bin.data[0..bin.size]);
+    json_buf[bin.size] = 0;
+    const json_cstr: [*:0]const u8 = @ptrCast(json_buf);
+
+    // Snapshot transition under the mutex; reset to "none" for next call.
+    var transition: [16]u8 = @splat(0);
+    erts.enif_mutex_lock(tap_mutex);
+    @memcpy(&transition, &g_transition);
+    @memset(&g_transition, 0);
+    g_transition[0] = 'n';
+    g_transition[1] = 'o';
+    g_transition[2] = 'n';
+    g_transition[3] = 'e';
+    erts.enif_mutex_unlock(tap_mutex);
+    const transition_cstr: [*:0]const u8 = @ptrCast(&transition);
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jjson = jni.newStringUTF(jenv, json_cstr);
+    const jtransition = jni.newStringUTF(jenv, transition_cstr);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.set_root, jjson, jtransition);
+    jni.deleteLocalRef(jenv, jjson);
+    jni.deleteLocalRef(jenv, jtransition);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+// nif_register_tap/1 — accepts a pid (tag = :ok) or {pid, tag} (any term
+// as the tag). Returns the integer handle.
+export fn nif_register_tap(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var pid: erts.ErlNifPid = undefined;
+    var tag_term: erts.ERL_NIF_TERM = undefined;
+
+    if (erts.enif_get_local_pid(env, argv[0], &pid) != 0) {
+        tag_term = erts.enif_make_atom(env, "ok");
+    } else {
+        var arity: c_int = 0;
+        var elems: [*]const erts.ERL_NIF_TERM = undefined;
+        if (erts.enif_get_tuple(env, argv[0], &arity, &elems) == 0 or arity != 2) {
+            return erts.badarg(env);
+        }
+        if (erts.enif_get_local_pid(env, elems[0], &pid) == 0) return erts.badarg(env);
+        tag_term = elems[1];
+    }
+
+    erts.enif_mutex_lock(tap_mutex);
+    defer erts.enif_mutex_unlock(tap_mutex);
+    if (tap_handle_next >= @as(c_int, @intCast(MAX_TAP_HANDLES))) return erts.badarg(env);
+
+    const handle: c_int = tap_handle_next;
+    tap_handle_next += 1;
+    const slot = &tap_handles[@intCast(handle)];
+    slot.pid = pid;
+    slot.tag_env = erts.enif_alloc_env() orelse return erts.atom(env, "error");
+    slot.tag = erts.enif_make_copy(slot.tag_env, tag_term);
+    return erts.enif_make_int(env, handle);
+}
+
+// nif_clear_taps/0 — cleared at the start of every render. Frees each
+// slot's tag_env (which owns the persistent tag term) and zeroes the
+// throttle state so reuse across renders doesn't leak stale config.
+export fn nif_clear_taps(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    erts.enif_mutex_lock(tap_mutex);
+    defer erts.enif_mutex_unlock(tap_mutex);
+    var i: usize = 0;
+    while (i < @as(usize, @intCast(tap_handle_next))) : (i += 1) {
+        const h = &tap_handles[i];
+        if (h.tag_env != null) {
+            erts.enif_free_env(h.tag_env);
+            h.tag_env = null;
+        }
+        // Reset throttle state — slots get reused across renders.
+        h.throttle_ms = 0;
+        h.debounce_ms = 0;
+        h.delta_threshold = 0;
+        h.leading = 1;
+        h.trailing = 1;
+        h.last_emit_ns = 0;
+        h.last_x = 0;
+        h.last_y = 0;
+        h.seq = 0;
+    }
+    tap_handle_next = 0;
+    return erts.ok(env);
+}
+
+// nif_set_transition/1 — store the transition type atom (push/pop/reset/
+// none) to be picked up by the next set_root call. Must be called before
+// set_root for the transition to take effect on that render.
+export fn nif_set_transition(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    erts.enif_mutex_lock(tap_mutex);
+    defer erts.enif_mutex_unlock(tap_mutex);
+    if (erts.enif_get_atom(env, argv[0], &g_transition, g_transition.len, erts.ERL_NIF_LATIN1) == 0) {
+        return erts.badarg(env);
+    }
+    return erts.ok(env);
+}
+
+// nif_register_component/1 — allocate a persistent component handle for
+// a Native View pid. Linear scan through MAX_COMPONENT_HANDLES slots;
+// fails when all are in use.
+export fn nif_register_component(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var pid: erts.ErlNifPid = undefined;
+    if (erts.enif_get_local_pid(env, argv[0], &pid) == 0) return erts.badarg(env);
+
+    erts.enif_mutex_lock(component_mutex);
+    defer erts.enif_mutex_unlock(component_mutex);
+    var i: usize = 0;
+    while (i < MAX_COMPONENT_HANDLES) : (i += 1) {
+        if (component_handles[i].active == 0) {
+            component_handles[i].pid = pid;
+            component_handles[i].active = 1;
+            return erts.enif_make_int(env, @intCast(i));
+        }
+    }
+    return erts.badarg(env);
+}
+
+// nif_deregister_component/1 — release a component handle. Slot becomes
+// available for the next register call.
+export fn nif_deregister_component(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var handle: c_int = 0;
+    if (erts.enif_get_int(env, argv[0], &handle) == 0 or
+        handle < 0 or
+        handle >= @as(c_int, @intCast(MAX_COMPONENT_HANDLES)))
+    {
+        return erts.badarg(env);
+    }
+    erts.enif_mutex_lock(component_mutex);
+    component_handles[@intCast(handle)].active = 0;
+    erts.enif_mutex_unlock(component_mutex);
+    return erts.ok(env);
 }
