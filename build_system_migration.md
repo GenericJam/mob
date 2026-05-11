@@ -1138,3 +1138,57 @@ something useful even if the total project pauses.
     binding module from iter 2 covers the JNI surface today;
     additional CallStaticXxxMethod / array-op vtable slots get
     added as each iter needs them.
+
+  - iter 3a (foundation + 3 standalone NIFs): the inaugural slice.
+    Establishes the cross-language linkage pattern that the
+    remaining sub-iters will reuse:
+
+      • NEW `android/jni/mob_erts.zig` — hand-declared ERL_NIF
+        FFI surface (ERL_NIF_TERM, ErlNifEnv, ErlNifPid,
+        ErlNifMutex, ErlNifBinary, ErlNifFunc, ErlNifCharEncoding,
+        plus the enif_make_* / enif_get_* / enif_inspect_* set
+        that iter 3a's NIFs need). Companion to mob_zig.zig —
+        same rationale (Zig 0.17 @cImport is gone, translate-c
+        unreliable on deeply nested OTP headers, surface small +
+        stable enough to hand-declare).
+      • NEW `android/jni/mob_nif.zig` — exports `nif_platform/0`,
+        `nif_log/1`, `nif_log/2`. Byte-for-byte equivalent to
+        the C versions removed from mob_nif.c.
+      • mob_nif.c shrinks ~35 lines (3 NIF defs + 1 helper); the
+        static `ErlNifFunc nif_funcs[]` table now resolves those
+        functions at link time via an `extern ERL_NIF_TERM ...`
+        block near the top. As iter 3b/3c/3d port more NIFs, the
+        extern block grows and the .c file shrinks. iter 3d
+        moves the table itself to Zig and removes mob_nif.c.
+
+    Two .o files coexist in the link — `<abi>/mob_nif.o` (the
+    shrinking C side) and `<abi>/mob_nif_zig.o`. Both contribute
+    symbols to lib<app>.so. The mob_new build template adds the
+    .zig source as a separate spec entry; the loop already
+    handles per-source .zig vs .c detection from iter 1.
+
+    Verified: standalone `zig build-obj -target
+    aarch64-linux-android.24` produces a clean mob_nif.o; symbol
+    check confirms `nif_platform`, `nif_log`, `nif_log2`
+    exported and only the expected ERL_NIF / Android-log
+    undefined references. mob_nif.c passes clang-format.
+    224/224 mob_new tests + full mob test suite pass. Full
+    Android end-to-end smoke deploy deferred to bundle with the
+    next sub-iter so we test once over a meaningful slice.
+
+  - iter 3b (planned): port the test harness NIFs — `ui_tree/0`,
+    `ui_view_tree/0`, `screen_info/0`, `tap/1`, `tap_xy/2`,
+    `type_text/1`, `delete_backward/0`, `key_press/1`,
+    `clear_text/0`, `long_press_xy/3`, `swipe_xy/4`. These are
+    largely independent of the cached MobBridge struct (they
+    look up their methods on demand or cache lazily) so they
+    slice cleanly.
+  - iter 3c (planned): the concurrency-heavy core — cached
+    MobBridge method ID struct, tap/component handle registries,
+    per-handle throttle state, all `mob_send_*` event senders.
+    Must coordinate with beam_jni.c which is the C-side caller
+    of the public sender API.
+  - iter 3d (planned): remaining feature NIFs — storage, WebView,
+    alert/action_sheet/toast, native view components, background
+    lifecycle, Mob.Device. Moves the `ErlNifFunc nif_funcs[]`
+    table to Zig. mob_nif.c deleted.
