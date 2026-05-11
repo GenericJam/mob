@@ -1079,3 +1079,62 @@ something useful even if the total project pauses.
     (mob_beam.c → mob_beam.zig as iter 2; mob_nif.c → mob_nif.zig
     across several iters as iter 3+) starts from a known-working
     toolchain.
+
+  - iter 2 (mob_beam.c → mob_beam.zig): full port of the Android
+    BEAM launcher (~540 lines). All load-bearing behaviour
+    preserved byte-for-byte:
+      • cold-start race fix (window-focus wait that prevents the
+        FORTIFY pthread_mutex SIGABRT against hwui's first-draw
+        setup — DO NOT REMOVE comment block kept verbatim)
+      • SELinux exec rules for ERTS bin symlinks
+      • Play Store split-APK fallback for exqlite/pythonx priv-dir
+        wiring
+      • BEAM stdio → logcat capture pipeline
+
+    Foundation FFI bindings hand-declared in
+    `android/jni/mob_zig.zig` (~470 lines: JNI vtable, libc,
+    Android log, dlfcn, pthreads). Zig 0.17-dev's `@cImport`
+    builtin is gone and `zig translate-c` hangs at 99% CPU on
+    the Android NDK's `jni.h` (deep recursive include tree).
+    Hand-declaring sidesteps both. Surface is stable — JNI ABI
+    hasn't materially changed since Java 1.1 (1997). Reusable
+    for iter 3+ mob_nif.zig work; new vtable slots get added as
+    that surface needs them.
+
+    Comptime gates replace `#ifdef`:
+      • `no_beam` — battery baseline config; default false
+      • `beam_flags_mode` — picks the default scheduler-tuning
+        argv shape ("untuned" / "sbwt_only" / "nerves_full");
+        default "nerves_full". Runtime override file
+        (`beams_dir/mob_beam_flags`, written by
+        `mix mob.deploy --schedulers N`) still wins.
+
+    Threaded via `b.addOptions()` from the per-app Android
+    `build.zig.eex` template (companion mob_new commit). The
+    `addZigObject` helper already accepted `?*Step.Options` from
+    iter 1, so wiring was four lines in the source-iteration
+    loop.
+
+    Verified: standalone `zig build-obj -target
+    aarch64-linux-android.24` produces a clean object. Exported
+    symbols (`mob_init_bridge`, `mob_start_beam`,
+    `mob_ui_cache_class`) match the C surface;
+    undefined references match what mob_nif.c provides
+    (`g_jvm`, `g_activity`, `_mob_ui_cache_class_impl`,
+    `_mob_bridge_init_activity`, `mob_set_startup_phase`,
+    `mob_set_startup_error`) plus libbeam's `erl_start` plus
+    standard bionic / libdl / liblog. `mob_beam.c` deleted;
+    `mob_beam.h` retained (still included by per-app
+    `beam_jni.c`). Full Android smoke test (mix mob.deploy
+    --native against an emulator) deferred to iter 3 prep so
+    the BEAM launcher + the next mob_nif.zig slice ship
+    together — the build chain is verified at object-link
+    granularity here.
+
+  - iter 3+ (mob_nif.c → mob_nif.zig): ~2570 lines, 79 NIF
+    functions. Will land across several iters, grouped by NIF
+    family (UI/render, gesture senders, device capabilities,
+    WebView, alerts, color-scheme, etc.). The mob_zig.zig FFI
+    binding module from iter 2 covers the JNI surface today;
+    additional CallStaticXxxMethod / array-op vtable slots get
+    added as each iter needs them.
