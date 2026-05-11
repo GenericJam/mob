@@ -833,3 +833,29 @@ generator pattern on a small, self-contained task.
   validated end-to-end; pattern is ready to apply to the heavier
   Phase 4 (`mob.enable` rewrite) and Phase 5 (`mob.new --liveview`
   generator rewrite).
+
+## Phase 4 — `mix mob.enable` → Igniter (in progress)
+
+The plan called for 3-4 weeks, one feature per iter (camera → ...
+→ python). Iter 1 collapsed that into a single sweep because the
+per-feature text-mutation logic is small enough to wrap uniformly.
+
+  - iter 1: `Mix.Tasks.Mob.Enable` is now `use Igniter.Mix.Task`.
+    All seven features (camera, photo_library, location,
+    file_sharing, notifications, liveview, python) dispatch through
+    `MobDev.Enable.Igniter` per-feature handlers that return
+    `igniter -> igniter`. Wins from the conversion:
+      - Single diff preview + atomic apply across all features.
+      - Per-handler idempotency via Igniter's `update_file` rather
+        than the legacy "read content, conditional write, log to
+        Mix.shell" pattern (which scattered idempotency checks).
+      - Missing platform dirs → notices instead of silent file-not-
+        found, so the user sees what was/wasn't done.
+    The text-mutation logic itself (the Sourceror regex patches in
+    `MobDev.Enable`) is unchanged from the legacy path — kept inside
+    the Igniter wrappers. AST-aware deepening for the two features
+    that touch Elixir source (liveview + python) is iter 2.
+    8 new tests; 38 legacy `MobDev.EnableTest` helper tests still pass.
+    872/872 mob_dev tests pass on master. Smoke-tested on
+    phase2q_smoke: `mix mob.enable photo_library --yes` added the
+    plist key cleanly with the expected notice about Android.
