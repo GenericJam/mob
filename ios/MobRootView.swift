@@ -417,20 +417,20 @@ struct MobNodeView: View {
                 if let src = node.src {
                     MobVideoPlayer(src: src, autoplay: node.videoAutoplay,
                                    loop: node.videoLoop, controls: node.videoControls)
-                        .ifLet(node.fixedWidth  > 0 ? node.fixedWidth  : nil) { v, w in v.frame(width:  CGFloat(w)) }
+                        .ifLet(node.fixedWidth  > 0 ? node.fixedWidth  : nil) { v, w in v.frame(width: CGFloat(w)) }
                         .ifLet(node.fixedHeight > 0 ? node.fixedHeight : nil) { v, h in v.frame(height: CGFloat(h)) }
                         .padding(node.paddingEdgeInsets)
                 }
 
             case .cameraPreview:
                 MobCameraPreviewView(facing: node.cameraFacing)
-                    .ifLet(node.fixedWidth  > 0 ? node.fixedWidth  : nil) { v, w in v.frame(width:  CGFloat(w)) }
+                    .ifLet(node.fixedWidth  > 0 ? node.fixedWidth  : nil) { v, w in v.frame(width: CGFloat(w)) }
                     .ifLet(node.fixedHeight > 0 ? node.fixedHeight : nil) { v, h in v.frame(height: CGFloat(h)) }
                     .padding(node.paddingEdgeInsets)
 
             case .webView:
                 MobWebView(node: node)
-                    .ifLet(node.fixedWidth  > 0 ? node.fixedWidth  : nil) { v, w in v.frame(width:  CGFloat(w)) }
+                    .ifLet(node.fixedWidth  > 0 ? node.fixedWidth  : nil) { v, w in v.frame(width: CGFloat(w)) }
                     .ifLet(node.fixedHeight > 0 ? node.fixedHeight : nil) { v, h in v.frame(height: CGFloat(h)) }
                     .padding(node.paddingEdgeInsets)
 
@@ -573,16 +573,14 @@ private struct MobCanvasView: View {
             let r = cgNum(op["r"])
             let rect = CGRect(x: cgNum(op["x"]) - r, y: cgNum(op["y"]) - r, width: r * 2, height: r * 2)
             let path = Path(ellipseIn: rect)
-            if isFill { ctx.fill(path, with: .color(color)) }
-            else      { ctx.stroke(path, with: .color(color), style: strokeStyle) }
+            if isFill { ctx.fill(path, with: .color(color)) } else { ctx.stroke(path, with: .color(color), style: strokeStyle) }
 
         case "ellipse":
             let rx = cgNum(op["rx"])
             let ry = cgNum(op["ry"])
             let rect = CGRect(x: cgNum(op["x"]) - rx, y: cgNum(op["y"]) - ry, width: rx * 2, height: ry * 2)
             let path = Path(ellipseIn: rect)
-            if isFill { ctx.fill(path, with: .color(color)) }
-            else      { ctx.stroke(path, with: .color(color), style: strokeStyle) }
+            if isFill { ctx.fill(path, with: .color(color)) } else { ctx.stroke(path, with: .color(color), style: strokeStyle) }
 
         case "arc":
             // Mob.Canvas arc convention: degrees, 0° to the right, sweeping clockwise.
@@ -607,8 +605,7 @@ private struct MobCanvasView: View {
             let path: Path = radius > 0
                 ? Path(roundedRect: rect, cornerRadius: radius)
                 : Path(rect)
-            if isFill { ctx.fill(path, with: .color(color)) }
-            else      { ctx.stroke(path, with: .color(color), style: strokeStyle) }
+            if isFill { ctx.fill(path, with: .color(color)) } else { ctx.stroke(path, with: .color(color), style: strokeStyle) }
 
         case "path":
             guard let pts = op["points"] as? [[Double]], !pts.isEmpty else { return }
@@ -620,8 +617,7 @@ private struct MobCanvasView: View {
                 }
                 if closed || isFill { p.closeSubpath() }
             }
-            if isFill { ctx.fill(path, with: .color(color)) }
-            else      { ctx.stroke(path, with: .color(color), style: strokeStyle) }
+            if isFill { ctx.fill(path, with: .color(color)) } else { ctx.stroke(path, with: .color(color), style: strokeStyle) }
 
         case "text":
             let str = (op["text"] as? String) ?? ""
@@ -1007,8 +1003,7 @@ private struct MobTextField: View {
                 node.onChangeStr?(newValue)
             }
             .onChange(of: isFocused) { _, focused in
-                if focused { node.onFocus?() }
-                else       { node.onBlur?() }
+                if focused { node.onFocus?() } else { node.onBlur?() }
             }
             // Sync from parent when the `value:` prop changes externally —
             // but only if the user isn't actively typing (which would yank
@@ -1092,7 +1087,7 @@ private struct MobImage: View {
     var body: some View {
         Group {
             if let src = node.src {
-                if (src.hasPrefix("http://") || src.hasPrefix("https://")),
+                if src.hasPrefix("http://") || src.hasPrefix("https://"),
                    let url = URL(string: src) {
                     AsyncImage(url: url) { phase in
                         switch phase {
@@ -1114,7 +1109,7 @@ private struct MobImage: View {
             }
         }
         .frame(
-            width:  node.fixedWidth  > 0 ? node.fixedWidth  : nil,
+            width: node.fixedWidth  > 0 ? node.fixedWidth  : nil,
             height: node.fixedHeight > 0 ? node.fixedHeight : nil
         )
         .clipShape(RoundedRectangle(cornerRadius: node.cornerRadius))
@@ -1126,7 +1121,7 @@ private struct MobImage: View {
 public struct MobRootView: View {
     @ObservedObject var model = MobViewModel.shared
     @Environment(\.colorScheme) private var colorScheme
-    @State private var currentRoot: MobNode? = nil
+    @State private var currentRoot: MobNode?
     @State private var currentTransition: String = "none"
     // Local mirror of model.navVersion so the .id() change happens INSIDE
     // the withAnimation block (the model's @Published value changes via
@@ -1220,13 +1215,13 @@ public struct MobRootView: View {
         switch t {
         case "push":
             return .asymmetric(
-                insertion:  .move(edge: .trailing),
-                removal:    .move(edge: .leading)
+                insertion: .move(edge: .trailing),
+                removal: .move(edge: .leading)
             )
         case "pop":
             return .asymmetric(
-                insertion:  .move(edge: .leading),
-                removal:    .move(edge: .trailing)
+                insertion: .move(edge: .leading),
+                removal: .move(edge: .trailing)
             )
         case "reset":
             return .opacity
@@ -1285,7 +1280,7 @@ struct MobScrollObserver: ViewModifier {
     @State private var lastTs: TimeInterval = 0
     @State private var hasBegun: Bool = false
     @State private var pastThreshold: Bool = false
-    @State private var endTask: Task<Void, Never>? = nil
+    @State private var endTask: Task<Void, Never>?
 
     private static let endDebounceMs: Int = 150
 

@@ -13,26 +13,29 @@
 
 #include <stddef.h>
 
-typedef struct { void* de; int flags; } ErtsStaticDriver;
+typedef struct {
+    void *de;
+    int flags;
+} ErtsStaticDriver;
 #define THE_NON_VALUE ((unsigned long)0)
 typedef struct {
-    void* (*nif_init)(void);
-    int   is_builtin;
+    void *(*nif_init)(void);
+    int is_builtin;
     unsigned long nif_mod;
-    void* entry;
+    void *entry;
 } ErtsStaticNif;
 
-typedef struct { void* de; int flags; } ErlDrvEntryStub;
+typedef struct {
+    void *de;
+    int flags;
+} ErlDrvEntryStub;
 extern ErlDrvEntryStub inet_driver_entry;
 extern ErlDrvEntryStub ram_file_driver_entry;
 
-ErtsStaticDriver driver_tab[] = {
-    {&inet_driver_entry, 0},
-    {&ram_file_driver_entry, 0},
-    {NULL, 0}
-};
+ErtsStaticDriver driver_tab[] = {{&inet_driver_entry, 0}, {&ram_file_driver_entry, 0}, {NULL, 0}};
 
-void erts_init_static_drivers(void) {}
+void erts_init_static_drivers(void) {
+}
 
 void *prim_tty_nif_init(void);
 void *erl_tracer_nif_init(void);
@@ -62,20 +65,18 @@ void *mob_nif_nif_init(void);
 void *sqlite3_nif_nif_init(void);
 #endif
 
-ErtsStaticNif erts_static_nif_tab[] = {
-    {prim_tty_nif_init,     0, THE_NON_VALUE, NULL},
-    {erl_tracer_nif_init,   0, THE_NON_VALUE, NULL},
-    {prim_buffer_nif_init,  0, THE_NON_VALUE, NULL},
-    {prim_file_nif_init,    0, THE_NON_VALUE, NULL},
-    {zlib_nif_init,         0, THE_NON_VALUE, NULL},
-    {zstd_nif_init,         0, THE_NON_VALUE, NULL},
-    {prim_socket_nif_init,  0, THE_NON_VALUE, NULL},
-    {prim_net_nif_init,     0, THE_NON_VALUE, NULL},
-    {asn1rt_nif_nif_init,   1, THE_NON_VALUE, NULL},
-    {crypto_nif_init,       1, THE_NON_VALUE, NULL},
-    {mob_nif_nif_init,      0, THE_NON_VALUE, NULL},
+ErtsStaticNif erts_static_nif_tab[] = {{prim_tty_nif_init, 0, THE_NON_VALUE, NULL},
+                                       {erl_tracer_nif_init, 0, THE_NON_VALUE, NULL},
+                                       {prim_buffer_nif_init, 0, THE_NON_VALUE, NULL},
+                                       {prim_file_nif_init, 0, THE_NON_VALUE, NULL},
+                                       {zlib_nif_init, 0, THE_NON_VALUE, NULL},
+                                       {zstd_nif_init, 0, THE_NON_VALUE, NULL},
+                                       {prim_socket_nif_init, 0, THE_NON_VALUE, NULL},
+                                       {prim_net_nif_init, 0, THE_NON_VALUE, NULL},
+                                       {asn1rt_nif_nif_init, 1, THE_NON_VALUE, NULL},
+                                       {crypto_nif_init, 1, THE_NON_VALUE, NULL},
+                                       {mob_nif_nif_init, 0, THE_NON_VALUE, NULL},
 #ifdef MOB_STATIC_SQLITE_NIF
-    {sqlite3_nif_nif_init,  0, THE_NON_VALUE, NULL},
+                                       {sqlite3_nif_nif_init, 0, THE_NON_VALUE, NULL},
 #endif
-    {NULL,                  0, THE_NON_VALUE, NULL}
-};
+                                       {NULL, 0, THE_NON_VALUE, NULL}};

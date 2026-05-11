@@ -3,17 +3,17 @@
 // mob_set_startup_phase/error are implemented in mob_nif.m (which imports the
 // Swift-generated header) so this file stays free of app-specific includes.
 
+#include "mob_beam.h"
 #import <Foundation/Foundation.h>
-#include <stdlib.h>
-#include <string.h>
+#include <arpa/inet.h>
 #include <fcntl.h>
-#include <unistd.h>
-#include <pthread.h>
 #include <ifaddrs.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
-#include "mob_beam.h"
+#include <unistd.h>
 
 // EPMD compiled into the binary (epmd.c / epmd_srv.c / epmd_cli.c compiled
 // with -Dmain=epmd_ios_main). Only present in device builds; the simulator
@@ -26,9 +26,9 @@
 // still works, but the app is networkless from a distribution POV.
 #if defined(MOB_BUNDLE_OTP) && !defined(MOB_RELEASE)
 extern int epmd_ios_main(int argc, char **argv);
-static void* epmd_thread(void *arg) {
+static void *epmd_thread(void *arg) {
     char *args[] = {"epmd", NULL};
-    epmd_ios_main(1, args);  // runs the EPMD event loop (does not return)
+    epmd_ios_main(1, args); // runs the EPMD event loop (does not return)
     return NULL;
 }
 #endif
@@ -47,7 +47,7 @@ static void* epmd_thread(void *arg) {
 #define OTP_ROOT_LEGACY "/tmp/otp-ios-sim"
 #endif
 #ifndef ERTS_VSN
-#define ERTS_VSN   "erts-17.0"
+#define ERTS_VSN "erts-17.0"
 #endif
 #ifndef OTP_RELEASE
 #define OTP_RELEASE "29"
@@ -73,7 +73,8 @@ static void* epmd_thread(void *arg) {
 // route to os_log, so the failure is invisible.
 static const char *resolve_sim_otp_root(const char *app_module) {
     const char *env = getenv("MOB_SIM_RUNTIME_DIR");
-    if (env && env[0]) return env;
+    if (env && env[0])
+        return env;
 
     // iOS sim apps inherit HOME pointing to the per-app sandbox container
     // (…/CoreSimulator/Devices/<udid>/data/Containers/Data/Application/<uuid>),
@@ -82,11 +83,11 @@ static const char *resolve_sim_otp_root(const char *app_module) {
     // ~/.mob/runtime/ios-sim. Fall back to HOME so this still works when the
     // binary runs outside simctl (e.g. raw test harness on the Mac).
     const char *home = getenv("SIMULATOR_HOST_HOME");
-    if (!home || !home[0]) home = getenv("HOME");
+    if (!home || !home[0])
+        home = getenv("HOME");
     if (home && app_module && app_module[0]) {
         static char new_default[1024];
-        snprintf(new_default, sizeof(new_default),
-                 "%s/.mob/runtime/ios-sim", home);
+        snprintf(new_default, sizeof(new_default), "%s/.mob/runtime/ios-sim", home);
 
         char check[1280];
         snprintf(check, sizeof(check), "%s/%s", new_default, app_module);
@@ -110,20 +111,25 @@ static void mob_write_diag(const char *docs_dir, const char *name, const char *i
     char path[1024];
     snprintf(path, sizeof(path), "%s/%s", docs_dir, name);
     FILE *f = fopen(path, "w");
-    if (f) { fprintf(f, "%s\n", info); fclose(f); }
+    if (f) {
+        fprintf(f, "%s\n", info);
+        fclose(f);
+    }
 }
 
 // Find the device's own USB link-local (169.254.x.x) IP by walking ifaddrs.
 // On simulator there is no such interface; returns NULL so callers fall back to 127.0.0.1.
 static const char *find_link_local_ip(char *buf, size_t len) {
     struct ifaddrs *ifa_list;
-    if (getifaddrs(&ifa_list) != 0) return NULL;
+    if (getifaddrs(&ifa_list) != 0)
+        return NULL;
     const char *found = NULL;
     for (struct ifaddrs *ifa = ifa_list; ifa && !found; ifa = ifa->ifa_next) {
-        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET)
+            continue;
         struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
         uint32_t addr = ntohl(sa->sin_addr.s_addr);
-        if ((addr >> 16) == 0xA9FE) {  // 169.254.0.0/16
+        if ((addr >> 16) == 0xA9FE) { // 169.254.0.0/16
             inet_ntop(AF_INET, &sa->sin_addr, buf, (socklen_t)len);
             found = buf;
         }
@@ -136,18 +142,20 @@ static const char *find_link_local_ip(char *buf, size_t len) {
 // when no USB link-local interface is present. Returns NULL if none found.
 static const char *find_lan_ip(char *buf, size_t len) {
     struct ifaddrs *ifa_list;
-    if (getifaddrs(&ifa_list) != 0) return NULL;
+    if (getifaddrs(&ifa_list) != 0)
+        return NULL;
     const char *found = NULL;
     for (struct ifaddrs *ifa = ifa_list; ifa && !found; ifa = ifa->ifa_next) {
-        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET)
+            continue;
         struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
         uint32_t addr = ntohl(sa->sin_addr.s_addr);
-        uint32_t top8  = addr >> 24;
+        uint32_t top8 = addr >> 24;
         uint32_t top16 = addr >> 16;
-        if (top8 == 10 ||                               // 10.0.0.0/8
-            (top16 >= 0xAC10 && top16 <= 0xAC1F) ||   // 172.16.0.0/12
-            top16 == 0xC0A8 ||                          // 192.168.0.0/16
-            (top16 >= 0x6440 && top16 <= 0x647F)) {   // 100.64.0.0/10 (Tailscale)
+        if (top8 == 10 ||                           // 10.0.0.0/8
+            (top16 >= 0xAC10 && top16 <= 0xAC1F) || // 172.16.0.0/12
+            top16 == 0xC0A8 ||                      // 192.168.0.0/16
+            (top16 >= 0x6440 && top16 <= 0x647F)) { // 100.64.0.0/10 (Tailscale)
             inet_ntop(AF_INET, &sa->sin_addr, buf, (socklen_t)len);
             found = buf;
         }
@@ -156,7 +164,7 @@ static const char *find_lan_ip(char *buf, size_t len) {
     return found;
 }
 
-void mob_start_beam(const char* app_module) {
+void mob_start_beam(const char *app_module) {
     mob_set_startup_phase("Setting up BEAM environment…");
 
     // Resolve Documents dir early for diagnostics.
@@ -171,8 +179,8 @@ void mob_start_beam(const char* app_module) {
     // reads MOB_SIM_RUNTIME_DIR (set by mix mob.deploy via simctl) with a /tmp
     // fallback for legacy projects.
 #ifdef MOB_BUNDLE_OTP
-    NSString *bundle_otp = [[[NSBundle mainBundle] bundlePath]
-                             stringByAppendingPathComponent:@"otp"];
+    NSString *bundle_otp =
+        [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"otp"];
     const char *otp_root = [bundle_otp UTF8String];
     const char *erts_vsn = ERTS_VSN;
     const char *otp_release = OTP_RELEASE;
@@ -186,19 +194,19 @@ void mob_start_beam(const char* app_module) {
 
     // Compose dynamic paths that depend on otp_root.
     static char bindir[512], elixir_dir[512], logger_dir[512], boot_path[512];
-    snprintf(bindir,      sizeof(bindir),      "%s/%s/bin",              otp_root, erts_vsn);
-    snprintf(elixir_dir,  sizeof(elixir_dir),  "%s/lib/elixir/ebin",    otp_root);
-    snprintf(logger_dir,  sizeof(logger_dir),  "%s/lib/logger/ebin",    otp_root);
-    snprintf(boot_path,   sizeof(boot_path),   "%s/releases/%s/start_clean", otp_root, otp_release);
+    snprintf(bindir, sizeof(bindir), "%s/%s/bin", otp_root, erts_vsn);
+    snprintf(elixir_dir, sizeof(elixir_dir), "%s/lib/elixir/ebin", otp_root);
+    snprintf(logger_dir, sizeof(logger_dir), "%s/lib/logger/ebin", otp_root);
+    snprintf(boot_path, sizeof(boot_path), "%s/releases/%s/start_clean", otp_root, otp_release);
 
     mob_write_diag(docs_dir, "mob_diag_c_paths.txt", bindir);
     NSLog(@"[MobBeam] otp_root=%s erts=%s release=%s", otp_root, erts_vsn, otp_release);
 
-    setenv("BINDIR",   bindir, 1);
-    setenv("ROOTDIR",  otp_root, 1);
+    setenv("BINDIR", bindir, 1);
+    setenv("ROOTDIR", otp_root, 1);
     setenv("PROGNAME", "erl", 1);
-    setenv("EMU",      "beam", 1);
-    setenv("HOME",     "/tmp", 1);
+    setenv("EMU", "beam", 1);
+    setenv("HOME", "/tmp", 1);
     // Set MOB_DATA_DIR to the app's Documents directory — persistent storage
     // accessible to the app and backed up by iCloud. Used by the generated Repo
     // module to determine where to place the SQLite database file.
@@ -240,7 +248,7 @@ void mob_start_beam(const char* app_module) {
     // Physical device: WiFi/LAN → USB link-local → loopback fallback.
     static char lan_ip_buf[64], link_local_buf[64];
     const char *lan_ip = find_lan_ip(lan_ip_buf, sizeof(lan_ip_buf));
-    const char *ll_ip  = lan_ip ? NULL : find_link_local_ip(link_local_buf, sizeof(link_local_buf));
+    const char *ll_ip = lan_ip ? NULL : find_link_local_ip(link_local_buf, sizeof(link_local_buf));
     const char *host_ip = lan_ip ? lan_ip : (ll_ip ? ll_ip : "127.0.0.1");
     static char eval_expr[280], node_name[128], beams_dir[512];
     snprintf(eval_expr, sizeof(eval_expr), "%s:start().", app_module);
@@ -281,7 +289,7 @@ void mob_start_beam(const char* app_module) {
     // If that directory exists, prefer it over the in-bundle copy.
     static char docs_beams[512];
     snprintf(docs_beams, sizeof(docs_beams), "%s/otp/%s", docs_dir, app_module);
-    if ([[NSFileManager defaultManager] fileExistsAtPath:@(docs_beams)])  {
+    if ([[NSFileManager defaultManager] fileExistsAtPath:@(docs_beams)]) {
         strlcpy(beams_dir, docs_beams, sizeof(beams_dir));
     }
     mob_write_diag(docs_dir, "mob_diag_beams_dir.txt", beams_dir);
@@ -302,15 +310,13 @@ void mob_start_beam(const char* app_module) {
     // Compile-time default BEAM tuning flags.
     // Overridden at runtime if beams_dir/mob_beam_flags exists
     // (written by `mix mob.deploy --schedulers N` or `--beam-flags "..."`).
-    static const char* s_default_flags[] = {
-        "-S", "1:1", "-SDcpu", "1:1", "-SDio", "1", "-A", "1", "-sbwt", "none",
-        NULL
-    };
+    static const char *s_default_flags[] = {"-S", "1:1", "-SDcpu", "1:1",  "-SDio", "1",
+                                            "-A", "1",   "-sbwt",  "none", NULL};
 
     // Runtime override: read whitespace-separated flags from beams_dir/mob_beam_flags.
-    static char   s_flags_buf[512]         = {0};
-    static const char* s_runtime_flags[64] = {NULL};
-    static int    s_runtime_flag_count     = 0;
+    static char s_flags_buf[512] = {0};
+    static const char *s_runtime_flags[64] = {NULL};
+    static int s_runtime_flag_count = 0;
     {
         char flags_path[640];
         snprintf(flags_path, sizeof(flags_path), "%s/mob_beam_flags", beams_dir);
@@ -322,59 +328,79 @@ void mob_start_beam(const char* app_module) {
             s_runtime_flag_count = 0;
             char *p = s_flags_buf;
             while (*p && s_runtime_flag_count < 63) {
-                while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
-                if (!*p) break;
+                while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
+                    p++;
+                if (!*p)
+                    break;
                 s_runtime_flags[s_runtime_flag_count++] = p;
-                while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
-                if (*p) *p++ = '\0';
+                while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
+                    p++;
+                if (*p)
+                    *p++ = '\0';
             }
             s_runtime_flags[s_runtime_flag_count] = NULL;
             NSLog(@"[MobBeam] loaded %d runtime flags from %s", s_runtime_flag_count, flags_path);
         }
     }
 
-    const char** selected_flags = (s_runtime_flag_count > 0)
-        ? s_runtime_flags
-        : s_default_flags;
+    const char **selected_flags = (s_runtime_flag_count > 0) ? s_runtime_flags : s_default_flags;
 
-    static const char* args[128];
+    static const char *args[128];
     int ac = 0;
     args[ac++] = "beam";
-    for (int i = 0; selected_flags[i]; i++) args[ac++] = selected_flags[i];
+    for (int i = 0; selected_flags[i]; i++)
+        args[ac++] = selected_flags[i];
     // Cap the BEAM's memory super carrier to 10MB on physical iOS devices.
     // The default 1GB virtual reservation is rejected by iOS on real hardware
     // (not on simulator where the Mac's VM handles it). Without this the BEAM
     // crashes immediately during startup on any physical iOS device.
 #ifdef MOB_BUNDLE_OTP
-    args[ac++] = "-MIscs"; args[ac++] = "10";
+    args[ac++] = "-MIscs";
+    args[ac++] = "10";
 #endif
     args[ac++] = "--";
-    args[ac++] = "-root";       args[ac++] = otp_root;
-    args[ac++] = "-bindir";     args[ac++] = bindir;
-    args[ac++] = "-progname";   args[ac++] = "erl";
+    args[ac++] = "-root";
+    args[ac++] = otp_root;
+    args[ac++] = "-bindir";
+    args[ac++] = bindir;
+    args[ac++] = "-progname";
+    args[ac++] = "erl";
     args[ac++] = "--";
 #ifndef MOB_RELEASE
     // Distribution flags. Omitted for App Store builds — see MOB_RELEASE
     // notes at the top of this file.
-    args[ac++] = "-name";       args[ac++] = node_name;
-    args[ac++] = "-setcookie";  args[ac++] = "mob_secret";
-    args[ac++] = "-kernel"; args[ac++] = "inet_dist_listen_min"; args[ac++] = dist_port_min;
-    args[ac++] = "-kernel"; args[ac++] = "inet_dist_listen_max"; args[ac++] = dist_port_max;
+    args[ac++] = "-name";
+    args[ac++] = node_name;
+    args[ac++] = "-setcookie";
+    args[ac++] = "mob_secret";
+    args[ac++] = "-kernel";
+    args[ac++] = "inet_dist_listen_min";
+    args[ac++] = dist_port_min;
+    args[ac++] = "-kernel";
+    args[ac++] = "inet_dist_listen_max";
+    args[ac++] = dist_port_max;
 #else
     // Mark MOB_RELEASE in env so Mob.Dist.ensure_started/1 short-circuits
     // before trying Node.start (which would fail without -name anyway, but
     // the env var lets app code probe for release mode without parsing
     // erl args).
     setenv("MOB_RELEASE", "1", 1);
-    (void)dist_port_min; (void)dist_port_max; (void)node_name;
+    (void)dist_port_min;
+    (void)dist_port_max;
+    (void)node_name;
 #endif
     args[ac++] = "-noshell";
     args[ac++] = "-noinput";
-    args[ac++] = "-boot";   args[ac++] = boot_path;
-    args[ac++] = "-pa";     args[ac++] = elixir_dir;
-    args[ac++] = "-pa";     args[ac++] = logger_dir;
-    args[ac++] = "-pa";     args[ac++] = beams_dir;
-    args[ac++] = "-eval";   args[ac++] = eval_expr;
+    args[ac++] = "-boot";
+    args[ac++] = boot_path;
+    args[ac++] = "-pa";
+    args[ac++] = elixir_dir;
+    args[ac++] = "-pa";
+    args[ac++] = logger_dir;
+    args[ac++] = "-pa";
+    args[ac++] = beams_dir;
+    args[ac++] = "-eval";
+    args[ac++] = eval_expr;
     args[ac] = NULL;
     NSLog(@"[MobBeam] mob_start_beam: starting BEAM module=%s argc=%d", app_module, ac);
     mob_set_startup_phase("Starting BEAM…");
@@ -398,11 +424,11 @@ void mob_start_beam(const char* app_module) {
     pthread_t epmd_t;
     pthread_create(&epmd_t, NULL, epmd_thread, NULL);
     pthread_detach(epmd_t);
-    usleep(300000);  // 300ms — give EPMD time to bind port 4369
+    usleep(300000); // 300ms — give EPMD time to bind port 4369
 #endif
 
-    void erl_start(int, char**);
-    erl_start(ac, (char**)args);
+    void erl_start(int, char **);
+    erl_start(ac, (char **)args);
     mob_write_diag(docs_dir, "mob_diag_e_erl_exited.txt", "erl_start returned");
     mob_set_startup_error("BEAM exited unexpectedly — check Documents/mob_erl_crash.dump");
     NSLog(@"[MobBeam] mob_start_beam: erl_start returned (unexpected)");

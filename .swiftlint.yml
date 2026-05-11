@@ -1,0 +1,48 @@
+included:
+  - ios
+
+# Mob's iOS renderer is a single SwiftUI file by design — it bridges the BEAM
+# diff stream to a switch-on-node-type renderer. The "errors" SwiftLint flags
+# below are stylistic, not bugs; tuning them lets the actual signal through.
+
+identifier_name:
+  # Allow short idiomatic names (a/b for tuple components, n/i for indices,
+  # dx/dy/dt for deltas, op for operation, cb for callback, pt/r/g/h for
+  # geometry helpers, ms for milliseconds, t for time/temp). Min length lower
+  # than 3 catches genuinely opaque names like `_a` while letting these stay.
+  min_length:
+    warning: 1
+    error: 1
+  # Existing 40-char max stays as warning — keeps catching genuinely runaway
+  # names without escalating.
+
+# MobRootView.swift's renderer uses a big switch over node types. Splitting
+# it would scatter the prop-mapping logic; the function reads top-to-bottom
+# and each case is small. Same for the file as a whole.
+cyclomatic_complexity:
+  warning: 40
+  error: 60
+
+file_length:
+  warning: 2000
+  error: 3000
+
+function_body_length:
+  warning: 100
+  error: 200
+
+# Force-cast in the bridging code is intentional: the BEAM-side type is
+# guaranteed by the encoder. Treat as warning, not error.
+force_cast: warning
+
+# SwiftUI initializers like Button(action:, label:) and modifiers like
+# onScrollGeometryChange(for:of:) take two closures by API design. Apple's
+# own examples use trailing-closure syntax. Suppress.
+disabled_rules:
+  - multiple_closures_with_trailing_closure
+
+# 130-char limit (default 120). The renderer has a few SwiftUI chains that
+# read better on one line; wrapping just to satisfy 120 hurts readability.
+line_length:
+  warning: 130
+  error: 200
