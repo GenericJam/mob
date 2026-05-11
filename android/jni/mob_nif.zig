@@ -23,9 +23,17 @@
 //!     nif_set_transition, nif_register_component, nif_deregister_component).
 //!     The C-side `nif_load` calls `mob_nif_init_state` (exported here)
 //!     to create the mutexes during BEAM init.
-//!   * iter 3d: remaining feature NIFs (storage, WebView, alert,
-//!     action_sheet, toast, native view components, lifecycle,
-//!     Mob.Device). Moves the NIF table itself here. mob_nif.c deleted.
+//!   * iter 3d (this iter): the finale. Remaining feature NIFs (color
+//!     scheme, exit_app, safe_area, haptic, clipboard, open_url,
+//!     share_text, launch notification, request_permission,
+//!     biometric, location ×3, camera ×4, photos_pick, files_pick,
+//!     audio ×5, motion ×2, scanner, notifications ×3, storage ×4,
+//!     alert/action_sheet/toast, webview ×4, background ×2,
+//!     Mob.Device ×7), the bridge bootstrap helpers
+//!     (_mob_ui_cache_class_impl, _mob_bridge_init_activity,
+//!     mob_set_startup_phase, mob_set_startup_error), all the
+//!     deliver_* event dispatchers, and the NIF table itself with
+//!     nif_load + the ERL_NIF_INIT entry point. mob_nif.c deleted.
 //!
 //! All exports use the C ABI so the C-side NIF table can reference them.
 
@@ -1417,4 +1425,1508 @@ export fn nif_deregister_component(
     component_handles[@intCast(handle)].active = 0;
     erts.enif_mutex_unlock(component_mutex);
     return erts.ok(env);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Phase 6b iter 3d — finale: bridge bootstrap, feature NIFs, deliver_* event
+// dispatchers, NIF table, and the ERL_NIF_INIT entry point. After this iter
+// mob_nif.c is gone — everything below was the last residency of native
+// state and entry points in C.
+// ══════════════════════════════════════════════════════════════════════════
+
+const NIF_LOG_TAG: [*:0]const u8 = "MobNIF";
+
+inline fn logi_nif(comptime fmt: []const u8, args: anytype) void {
+    jni.logWrite(jni.ANDROID_LOG_INFO, NIF_LOG_TAG, fmt, args);
+}
+
+inline fn loge_nif(comptime fmt: []const u8, args: anytype) void {
+    jni.logWrite(jni.ANDROID_LOG_ERROR, NIF_LOG_TAG, fmt, args);
+}
+
+// ── Bridge bootstrap helpers ─────────────────────────────────────────────
+// Called from mob_beam.zig during BEAM startup, BEFORE nif_load runs. The
+// startup_phase / startup_error paths must be safe to call when only
+// `Bridge.cls` + `Bridge.set_startup_phase` / `Bridge.set_startup_error`
+// are populated (which is what _mob_ui_cache_class_impl does first).
+
+/// `_mob_ui_cache_class_impl(jenv, bridge_class)` — invoked by
+/// `mob_ui_cache_class` (in mob_beam.zig) from JNI_OnLoad. Caches the
+/// MobBridge `jclass` as a global ref and pre-caches set_startup_phase /
+/// set_startup_error so the BEAM launcher can drive the splash screen
+/// before NIF load.
+pub export fn _mob_ui_cache_class_impl(jenv_p: *jni.JNIEnv, bridge_class: [*:0]const u8) callconv(.c) void {
+    logi_nif("mob_ui_cache_class: looking up {s}", .{bridge_class});
+    const cls = jni.findClass(jenv_p, bridge_class);
+    if (cls == null) {
+        loge_nif("mob_ui_cache_class: {s} not found", .{bridge_class});
+        return;
+    }
+    Bridge.cls = jni.newGlobalRef(jenv_p, cls);
+    jni.deleteLocalRef(jenv_p, cls);
+    // Pre-cache startup status methods — needed before nif_load runs.
+    // These are optional (older MobBridge versions may not have them);
+    // clear any pending exception rather than aborting.
+    Bridge.set_startup_phase = jni.getStaticMethodID(jenv_p, Bridge.cls, "setStartupPhase", "(Ljava/lang/String;)V");
+    if (Bridge.set_startup_phase == null) jni.exceptionClear(jenv_p);
+    Bridge.set_startup_error = jni.getStaticMethodID(jenv_p, Bridge.cls, "setStartupError", "(Ljava/lang/String;)V");
+    if (Bridge.set_startup_error == null) jni.exceptionClear(jenv_p);
+    logi_nif("mob_ui_cache_class: {s} cached OK", .{bridge_class});
+}
+
+pub export fn mob_set_startup_phase(phase: [*:0]const u8) callconv(.c) void {
+    if (g_jvm == null or Bridge.cls == null or Bridge.set_startup_phase == null) return;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return;
+    const js = jni.newStringUTF(jenv, phase);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.set_startup_phase, js);
+    jni.deleteLocalRef(jenv, js);
+    detachIfAttached(attached);
+    logi_nif("startup: {s}", .{phase});
+}
+
+pub export fn mob_set_startup_error(err: [*:0]const u8) callconv(.c) void {
+    if (g_jvm == null or Bridge.cls == null or Bridge.set_startup_error == null) return;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return;
+    const js = jni.newStringUTF(jenv, err);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.set_startup_error, js);
+    jni.deleteLocalRef(jenv, js);
+    detachIfAttached(attached);
+    loge_nif("startup ERROR: {s}", .{err});
+}
+
+/// `_mob_bridge_init_activity` — invoked by `mob_init_bridge` (mob_beam.zig)
+/// after the Activity global ref is set. Calls MobBridge.init(Activity)
+/// which wires the Kotlin side to the running activity.
+pub export fn _mob_bridge_init_activity(env: *jni.JNIEnv, activity: jni.JObject) callconv(.c) void {
+    if (Bridge.cls == null) {
+        loge_nif("_mob_bridge_init_activity: Bridge.cls not cached", .{});
+        return;
+    }
+    const init = jni.getStaticMethodID(env, Bridge.cls, "init", "(Landroid/app/Activity;)V");
+    env.*.CallStaticVoidMethod.?(env, Bridge.cls, init, activity);
+    logi_nif("_mob_bridge_init_activity: MobBridge.init called", .{});
+}
+
+// ── Helpers for the feature NIFs below ───────────────────────────────────
+
+/// Accept either a plain binary or an iolist (deep-flatten to binary).
+/// Returns null on failure — the caller turns that into `badarg`.
+fn getBinOrIolist(env: ?*erts.ErlNifEnv, term: erts.ERL_NIF_TERM) ?erts.ErlNifBinary {
+    var bin: erts.ErlNifBinary = undefined;
+    if (erts.enif_inspect_binary(env, term, &bin) != 0) return bin;
+    if (erts.enif_inspect_iolist_as_binary(env, term, &bin) != 0) return bin;
+    return null;
+}
+
+/// Heap-allocate a NUL-terminated copy of an `ErlNifBinary` for JNI's
+/// NewStringUTF. Returns null on OOM. Caller frees via `freeCString`.
+fn binToCString(bin: erts.ErlNifBinary) ?[*:0]u8 {
+    const buf_ptr = jni.malloc(bin.size + 1) orelse return null;
+    const dst: [*]u8 = @ptrCast(buf_ptr);
+    @memcpy(dst[0..bin.size], bin.data[0..bin.size]);
+    dst[bin.size] = 0;
+    return @ptrCast(buf_ptr);
+}
+
+inline fn freeCString(p: ?[*:0]u8) void {
+    if (p) |ptr| jni.free(@as(?*anyopaque, @ptrCast(ptr)));
+}
+
+/// Pack an ErlNifPid into a jlong for the JNI-side delivery handle. Kotlin
+/// hands it back unchanged when it calls one of the mob_deliver_* hooks;
+/// we round-trip via `pidFromLong`. ErlNifPid is `{ ERL_NIF_TERM pid; }`
+/// which is `c_ulong` on aarch64 — same size as jlong — so a bitcast is
+/// equivalent to the C `memcpy(&jpid, &pid, sizeof(...))` pattern.
+inline fn pidToJlong(pid: erts.ErlNifPid) jni.JLong {
+    return @bitCast(pid.pid);
+}
+
+inline fn pidFromLong(jpid: jni.JLong) erts.ErlNifPid {
+    return .{ .pid = @bitCast(jpid) };
+}
+
+/// Call `MobBridge.<method>(pid_long, arg)` — the standard shape for
+/// async device-capability NIFs (location, camera, audio_play, etc.).
+/// Returns the `:ok` atom unconditionally; results land later via one of
+/// the mob_deliver_* JNI hooks. `arg` may be null for void-of-pid methods.
+fn callBridgePidStr(env: ?*erts.ErlNifEnv, method: jni.JMethodID, pid: erts.ErlNifPid, arg: ?[*:0]const u8) erts.ERL_NIF_TERM {
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jarg: jni.JString = if (arg) |a| jni.newStringUTF(jenv, a) else null;
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, method, pidToJlong(pid), jarg);
+    if (jarg != null) jni.deleteLocalRef(jenv, jarg);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+fn callBridgePidStr2(env: ?*erts.ErlNifEnv, method: jni.JMethodID, pid: erts.ErlNifPid, a1: ?[*:0]const u8, a2: ?[*:0]const u8) erts.ERL_NIF_TERM {
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const j1: jni.JString = if (a1) |a| jni.newStringUTF(jenv, a) else null;
+    const j2: jni.JString = if (a2) |a| jni.newStringUTF(jenv, a) else null;
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, method, pidToJlong(pid), j1, j2);
+    if (j1 != null) jni.deleteLocalRef(jenv, j1);
+    if (j2 != null) jni.deleteLocalRef(jenv, j2);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+/// Read a jstring into an `ErlNifBinary` via UTF-8. Returns the binary
+/// term + 1 (success) or 0 (null jstring / GetStringUTFChars failed).
+/// Deletes the local ref on success.
+fn jstringToBinaryTerm(env: ?*erts.ErlNifEnv, jenv: *jni.JNIEnv, js: jni.JString) ?erts.ERL_NIF_TERM {
+    if (js == null) return null;
+    const utf = jni.getStringUTFChars(jenv, js) orelse return null;
+    const len = jni.strlen(utf);
+    var bin: erts.ErlNifBinary = undefined;
+    _ = erts.enif_alloc_binary(len, &bin);
+    @memcpy(bin.data[0..len], utf[0..len]);
+    jni.releaseStringUTFChars(jenv, js, utf);
+    jni.deleteLocalRef(jenv, js);
+    return erts.enif_make_binary(env, &bin);
+}
+
+// ── Core feature NIFs ────────────────────────────────────────────────────
+
+// nif_color_scheme/0 — :light | :dark. Returns :light if the optional
+// MobBridge.getColorScheme() isn't compiled into the app.
+export fn nif_color_scheme(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    if (Bridge.get_color_scheme == null) return erts.atom(env, "light");
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "light");
+    const result = jenv.*.CallStaticObjectMethod.?(jenv, Bridge.cls, Bridge.get_color_scheme);
+    var out = erts.atom(env, "light");
+    if (result != null) {
+        if (jni.getStringUTFChars(jenv, result)) |str| {
+            if (jni.strncmp(str, "dark", 4) == 0 and str[4] == 0) {
+                out = erts.atom(env, "dark");
+            }
+            jni.releaseStringUTFChars(jenv, result, str);
+        }
+        jni.deleteLocalRef(jenv, result);
+    }
+    detachIfAttached(attached);
+    return out;
+}
+
+// nif_exit_app/0 — Activity.moveTaskToBack(true). Called by Mob.Screen
+// when the back gesture fires at the root of the nav stack.
+export fn nif_exit_app(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.move_to_back);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+// nif_safe_area/0 — {Top, Right, Bottom, Left} in dp via
+// MobBridge.getSafeArea(). The Kotlin side returns float[4] in
+// {top, right, bottom, left} order.
+export fn nif_safe_area(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    var vals: [4]f32 = @splat(0);
+    const arr = jenv.*.CallStaticObjectMethod.?(jenv, Bridge.cls, Bridge.get_safe_area);
+    if (arr != null) {
+        jni.getFloatArrayRegion(jenv, arr, 0, 4, &vals);
+        jni.deleteLocalRef(jenv, arr);
+    }
+    detachIfAttached(attached);
+    return erts.makeTuple(env, .{
+        erts.enif_make_double(env, @floatCast(vals[0])),
+        erts.enif_make_double(env, @floatCast(vals[1])),
+        erts.enif_make_double(env, @floatCast(vals[2])),
+        erts.enif_make_double(env, @floatCast(vals[3])),
+    });
+}
+
+// nif_haptic/1 — pass an atom (heavy/medium/light/...) to
+// MobBridge.haptic(String).
+export fn nif_haptic(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var type_buf: [32]u8 = @splat(0);
+    _ = erts.enif_get_atom(env, argv[0], &type_buf, type_buf.len, erts.ERL_NIF_LATIN1);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jtype = jni.newStringUTF(jenv, jni.asCStr(&type_buf));
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.haptic, jtype);
+    jni.deleteLocalRef(jenv, jtype);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+// nif_clipboard_put/1 — ClipboardManager.setPrimaryClip via Kotlin.
+export fn nif_clipboard_put(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const text = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(text);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jtext = jni.newStringUTF(jenv, text);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.clipboard_put, jtext);
+    jni.deleteLocalRef(jenv, jtext);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+// nif_clipboard_get/0 — returns {:ok, Binary} or :empty.
+export fn nif_clipboard_get(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const result = jenv.*.CallStaticObjectMethod.?(jenv, Bridge.cls, Bridge.clipboard_get);
+    var out: erts.ERL_NIF_TERM = undefined;
+    if (jstringToBinaryTerm(env, jenv, result)) |bin_term| {
+        out = erts.makeTuple(env, .{ erts.atom(env, "ok"), bin_term });
+    } else {
+        out = erts.atom(env, "empty");
+    }
+    detachIfAttached(attached);
+    return out;
+}
+
+// nif_open_url/1 — Intent ACTION_VIEW with the URI.
+export fn nif_open_url(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const url = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(url);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jurl = jni.newStringUTF(jenv, url);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.open_url, jurl);
+    jni.deleteLocalRef(jenv, jurl);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+// nif_share_text/1 — system share sheet (Intent ACTION_SEND text/plain).
+export fn nif_share_text(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const text = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(text);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jtext = jni.newStringUTF(jenv, text);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.share_text, jtext);
+    jni.deleteLocalRef(jenv, jtext);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+// ── Launch notification (written from Kotlin on cold start) ──────────────
+// MobBridge.setLaunchNotification(json) → mob_set_launch_notification(json).
+// Apps call Mob.Device.take_launch_notification/0 → nif_take_launch_notification
+// to consume it. Guarded by g_launch_notif_mutex (lazily created in nif_load).
+
+var g_launch_notif_json: ?[*:0]u8 = null;
+var g_launch_notif_mutex: ?*erts.ErlNifMutex = null;
+
+pub export fn mob_set_launch_notification(json: ?[*:0]const u8) callconv(.c) void {
+    const mutex = g_launch_notif_mutex orelse return;
+    erts.enif_mutex_lock(mutex);
+    defer erts.enif_mutex_unlock(mutex);
+    if (g_launch_notif_json) |old| jni.free(@as(?*anyopaque, @ptrCast(old)));
+    g_launch_notif_json = if (json) |j| jni.strdup(j) else null;
+}
+
+export fn nif_take_launch_notification(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    const mutex = g_launch_notif_mutex orelse return erts.atom(env, "none");
+    erts.enif_mutex_lock(mutex);
+    const taken = g_launch_notif_json;
+    g_launch_notif_json = null;
+    erts.enif_mutex_unlock(mutex);
+    const json = taken orelse return erts.atom(env, "none");
+    const len = jni.strlen(json);
+    var bin: erts.ErlNifBinary = undefined;
+    _ = erts.enif_alloc_binary(len, &bin);
+    @memcpy(bin.data[0..len], json[0..len]);
+    jni.free(@as(?*anyopaque, @ptrCast(json)));
+    return erts.enif_make_binary(env, &bin);
+}
+
+// ── Async result delivery (called from Kotlin via JNI) ───────────────────
+// Each `mob_deliver_*` is invoked by the Kotlin side (after an async
+// operation like locationGetOnce or cameraCapturePhoto completes) with
+// the pid encoded as a jlong + the typed result. We rebuild an ErlNifPid
+// and ship the appropriate {:tag, payload} message.
+
+/// `mob_nif_deliver_json` exists for legacy callers in beam_jni.c — it's a
+/// no-op. Typed dispatchers below cover the real surface.
+pub export fn mob_nif_deliver_json(pid_long: jni.JLong, json_str: [*:0]const u8) callconv(.c) void {
+    _ = pid_long;
+    _ = json_str;
+}
+
+pub export fn mob_deliver_atom2(jpid: jni.JLong, a1: [*:0]const u8, a2: [*:0]const u8) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, a1),
+        erts.enif_make_atom(env, a2),
+    });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+pub export fn mob_deliver_atom3(jpid: jni.JLong, a1: [*:0]const u8, a2: [*:0]const u8, a3: [*:0]const u8) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, a1),
+        erts.enif_make_atom(env, a2),
+        erts.enif_make_atom(env, a3),
+    });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+pub export fn mob_deliver_location(jpid: jni.JLong, lat: f64, lon: f64, acc: f64, alt: f64) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.atom(env, "lat"),
+        erts.atom(env, "lon"),
+        erts.atom(env, "accuracy"),
+        erts.atom(env, "altitude"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_double(env, lat),
+        erts.enif_make_double(env, lon),
+        erts.enif_make_double(env, acc),
+        erts.enif_make_double(env, alt),
+    };
+    const map = erts.makeMap(env, &keys, &vals) orelse return;
+    const msg = erts.makeTuple(env, .{ erts.atom(env, "location"), map });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+pub export fn mob_deliver_motion(
+    jpid: jni.JLong,
+    ax: f64,
+    ay: f64,
+    az: f64,
+    gx: f64,
+    gy: f64,
+    gz: f64,
+    ts: i64,
+) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const accel = erts.makeTuple(env, .{
+        erts.enif_make_double(env, ax),
+        erts.enif_make_double(env, ay),
+        erts.enif_make_double(env, az),
+    });
+    const gyro = erts.makeTuple(env, .{
+        erts.enif_make_double(env, gx),
+        erts.enif_make_double(env, gy),
+        erts.enif_make_double(env, gz),
+    });
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.atom(env, "accel"),
+        erts.atom(env, "gyro"),
+        erts.atom(env, "timestamp"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        accel,
+        gyro,
+        erts.enif_make_int64(env, ts),
+    };
+    const map = erts.makeMap(env, &keys, &vals) orelse return;
+    const msg = erts.makeTuple(env, .{ erts.atom(env, "motion"), map });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+/// `{:webview, tag, binary}`. When `jpid == 0` the message routes to the
+/// :mob_screen registered process; otherwise to the explicit pid.
+fn deliverWebviewBinary(jpid: jni.JLong, comptime tag: [:0]const u8, utf8: [*:0]const u8) void {
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    var pid: erts.ErlNifPid = undefined;
+    if (jpid != 0) {
+        pid = pidFromLong(jpid);
+    } else if (erts.enif_whereis_pid(env, erts.atom(env, "mob_screen"), &pid) == 0) {
+        return;
+    }
+    const len = jni.strlen(utf8);
+    var bin: erts.ErlNifBinary = undefined;
+    _ = erts.enif_alloc_binary(len, &bin);
+    @memcpy(bin.data[0..len], utf8[0..len]);
+    const msg = erts.makeTuple(env, .{
+        erts.atom(env, "webview"),
+        erts.atom(env, tag),
+        erts.enif_make_binary(env, &bin),
+    });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+pub export fn mob_deliver_webview_message(jpid: jni.JLong, json: [*:0]const u8) callconv(.c) void {
+    deliverWebviewBinary(jpid, "message", json);
+}
+
+pub export fn mob_deliver_webview_blocked(jpid: jni.JLong, url: [*:0]const u8) callconv(.c) void {
+    deliverWebviewBinary(jpid, "blocked", url);
+}
+
+/// `mob_deliver_file_result` — used by camera/photos/files/audio/scanner
+/// capture results. Two shapes:
+///   * `{event_atom, :cancelled}` when json_items is null OR "cancelled"
+///   * `{:mob_file_result, event_bin, sub_bin, json_bin}` otherwise
+pub export fn mob_deliver_file_result(
+    jpid: jni.JLong,
+    event: [*:0]const u8,
+    sub: [*:0]const u8,
+    json_items: ?[*:0]const u8,
+) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+
+    const cancelled = blk: {
+        const j = json_items orelse break :blk true;
+        const span = std.mem.span(j);
+        break :blk std.mem.eql(u8, span, "cancelled");
+    };
+
+    const msg = if (cancelled) erts.makeTuple(env, .{
+        erts.enif_make_atom(env, event),
+        erts.atom(env, "cancelled"),
+    }) else build: {
+        const j = json_items.?;
+        const jl = jni.strlen(j);
+        const el = jni.strlen(event);
+        const sl = jni.strlen(sub);
+        var jb: erts.ErlNifBinary = undefined;
+        var eb: erts.ErlNifBinary = undefined;
+        var sb: erts.ErlNifBinary = undefined;
+        _ = erts.enif_alloc_binary(jl, &jb);
+        _ = erts.enif_alloc_binary(el, &eb);
+        _ = erts.enif_alloc_binary(sl, &sb);
+        @memcpy(jb.data[0..jl], j[0..jl]);
+        @memcpy(eb.data[0..el], event[0..el]);
+        @memcpy(sb.data[0..sl], sub[0..sl]);
+        break :build erts.makeTuple(env, .{
+            erts.atom(env, "mob_file_result"),
+            erts.enif_make_binary(env, &eb),
+            erts.enif_make_binary(env, &sb),
+            erts.enif_make_binary(env, &jb),
+        });
+    };
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+pub export fn mob_deliver_push_token(jpid: jni.JLong, token: [*:0]const u8) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const len = jni.strlen(token);
+    var tb: erts.ErlNifBinary = undefined;
+    _ = erts.enif_alloc_binary(len, &tb);
+    @memcpy(tb.data[0..len], token[0..len]);
+    const msg = erts.makeTuple(env, .{
+        erts.atom(env, "push_token"),
+        erts.atom(env, "android"),
+        erts.enif_make_binary(env, &tb),
+    });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+pub export fn mob_deliver_notification(jpid: jni.JLong, json: [*:0]const u8) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const len = jni.strlen(json);
+    var jb: erts.ErlNifBinary = undefined;
+    _ = erts.enif_alloc_binary(len, &jb);
+    @memcpy(jb.data[0..len], json[0..len]);
+    const msg = erts.makeTuple(env, .{
+        erts.atom(env, "mob_launch_notification"),
+        erts.enif_make_binary(env, &jb),
+    });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+/// `mob_deliver_alert_action` — called from beam_jni.c when a dialog
+/// button is tapped. Routes to :mob_screen as {:alert, action_atom}.
+pub export fn mob_deliver_alert_action(action: [*:0]const u8) callconv(.c) void {
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    var pid: erts.ErlNifPid = undefined;
+    if (erts.enif_whereis_pid(env, erts.atom(env, "mob_screen"), &pid) == 0) return;
+    const msg = erts.makeTuple(env, .{
+        erts.atom(env, "alert"),
+        erts.enif_make_atom(env, action),
+    });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+// ── Capability NIFs (thin shims to Kotlin) ───────────────────────────────
+
+export fn nif_request_permission(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var cap_buf: [32]u8 = @splat(0);
+    _ = erts.enif_get_atom(env, argv[0], &cap_buf, cap_buf.len, erts.ERL_NIF_LATIN1);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.request_permission, pid, jni.asCStr(&cap_buf));
+}
+
+export fn nif_biometric_authenticate(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    var reason: [256]u8 = @splat(0);
+    if (bin.size + 1 <= reason.len) {
+        @memcpy(reason[0..bin.size], bin.data[0..bin.size]);
+        reason[bin.size] = 0;
+    } else {
+        // Truncate. Matches the C original's defensive truncate-or-default.
+        @memcpy(reason[0 .. reason.len - 1], bin.data[0 .. reason.len - 1]);
+        reason[reason.len - 1] = 0;
+    }
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.biometric_authenticate, pid, jni.asCStr(&reason));
+}
+
+export fn nif_location_get_once(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.location_get_once, pid, "balanced");
+}
+
+export fn nif_location_start(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var acc_buf: [16]u8 = @splat(0);
+    jni.copyZ(&acc_buf, "balanced");
+    _ = erts.enif_get_atom(env, argv[0], &acc_buf, acc_buf.len, erts.ERL_NIF_LATIN1);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.location_start, pid, jni.asCStr(&acc_buf));
+}
+
+export fn nif_location_stop(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.location_stop);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+export fn nif_camera_capture_photo(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var qual: [16]u8 = @splat(0);
+    jni.copyZ(&qual, "high");
+    _ = erts.enif_get_atom(env, argv[0], &qual, qual.len, erts.ERL_NIF_LATIN1);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.camera_capture_photo, pid, jni.asCStr(&qual));
+}
+
+export fn nif_camera_capture_video(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var max_dur: c_int = 60;
+    _ = erts.enif_get_int(env, argv[0], &max_dur);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    var dur_buf: [16]u8 = @splat(0);
+    _ = std.fmt.bufPrint(&dur_buf, "{d}", .{max_dur}) catch {};
+    return callBridgePidStr(env, Bridge.camera_capture_video, pid, jni.asCStr(&dur_buf));
+}
+
+export fn nif_camera_start_preview(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const json = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(json);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.camera_start_preview, pid, json);
+}
+
+export fn nif_camera_stop_preview(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.camera_stop_preview);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+export fn nif_photos_pick(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var max: c_int = 1;
+    _ = erts.enif_get_int(env, argv[0], &max);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    var max_buf: [16]u8 = @splat(0);
+    _ = std.fmt.bufPrint(&max_buf, "{d}", .{max}) catch {};
+    return callBridgePidStr(env, Bridge.photos_pick, pid, jni.asCStr(&max_buf));
+}
+
+export fn nif_files_pick(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const json = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(json);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.files_pick, pid, json);
+}
+
+export fn nif_audio_start_recording(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const json = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(json);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.audio_start_recording, pid, json);
+}
+
+export fn nif_audio_stop_recording(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.audio_stop_recording);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+export fn nif_audio_play(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const path_bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const opts_bin = getBinOrIolist(env, argv[1]) orelse return erts.badarg(env);
+    const path = binToCString(path_bin) orelse return erts.atom(env, "error");
+    defer freeCString(path);
+    const opts = binToCString(opts_bin) orelse return erts.atom(env, "error");
+    defer freeCString(opts);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr2(env, Bridge.audio_play, pid, path, opts);
+}
+
+export fn nif_audio_stop_playback(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.audio_stop_playback);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+export fn nif_audio_set_volume(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var vol: f64 = 1.0;
+    _ = erts.enif_get_double(env, argv[0], &vol);
+    var vol_buf: [32]u8 = @splat(0);
+    _ = std.fmt.bufPrint(&vol_buf, "{d:.6}", .{vol}) catch {};
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jvol = jni.newStringUTF(jenv, jni.asCStr(&vol_buf));
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.audio_set_volume, jvol);
+    jni.deleteLocalRef(jenv, jvol);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+export fn nif_motion_start(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var interval_ms: c_int = 100;
+    _ = erts.enif_get_int(env, argv[1], &interval_ms);
+    var ival_buf: [16]u8 = @splat(0);
+    _ = std.fmt.bufPrint(&ival_buf, "{d}", .{interval_ms}) catch {};
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.motion_start, pid, jni.asCStr(&ival_buf));
+}
+
+export fn nif_motion_stop(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.motion_stop);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+export fn nif_scanner_scan(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const json = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(json);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.scanner_scan, pid, json);
+}
+
+export fn nif_notify_schedule(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const json = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(json);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.notify_schedule, pid, json);
+}
+
+export fn nif_notify_cancel(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    var nid: [256]u8 = @splat(0);
+    const copy = @min(bin.size, nid.len - 1);
+    @memcpy(nid[0..copy], bin.data[0..copy]);
+    nid[copy] = 0;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const js = jni.newStringUTF(jenv, jni.asCStr(&nid));
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.notify_cancel, js);
+    jni.deleteLocalRef(jenv, js);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+export fn nif_notify_register_push(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.notify_register_push, pid, null);
+}
+
+// ── Storage ──────────────────────────────────────────────────────────────
+
+export fn nif_storage_dir(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var loc: [32]u8 = @splat(0);
+    _ = erts.enif_get_atom(env, argv[0], &loc, loc.len, erts.ERL_NIF_LATIN1);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jloc = jni.newStringUTF(jenv, jni.asCStr(&loc));
+    const result = jenv.*.CallStaticObjectMethod.?(jenv, Bridge.cls, Bridge.storage_dir, jloc);
+    jni.deleteLocalRef(jenv, jloc);
+    const out = jstringToBinaryTerm(env, jenv, result) orelse erts.atom(env, "nil");
+    detachIfAttached(attached);
+    return out;
+}
+
+export fn nif_storage_save_to_media_store(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const path = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(path);
+    var type_buf: [16]u8 = @splat(0);
+    jni.copyZ(&type_buf, "auto");
+    _ = erts.enif_get_atom(env, argv[1], &type_buf, type_buf.len, erts.ERL_NIF_LATIN1);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr2(env, Bridge.storage_save_to_media_store, pid, path, jni.asCStr(&type_buf));
+}
+
+export fn nif_storage_external_files_dir(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var type_buf: [32]u8 = @splat(0);
+    _ = erts.enif_get_atom(env, argv[0], &type_buf, type_buf.len, erts.ERL_NIF_LATIN1);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jtype = jni.newStringUTF(jenv, jni.asCStr(&type_buf));
+    const result = jenv.*.CallStaticObjectMethod.?(jenv, Bridge.cls, Bridge.storage_external_files_dir, jtype);
+    jni.deleteLocalRef(jenv, jtype);
+    const out = jstringToBinaryTerm(env, jenv, result) orelse erts.atom(env, "nil");
+    detachIfAttached(attached);
+    return out;
+}
+
+/// iOS-only — Android has no equivalent. Returns `{:error, :not_supported}`.
+export fn nif_storage_save_to_photo_library(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    return erts.errorTuple(env, erts.atom(env, "not_supported"));
+}
+
+// ── Alert / action sheet / toast ─────────────────────────────────────────
+
+export fn nif_alert_show(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const title_bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const msg_bin = getBinOrIolist(env, argv[1]) orelse return erts.badarg(env);
+    const btns_bin = getBinOrIolist(env, argv[2]) orelse return erts.badarg(env);
+
+    const title = binToCString(title_bin) orelse return erts.atom(env, "error");
+    defer freeCString(title);
+    const message = binToCString(msg_bin) orelse return erts.atom(env, "error");
+    defer freeCString(message);
+    const btns = binToCString(btns_bin) orelse return erts.atom(env, "error");
+    defer freeCString(btns);
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jtitle = jni.newStringUTF(jenv, title);
+    const jmessage = jni.newStringUTF(jenv, message);
+    const jbtns = jni.newStringUTF(jenv, btns);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.alert_show, jtitle, jmessage, jbtns);
+    jni.deleteLocalRef(jenv, jtitle);
+    jni.deleteLocalRef(jenv, jmessage);
+    jni.deleteLocalRef(jenv, jbtns);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+export fn nif_action_sheet_show(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const title_bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const btns_bin = getBinOrIolist(env, argv[1]) orelse return erts.badarg(env);
+    const title = binToCString(title_bin) orelse return erts.atom(env, "error");
+    defer freeCString(title);
+    const btns = binToCString(btns_bin) orelse return erts.atom(env, "error");
+    defer freeCString(btns);
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jtitle = jni.newStringUTF(jenv, title);
+    const jbtns = jni.newStringUTF(jenv, btns);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.action_sheet_show, jtitle, jbtns);
+    jni.deleteLocalRef(jenv, jtitle);
+    jni.deleteLocalRef(jenv, jbtns);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+export fn nif_toast_show(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const msg_bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    var dur: [8]u8 = @splat(0);
+    jni.copyZ(&dur, "short");
+    _ = erts.enif_get_atom(env, argv[1], &dur, dur.len, erts.ERL_NIF_LATIN1);
+    const msg = binToCString(msg_bin) orelse return erts.atom(env, "error");
+    defer freeCString(msg);
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jmsg = jni.newStringUTF(jenv, msg);
+    const jdur = jni.newStringUTF(jenv, jni.asCStr(&dur));
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.toast_show, jmsg, jdur);
+    jni.deleteLocalRef(jenv, jmsg);
+    jni.deleteLocalRef(jenv, jdur);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+// ── WebView ──────────────────────────────────────────────────────────────
+
+export fn nif_webview_eval_js(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const code = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(code);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jcode = jni.newStringUTF(jenv, code);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.webview_eval_js, jcode);
+    jni.deleteLocalRef(jenv, jcode);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+export fn nif_webview_post_message(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const json = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(json);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jjson = jni.newStringUTF(jenv, json);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.webview_post_message, jjson);
+    jni.deleteLocalRef(jenv, jjson);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+export fn nif_webview_can_go_back(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "false");
+    const result = jenv.*.CallStaticBooleanMethod.?(jenv, Bridge.cls, Bridge.webview_can_go_back);
+    detachIfAttached(attached);
+    return if (result != 0) erts.atom(env, "true") else erts.atom(env, "false");
+}
+
+export fn nif_webview_go_back(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.webview_go_back);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+// ── Background (foreground service) ──────────────────────────────────────
+
+export fn nif_background_keep_alive(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.background_keep_alive);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+export fn nif_background_stop(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.background_stop);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+// ── Mob.Device — lifecycle events + queries ──────────────────────────────
+// Android implementation is partial — only `:appearance` (color scheme
+// changes from MainActivity.onConfigurationChanged) is wired today. The
+// rest (battery, thermal, lifecycle) is queued behind ProcessLifecycleOwner
+// + ComponentCallbacks2 plumbing. Until then the dispatcher pid is stored
+// so what IS wired (color scheme) can deliver, and the query NIFs return
+// reasonable defaults.
+
+var g_device_dispatcher_pid: erts.ErlNifPid = .{ .pid = 0 };
+var g_device_dispatcher_set: bool = false;
+
+fn deviceSendAtomPayload(comptime tag: [:0]const u8, atom_name: [*:0]const u8, payload_atom_str: [*:0]const u8) void {
+    if (!g_device_dispatcher_set) return;
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const msg = erts.makeTuple(env, .{
+        erts.atom(env, tag),
+        erts.enif_make_atom(env, atom_name),
+        erts.enif_make_atom(env, payload_atom_str),
+    });
+    var pid = g_device_dispatcher_pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+/// Called from beam_jni.c's `Java_..._MobBridge_nativeNotifyColorScheme`
+/// when MainActivity.onConfigurationChanged sees a uiMode flip. `scheme`
+/// must be "light" or "dark".
+pub export fn mob_send_color_scheme_changed(scheme: ?[*:0]const u8) callconv(.c) void {
+    const s = scheme orelse return;
+    deviceSendAtomPayload("mob_device", "color_scheme_changed", s);
+}
+
+export fn nif_device_set_dispatcher(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var pid: erts.ErlNifPid = undefined;
+    if (erts.enif_get_local_pid(env, argv[0], &pid) == 0) return erts.badarg(env);
+    g_device_dispatcher_pid = pid;
+    g_device_dispatcher_set = true;
+    return erts.ok(env);
+}
+
+export fn nif_device_battery_state(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    // TODO(android): query BatteryManager. For now, unknown / -1.
+    return erts.makeTuple(env, .{
+        erts.atom(env, "unknown"),
+        erts.enif_make_int(env, -1),
+    });
+}
+
+export fn nif_device_thermal_state(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    // TODO(android): PowerManager.getCurrentThermalStatus() (API 29+).
+    return erts.atom(env, "nominal");
+}
+
+export fn nif_device_low_power_mode(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    // TODO(android): PowerManager.isPowerSaveMode().
+    return erts.atom(env, "false");
+}
+
+export fn nif_device_foreground(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    // TODO(android): track via ProcessLifecycleOwner.
+    return erts.atom(env, "true");
+}
+
+export fn nif_device_os_version(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    // TODO(android): Build.VERSION.RELEASE via JNI.
+    return erts.enif_make_string(env, "", erts.ERL_NIF_LATIN1);
+}
+
+export fn nif_device_model(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    // TODO(android): Build.MODEL via JNI.
+    return erts.enif_make_string(env, "Android", erts.ERL_NIF_LATIN1);
+}
+
+// ── nif_load: cache all method IDs at BEAM startup ───────────────────────
+
+/// Required-method helper. Returns false if the method isn't on the
+/// Kotlin side — caller turns that into a `return -1` from nif_load.
+inline fn cacheRequired(jenv: *jni.JNIEnv, name: [*:0]const u8, sig: [*:0]const u8, field: *jni.JMethodID) bool {
+    field.* = jni.getStaticMethodID(jenv, Bridge.cls, name, sig);
+    if (field.* == null) {
+        loge_nif("nif_load: {s} not found", .{name});
+        return false;
+    }
+    return true;
+}
+
+/// Optional-method helper. Clears any JNI exception and logs at INFO.
+inline fn cacheOptional(jenv: *jni.JNIEnv, name: [*:0]const u8, sig: [*:0]const u8, field: *jni.JMethodID) void {
+    field.* = jni.getStaticMethodID(jenv, Bridge.cls, name, sig);
+    if (field.* == null) {
+        jni.exceptionClear(jenv);
+        logi_nif("nif_load: {s} not found (optional)", .{name});
+    }
+}
+
+fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) callconv(.c) c_int {
+    _ = env;
+    _ = priv;
+    _ = info;
+    logi_nif("nif_load: entered, Bridge.cls={any}", .{Bridge.cls});
+    if (Bridge.cls == null) {
+        loge_nif("Bridge.cls not cached — was mob_ui_cache_class called?", .{});
+        return -1;
+    }
+
+    // tap_mutex + component_mutex are created here (mob_nif_init_state is
+    // a Zig-side export, but for the all-Zig finale we just call the
+    // initialiser directly — no C boundary to cross).
+    if (mob_nif_init_state() != 0) {
+        loge_nif("nif_load: mob_nif_init_state failed (mutex create)", .{});
+        return -1;
+    }
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse {
+        loge_nif("nif_load: get_jenv returned null", .{});
+        return -1;
+    };
+    defer detachIfAttached(attached);
+
+    if (!cacheRequired(jenv, "setRootJson", "(Ljava/lang/String;Ljava/lang/String;)V", &Bridge.set_root)) return -1;
+    if (!cacheRequired(jenv, "moveToBack", "()V", &Bridge.move_to_back)) return -1;
+    if (!cacheRequired(jenv, "getSafeArea", "()[F", &Bridge.get_safe_area)) return -1;
+
+    // getColorScheme() is optional — apps that haven't been regenerated
+    // since it was added still load fine; nif_color_scheme falls back to
+    // :light.
+    cacheOptional(jenv, "getColorScheme", "()Ljava/lang/String;", &Bridge.get_color_scheme);
+
+    if (!cacheRequired(jenv, "haptic", "(Ljava/lang/String;)V", &Bridge.haptic)) return -1;
+    if (!cacheRequired(jenv, "clipboardPut", "(Ljava/lang/String;)V", &Bridge.clipboard_put)) return -1;
+    if (!cacheRequired(jenv, "clipboardGet", "()Ljava/lang/String;", &Bridge.clipboard_get)) return -1;
+    if (!cacheRequired(jenv, "shareText", "(Ljava/lang/String;)V", &Bridge.share_text)) return -1;
+    if (!cacheRequired(jenv, "openUrl", "(Ljava/lang/String;)V", &Bridge.open_url)) return -1;
+
+    // Async device-capability methods. Most take (J, String) where J is
+    // the pid as a long.
+    if (!cacheRequired(jenv, "request_permission", "(JLjava/lang/String;)V", &Bridge.request_permission)) return -1;
+    if (!cacheRequired(jenv, "biometric_authenticate", "(JLjava/lang/String;)V", &Bridge.biometric_authenticate)) return -1;
+    if (!cacheRequired(jenv, "location_get_once", "(JLjava/lang/String;)V", &Bridge.location_get_once)) return -1;
+    if (!cacheRequired(jenv, "location_start", "(JLjava/lang/String;)V", &Bridge.location_start)) return -1;
+    if (!cacheRequired(jenv, "location_stop", "()V", &Bridge.location_stop)) return -1;
+    if (!cacheRequired(jenv, "camera_capture_photo", "(JLjava/lang/String;)V", &Bridge.camera_capture_photo)) return -1;
+    if (!cacheRequired(jenv, "camera_capture_video", "(JLjava/lang/String;)V", &Bridge.camera_capture_video)) return -1;
+    if (!cacheRequired(jenv, "camera_start_preview", "(JLjava/lang/String;)V", &Bridge.camera_start_preview)) return -1;
+    if (!cacheRequired(jenv, "camera_stop_preview", "()V", &Bridge.camera_stop_preview)) return -1;
+    if (!cacheRequired(jenv, "photos_pick", "(JLjava/lang/String;)V", &Bridge.photos_pick)) return -1;
+    if (!cacheRequired(jenv, "files_pick", "(JLjava/lang/String;)V", &Bridge.files_pick)) return -1;
+    if (!cacheRequired(jenv, "audio_start_recording", "(JLjava/lang/String;)V", &Bridge.audio_start_recording)) return -1;
+    if (!cacheRequired(jenv, "audio_stop_recording", "()V", &Bridge.audio_stop_recording)) return -1;
+    if (!cacheRequired(jenv, "audio_play", "(JLjava/lang/String;Ljava/lang/String;)V", &Bridge.audio_play)) return -1;
+    if (!cacheRequired(jenv, "audio_stop_playback", "()V", &Bridge.audio_stop_playback)) return -1;
+    if (!cacheRequired(jenv, "audio_set_volume", "(Ljava/lang/String;)V", &Bridge.audio_set_volume)) return -1;
+    if (!cacheRequired(jenv, "storage_dir", "(Ljava/lang/String;)Ljava/lang/String;", &Bridge.storage_dir)) return -1;
+    if (!cacheRequired(jenv, "storage_save_to_media_store", "(JLjava/lang/String;Ljava/lang/String;)V", &Bridge.storage_save_to_media_store)) return -1;
+    if (!cacheRequired(jenv, "storage_external_files_dir", "(Ljava/lang/String;)Ljava/lang/String;", &Bridge.storage_external_files_dir)) return -1;
+    if (!cacheRequired(jenv, "alert_show", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", &Bridge.alert_show)) return -1;
+    if (!cacheRequired(jenv, "action_sheet_show", "(Ljava/lang/String;Ljava/lang/String;)V", &Bridge.action_sheet_show)) return -1;
+    if (!cacheRequired(jenv, "toast_show", "(Ljava/lang/String;Ljava/lang/String;)V", &Bridge.toast_show)) return -1;
+    if (!cacheRequired(jenv, "webview_eval_js", "(Ljava/lang/String;)V", &Bridge.webview_eval_js)) return -1;
+    if (!cacheRequired(jenv, "webview_post_message", "(Ljava/lang/String;)V", &Bridge.webview_post_message)) return -1;
+    if (!cacheRequired(jenv, "webview_can_go_back", "()Z", &Bridge.webview_can_go_back)) return -1;
+    if (!cacheRequired(jenv, "webview_go_back", "()V", &Bridge.webview_go_back)) return -1;
+    if (!cacheRequired(jenv, "motion_start", "(JLjava/lang/String;)V", &Bridge.motion_start)) return -1;
+    if (!cacheRequired(jenv, "motion_stop", "()V", &Bridge.motion_stop)) return -1;
+    if (!cacheRequired(jenv, "scanner_scan", "(JLjava/lang/String;)V", &Bridge.scanner_scan)) return -1;
+    if (!cacheRequired(jenv, "notify_schedule", "(JLjava/lang/String;)V", &Bridge.notify_schedule)) return -1;
+    if (!cacheRequired(jenv, "notify_cancel", "(Ljava/lang/String;)V", &Bridge.notify_cancel)) return -1;
+    if (!cacheRequired(jenv, "notify_register_push", "(JLjava/lang/String;)V", &Bridge.notify_register_push)) return -1;
+    if (!cacheRequired(jenv, "background_keep_alive", "()V", &Bridge.background_keep_alive)) return -1;
+    if (!cacheRequired(jenv, "background_stop", "()V", &Bridge.background_stop)) return -1;
+
+    g_launch_notif_mutex = erts.enif_mutex_create("mob_launch_notif_mutex");
+    if (g_launch_notif_mutex == null) {
+        loge_nif("nif_load: failed to create launch notif mutex", .{});
+        return -1;
+    }
+
+    // Test harness method IDs — optional. Apps without the harness build
+    // (release variants, downstream consumers that don't link it) won't
+    // have these and that's fine; the test NIFs return :not_loaded.
+    cacheOptional(jenv, "uiTree", "()Ljava/lang/String;", &Bridge.ui_tree);
+    cacheOptional(jenv, "uiViewTree", "()Ljava/lang/String;", &Bridge.ui_view_tree);
+    cacheOptional(jenv, "screenInfo", "()[F", &Bridge.screen_info);
+    cacheOptional(jenv, "tapXy", "(FF)Z", &Bridge.tap_xy);
+    cacheOptional(jenv, "tapByLabel", "(Ljava/lang/String;)Z", &Bridge.tap_by_label);
+    cacheOptional(jenv, "typeText", "(Ljava/lang/String;)Z", &Bridge.type_text);
+    cacheOptional(jenv, "deleteBackward", "()Z", &Bridge.delete_backward);
+    cacheOptional(jenv, "clearText", "()Z", &Bridge.clear_text);
+    cacheOptional(jenv, "longPressXy", "(FFJ)Z", &Bridge.long_press_xy);
+    cacheOptional(jenv, "swipeXy", "(FFFF)Z", &Bridge.swipe_xy);
+
+    logi_nif("Mob NIF loaded (Compose backend)", .{});
+    return 0;
+}
+
+// ── NIF table + ERL_NIF_INIT entry point ─────────────────────────────────
+// Replaces the static `ErlNifFunc nif_funcs[]` + `ERL_NIF_INIT` macro
+// that used to live at the bottom of mob_nif.c. The entry point is the
+// `<MODNAME>_nif_init` symbol the BEAM looks up from the driver_tab —
+// driver_tab_android.zig already extern-declares `mob_nif_nif_init` for
+// the static-NIF link path.
+
+const nif_funcs = [_]erts.ErlNifFunc{
+    // Test harness first — matches the iOS nif_funcs[] ordering convention.
+    .{ .name = "ui_tree", .arity = 0, .fptr = nif_ui_tree, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
+    .{ .name = "ui_view_tree", .arity = 0, .fptr = nif_ui_view_tree, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
+    .{ .name = "ax_action", .arity = 2, .fptr = nif_ax_action, .flags = 0 },
+    .{ .name = "ax_action_at_xy", .arity = 3, .fptr = nif_ax_action_at_xy, .flags = 0 },
+    .{ .name = "ui_debug", .arity = 0, .fptr = nif_ui_debug, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
+    .{ .name = "screen_info", .arity = 0, .fptr = nif_screen_info, .flags = 0 },
+    .{ .name = "tap", .arity = 1, .fptr = nif_tap, .flags = 0 },
+    .{ .name = "tap_xy", .arity = 2, .fptr = nif_tap_xy, .flags = 0 },
+    .{ .name = "type_text", .arity = 1, .fptr = nif_type_text, .flags = 0 },
+    .{ .name = "delete_backward", .arity = 0, .fptr = nif_delete_backward, .flags = 0 },
+    .{ .name = "key_press", .arity = 1, .fptr = nif_key_press, .flags = 0 },
+    .{ .name = "clear_text", .arity = 0, .fptr = nif_clear_text, .flags = 0 },
+    .{ .name = "long_press_xy", .arity = 3, .fptr = nif_long_press_xy, .flags = 0 },
+    .{ .name = "swipe_xy", .arity = 4, .fptr = nif_swipe_xy, .flags = 0 },
+    // Core mob functions.
+    .{ .name = "platform", .arity = 0, .fptr = nif_platform, .flags = 0 },
+    .{ .name = "color_scheme", .arity = 0, .fptr = nif_color_scheme, .flags = 0 },
+    .{ .name = "log", .arity = 1, .fptr = nif_log, .flags = 0 },
+    .{ .name = "log", .arity = 2, .fptr = nif_log2, .flags = 0 },
+    .{ .name = "set_transition", .arity = 1, .fptr = nif_set_transition, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
+    .{ .name = "set_root", .arity = 1, .fptr = nif_set_root, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
+    .{ .name = "register_tap", .arity = 1, .fptr = nif_register_tap, .flags = 0 },
+    .{ .name = "clear_taps", .arity = 0, .fptr = nif_clear_taps, .flags = 0 },
+    .{ .name = "exit_app", .arity = 0, .fptr = nif_exit_app, .flags = 0 },
+    .{ .name = "safe_area", .arity = 0, .fptr = nif_safe_area, .flags = 0 },
+    .{ .name = "haptic", .arity = 1, .fptr = nif_haptic, .flags = 0 },
+    .{ .name = "clipboard_put", .arity = 1, .fptr = nif_clipboard_put, .flags = 0 },
+    .{ .name = "clipboard_get", .arity = 0, .fptr = nif_clipboard_get, .flags = 0 },
+    .{ .name = "share_text", .arity = 1, .fptr = nif_share_text, .flags = 0 },
+    .{ .name = "open_url", .arity = 1, .fptr = nif_open_url, .flags = 0 },
+    .{ .name = "request_permission", .arity = 1, .fptr = nif_request_permission, .flags = 0 },
+    .{ .name = "biometric_authenticate", .arity = 1, .fptr = nif_biometric_authenticate, .flags = 0 },
+    .{ .name = "location_get_once", .arity = 0, .fptr = nif_location_get_once, .flags = 0 },
+    .{ .name = "location_start", .arity = 1, .fptr = nif_location_start, .flags = 0 },
+    .{ .name = "location_stop", .arity = 0, .fptr = nif_location_stop, .flags = 0 },
+    .{ .name = "camera_capture_photo", .arity = 1, .fptr = nif_camera_capture_photo, .flags = 0 },
+    .{ .name = "camera_capture_video", .arity = 1, .fptr = nif_camera_capture_video, .flags = 0 },
+    .{ .name = "camera_start_preview", .arity = 1, .fptr = nif_camera_start_preview, .flags = 0 },
+    .{ .name = "camera_stop_preview", .arity = 0, .fptr = nif_camera_stop_preview, .flags = 0 },
+    .{ .name = "photos_pick", .arity = 2, .fptr = nif_photos_pick, .flags = 0 },
+    .{ .name = "files_pick", .arity = 1, .fptr = nif_files_pick, .flags = 0 },
+    .{ .name = "audio_start_recording", .arity = 1, .fptr = nif_audio_start_recording, .flags = 0 },
+    .{ .name = "audio_stop_recording", .arity = 0, .fptr = nif_audio_stop_recording, .flags = 0 },
+    .{ .name = "audio_play", .arity = 2, .fptr = nif_audio_play, .flags = 0 },
+    .{ .name = "audio_stop_playback", .arity = 0, .fptr = nif_audio_stop_playback, .flags = 0 },
+    .{ .name = "audio_set_volume", .arity = 1, .fptr = nif_audio_set_volume, .flags = 0 },
+    .{ .name = "motion_start", .arity = 2, .fptr = nif_motion_start, .flags = 0 },
+    .{ .name = "motion_stop", .arity = 0, .fptr = nif_motion_stop, .flags = 0 },
+    .{ .name = "scanner_scan", .arity = 1, .fptr = nif_scanner_scan, .flags = 0 },
+    .{ .name = "notify_schedule", .arity = 1, .fptr = nif_notify_schedule, .flags = 0 },
+    .{ .name = "notify_cancel", .arity = 1, .fptr = nif_notify_cancel, .flags = 0 },
+    .{ .name = "notify_register_push", .arity = 0, .fptr = nif_notify_register_push, .flags = 0 },
+    .{ .name = "take_launch_notification", .arity = 0, .fptr = nif_take_launch_notification, .flags = 0 },
+    .{ .name = "storage_dir", .arity = 1, .fptr = nif_storage_dir, .flags = 0 },
+    .{ .name = "storage_save_to_media_store", .arity = 2, .fptr = nif_storage_save_to_media_store, .flags = 0 },
+    .{ .name = "storage_external_files_dir", .arity = 1, .fptr = nif_storage_external_files_dir, .flags = 0 },
+    .{ .name = "storage_save_to_photo_library", .arity = 1, .fptr = nif_storage_save_to_photo_library, .flags = 0 },
+    .{ .name = "alert_show", .arity = 3, .fptr = nif_alert_show, .flags = 0 },
+    .{ .name = "action_sheet_show", .arity = 2, .fptr = nif_action_sheet_show, .flags = 0 },
+    .{ .name = "toast_show", .arity = 2, .fptr = nif_toast_show, .flags = 0 },
+    .{ .name = "webview_eval_js", .arity = 1, .fptr = nif_webview_eval_js, .flags = 0 },
+    .{ .name = "webview_post_message", .arity = 1, .fptr = nif_webview_post_message, .flags = 0 },
+    .{ .name = "webview_can_go_back", .arity = 0, .fptr = nif_webview_can_go_back, .flags = 0 },
+    .{ .name = "webview_go_back", .arity = 0, .fptr = nif_webview_go_back, .flags = 0 },
+    .{ .name = "register_component", .arity = 1, .fptr = nif_register_component, .flags = 0 },
+    .{ .name = "deregister_component", .arity = 1, .fptr = nif_deregister_component, .flags = 0 },
+    .{ .name = "background_keep_alive", .arity = 0, .fptr = nif_background_keep_alive, .flags = 0 },
+    .{ .name = "background_stop", .arity = 0, .fptr = nif_background_stop, .flags = 0 },
+    // Mob.Device — lifecycle events + queries (Android stubs except dispatcher set).
+    .{ .name = "device_set_dispatcher", .arity = 1, .fptr = nif_device_set_dispatcher, .flags = 0 },
+    .{ .name = "device_battery_state", .arity = 0, .fptr = nif_device_battery_state, .flags = 0 },
+    .{ .name = "device_thermal_state", .arity = 0, .fptr = nif_device_thermal_state, .flags = 0 },
+    .{ .name = "device_low_power_mode", .arity = 0, .fptr = nif_device_low_power_mode, .flags = 0 },
+    .{ .name = "device_foreground", .arity = 0, .fptr = nif_device_foreground, .flags = 0 },
+    .{ .name = "device_os_version", .arity = 0, .fptr = nif_device_os_version, .flags = 0 },
+    .{ .name = "device_model", .arity = 0, .fptr = nif_device_model, .flags = 0 },
+};
+
+var mob_nif_entry: erts.ErlNifEntry = .{
+    .major = erts.ERL_NIF_MAJOR_VERSION,
+    .minor = erts.ERL_NIF_MINOR_VERSION,
+    .name = "mob_nif",
+    .num_of_funcs = nif_funcs.len,
+    .funcs = &nif_funcs,
+    .load = nifLoad,
+    .reload = null,
+    .upgrade = null,
+    .unload = null,
+    .vm_variant = erts.ERL_NIF_VM_VARIANT,
+    .options = 1, // enable dirty-NIF support — matches what ERL_NIF_INIT emits.
+    .sizeof_ErlNifResourceTypeInit = erts.SIZEOF_ErlNifResourceTypeInit,
+    .min_erts = erts.ERL_NIF_MIN_ERTS_VERSION,
+};
+
+/// `mob_nif_nif_init` — the symbol the BEAM looks up via the static NIF
+/// table to find this NIF's `ErlNifEntry`. driver_tab_android.zig already
+/// extern-declares it. STATIC_ERLANG_NIF + ERL_NIF_INIT_NAME(mob_nif) in
+/// the C header would have expanded to the same symbol.
+pub export fn mob_nif_nif_init() callconv(.c) *erts.ErlNifEntry {
+    return &mob_nif_entry;
 }
