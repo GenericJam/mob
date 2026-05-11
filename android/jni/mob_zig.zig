@@ -93,6 +93,8 @@ pub fn nowNs() i64 {
 // equivalent and skips the link-time guard.
 pub extern fn malloc(size: usize) ?*anyopaque;
 pub extern fn free(ptr: ?*anyopaque) void;
+pub extern fn strlen(s: [*:0]const u8) usize;
+pub extern fn strdup(s: [*:0]const u8) ?[*:0]u8;
 
 pub const _IONBF: c_int = 2;
 

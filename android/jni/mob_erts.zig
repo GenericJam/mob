@@ -64,6 +64,54 @@ pub const ErlNifFunc = extern struct {
     flags: c_uint,
 };
 
+/// NIF dirty-job flags. Match the `ErlNifDirtyTaskFlags` enum in erl_nif.h —
+/// these are the `flags` field values for ErlNifFunc entries that should
+/// dispatch on a dirty scheduler. Plain CPU-bound work on the BEAM thread
+/// (JSON parse, tree walks) uses CPU_BOUND; long-blocking I/O uses IO_BOUND.
+pub const ERL_NIF_DIRTY_JOB_CPU_BOUND: c_uint = 1;
+pub const ERL_NIF_DIRTY_JOB_IO_BOUND: c_uint = 2;
+
+/// `ErlNifEntry` — the top-level NIF library descriptor. Returned by the
+/// `<module>_nif_init` symbol that the `ERL_NIF_INIT` macro generates in C.
+/// Iter 3d builds this struct manually in Zig (instead of via the C macro)
+/// so the entire NIF surface — table, load callback, and entry returned to
+/// the BEAM — lives in mob_nif.zig.
+///
+/// Major/minor + min_erts must match the headers the BEAM was built with.
+/// We hard-code 2/18 + "erts-14.0" to match the bundled OTP 29 headers; if
+/// you bump the OTP runtime, also bump these. `options = 1` allows dirty
+/// NIFs (matches what the ERL_NIF_INIT macro emits today).
+pub const ERL_NIF_MAJOR_VERSION: c_int = 2;
+pub const ERL_NIF_MINOR_VERSION: c_int = 18;
+pub const ERL_NIF_MIN_ERTS_VERSION: [*:0]const u8 = "erts-14.0";
+pub const ERL_NIF_VM_VARIANT: [*:0]const u8 = "beam.vanilla";
+
+/// ErlNifResourceTypeInit — declared opaque (we never construct one; only
+/// its size is read from the entry to gate ABI compatibility). Size on
+/// aarch64-linux: 5 pointers = 40 bytes (dtor/stop/down/dyncall + int).
+pub const SIZEOF_ErlNifResourceTypeInit: usize = 40;
+
+pub const ErlNifLoadFn = ?*const fn (env: ?*ErlNifEnv, priv_data: *?*anyopaque, load_info: ERL_NIF_TERM) callconv(.c) c_int;
+pub const ErlNifReloadFn = ?*const fn (env: ?*ErlNifEnv, priv_data: *?*anyopaque, load_info: ERL_NIF_TERM) callconv(.c) c_int;
+pub const ErlNifUpgradeFn = ?*const fn (env: ?*ErlNifEnv, priv_data: *?*anyopaque, old_priv: *?*anyopaque, load_info: ERL_NIF_TERM) callconv(.c) c_int;
+pub const ErlNifUnloadFn = ?*const fn (env: ?*ErlNifEnv, priv_data: ?*anyopaque) callconv(.c) void;
+
+pub const ErlNifEntry = extern struct {
+    major: c_int,
+    minor: c_int,
+    name: [*:0]const u8,
+    num_of_funcs: c_int,
+    funcs: [*]const ErlNifFunc,
+    load: ErlNifLoadFn,
+    reload: ErlNifReloadFn,
+    upgrade: ErlNifUpgradeFn,
+    unload: ErlNifUnloadFn,
+    vm_variant: [*:0]const u8,
+    options: c_uint,
+    sizeof_ErlNifResourceTypeInit: usize,
+    min_erts: [*:0]const u8,
+};
+
 // ── Term constructors ─────────────────────────────────────────────────────
 
 pub extern fn enif_make_atom(env: ?*ErlNifEnv, name: [*:0]const u8) ERL_NIF_TERM;
