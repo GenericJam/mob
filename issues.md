@@ -393,7 +393,13 @@ phones will be Android 15+).
 
 ---
 
-## 7. iOS Slider doesn't honor `accessibilityIncrement`/`Decrement`
+## 7. iOS Slider doesn't honor `accessibilityIncrement`/`Decrement` — **FIXED 2026-05-10**
+
+> **Resolution.** `MobSlider` in `ios/MobRootView.swift` now has
+> `.accessibilityAdjustableAction { direction in … }` with default step
+> `(max - min) / 10` (matches VoiceOver's default for native UISlider).
+> Increments/decrements call `node.onChangeFloat?` so `:change` events
+> still flow. `Mob.Test.adjust_slider/4` works end-to-end after this.
 
 **Symptom** — `Mob.Test.adjust_slider/4` (and direct `mob_nif:ax_action_at_xy(x, y, :increment)`) returns `:ok` but the slider's value never changes. Verified 2026-04-30 against `mob_test`'s ControlsScreen on a real iPhone with VoiceOver active.
 
@@ -426,7 +432,15 @@ This unblocks `Mob.Test.adjust_slider/4` end-to-end. Same component on Android (
 
 ---
 
-## 8. iOS Toggle's `label:` prop doesn't reach the AX tree
+## 8. iOS Toggle's `label:` prop doesn't reach the AX tree — **FIXED 2026-05-10**
+
+> **Resolution.** `MobToggle` in `ios/MobRootView.swift` now appends
+> `.accessibilityLabel(label)` after the `Toggle("Label", isOn:)` view.
+> SwiftUI's Toggle initializer doesn't propagate the label string into
+> the underlying control's accessibilityLabel, so this is the explicit
+> bridge. After the fix, the toggle appears in `ui_tree` as
+> `:button label="Notifications" value="1"` and
+> `Mob.Test.toggle(node, "Notifications")` finds it via plain match.
 
 **Symptom** — `Mob.Test.toggle/2` returns `{:error, :label_not_found}` because the visible label text doesn't appear in `mob_nif:ui_tree/0`. The toggle itself comes through as:
 
@@ -788,7 +802,24 @@ problem.
 
 ---
 
-## 14. iOS sim's distribution node name doesn't match `mix mob.connect`'s expectation
+## 14. iOS sim's distribution node name doesn't match `mix mob.connect`'s expectation — **WORKED AROUND 2026-05-10**
+
+> **Resolution.** Option (1) from the fix list — defensive fallback in
+> `mob_dev/lib/mob_dev/connector.ex`. `wait_for_nodes/2` now builds a
+> per-device candidate list and tries each in parallel via
+> `try_connect_each/2`. For iOS sims the list is
+> `[<app>_ios_<short>@127.0.0.1, <app>_ios@127.0.0.1]`; first responder
+> wins and the connected `Device.node` is updated to whichever name
+> actually registered. The output surfaces the alternate name when the
+> fallback is used so the user can copy it for direct RPC.
+>
+> **Root cause still TBD.** The fallback works around the symptom but
+> doesn't explain why `mob_beam.m`'s `getenv("SIMULATOR_UDID")` sometimes
+> returns NULL in launch contexts where it should be set. Worth
+> investigating: confirm via `simctl spawn <udid> printenv | grep SIM`
+> on a freshly-deployed sim, then trace through the launcher chain
+> (`xcrun simctl install` then user-tap vs `simctl launch`). The fix
+> there belongs in mob_beam.m (or the launch path that drops the var).
 
 **Symptom** — After `mix mob.deploy --native --ios --device <sim-udid>`,
 running `mix mob.connect --no-iex` shows the sim node as a timeout while
