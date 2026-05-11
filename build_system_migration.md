@@ -1279,7 +1279,76 @@ something useful even if the total project pauses.
     senders + mob_handle_back + 23 nif_*). 702/702 mob tests +
     credo strict clean + clang-format clean. mob_nif.c lost ~666
     lines net.
-  - iter 3d (planned): remaining feature NIFs — storage, WebView,
-    alert/action_sheet/toast, native view components, background
-    lifecycle, Mob.Device. Moves the `ErlNifFunc nif_funcs[]`
-    table to Zig. mob_nif.c deleted.
+  - iter 3d (finale — mob_nif.c deleted, all-Zig NIF surface):
+    the multi-iter port is done. mob_nif.c is gone after starting
+    iter 3a at 2570 lines. The final Android native code surface
+    is 4457 lines: 2932 in mob_nif.zig, 281 in mob_erts.zig, 569
+    in mob_zig.zig, 675 in mob_beam.zig. The only `.c` file
+    remaining in the Android native build is the per-app
+    `beam_jni.c` stub (JNI entrypoints + `g_jvm`/`g_activity`
+    globals), kept as C so app authors don't need Zig to read
+    their own JNI bridge.
+
+    Moved in this iter:
+
+      • Bridge bootstrap (`_mob_ui_cache_class_impl`,
+        `mob_set_startup_phase`, `mob_set_startup_error`,
+        `_mob_bridge_init_activity`) — exported with C ABI so
+        mob_beam.zig and beam_jni.c keep calling them unchanged.
+      • All remaining feature NIFs: color_scheme, exit_app,
+        safe_area, haptic, clipboard ×2, open_url, share_text,
+        biometric_authenticate, request_permission, location ×3,
+        camera ×4, photos_pick, files_pick, audio ×5, motion ×2,
+        scanner, notify ×3, storage ×4, alert/action_sheet/toast,
+        webview ×4, background ×2, device ×7 (dispatcher_set +
+        6 stubs).
+      • Async result dispatchers (called from Kotlin via JNI):
+        `mob_deliver_atom2/atom3/location/motion/webview_message/
+        webview_blocked/file_result/push_token/notification/
+        alert_action`, plus the legacy `mob_nif_deliver_json`
+        no-op.
+      • Launch notification global + writer + take NIF.
+      • Mob.Device dispatcher pid + `mob_send_color_scheme_changed`.
+      • The `ErlNifFunc nif_funcs[]` table (75 entries; dirty-job
+        flags preserved on the four CPU-bound NIFs).
+      • `nif_load` BEAM callback — caches all ~45 method IDs and
+        creates the launch-notification mutex. Replaces the C-side
+        `CACHE`/`CACHE_OPT` macros with `cacheRequired` /
+        `cacheOptional` Zig inlines.
+      • Hand-built `ErlNifEntry` struct + `mob_nif_nif_init` —
+        replaces the `ERL_NIF_INIT(mob_nif, …)` C macro with a
+        plain Zig struct literal + `export fn` returning a
+        pointer to it. driver_tab_android.zig already extern-
+        declared the symbol from iter 3a, so the static-NIF link
+        path keeps working unchanged.
+
+    FFI extensions:
+
+      • mob_erts.zig: `ErlNifEntry` extern struct + the four
+        callback function-pointer typedefs (Load/Reload/Upgrade/
+        Unload) + ERL_NIF_{MAJOR,MINOR}_VERSION constants +
+        ERL_NIF_MIN_ERTS_VERSION + ERL_NIF_VM_VARIANT +
+        ERL_NIF_DIRTY_JOB_{CPU,IO}_BOUND flag constants +
+        SIZEOF_ErlNifResourceTypeInit (the ABI-compat gate).
+      • mob_zig.zig: `strlen` + `strdup` extern decls (used by
+        deliver_* helpers + the launch-notification strdup-and-
+        store path).
+
+    Verified: standalone `zig build-obj -target
+    aarch64-linux-android.24` produces a clean mob_nif.o with
+    124 exported symbols. Every reference beam_jni.c needs
+    (`mob_send_*`, `mob_deliver_*`, `mob_handle_back`,
+    `mob_set_launch_notification`, `mob_init_bridge`,
+    `mob_ui_cache_class`, `mob_start_beam`,
+    `mob_send_color_scheme_changed`) resolves at link time. The
+    `mob_nif_nif_init` symbol the driver_tab references is now
+    exported from Zig. 702/702 mob tests + 224/224 mob_new tests
+    + credo strict clean on both. mob_new template drops
+    mob_nif.c from its source list — the only remaining `.c` is
+    `beam_jni.c`.
+
+    The full Android end-to-end smoke deploy (mix mob.deploy
+    --native against a connected emulator) is the next thing to
+    run — it bundles best as its own verification commit so the
+    test path is explicit about exercising the all-Zig finale.
+    Once that's green, Phase 6b is complete.
