@@ -360,7 +360,7 @@ app code just calls `Mob.Dist.ensure_started(node: :"my_app_android@127.0.0.1", 
 ERTS helper binaries (`erl_child_setup`, `inet_gethost`, `epmd`) cannot be exec'd from the
 app data directory (SELinux `app_data_file` blocks `execute_no_trans`). They are packaged in
 the APK as `lib*.so` in `jniLibs/arm64-v8a/` (gets `apk_data_file` label, which allows exec).
-`mob_beam.c` symlinks `BINDIR/<name>` → `<nativeLibraryDir>/lib<name>.so` before `erl_start`.
+`mob_beam.zig` symlinks `BINDIR/<name>` → `<nativeLibraryDir>/lib<name>.so` before `erl_start`.
 
 ## Agent round-trip workflow
 
@@ -548,7 +548,8 @@ User alias "Nova" = macOS + Nix-managed toolchain throughout.
 - `ios/mob_nif.m` — iOS NIF implementation (SwiftUI bridge + test harness)
 - `android/jni/mob_nif.c` — Android NIF implementation (JNI bridge)
 - `ios/mob_beam.m` — iOS BEAM launcher
-- `android/jni/mob_beam.c` — Android BEAM launcher
+- `android/jni/mob_beam.zig` — Android BEAM launcher (Phase 6b iter 2 — was `.c`)
+- `android/jni/mob_zig.zig` — Hand-declared JNI / libc / Android FFI bindings used by mob_beam.zig
 
 ## Transport-handler reentrancy: spawn before calling back into the GenServer
 

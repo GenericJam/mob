@@ -1,0 +1,470 @@
+//! mob_zig.zig — Hand-declared JNI/Android/libc bindings for Mob's Zig code.
+//!
+//! Phase 6b of the build-system migration translates mob's Android C source
+//! (mob_beam.c, mob_nif.c) to Zig. Zig 0.17-dev's `@cImport` builtin was
+//! removed and `zig translate-c` hangs on the Android NDK's `jni.h` (deep
+//! recursive include tree). Hand-declaring the FFI surface sidesteps both:
+//!
+//!   * **Stable**: JNI ABI hasn't materially changed since Java 1.1 (1997).
+//!     Android log + libc surface used here is similarly stable.
+//!   * **Minimal**: declares only what Mob's Zig source actually uses.
+//!     ~250 lines beats a thousand-line auto-generated translation.
+//!   * **Auditable**: a reviewer can read the whole binding in one sitting.
+//!   * **Future-proof**: doesn't depend on Zig version's @cImport behavior.
+//!
+//! The hand-declared layouts mirror the C headers byte-for-byte (verified
+//! against AOSP's `frameworks/native/include/jni.h` and Android NDK's
+//! `android/log.h`, `dlfcn.h`, etc.).
+
+const std = @import("std");
+
+// ── Android log ────────────────────────────────────────────────────────────
+
+pub const ANDROID_LOG_VERBOSE: c_int = 2;
+pub const ANDROID_LOG_DEBUG: c_int = 3;
+pub const ANDROID_LOG_INFO: c_int = 4;
+pub const ANDROID_LOG_WARN: c_int = 5;
+pub const ANDROID_LOG_ERROR: c_int = 6;
+
+pub extern fn __android_log_write(prio: c_int, tag: [*:0]const u8, text: [*:0]const u8) c_int;
+pub extern fn __android_log_print(prio: c_int, tag: [*:0]const u8, fmt: [*:0]const u8, ...) c_int;
+
+/// Format a message with std.fmt and write it via __android_log_write.
+/// Truncates safely on oversize input (Android log already truncates at
+/// ~4 KB anyway).
+pub fn logWrite(prio: c_int, comptime tag: [*:0]const u8, comptime fmt: []const u8, args: anytype) void {
+    var buf: [4096]u8 = undefined;
+    const slice = std.fmt.bufPrint(&buf, fmt, args) catch buf[0..(buf.len - 1)];
+    // bufPrint doesn't NUL-terminate; we need NUL for __android_log_write.
+    const end = @min(slice.len, buf.len - 1);
+    buf[end] = 0;
+    _ = __android_log_write(prio, tag, buf[0..end :0]);
+}
+
+// ── POSIX / libc ───────────────────────────────────────────────────────────
+
+pub const STDOUT_FILENO: c_int = 1;
+pub const STDERR_FILENO: c_int = 2;
+
+pub extern fn pipe(fds: *[2]c_int) c_int;
+pub extern fn dup2(oldfd: c_int, newfd: c_int) c_int;
+pub extern fn close(fd: c_int) c_int;
+pub extern fn read(fd: c_int, buf: [*]u8, count: usize) isize;
+pub extern fn setvbuf(stream: *FILE, buf: ?[*]u8, mode: c_int, size: usize) c_int;
+pub extern fn fopen(pathname: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
+pub extern fn fread(ptr: [*]u8, size: usize, nmemb: usize, stream: *FILE) usize;
+pub extern fn fclose(stream: *FILE) c_int;
+/// bionic's errno getter. The C `errno` macro expands to `(*__errno())`.
+/// Symbol name matches the linker name in libc.so (`__errno`, not
+/// `__errno_location` — that's the glibc spelling).
+pub extern fn __errno() *c_int;
+pub extern fn strerror(errnum: c_int) [*:0]const u8;
+pub extern fn strncmp(s1: [*]const u8, s2: [*]const u8, n: usize) c_int;
+pub extern fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+pub extern fn mkdir(pathname: [*:0]const u8, mode: u32) c_int;
+pub extern fn unlink(pathname: [*:0]const u8) c_int;
+pub extern fn symlink(target: [*:0]const u8, linkpath: [*:0]const u8) c_int;
+pub extern fn stat(pathname: [*:0]const u8, statbuf: *Stat) c_int;
+pub extern fn opendir(name: [*:0]const u8) ?*DIR;
+pub extern fn readdir(dirp: *DIR) ?*Dirent;
+pub extern fn closedir(dirp: *DIR) c_int;
+pub extern fn nanosleep(req: *const Timespec, rem: ?*Timespec) c_int;
+pub extern fn snprintf(buf: [*]u8, size: usize, fmt: [*:0]const u8, ...) c_int;
+
+pub const _IONBF: c_int = 2;
+
+pub const FILE = opaque {};
+
+/// bionic exposes `stdout` and `stderr` as `extern FILE*` symbols (NDK 23+,
+/// API ≥ 21). We use them only to call `setvbuf(stdout, NULL, _IONBF, 0)`
+/// after redirecting fd 1/2 to a pipe — the libc-side FILE objects retain
+/// their own buffer until told otherwise.
+pub extern var stdout: *FILE;
+pub extern var stderr: *FILE;
+
+/// Opaque DIR for opendir/readdir/closedir.
+pub const DIR = opaque {};
+
+/// Android bionic dirent layout (sufficient for us — only need d_name).
+/// AOSP source: bionic/libc/include/dirent.h.
+pub const Dirent = extern struct {
+    d_ino: u64,
+    d_off: i64,
+    d_reclen: u16,
+    d_type: u8,
+    d_name: [256]u8,
+};
+
+pub const Stat = extern struct {
+    // Layout we don't fully care about — we only call stat() for existence
+    // check. Opaque-sized buffer is safer than getting field offsets wrong.
+    _opaque: [256]u8,
+};
+
+pub const Timespec = extern struct {
+    tv_sec: i64,
+    tv_nsec: i64,
+};
+
+pub extern fn pthread_create(
+    thread: *PthreadT,
+    attr: ?*const anyopaque,
+    start_routine: *const fn (?*anyopaque) callconv(.c) ?*anyopaque,
+    arg: ?*anyopaque,
+) c_int;
+
+pub extern fn pthread_detach(thread: PthreadT) c_int;
+
+pub const PthreadT = usize; // Android: pthread_t is a long unsigned int
+
+// ── dlfcn ──────────────────────────────────────────────────────────────────
+
+pub const RTLD_NOW: c_int = 2;
+pub const RTLD_GLOBAL: c_int = 0x00100;
+
+pub extern fn dlopen(filename: [*:0]const u8, flags: c_int) ?*anyopaque;
+pub extern fn dlerror() ?[*:0]const u8;
+
+// ── JNI ────────────────────────────────────────────────────────────────────
+// AOSP source: frameworks/native/include/jni.h. We only declare the vtable
+// entries we actually call; future iters can add more as needed.
+
+pub const JNI_VERSION_1_6: c_int = 0x00010006;
+pub const JNI_OK: c_int = 0;
+
+pub const JBoolean = u8;
+pub const JInt = i32;
+pub const JLong = i64;
+pub const JFloat = f32;
+pub const JDouble = f64;
+
+pub const JObject = ?*anyopaque;
+pub const JClass = JObject;
+pub const JString = JObject;
+pub const JFieldID = ?*anyopaque;
+pub const JMethodID = ?*anyopaque;
+
+/// JNIEnv is a pointer-to-pointer-to-JNINativeInterface. C usage:
+///   `(*env)->FindClass(env, "..")`
+/// Zig usage via our helpers:
+///   `jni.findClass(env, "..")`
+pub const JNIEnv = *const JNINativeInterface;
+
+/// Vtable inside JNIEnv. Order matters — must match jni.h exactly.
+/// We declare only the slots we use, plus reserved padding for the rest.
+/// Each `?*const fn(...) callconv(.c) ...` is a function pointer.
+pub const JNINativeInterface = extern struct {
+    _reserved0: ?*anyopaque,
+    _reserved1: ?*anyopaque,
+    _reserved2: ?*anyopaque,
+    _reserved3: ?*anyopaque,
+
+    // Index 4: GetVersion — unused but in the slot order.
+    GetVersion: ?*const fn (env: *JNIEnv) callconv(.c) JInt,
+
+    // 5-8: DefineClass, FindClass, FromReflectedMethod, FromReflectedField
+    DefineClass: ?*anyopaque,
+    FindClass: ?*const fn (env: *JNIEnv, name: [*:0]const u8) callconv(.c) JClass,
+    FromReflectedMethod: ?*anyopaque,
+    FromReflectedField: ?*anyopaque,
+
+    // 9-16: reflected/IsAssignableFrom + exceptions block
+    ToReflectedMethod: ?*anyopaque,
+    GetSuperclass: ?*anyopaque,
+    IsAssignableFrom: ?*anyopaque,
+    ToReflectedField: ?*anyopaque,
+    Throw: ?*anyopaque,
+    ThrowNew: ?*anyopaque,
+    ExceptionOccurred: ?*anyopaque,
+    ExceptionDescribe: ?*anyopaque,
+
+    // 17-22: exception finish, refs
+    ExceptionClear: ?*anyopaque,
+    FatalError: ?*anyopaque,
+    PushLocalFrame: ?*anyopaque,
+    PopLocalFrame: ?*anyopaque,
+    NewGlobalRef: ?*const fn (env: *JNIEnv, obj: JObject) callconv(.c) JObject,
+    DeleteGlobalRef: ?*const fn (env: *JNIEnv, gref: JObject) callconv(.c) void,
+
+    // 23-26: local ref slots
+    DeleteLocalRef: ?*anyopaque,
+    IsSameObject: ?*anyopaque,
+    NewLocalRef: ?*anyopaque,
+    EnsureLocalCapacity: ?*anyopaque,
+
+    // 27-29: object creation
+    AllocObject: ?*anyopaque,
+    NewObject: ?*anyopaque,
+    NewObjectV: ?*anyopaque,
+
+    // 30-32: object type queries
+    NewObjectA: ?*anyopaque,
+    GetObjectClass: ?*const fn (env: *JNIEnv, obj: JObject) callconv(.c) JClass,
+    IsInstanceOf: ?*anyopaque,
+
+    // 33: GetMethodID
+    GetMethodID: ?*const fn (env: *JNIEnv, cls: JClass, name: [*:0]const u8, sig: [*:0]const u8) callconv(.c) JMethodID,
+
+    // 34-60: many CallXxxMethod variants — we only use CallObjectMethod
+    // and CallBooleanMethod by typed signature. Pad as opaque.
+    CallObjectMethod: ?*const fn (env: *JNIEnv, obj: JObject, mid: JMethodID, ...) callconv(.c) JObject,
+    CallObjectMethodV: ?*anyopaque,
+    CallObjectMethodA: ?*anyopaque,
+    CallBooleanMethod: ?*const fn (env: *JNIEnv, obj: JObject, mid: JMethodID, ...) callconv(.c) JBoolean,
+    CallBooleanMethodV: ?*anyopaque,
+    CallBooleanMethodA: ?*anyopaque,
+    CallByteMethod: ?*anyopaque,
+    CallByteMethodV: ?*anyopaque,
+    CallByteMethodA: ?*anyopaque,
+    CallCharMethod: ?*anyopaque,
+    CallCharMethodV: ?*anyopaque,
+    CallCharMethodA: ?*anyopaque,
+    CallShortMethod: ?*anyopaque,
+    CallShortMethodV: ?*anyopaque,
+    CallShortMethodA: ?*anyopaque,
+    CallIntMethod: ?*anyopaque,
+    CallIntMethodV: ?*anyopaque,
+    CallIntMethodA: ?*anyopaque,
+    CallLongMethod: ?*anyopaque,
+    CallLongMethodV: ?*anyopaque,
+    CallLongMethodA: ?*anyopaque,
+    CallFloatMethod: ?*anyopaque,
+    CallFloatMethodV: ?*anyopaque,
+    CallFloatMethodA: ?*anyopaque,
+    CallDoubleMethod: ?*anyopaque,
+    CallDoubleMethodV: ?*anyopaque,
+    CallDoubleMethodA: ?*anyopaque,
+    CallVoidMethod: ?*anyopaque,
+    CallVoidMethodV: ?*anyopaque,
+    CallVoidMethodA: ?*anyopaque,
+
+    // 62-94: nonvirtual call variants + field accessors
+    CallNonvirtualObjectMethod: ?*anyopaque,
+    CallNonvirtualObjectMethodV: ?*anyopaque,
+    CallNonvirtualObjectMethodA: ?*anyopaque,
+    CallNonvirtualBooleanMethod: ?*anyopaque,
+    CallNonvirtualBooleanMethodV: ?*anyopaque,
+    CallNonvirtualBooleanMethodA: ?*anyopaque,
+    CallNonvirtualByteMethod: ?*anyopaque,
+    CallNonvirtualByteMethodV: ?*anyopaque,
+    CallNonvirtualByteMethodA: ?*anyopaque,
+    CallNonvirtualCharMethod: ?*anyopaque,
+    CallNonvirtualCharMethodV: ?*anyopaque,
+    CallNonvirtualCharMethodA: ?*anyopaque,
+    CallNonvirtualShortMethod: ?*anyopaque,
+    CallNonvirtualShortMethodV: ?*anyopaque,
+    CallNonvirtualShortMethodA: ?*anyopaque,
+    CallNonvirtualIntMethod: ?*anyopaque,
+    CallNonvirtualIntMethodV: ?*anyopaque,
+    CallNonvirtualIntMethodA: ?*anyopaque,
+    CallNonvirtualLongMethod: ?*anyopaque,
+    CallNonvirtualLongMethodV: ?*anyopaque,
+    CallNonvirtualLongMethodA: ?*anyopaque,
+    CallNonvirtualFloatMethod: ?*anyopaque,
+    CallNonvirtualFloatMethodV: ?*anyopaque,
+    CallNonvirtualFloatMethodA: ?*anyopaque,
+    CallNonvirtualDoubleMethod: ?*anyopaque,
+    CallNonvirtualDoubleMethodV: ?*anyopaque,
+    CallNonvirtualDoubleMethodA: ?*anyopaque,
+    CallNonvirtualVoidMethod: ?*anyopaque,
+    CallNonvirtualVoidMethodV: ?*anyopaque,
+    CallNonvirtualVoidMethodA: ?*anyopaque,
+
+    // 95: GetFieldID — we use this
+    GetFieldID: ?*const fn (env: *JNIEnv, cls: JClass, name: [*:0]const u8, sig: [*:0]const u8) callconv(.c) JFieldID,
+
+    // 96-104: GetXxxField — we use GetObjectField
+    GetObjectField: ?*const fn (env: *JNIEnv, obj: JObject, fid: JFieldID) callconv(.c) JObject,
+    GetBooleanField: ?*anyopaque,
+    GetByteField: ?*anyopaque,
+    GetCharField: ?*anyopaque,
+    GetShortField: ?*anyopaque,
+    GetIntField: ?*anyopaque,
+    GetLongField: ?*anyopaque,
+    GetFloatField: ?*anyopaque,
+    GetDoubleField: ?*anyopaque,
+
+    // 105-113: SetXxxField + static method id/calls — unused
+    SetObjectField: ?*anyopaque,
+    SetBooleanField: ?*anyopaque,
+    SetByteField: ?*anyopaque,
+    SetCharField: ?*anyopaque,
+    SetShortField: ?*anyopaque,
+    SetIntField: ?*anyopaque,
+    SetLongField: ?*anyopaque,
+    SetFloatField: ?*anyopaque,
+    SetDoubleField: ?*anyopaque,
+
+    // 114-152: static stuff + string ops — pad as opaque, we don't use them
+    // in mob_beam.zig (mob_nif iters will likely need GetStaticMethodID etc.).
+    GetStaticMethodID: ?*anyopaque,
+    CallStaticObjectMethod: ?*anyopaque,
+    CallStaticObjectMethodV: ?*anyopaque,
+    CallStaticObjectMethodA: ?*anyopaque,
+    CallStaticBooleanMethod: ?*anyopaque,
+    CallStaticBooleanMethodV: ?*anyopaque,
+    CallStaticBooleanMethodA: ?*anyopaque,
+    CallStaticByteMethod: ?*anyopaque,
+    CallStaticByteMethodV: ?*anyopaque,
+    CallStaticByteMethodA: ?*anyopaque,
+    CallStaticCharMethod: ?*anyopaque,
+    CallStaticCharMethodV: ?*anyopaque,
+    CallStaticCharMethodA: ?*anyopaque,
+    CallStaticShortMethod: ?*anyopaque,
+    CallStaticShortMethodV: ?*anyopaque,
+    CallStaticShortMethodA: ?*anyopaque,
+    CallStaticIntMethod: ?*anyopaque,
+    CallStaticIntMethodV: ?*anyopaque,
+    CallStaticIntMethodA: ?*anyopaque,
+    CallStaticLongMethod: ?*anyopaque,
+    CallStaticLongMethodV: ?*anyopaque,
+    CallStaticLongMethodA: ?*anyopaque,
+    CallStaticFloatMethod: ?*anyopaque,
+    CallStaticFloatMethodV: ?*anyopaque,
+    CallStaticFloatMethodA: ?*anyopaque,
+    CallStaticDoubleMethod: ?*anyopaque,
+    CallStaticDoubleMethodV: ?*anyopaque,
+    CallStaticDoubleMethodA: ?*anyopaque,
+    CallStaticVoidMethod: ?*anyopaque,
+    CallStaticVoidMethodV: ?*anyopaque,
+    CallStaticVoidMethodA: ?*anyopaque,
+    GetStaticFieldID: ?*anyopaque,
+    GetStaticObjectField: ?*anyopaque,
+    GetStaticBooleanField: ?*anyopaque,
+    GetStaticByteField: ?*anyopaque,
+    GetStaticCharField: ?*anyopaque,
+    GetStaticShortField: ?*anyopaque,
+    GetStaticIntField: ?*anyopaque,
+    GetStaticLongField: ?*anyopaque,
+    GetStaticFloatField: ?*anyopaque,
+    GetStaticDoubleField: ?*anyopaque,
+
+    // 153-162: SetStaticXxxField — unused
+    SetStaticObjectField: ?*anyopaque,
+    SetStaticBooleanField: ?*anyopaque,
+    SetStaticByteField: ?*anyopaque,
+    SetStaticCharField: ?*anyopaque,
+    SetStaticShortField: ?*anyopaque,
+    SetStaticIntField: ?*anyopaque,
+    SetStaticLongField: ?*anyopaque,
+    SetStaticFloatField: ?*anyopaque,
+    SetStaticDoubleField: ?*anyopaque,
+
+    // 163-168: NewString + GetStringChars — unused but pad for completeness
+    NewString: ?*anyopaque,
+    GetStringLength: ?*anyopaque,
+    GetStringChars: ?*anyopaque,
+    ReleaseStringChars: ?*anyopaque,
+    NewStringUTF: ?*anyopaque,
+    GetStringUTFLength: ?*anyopaque,
+
+    // 169-170: GetStringUTFChars / ReleaseStringUTFChars — we use these
+    GetStringUTFChars: ?*const fn (env: *JNIEnv, str: JString, is_copy: ?*JBoolean) callconv(.c) ?[*:0]const u8,
+    ReleaseStringUTFChars: ?*const fn (env: *JNIEnv, str: JString, utf: [*:0]const u8) callconv(.c) void,
+
+    // The remaining ~60 slots (array ops, monitor enter/exit, GetJavaVM,
+    // NewWeakGlobalRef, etc.) are not used by mob_beam.zig — add when an
+    // iter needs them. Leaving them out is fine because we never read past
+    // the declared slots: as long as the layout up to the last USED slot
+    // matches jni.h, the unused tail can be anything.
+};
+
+/// JavaVM vtable — used for GetEnv / AttachCurrentThread / DetachCurrentThread.
+pub const JavaVM = *const JNIInvokeInterface;
+
+pub const JNIInvokeInterface = extern struct {
+    _reserved0: ?*anyopaque,
+    _reserved1: ?*anyopaque,
+    _reserved2: ?*anyopaque,
+    DestroyJavaVM: ?*anyopaque,
+    AttachCurrentThread: ?*const fn (vm: *JavaVM, env: *?*JNIEnv, args: ?*anyopaque) callconv(.c) JInt,
+    DetachCurrentThread: ?*const fn (vm: *JavaVM) callconv(.c) JInt,
+    GetEnv: ?*const fn (vm: *JavaVM, env: *?*anyopaque, version: JInt) callconv(.c) JInt,
+    AttachCurrentThreadAsDaemon: ?*anyopaque,
+};
+
+// ── Wrapper helpers (hide vtable indirection) ──────────────────────────────
+// Each one-liner unwraps the JNIEnv vtable pointer and the function-pointer
+// optional. Cuts call-site noise: `jni.findClass(env, "X")` vs
+// `env.*.FindClass.?(env, "X")`.
+
+pub inline fn findClass(env: *JNIEnv, name: [*:0]const u8) JClass {
+    return env.*.FindClass.?(env, name);
+}
+
+pub inline fn getObjectClass(env: *JNIEnv, obj: JObject) JClass {
+    return env.*.GetObjectClass.?(env, obj);
+}
+
+pub inline fn getMethodID(env: *JNIEnv, cls: JClass, name: [*:0]const u8, sig: [*:0]const u8) JMethodID {
+    return env.*.GetMethodID.?(env, cls, name, sig);
+}
+
+pub inline fn getFieldID(env: *JNIEnv, cls: JClass, name: [*:0]const u8, sig: [*:0]const u8) JFieldID {
+    return env.*.GetFieldID.?(env, cls, name, sig);
+}
+
+pub inline fn callObjectMethod(env: *JNIEnv, obj: JObject, mid: JMethodID) JObject {
+    return env.*.CallObjectMethod.?(env, obj, mid);
+}
+
+pub inline fn callBooleanMethod(env: *JNIEnv, obj: JObject, mid: JMethodID) JBoolean {
+    return env.*.CallBooleanMethod.?(env, obj, mid);
+}
+
+pub inline fn getObjectField(env: *JNIEnv, obj: JObject, fid: JFieldID) JObject {
+    return env.*.GetObjectField.?(env, obj, fid);
+}
+
+pub inline fn getStringUTFChars(env: *JNIEnv, str: JString) ?[*:0]const u8 {
+    return env.*.GetStringUTFChars.?(env, str, null);
+}
+
+pub inline fn releaseStringUTFChars(env: *JNIEnv, str: JString, utf: [*:0]const u8) void {
+    env.*.ReleaseStringUTFChars.?(env, str, utf);
+}
+
+pub inline fn newGlobalRef(env: *JNIEnv, obj: JObject) JObject {
+    return env.*.NewGlobalRef.?(env, obj);
+}
+
+pub inline fn getEnv(vm: *JavaVM, version: JInt) ?*JNIEnv {
+    var env: ?*anyopaque = null;
+    if (vm.*.GetEnv.?(vm, &env, version) != JNI_OK) return null;
+    return @ptrCast(@alignCast(env));
+}
+
+pub inline fn attachCurrentThread(vm: *JavaVM) ?*JNIEnv {
+    var env: ?*JNIEnv = null;
+    if (vm.*.AttachCurrentThread.?(vm, &env, null) != JNI_OK) return null;
+    return env;
+}
+
+pub inline fn detachCurrentThread(vm: *JavaVM) void {
+    _ = vm.*.DetachCurrentThread.?(vm);
+}
+
+// ── Small string utilities ────────────────────────────────────────────────
+
+/// Copy a NUL-terminated source string into a fixed-size buffer, truncating
+/// (NUL-terminated) on overflow. Mirrors `snprintf(buf, sizeof(buf), "%s", src)`.
+pub fn copyZ(buf: []u8, src: [*:0]const u8) void {
+    var i: usize = 0;
+    while (i < buf.len - 1 and src[i] != 0) : (i += 1) {
+        buf[i] = src[i];
+    }
+    buf[i] = 0;
+}
+
+/// Compute the NUL-terminated length of a buffer (i.e. C strlen of buf[..]).
+pub fn zLen(buf: []const u8) usize {
+    var i: usize = 0;
+    while (i < buf.len and buf[i] != 0) : (i += 1) {}
+    return i;
+}
+
+/// View a NUL-terminated buffer as a NUL-terminated [*:0]const u8.
+/// The buffer must contain at least one NUL byte within its bounds.
+pub fn asCStr(buf: []const u8) [*:0]const u8 {
+    return @ptrCast(buf.ptr);
+}
