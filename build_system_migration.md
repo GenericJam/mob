@@ -1007,8 +1007,46 @@ validated on phase2q_smoke.
     trip `zig ast-check` of generated output. 882/882 mob_dev tests,
     224/224 mob_new tests pass.
 
-  Phase 6a is functionally complete — Zig is a first-class
-  driver_tab format end-to-end. Optional follow-ups (subsequent
-  iters): wire `mix mob.regen_driver_tab` into `mix compile` so the
-  regen step disappears from user workflow entirely; default new
-  projects to Zig driver_tab via `mix mob.new`.
+  - iter 4: Zig is the default `mix mob.regen_driver_tab` format.
+    `parse_format(nil)` now calls `detect_default_format/0` which
+    reads `ios/build.zig` and picks:
+      * `:zig` if the file contains `addZigObject` (post-iter-2
+        template);
+      * `:c` otherwise (legacy template that can't compile .zig
+        source via `addCObject`'s addCSourceFile pipeline on Zig
+        0.17-dev);
+      * `:zig` when no build.zig exists yet (rare).
+    This makes the regen-default flip safe in-place: existing
+    projects continue producing C output that their old build.zig
+    can handle, while freshly-generated projects pick up Zig
+    automatically. `--format zig` / `--format c` override the
+    auto-detect explicitly.
+
+    C NIF authors are fully unaffected: `mix mob.add_nif --type c`
+    still drops `c_src/<name>.c`; the Zig dispatch table calls into
+    user C code via standard C ABI (`extern fn <name>_nif_init()
+    callconv(.c)`); `--format c` is always available for projects
+    that want hand-editable dispatch tables.
+
+    mob's redundant `ios/driver_tab_ios.c` +
+    `android/jni/driver_tab_android.c` reference files deleted —
+    nothing reads them after iter 3's resolve_driver_tab_* prefers
+    .zig. mob_new template comments + `b.option` help-strings
+    updated to mention `.{zig,c}` to reflect the new default with
+    legacy support.
+
+    Smoke-tested both detection paths against `phase2q_smoke`
+    (legacy template) and a marker-injected variant (simulated new
+    template). Auto-detect picks the right format both ways;
+    deploys succeed end-to-end. 13/13 regen tests pass (added 2
+    auto-detect-path tests); 884/884 mob_dev tests pass overall.
+
+  **Phase 6a is COMPLETE.** Zig is the default driver_tab format
+  across the build system. Old projects keep working via the
+  auto-detect fallback to C. New projects ship Zig out of the box.
+  C NIF authoring path remains fully supported via `--type c` for
+  scaffolding and `--format c` for dispatch-table output.
+
+  Optional further follow-ups (not required for Phase 6a closure):
+  wire `mix mob.regen_driver_tab` into `mix compile` so the regen
+  step disappears from user workflow entirely.
