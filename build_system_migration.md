@@ -784,3 +784,52 @@ generator pattern on a small, self-contained task.
     validation/stub/append/idempotence/C-skeleton/notice paths.
     `igniter ~> 0.8` added to mob_dev deps (the Phase 3 dep
     commitment). 850/850 tests pass on mob_dev master.
+
+  - iter 2: auto-regen via `Igniter.add_task/3`. The post-run notice
+    that asked the user to run `mix mob.regen_driver_tab` manually is
+    gone — `mob.add_nif` queues regen to fire after Igniter commits,
+    so the same shell invocation produces stub + mob.exs update +
+    optional native skeleton + regenerated driver_tab. Single command,
+    one diff, one confirm.
+
+  - iter 3: `--type zigler`. Generates a Zigler-backed stub
+    (`use Zig, otp_app: :<app>` + inline `~Z` sigil with example
+    `pub fn add_one`). Adds `:zigler ~> 0.15` to mix.exs deps via
+    `Igniter.Project.Deps.add_dep/2`. Skips `c_src/<name>.c` (Zigler
+    manages its own native side via the sigil + zig-build pipeline).
+    Stub moduledoc warns about the static-link gap: Zigler's default
+    flow produces a dlopen'd `.so`, incompatible with Mob's iOS
+    App Store / Android RTLD_LOCAL constraints; on-device shipping
+    requires the user to wire the Zigler archive into ios/build.zig
+    + android/jni/ manually. Host-dev path works out-of-the-box. 6
+    new tests.
+
+  - iter 4: `--type rustler`. Generates a Rustler-backed stub
+    (`use Rustler, otp_app: :<app>, crate: "<name>"`) plus a full
+    Cargo crate skeleton at `native/<name>/`: `Cargo.toml` with
+    `crate-type = ["cdylib"]` (Rustler default; comment documents
+    the `staticlib` swap for Mob), `src/lib.rs` with example
+    `#[rustler::nif] fn add_one` + `rustler::init!` correctly
+    pointing at the generated Elixir module name, and `.gitignore`
+    excluding `/target`. Adds `:rustler ~> 0.32` to mix.exs deps.
+    Same static-link warning as zigler. 8 new tests; updated the
+    unknown-type test to use `haskell` (since `rustler` is now
+    valid).
+
+  - iter 5: docs. `README.md` gains a top-level `mix mob.add_nif`
+    section with the four `--type` variants, the matrix of generated
+    files + Hex deps per type, and an explicit static-link gotcha
+    callout for zigler/rustler. The Mix tasks table now lists
+    `mob.add_nif` and `mob.regen_driver_tab` (the latter wasn't
+    documented at all before). `AGENTS.md` adds two gotchas: don't
+    edit `:static_nifs` in mob.exs by hand (use `mob.add_nif`), and
+    `mob.regen_driver_tab` reads from `Config.Reader` not
+    `Application.env` (template for future `:static_nifs` consumers).
+
+  **Phase 3 is COMPLETE.** `mix mob.add_nif <name>` covers all four
+  backend types (`elixir-only`, `c`, `zigler`, `rustler`), composes
+  with regen automatically, and is documented in README + AGENTS.md.
+  864/864 mob_dev tests pass on master. First Igniter-backed task
+  validated end-to-end; pattern is ready to apply to the heavier
+  Phase 4 (`mob.enable` rewrite) and Phase 5 (`mob.new --liveview`
+  generator rewrite).
