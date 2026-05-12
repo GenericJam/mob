@@ -159,6 +159,11 @@ defmodule Mob.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:jump_credo_checks, "~> 0.1.0", only: [:dev, :test], runtime: false},
       {:erlfmt, "~> 1.8", only: :dev, runtime: false},
+      # Known Elixir 1.20-rc.4 dep warning (cosmetic, dev-only):
+      #   lib/mix_unused/filter.ex:61 — `_.._ inside match is deprecated`.
+      # No upstream fix shipped yet (0.4.1 is latest, from 2024). Bump
+      # this version + drop this comment once mix_unused ships a 1.20-clean
+      # release.
       {:mix_unused, "~> 0.4", only: :dev, runtime: false},
       {:ecto_sqlite3, "~> 0.18", only: :test}
     ]
