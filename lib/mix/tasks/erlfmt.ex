@@ -34,13 +34,25 @@ defmodule Mix.Tasks.Erlfmt do
 
     if paths == [], do: Mix.raise("mix erlfmt requires at least one path")
 
+    # erlfmt is `only: :dev, runtime: false` in mob's mix.exs, so when
+    # mob is compiled as a dep of a downstream project (without erlfmt
+    # in *their* deps), the static reference would warn. Resolve at
+    # runtime via apply so the compiler doesn't complain — and surface
+    # a clean error if the dep really isn't on the path.
+    unless Code.ensure_loaded?(:erlfmt) do
+      Mix.raise(
+        "mix erlfmt requires the `:erlfmt` dep — add `{:erlfmt, \"~> 1.8\", " <>
+          "only: :dev, runtime: false}` to your project's mix.exs and rerun `mix deps.get`."
+      )
+    end
+
     Application.ensure_all_started(:erlfmt)
 
     files = Enum.flat_map(paths, &collect_erl_files/1)
 
     {ok_count, changed} =
       Enum.reduce(files, {0, []}, fn file, {ok, changed} ->
-        case :erlfmt.format_file(String.to_charlist(file), [:return]) do
+        case apply(:erlfmt, :format_file, [String.to_charlist(file), [:return]]) do
           {:ok, formatted, _warnings} ->
             original = File.read!(file)
             # erlfmt returns iodata that may include codepoints > 255 (e.g.

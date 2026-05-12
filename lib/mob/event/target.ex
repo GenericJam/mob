@@ -94,10 +94,15 @@ defmodule Mob.Event.Target do
   end
 
   def resolve({:via, mod, key} = via, _scope) when is_atom(mod) do
+    # GenServer.whereis/1 narrows to `pid | nil` for `{:via, _, _}`
+    # inputs (the registry callbacks normalize their result before
+    # returning). The historical `{_name, _node}` arm came from
+    # treating `GenServer.whereis/1`'s full @spec — that variant
+    # only fires for `{name, node}` inputs, which this clause never
+    # passes.
     case GenServer.whereis(via) do
       nil -> {:error, {:via_not_resolvable, mod, key}}
       pid when is_pid(pid) -> {:ok, pid}
-      {_name, _node} = remote -> {:error, {:remote_not_supported, remote}}
     end
   end
 

@@ -283,12 +283,18 @@ defmodule Mob.Sigil do
           quoted =
             Code.string_to_quoted!(String.trim(expr_str), file: caller.file, line: caller.line)
 
-          quote do
-            case unquote(quoted) do
-              list when is_list(list) -> list
-              node -> [node]
-            end
-          end
+          # Emit a call to `wrap_child/1` rather than an inline `case`.
+          # The inline version generates a `case` per call site whose
+          # `is_list(list)` clause is type-narrowed to "unreachable"
+          # whenever the user's expression has a static-shape return
+          # (e.g. `nav_button("Foo", :bar)` is always a map). The
+          # warning is correct in isolation but the multi-shape
+          # tolerance is the WHOLE POINT of {expr} children — users
+          # can write `Enum.map(items, &row/1)` and get list-flattened
+          # behaviour. Dispatching via a helper hides the
+          # type-narrowing from the per-call-site warning while
+          # preserving both shapes' runtime behaviour.
+          quote do: Mob.Sigil.wrap_child(unquote(quoted))
 
         node_tuple ->
           ast = build_ast(node_tuple, caller)
@@ -297,6 +303,16 @@ defmodule Mob.Sigil do
 
     quote do: List.flatten(unquote(child_asts))
   end
+
+  @doc """
+  Normalizes a `{expr}` child's value to a list of UI-node maps for
+  the surrounding sigil. Single nodes wrap into a one-element list;
+  lists pass through. Public so the sigil-generated AST can call it
+  by FQ name; not part of the application API.
+  """
+  @spec wrap_child(list() | map()) :: list()
+  def wrap_child(list) when is_list(list), do: list
+  def wrap_child(node), do: [node]
 
   defp resolve_type(tag, caller) do
     atom = tag |> Macro.underscore() |> String.to_atom()
