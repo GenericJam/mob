@@ -162,10 +162,10 @@ defmodule Mob.Device do
 
       {:error, :nif_not_loaded} ->
         # Expected when running on the host (tests, IEx without device).
+        # `maybe_set_dispatcher/0` only ever returns `:ok` or this
+        # specific `:nif_not_loaded` shape — broader `{:error, reason}`
+        # catch-all was unreachable and the 1.20 type checker flagged it.
         :ok
-
-      {:error, reason} ->
-        :logger.warning("Mob.Device: NIF dispatcher not set: #{inspect(reason)}")
     end
 
     {:ok, %{subscribers: %{}, monitors: %{}}}
