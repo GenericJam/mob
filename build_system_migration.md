@@ -224,10 +224,20 @@ others.
 - iOS Objective-C stays as-is — ARC handles memory; ObjC's Cocoa idiom is right
 - Touches: mob primarily
 
-**6c — OTP rebuild scripts → `build.zig`:**
-- `scripts/release/openssl/build_crypto_static_*.sh` → Zig build
-- `scripts/release/xcompile_*.sh` → Zig build
-- `scripts/release/tarball_*.sh` → Zig build (or stay shell — these are simpler)
+**6c — OTP release scripts → tested Elixir under `MobDev.Release.*`:** ✓ complete (2026-05-11)
+- `scripts/release/openssl/build_crypto_static_*.sh` → `MobDev.Release.OpenSSL`
+  + `MobDev.Release.OpenSSL.CryptoNif`
+- `scripts/release/xcompile_*.sh` → `MobDev.Release.OTP`
+- `scripts/release/tarball_*.sh` → `MobDev.Release.Tarball`
+- `scripts/release/publish.sh` → `MobDev.Release.Publish`
+- All routed through `MobDev.Release.Shell` behaviour for mockable I/O;
+  every `gh` failure classified into typed error categories
+  (`:auth_required`, `:infra_unreachable`, `:precondition_failed`,
+  `:cmd_failed`) so the release pipeline can distinguish "GitHub
+  outage" from "expired auth" from "our bug" at the call site. The
+  Zig-build option was reconsidered: orchestration is the wrong job
+  for Zig's compile-graph model, but compile orchestration (zig cc)
+  stays in scope for the C-builder deferral in iter 13d.
 - Touches: mob_dev
 
 ---
