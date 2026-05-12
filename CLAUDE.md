@@ -47,6 +47,30 @@ but if in doubt, ask.
 
 ---
 
+## Tests cover everything, not just runtime code
+
+Every behavior in this repo gets a test — including build helpers
+and any CLI surface that lives here (less common in `mob` than in
+`mob_dev`, but the discipline is the same). Runtime modules like
+`Mob.Screen`, `Mob.Renderer`, `Mob.Sigil` get the obvious
+unit/integration coverage. **Beyond runtime:**
+
+- NIF stub modules (`mob_nif.erl`, when it gains more surface):
+  pure helpers extracted from the C/Zig side get Elixir tests.
+- Sigil compile-time AST transforms: test the generated AST,
+  not just runtime behavior. This caught the
+  `Mob.Sigil.wrap_child/1` per-call-site warning regression this
+  session.
+- Build-time helpers (driver_tab generators, native build glue
+  when it lives here): same rule.
+
+The goal is **find bugs in CI before users hit them.** A bug found
+by a test takes minutes to fix; one found by a user takes a
+bug-report-to-fix cycle plus damage to confidence. When you touch
+something untested, either add coverage or note it as a follow-up.
+
+---
+
 ## Pre-commit checklist
 
 Before committing changes, run **all** in this order:
