@@ -916,19 +916,57 @@ The Zig 0.15→0.16 stdlib breaking changes that hit Zigler:
   iex> TestMigration.Nifs.GreetZig.greet()
   "Hello from Zig!"
 
-**Still pending — iPhone deploy.** Zigler 0.15.x has no cross-
-compile target or `staticlib` crate-type options. Its builder
-emits a `dylib` for the host only. Getting `--type zigler --demo`
-working on iPhone requires either:
+**iPhone deploy — foundation landed in fork; one piece pending in
+Zigler itself (2026-05-13).**
 
-  1. Extending Zigler's build pipeline to accept a target triple
-     + crate_type (a feature add, not a port)
-  2. Bypassing Zigler's build entirely for the on-device path
-     and using `zig build-lib --target aarch64-ios --crate-type
-     static` directly with the user's `~Z` source
+Two Zigler-fork build options added (GenericJam/zigler 2f17e63):
 
-Option 1 is the right contribution to upstream Zigler — file as
-a follow-up. Option 2 is more invasive in mob_dev.
+  -Dnif_linkage=static
+       produces a `.a` instead of the default dylib/so/dll.
+       linkage flows into `b.addLibrary(.linkage = ...)`; the
+       `linker_allow_shlib_undefined` flag is skipped for static
+       (it's a dynamic-library concept).
+
+  -Dnif_init_alias=<name>_nif_init
+       adds an additional `@export` of nif_init under that name.
+       Static-NIF table lookup matches `<modname>_nif_init`; the
+       default `nif_init` symbol is always kept so dlopen also
+       works. Both names point to the same function.
+
+Verified on a host-target sanity build: `nm libElixir.<Mod>.a`
+shows both `_nif_init` AND `_greet_zig_nif_init` exported.
+
+mob_dev plumbing landed in 2c405c5: `classify_project_nif/2`
+detects `:zig` from a `use Zig` stub, `cross_compile_zig_nif`
+invokes `zig build -Dtarget=… -Dnif_linkage=static
+-Dnif_init_alias=…` against Zigler's staging dir, output `.a`
+flows into the iOS link via the existing `project_rust_libs` arg.
+
+**Blocker — Apple SDK headers in cImport.** When `zig build` runs
+the cross-compile for `aarch64-ios-none`, it cImports `erl_nif.h`
+which transitively pulls `sys/types.h`. Zig's cImport on iOS
+targets needs `-isysroot $iPhoneOS_SDK_path`. Zigler's `erl_nif`
+module hardcodes the host Erlang include path and doesn't expose
+an isysroot knob:
+
+  error: 'sys/types.h' not found
+      #  include <sys/types.h>
+
+Fixing this needs another Zigler-side change — pass an isysroot
+through `addCSourceFile`/cImport calls when the build target is
+Apple. The upstream Zigler 0.16 work the author has planned for
+next week is the natural place for this; we'll either pick up
+their fix or contribute the isysroot patch then.
+
+**Status summary**
+
+  Host (macOS 26)        ✓  via fork
+  iOS device (real)      ✗  blocked on Zigler isysroot/cImport
+  iOS sim                untested (same blocker expected)
+  Android                untested (different SDK story)
+
+Linux + older macOS users can verify the host path end-to-end
+following the same scaffold flow.
 
 
 
