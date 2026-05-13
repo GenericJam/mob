@@ -1348,3 +1348,247 @@ before iOS even enters the picture (issue #15). Until Zigler supports
 Zig 0.16+, no automated iOS-device path is possible on this Mac.
 Linux and older macOS users can verify zigler --demo end-to-end
 following the same pattern as C/Rust above.
+
+---
+
+## 19. Android NIF auto-wiring — port the iOS work for `--type {c, rustler, zigler}` deploys
+
+**Status:** Open, ready for a fresh session. iOS pattern landed in
+issues #18 + #15 (both FIXED 2026-05-13); Android is the parallel
+work that mirrors it for the `aarch64-linux-android` target.
+
+### Goal
+
+End-to-end verification of all three demo scaffolds on a physical
+Android device (or emulator):
+
+    $ mix mob.add_nif greet_c     --type c       --demo --yes
+    $ mix mob.add_nif greet_rust  --type rustler --demo --yes
+    $ mix mob.add_nif greet_zig   --type zigler  --demo --yes
+    $ mix mob.deploy --native --android
+    $ # via Mob.Test from a Mac-side IEx:
+    $ Mob.Test.tap(node, :run); Mob.Test.assigns(node).result
+    ~c"Hello from C!"      # or "Hello from Rust!" / "Hello from Zig!"
+
+Plus the matching `[info] [<name>-nif] call 1 returned: ...`
+Logger line visible in `adb logcat` (or via dist to a Mac-side
+IEx — see CLAUDE.md for `mix mob.connect` setup).
+
+`moto e` and the `sdk_gphone64_arm64` emulators are typically
+connected in this workspace. Prefer the physical `moto e` because
+emulators sometimes mask SELinux/dlopen quirks (see issue #10).
+
+### Reference: where the iOS pattern lives
+
+The iOS work is a clean template to mirror. Read these first:
+
+- **mob_dev cross-compile helpers** —
+  `lib/mob_dev/native_build.ex`:
+  - `project_nif_user_entries/0` (filters out baked-in NIFs)
+  - `classify_project_nif/2` — returns
+    `{:c, _} | {:rust, _} | {:zig, _} | :elixir_only`
+  - `cross_compile_rust_nifs/2` + `rust_target_for(:android)` →
+    `"aarch64-linux-android"` (already wired, just not invoked)
+  - `cross_compile_zig_nifs/2` + `zig_build_target_for(:android)`
+    → `"aarch64-linux-android"` (same — wired but unused)
+  - `project_nif_zig_args/1` — gathers everything and emits
+    `-Dproject_root=`, `-Dproject_c_nifs=`, `-Dproject_rust_libs=`
+
+- **iOS build template consumer** —
+  `mob_new/priv/templates/mob.new/ios/build_device.zig.eex`
+  + the matching `ios/build.zig.eex` for sim:
+  - Reads the `-D` options
+  - Iterates `project_c_nifs` and emits `addCObject` per name
+    with `-DSTATIC_ERLANG_NIF -DSTATIC_ERLANG_NIF_LIBNAME=<name>`
+  - Appends each `project_rust_libs` `.a` to the linker line
+
+- **Apple-SDK plumbing for Zigler cImport** —
+  GenericJam/zigler fork `zig-016-port`, commit `e2a4c19`. Adds
+  `-Dapple_sdkroot=...` build option used by the build template
+  to `addSystemIncludePath` on the `erl_nif` module.
+
+### Android-specific surface (what needs to change)
+
+Android uses a different build stack: **Gradle → CMake → NDK
+clang**, plus its own `build.zig` for the BEAM library
+(mob's Phase 2 work moved most of the native build into
+`zig build`). Each layer is parallel-but-different from iOS.
+
+**1. `cross_compile_*_nifs` already handles `:android` — just
+hook them in.** mob_dev currently only calls
+`project_nif_zig_args` from `zig_build_binary_ios_device` and
+`zig_build_binary_ios_sim`. Add a parallel call from
+`run_zig_android_objects` (line ~184 of native_build.ex) so the
+flags propagate to the Android `zig build` invocation.
+
+**2. Rust prerequisites the scaffold doesn't yet check.**
+   - `rustup target add aarch64-linux-android`
+   - `cargo-ndk` *or* manual NDK linker env vars
+     (`CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` etc.) so cargo
+     can find the NDK's `aarch64-linux-android<API>-clang`
+   - `mix mob.doctor` should warn if missing — same shape as the
+     iPhone-target check filed in #18.
+
+**3. Zigler fork needs an `android_sdkroot` companion to
+`apple_sdkroot` — IF NEEDED. Verify first.** Zig 0.16's
+`aarch64-linux-android` target may already bundle Bionic libc
+headers (unlike Apple, where `cImport` truly needs the SDK
+headers). Run the cross-compile FIRST and see what (if anything)
+fails on cImport. If headers are bundled, this step is a no-op.
+
+   If needed: same insertion site
+   (`zigler/lib/zig/templates/build_mod.zig.eex`), same mechanism
+   as `apple_sdkroot`. mob_dev's `ndk_sysroot/0` (line ~216 of
+   native_build.ex) already resolves the NDK path — pass it as
+   `-Dandroid_sdkroot=<path>` to Zigler's build. Probably ~15
+   lines in the fork; lands alongside the existing
+   `apple_sdkroot` commit (e2a4c19).
+
+**4. `android/app/src/main/jni/build.zig.eex` consumes the
+project NIF flags.** This is the Android counterpart to
+`ios/build_device.zig.eex`. The template (in mob_new) iterates
+`project_c_nifs` to emit objects into `zig-out/<abi>/` and adds
+each `project_rust_libs` `.a` to the final link. Same shape as
+the iOS template; different file.
+
+**5. `CMakeLists.txt.eex` fallback paths.** The Android
+CMakeLists template has three paths
+(`mob_new/priv/templates/mob.new/android/app/src/main/jni/CMakeLists.txt.eex`,
+lines ~28-60):
+
+  1. zig-built `lib<app>.so` in `jniLibs/<abi>/` — Gradle picks
+     it up directly (the happy path under mob)
+  2. zig-built `.o` files in `zig-out/<abi>/` — CMake links them
+  3. `.c` sources fallback — CMake compiles via NDK clang
+
+   Paths 1 and 2 are covered by step 4. Path 3 is for non-Mix
+   invocations (Android Studio "Sync Project", standalone
+   `./gradlew assembleDebug`) — emit `target_sources` for each
+   `c_src/<name>.c` with the right `-DSTATIC_ERLANG_NIF` flags.
+
+**6. Symbol naming + static-NIF table.** Same as iOS:
+`ERL_NIF_INIT(Elixir.<DotPath>, ...)` with
+`-DSTATIC_ERLANG_NIF -DSTATIC_ERLANG_NIF_LIBNAME=<name>` for C;
+rustler 0.37+ auto-derives `<crate>_nif_init` for Rust; Zigler
+fork's `-Dnif_init_alias=<name>_nif_init` for Zig. No new
+mechanism — these all already work; just need to be **invoked**
+from the Android build.
+
+**7. `driver_tab_android.zig` regeneration.**
+`mix mob.regen_driver_tab` already handles this. The generated
+table declares `<name>_nif_init` for every entry in `mob.exs
+:static_nifs` — verified via `priv/generated/driver_tab_android.zig`
+after `mix mob.add_nif greet_c --type c --demo --yes`. No change.
+
+### Likely gotchas
+
+- **SELinux on Android 17+** (issue #10) — physical device may
+  refuse `dlopen`/`execve` of certain `lib*.so` files. NIFs
+  going through the static-table path should be unaffected
+  (they're in the main `.so`), but worth a sanity check on the
+  `moto e` if anything weird shows up.
+
+- **JNI symbol stripping** — Android `--gc-sections` strips
+  unreferenced symbols aggressively. The existing
+  `enif_keepalive` table covers BEAM's `enif_*` API; verify it
+  also covers any symbols the project NIFs introduce.
+
+- **Multi-ABI** — mob currently builds both `arm64-v8a` AND
+  `armeabi-v7a` (see `zig_build_android_objects` loop). Project
+  NIFs need to cross-compile for both. The Rust 32-bit target is
+  `armv7-linux-androideabi`; Zig's `arm-linux-androideabi`.
+  Plumbing both ABIs may be the longest pole — **start with
+  arm64 only for the demo**, file 32-bit as a follow-up.
+
+- **rustup targets may not be installed.** Run
+  `rustup target add aarch64-linux-android` early and surface a
+  clear error if it fails. Sequester it from the user's iOS-only
+  Rust setup if they have one.
+
+- **`cargo-ndk` vs raw env vars.** `cargo-ndk` simplifies path
+  resolution but adds a tool dep. Raw env vars (e.g.
+  `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER`) avoid the dep but
+  are more brittle. Pick one approach and document the choice in
+  the scaffold's moduledoc + `mob.doctor`.
+
+### Scope guardrails
+
+**In scope:**
+- iOS-pattern parity for `arm64-v8a` (most users)
+- All three `--demo` flows end-to-end on a connected Android
+- mob_dev plumbing + mob_new template changes
+- Zigler fork's `android_sdkroot` option *if needed* (verify first)
+
+**Out of scope (file as follow-ups):**
+- `armeabi-v7a` (32-bit) cross-compile — arm64 first
+- `mix mob.doctor` prerequisite checks for rustup targets / NDK
+- Pythonx on Android — Python bundling is its own thing
+  (`nif_future.md` issue #2)
+
+### Done definition
+
+- All three `--demo` scaffolds (`c`, `rustler`, `zigler`) deploy
+  to a real Android device via `mix mob.deploy --native --android`
+  with **zero hand-editing** of CMakeLists.txt, build.zig, or
+  Cargo.toml.
+- `Mob.Test.tap(node, :run)` on each demo screen returns the
+  expected greeting on Android the same way it does on iPhone
+  (verified for iOS in issues #15 + #18).
+- Logger output `[info] [<name>-nif] call 1 returned: ...`
+  visible in `adb logcat` (or via dist to Mac-side IEx).
+- Tests + credo clean in mob_dev.
+
+### Verification recipe
+
+    $ # Prerequisites
+    $ rustup target add aarch64-linux-android
+    $ # (verify NDK is configured — android/local.properties has sdk.dir
+    $ #  and either ndk.dir or ANDROID_NDK_HOME)
+    $ mix mob.doctor   # should report no missing prerequisites
+
+    $ cd ~/code/test_migration   # known-good scratch project
+    $ rm -rf lib/test_migration/nifs native c_src   # clean slate
+    $ # reset mob.exs to drop old :static_nifs entries
+
+    $ # Scaffold all three demos
+    $ for type in c rustler zigler; do
+        mix mob.add_nif greet_$type --type $type --demo --yes
+      done
+
+    $ # Build + deploy
+    $ mix mob.deploy --native --android
+
+    $ # Drive each demo via dist
+    $ # Node name is `test_migration_android_<suffix>@127.0.0.1`;
+    $ # `mix mob.devices` lists exact names per attached device.
+    $ # See CLAUDE.md → "Connecting an IEx session to a running mob app"
+    $ # for the dist setup. mob/lib/mob/test.ex is the harness.
+
+### Suggested commit shape
+
+One logical PR per layer so each is independently verifiable:
+
+1. **mob_dev**: invoke `project_nif_zig_args` from the Android
+   build path. Confirms cross-compiles run (they may not link
+   yet because templates don't consume the args).
+2. **mob_new**: `android/app/src/main/jni/build.zig.eex`
+   consumes `-Dproject_c_nifs` / `-Dproject_rust_libs`. Confirms
+   C demo works.
+3. **mob_new**: `CMakeLists.txt.eex` mirrors for the fallback
+   paths (Studio sync + standalone gradle). Confirms emulator +
+   Studio builds.
+4. *(if verified-needed)* **GenericJam/zigler fork**:
+   `-Dandroid_sdkroot=...`. Confirms Zig demo works.
+5. **issues.md**: flip #19 to FIXED with empirical results.
+
+### Related issues to read first
+
+- **#18** — iOS auto-wiring, the pattern to mirror
+- **#15** — Zigler fork (the four fork patches the agent will
+  extend with `android_sdkroot` if needed)
+- **#10** — Android 17 SELinux constraints (open; may or may not
+  affect this work)
+- **CLAUDE.md** in mob — Android deploy / multi-device / dist-port
+  story; required reading
+- **mob_dev/AGENTS.md** — TDD discipline, "tests cover everything"
+  including build helpers
