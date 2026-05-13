@@ -139,17 +139,71 @@ test cases when the new build pipeline reaches the deploy step.
 
 ---
 
-## 4. iOS device build skips `copy_project_python_wheels`  (verified 2026-05-11, **FIXED 2026-05-11**)
+## 4. iOS device build skips `copy_project_python_wheels`  (verified 2026-05-11, **FIXED 2026-05-11 19:10 PT on branch `fix/ios-wheel-copy`** — re-verified end-to-end on iPhone SE 3rd gen)
 
-**Resolution**: `mob_dev` `lib/mob_dev/native_build.ex` —
+**Resolution (2026-05-11 evening, branch `fix/ios-wheel-copy`,
+commit `78ebf2e` on `deps/mob_dev`)**: `bundle_otp_runtime/4` in
+`lib/mob_dev/native_build.ex` now calls a new
+`copy_ios_safe_project_python_wheels/1` right after the python rsync
+into `<App>.app/otp/python/`. The helper mirrors the Android
+`copy_project_python_wheels/1` pattern but filters out wheels that
+contain any `.so` extension — today's `priv/python_wheels/` ships
+Chaquopy-compatible Android binaries under names like
+`_cffi_backend.so` and `_rust.so` (no "android" in the filename), so a
+name-based filter misses them. "Has any `.so`" matches the current
+reality: pure-Python wheels (rns, lxmf, pyserial, pycparser) land,
+Android-only ones get skipped with a `[ios-wheels] skipped` log line.
+RNS falls back to its internal crypto provider when `cryptography`
+isn't importable, so the pure-Python subset is enough to bring the
+Reticulum stack up.
+
+Note: `ios/build_device.sh:179` still nukes
+`<OTP_ROOT>/python/Python.framework` and
+`<OTP_ROOT>/python/lib/python3.13` on every build — so a
+stage-into-the-cache workaround would not survive. Doing the wheel
+copy in `bundle_otp_runtime/4` (which runs AFTER the rsync into the
+`.app`) sidesteps that.
+
+**Verification (iPhone SE 3rd gen 00008110-001E1C3A34F8401E)**:
+- `Pigeon.app/otp/python/lib/python3.13/site-packages/` now contains
+  `RNS/`, `LXMF/`, `serial/`, `pycparser/`, `chaquopy/` (metadata-only)
+  plus their `*.dist-info/` directories.
+- BEAM boot trace (via temporary `Pigeon.App.on_start` file logger):
+  `on_start enter` → `backend=Pigeon.Transport.Reticulum` →
+  `python init start` → `python init ok` (+124 ms) →
+  `transport start (…)` → `transport started ok` (+2.5 s).
+- Process stays alive (`xcrun devicectl device info processes`
+  shows Pigeon running). Previously exited cleanly at the
+  `{:ok, _transport_sup} = …` pattern match.
+
+The historical 2026-05-11 morning + 2026-05-11 17:40 PT notes
+below are kept for context.
+
+---
+
+### Earlier note: 2026-05-11 17:40 PT — "did not actually land"
+
+The 2026-05-11 morning note claimed the iOS device path was wired to
+`copy_project_python_wheels/1` via `maybe_setup_pythonx_sim/5` /
+`maybe_setup_pythonx_device/5`. Re-check on 2026-05-11 17:40 PT showed
+neither helper nor either call site existed in `deps/mob_dev` HEAD —
+the prior fix attempt didn't land. That's what triggered the current
+fix on branch `fix/ios-wheel-copy`.
+
+---
+
+### Earlier note that turned out to be inaccurate
+
+`mob_dev` `lib/mob_dev/native_build.ex` —
 `copy_project_python_wheels/1` generalised (param renamed
 `assets_root` → `python_root`, docstring covers both platforms) and
 wired into both `maybe_setup_pythonx_sim/5` (right after the
 lib-dynload `copy_dir!`) and `maybe_setup_pythonx_device/5` (right
 after the lib-dynload `cp_r!`). Both call sites pass
 `<otp_root>/python` as the root — same `lib/python3.13/site-packages/`
-suffix as Android, so the helper works unchanged. The historical
-notes below are kept for context.
+suffix as Android, so the helper works unchanged. **Re-check on
+2026-05-11 evening shows neither helper nor either call site exists
+in `deps/mob_dev` HEAD; whatever was intended did not land.**
 
 ---
 

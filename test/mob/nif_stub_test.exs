@@ -56,7 +56,8 @@ defmodule Mob.NifStubTest do
       Enum.filter(nifs, fn {name, arity} ->
         # Match `<name>(args) -> erlang:nif_error(not_loaded).` — args
         # are typically `_Foo, _Bar` matching the arity.
-        pattern = ~r/^#{Regex.escape(Atom.to_string(name))}\([^)]*\)\s*->\s*erlang:nif_error\(not_loaded\)\.$/m
+        pattern =
+          ~r/^#{Regex.escape(Atom.to_string(name))}\([^)]*\)\s*->\s*erlang:nif_error\(not_loaded\)\.$/m
 
         not (Regex.match?(pattern, src) and
                arity_matches?(src, name, arity))
