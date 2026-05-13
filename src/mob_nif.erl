@@ -95,7 +95,9 @@
     key_press/1,
     clear_text/0,
     long_press_xy/3,
-    swipe_xy/4
+    swipe_xy/4,
+    %% DNS — see Mob.DNS and guides/dns_on_ios.md
+    resolve_ipv4/1
 ]).
 
 -nifs([

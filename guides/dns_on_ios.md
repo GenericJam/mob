@@ -261,3 +261,91 @@ route because:
 
 If your app talks to a small fixed set of hosts (which most do), the
 extra `preresolve/1` line at startup is the lowest-friction option.
+
+---
+
+## Other gotchas (empirically discovered)
+
+Once `Mob.DNS` is in place, the next failures down the HTTPS stack
+are easy to misread as "DNS still broken." They aren't — they're
+separate issues that the iOS-device deployment surfaces because
+the BEAM bootstrap is more minimal than a normal Mix project. If
+your request still fails after seeding DNS, check these:
+
+### 1. Start the HTTP client's application
+
+Mob's iOS launcher (`mob_beam.m`) boots a minimal BEAM:
+`compiler` → `elixir` → `logger` → `<your_app>.start/0`. That's
+*all*. Hex dependencies like `:req` are **not auto-started** — the
+normal OTP `applications:` list in your `.app` file isn't being
+consulted by this boot path.
+
+If Req's `Finch` supervisor isn't running you'll see:
+
+```
+GenServer.call(Req.FinchSupervisor, ...)
+** (EXIT) no process: the process is not alive ...
+```
+
+Fix: explicitly start the HTTP client and the cert store in your
+`on_start/0`, after `Mob.DNS.preresolve/1`:
+
+```elixir
+def on_start do
+  # ... your usual startup ...
+
+  {:ok, _} = Application.ensure_all_started(:req)
+  {:ok, _} = Application.ensure_all_started(:castore)
+
+  Mob.DNS.preresolve(["api.example.com"])
+
+  Mob.Screen.start_root(MyApp.HomeScreen)
+end
+```
+
+Same pattern for `:finch`/`:mint`/`:httpoison`/`:tesla` if you're
+using those directly.
+
+### 2. TLS trust store — `:castore` or `:public_key.cacerts_load!/0`
+
+Mint's HTTPS path verifies the server certificate by default and
+needs a CA bundle. On iOS-device builds the default
+`Application.app_dir(:castore, "priv/cacerts.pem")` path doesn't
+always resolve correctly even with castore in deps. Two working
+options:
+
+```elixir
+# Option A — explicit CA file via transport opts
+Req.get(url, connect_options: [transport_opts: [cacertfile: ...]])
+
+# Option B — load the OS CA store (OTP 25+)
+:public_key.cacerts_load!()
+Req.get(url, connect_options: [
+  transport_opts: [cacerts: :public_key.cacerts_get()]
+])
+```
+
+For dev / spike testing where you don't care about cert validation,
+`verify: :verify_none` works but **never ship this**:
+
+```elixir
+Req.get(url, connect_options: [transport_opts: [verify: :verify_none]])
+```
+
+### 3. Stale `:inet_db` if the IP rotates
+
+`Mob.DNS.resolve/1` seeds `:inet_db` once per BEAM lifetime. If the
+backend's IP changes mid-session (DNS round-robin, blue/green
+deploy), subsequent requests will keep hitting the cached IP until
+you call `resolve/1` again. For long-running apps that talk to
+volatile endpoints, schedule a periodic re-resolve.
+
+### 4. Hot-push doesn't re-run `on_start/0`
+
+`mix mob.deploy` (without `--native`) hot-loads new BEAMs via
+`:code.load_binary` — the running app's `on_start/0` is *not*
+re-invoked, and the on-disk `.beam` files in the app's Documents
+dir aren't updated. If you change `on_start/0` (e.g., to add the
+`ensure_all_started` calls above), use `mix mob.deploy --native`
+to actually reinstall the app with the new beams on disk so a
+restart will pick them up.
