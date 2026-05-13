@@ -876,7 +876,7 @@ the sim, agents lose the fast path and burn cycles on screenshots.
 
 ---
 
-## 15. `mix mob.add_nif --type zigler` — Zig toolchain mismatch (FIXED for the PATH-priority bug + macOS 26 host-dev path via fork, 2026-05-13; **iPhone deploy still pending — Zigler lacks cross-compile**)
+## 15. `mix mob.add_nif --type zigler` — Zig toolchain mismatch — **FIXED 2026-05-13 via GenericJam/zigler fork (interim until upstream catches up)**
 
 **Resolution (partial, 2026-05-12, mob_dev commit forthcoming):** The
 scaffold now queues `mix zig.get` after adding the `:zigler ~> 0.15`
@@ -942,31 +942,55 @@ invokes `zig build -Dtarget=… -Dnif_linkage=static
 -Dnif_init_alias=…` against Zigler's staging dir, output `.a`
 flows into the iOS link via the existing `project_rust_libs` arg.
 
-**Blocker — Apple SDK headers in cImport.** When `zig build` runs
-the cross-compile for `aarch64-ios-none`, it cImports `erl_nif.h`
-which transitively pulls `sys/types.h`. Zig's cImport on iOS
-targets needs `-isysroot $iPhoneOS_SDK_path`. Zigler's `erl_nif`
-module hardcodes the host Erlang include path and doesn't expose
-an isysroot knob:
+**iPhone empirical verification on 2026-05-13:**
 
-  error: 'sys/types.h' not found
-      #  include <sys/types.h>
+  iex> Mob.Test.tap(node, :run); Mob.Test.assigns(node)
+  %{result: "Hello from Zig!", ...}
 
-Fixing this needs another Zigler-side change — pass an isysroot
-through `addCSourceFile`/cImport calls when the build target is
-Apple. The upstream Zigler 0.16 work the author has planned for
-next week is the natural place for this; we'll either pick up
-their fix or contribute the isysroot patch then.
+  [info] [greet_zig-nif] call 1 returned: "Hello from Zig!"
+  (visible in Mac-side IEx via mix mob.connect)
+
+Two additional fork patches needed beyond the linkage + alias
+options for iPhone:
+
+  -Dapple_sdkroot=<absolute SDK path>
+       Resolves Apple-target cImport headers (sys/types.h etc.).
+       mob_dev calls `xcrun --show-sdk-path -sdk iphoneos` and
+       passes the result. Empty/unset → host build (no SDK
+       injection needed).
+
+  module.zig: pub const panic = ... if alias set, no_panic, else
+       simple_panic
+       Default panic pulls in std.debug.SelfInfo for stack traces,
+       which on Mach-O references dyld functions
+       (`_dyld_get_image_header_containing_address`). Not linkable
+       in static archives going into an embedded BEAM. Swap to
+       no_panic (trap-only, no SelfInfo) when alias is set
+       (our static-build marker). Host still gets simple_panic for
+       readable error messages.
 
 **Status summary**
 
   Host (macOS 26)        ✓  via fork
-  iOS device (real)      ✗  blocked on Zigler isysroot/cImport
-  iOS sim                untested (same blocker expected)
-  Android                untested (different SDK story)
+  iOS device (real)      ✓  via fork (verified 2026-05-13)
+  iOS sim                untested (mob_dev plumbing reuses iOS
+                          device path; SDK swap is the only diff)
+  Android                untested (different SDK story — needs
+                          NDK sysroot threading, parallel work
+                          to Apple SDK)
 
-Linux + older macOS users can verify the host path end-to-end
-following the same scaffold flow.
+The fork (`github.com/GenericJam/zigler` branch `zig-016-port`)
+is the interim until Isaac's upstream 0.16 release ships with
+the iOS / cross-compile fixes integrated. The mechanism we
+landed should drop in cleanly:
+
+  - 5-file priv/beam/ port to Zig 0.16 stdlib (the actual 0.16 work)
+  - `-Dnif_linkage=static` build option
+  - `-Dnif_init_alias=<name>_nif_init` build option (writes
+    additional `@export`)
+  - `-Dapple_sdkroot=<path>` build option (addSystemIncludePath
+    on erl_nif module)
+  - `pub const panic` selection based on alias presence
 
 
 
