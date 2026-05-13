@@ -1079,3 +1079,73 @@ but discoverability is poor.
 
 **Where this matters** — when a user types `mix mob.add_nif --help`
 and tries to figure out how to add Python.
+
+---
+
+## 18. `mob.add_nif --type c` doesn't auto-wire `c_src/<name>.c` into the iOS/Android build
+
+**Symptom** — After `mix mob.add_nif foo --type c`, the next native
+build (`mix mob.deploy --native`) leaves `c_src/foo.c` unlinked.
+On Elixir-side, `:erlang.load_nif/2` fails with:
+
+```
+The on_load function for module Elixir.<App>.Nifs.Foo returned:
+  {:error, {:load_failed,
+    "Failed to load NIF library: 'dlopen(foo.so, 0x0006): tried: ...'"}}
+```
+
+(BEAM fell through from the static-NIF table to dlopen because
+nothing registered `<name>_nif_init` at link time.)
+
+The C scaffold's moduledoc currently tells the user to do this
+manually — but the right scaffolding action is to auto-wire it.
+
+**Why this matters now** — `--demo` made this gap visible because
+the demo flow expects the C NIF to actually work. Verified manually:
+hand-adding an `addCObject` block + `-DSTATIC_ERLANG_NIF
+-DSTATIC_ERLANG_NIF_LIBNAME=<name>` flags to `ios/build_device.zig`
+gets the demo working end-to-end (Hello from C! on iPhone).
+
+**Fix shape**
+
+1. **iOS** — the `build_device.zig` template (in `mob_new`) and
+   `build.zig` (sim) should iterate `:static_nifs` from `mob.exs`
+   and emit an `addCObject` block for each entry that has a
+   corresponding `c_src/<name>.c` file. The `c_flags` need
+   `-DSTATIC_ERLANG_NIF -DSTATIC_ERLANG_NIF_LIBNAME=<name>` baked
+   in.
+
+2. **Android** — equivalent in `android/jni/CMakeLists.txt`: glob
+   `${PROJECT_ROOT}/c_src/*.c` (or read `mob.exs :static_nifs`)
+   and add to `target_sources` with the same -D flags.
+
+3. **`mob.regen_driver_tab`** could grow a side-effect that lists
+   which `c_src/*.c` files exist and warns if the project's
+   `build.zig` / CMakeLists isn't picking them up. Belt-and-braces.
+
+**Workaround until then** — hand-edit `ios/build_device.zig` to add:
+
+```zig
+installAndCollect(b, objects_step, &objs, addCObject(b, .{
+    .name = "<your_nif>",
+    .source = "<project>/c_src/<your_nif>.c",
+    .target = target,
+    .optimize = optimize,
+    .c_flags = c_flags_base ++ &[_][]const u8{
+        "-DSTATIC_ERLANG_NIF",
+        "-DSTATIC_ERLANG_NIF_LIBNAME=<your_nif>",
+    },
+    .mob_dir = mob_dir,
+    .otp_root = otp_root,
+    .erts_vsn = erts_vsn,
+    .sdkroot = sdkroot,
+}), "<your_nif>.o");
+```
+
+The two -D flags are mandatory: without `STATIC_ERLANG_NIF_LIBNAME`,
+`ERL_NIF_INIT(Elixir.App.Nifs.Foo, ...)` mangles to an invalid C
+symbol name (dots in identifiers don't compile).
+
+**Empirically verified 2026-05-12** via the demo screen flow in
+`~/code/test_migration`. The full diagnosis lives in
+`mob_dev/lib/mix/tasks/mob.add_nif.ex`'s `c_skeleton/3` docstring.
