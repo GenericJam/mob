@@ -10,10 +10,13 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#include <arpa/inet.h>
 #include <dlfcn.h>
 #include <mach/mach_time.h>
+#include <netdb.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
+#include <sys/socket.h>
 // dlopen/dlsym are marked unavailable in iOS SDK headers but exist at runtime
 // in the iOS Simulator (macOS). Declare prototypes directly to bypass the header
 // restriction. On a real device these will be NULL (weak symbols).
@@ -5514,6 +5517,96 @@ static ERL_NIF_TERM nif_deregister_component(ErlNifEnv *env, int argc, const ERL
     return enif_make_atom(env, "ok");
 }
 
+// ── NIF: resolve_ipv4/1 ──────────────────────────────────────────────────────
+//
+// In-process IPv4 DNS resolution via Darwin's libc getaddrinfo. Exists
+// because BEAM's normal DNS path (`inet_gethost`, a port-program subprocess)
+// is unrunnable on iOS — the sandbox forbids execve of bundled helper
+// binaries. getaddrinfo is a libc function that runs in the app process
+// with no exec / no sandbox interaction, so DNS via this NIF works where
+// BEAM's built-in path doesn't.
+//
+// Callers should not invoke this NIF directly in app code. Use
+// `Mob.DNS.resolve/1` (Elixir wrapper) which also seeds `:inet_db` so
+// subsequent `:inet.getaddr/2` lookups by Req / Finch / Mint find the
+// host. See `guides/dns_on_ios.md`.
+//
+// Dirty-scheduled because getaddrinfo can block on network for the full
+// resolver timeout (sometimes seconds). Keeping it off regular schedulers
+// avoids head-of-line blocking on every other BEAM activity.
+//
+// Returns:
+//   {:ok, {a, b, c, d}}
+//   {:error, :badarg}        — host arg isn't a string/charlist
+//   {:error, :nxdomain}      — no such hostname
+//   {:error, :timeout}       — getaddrinfo TRY_AGAIN
+//   {:error, :no_address}    — got a result but no IPv4 in the chain
+//   {:error, {:gai, code}}   — anything else; `code` is the raw EAI_* int
+
+static ERL_NIF_TERM nif_resolve_ipv4(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    char host[256];
+    int got = enif_get_string(env, argv[0], host, sizeof(host), ERL_NIF_LATIN1);
+
+    if (got <= 0) {
+        // got == 0 means the term wasn't a string; got < 0 means truncation.
+        return enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_atom(env, "badarg"));
+    }
+
+    struct addrinfo hints = {0};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    struct addrinfo *result = NULL;
+    int err = getaddrinfo(host, NULL, &hints, &result);
+
+    if (err != 0) {
+        const char *atom = NULL;
+        switch (err) {
+        case EAI_NONAME:
+        case EAI_NODATA:
+            atom = "nxdomain";
+            break;
+        case EAI_AGAIN:
+            atom = "timeout";
+            break;
+        default:
+            break;
+        }
+        if (atom) {
+            return enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_atom(env, atom));
+        }
+        // Anything else: surface the raw EAI_* code so the caller can
+        // distinguish or log it.
+        return enif_make_tuple2(
+            env, enif_make_atom(env, "error"),
+            enif_make_tuple2(env, enif_make_atom(env, "gai"), enif_make_int(env, err)));
+    }
+
+    // Walk the result chain for the first AF_INET. getaddrinfo with
+    // ai_family=AF_INET should only return AF_INET entries but be
+    // defensive in case the resolver returns IPv6-mapped records.
+    ERL_NIF_TERM out_term = 0;
+    for (struct addrinfo *ai = result; ai != NULL; ai = ai->ai_next) {
+        if (ai->ai_family != AF_INET)
+            continue;
+        struct sockaddr_in *sin = (struct sockaddr_in *)ai->ai_addr;
+        uint32_t addr = ntohl(sin->sin_addr.s_addr);
+        out_term = enif_make_tuple2(env, enif_make_atom(env, "ok"),
+                                    enif_make_tuple4(env, enif_make_int(env, (addr >> 24) & 0xFF),
+                                                     enif_make_int(env, (addr >> 16) & 0xFF),
+                                                     enif_make_int(env, (addr >> 8) & 0xFF),
+                                                     enif_make_int(env, addr & 0xFF)));
+        break;
+    }
+    freeaddrinfo(result);
+
+    if (out_term == 0) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "no_address"));
+    }
+    return out_term;
+}
+
 void mob_send_component_event(int handle, const char *event, const char *payload_json) {
     if (handle < 0 || handle >= MAX_COMPONENT_HANDLES)
         return;
@@ -5639,6 +5732,10 @@ static ErlNifFunc nif_funcs[] = {
     {"webview_go_back", 0, nif_webview_go_back, 0},
     {"register_component", 1, nif_register_component, 0},
     {"deregister_component", 1, nif_deregister_component, 0},
+    // getaddrinfo can block on the resolver for seconds — dirty-IO so it
+    // doesn't head-of-line-block the regular schedulers. See the impl
+    // above for the iOS rationale.
+    {"resolve_ipv4", 1, nif_resolve_ipv4, ERL_NIF_DIRTY_JOB_IO_BOUND},
 };
 
 static int nif_load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info) {

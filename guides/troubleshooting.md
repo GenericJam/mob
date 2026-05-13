@@ -328,3 +328,33 @@ lsof -i :9101
 
 If something else is using it, configure a different dist port in
 `Mob.Dist.ensure_started/1` and update `mob.exs` accordingly.
+
+---
+
+## iOS: `Req` / `Finch` / `Mint` request fails with nxdomain on device
+
+**Symptom:** HTTPS calls that work everywhere else (host, simulator, Android)
+fail on a physical iOS device. Errors look like `nxdomain`, `:einval`, or a
+generic "lookup failed."
+
+**Cause:** BEAM's `inet_gethost` helper is spawned via `execve`, which iOS's
+app sandbox forbids. Every hostname lookup through `:inet` fails immediately.
+Android works because its OTP helpers ship as `lib*.so` in `jniLibs/`, which
+SELinux allows to exec; iOS has no equivalent escape hatch.
+
+**Fix:** Call `Mob.DNS.resolve/1` once per backend before your first request,
+typically in your app's `on_start/0`:
+
+```elixir
+Mob.DNS.preresolve([
+  "api.example.com",
+  "auth.example.com"
+])
+```
+
+After that, Req / Finch / Mint / `:httpc` / `gen_tcp` all work normally.
+
+See the [DNS on iOS guide](dns_on_ios.md) for the full story, including why
+manual resolution rather than automatic interception, what to do if the IP
+changes mid-session, and which libraries (NIFs that do their own
+`getaddrinfo`) don't need this fix.

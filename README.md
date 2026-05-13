@@ -203,6 +203,7 @@ Full documentation at [hexdocs.pm/mob](https://hexdocs.pm/mob), including:
 - [Theming](https://hexdocs.pm/mob/theming.html)
 - [Navigation](https://hexdocs.pm/mob/navigation.html)
 - [Device Capabilities](https://hexdocs.pm/mob/device_capabilities.html)
+- [DNS on iOS](https://hexdocs.pm/mob/dns_on_ios.html) — required reading if your app makes HTTPS calls; one-line fix for a non-obvious iOS-only failure mode
 - [Testing](https://hexdocs.pm/mob/testing.html)
 
 ## License
