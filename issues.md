@@ -1082,7 +1082,7 @@ and tries to figure out how to add Python.
 
 ---
 
-## 18. `mob.add_nif --type c` doesn't auto-wire `c_src/<name>.c` into the iOS/Android build
+## 18. NIF source auto-wiring missing for `mob.add_nif --type {c, rustler}` builds
 
 **Symptom** — After `mix mob.add_nif foo --type c`, the next native
 build (`mix mob.deploy --native`) leaves `c_src/foo.c` unlinked.
@@ -1149,3 +1149,62 @@ symbol name (dots in identifiers don't compile).
 **Empirically verified 2026-05-12** via the demo screen flow in
 `~/code/test_migration`. The full diagnosis lives in
 `mob_dev/lib/mix/tasks/mob.add_nif.ex`'s `c_skeleton/3` docstring.
+
+### Rustler is in the same boat (verified 2026-05-12)
+
+Same gap, harder shape:
+
+1. **Cargo `crate-type`** — scaffolded as `cdylib` (for host-dev
+   ergonomics). iOS device needs `staticlib`. Add both:
+   `crate-type = ["staticlib", "cdylib"]`. The Mob scaffold should
+   emit this dual form by default — host-dev still gets the
+   `.dylib`, iOS device gets the `.a`.
+2. **Cross-compile target** — `rustup target add aarch64-apple-ios`
+   is a one-time setup the scaffold doesn't run. `mix mob.doctor`
+   could check for this and prompt.
+3. **Invoke cross-compile** — Rustler's mix integration only knows
+   about the host target. iOS device needs:
+   ```bash
+   cd native/<name> && cargo rustc --release \
+       --target aarch64-apple-ios --crate-type staticlib
+   ```
+   This isn't wired into `mix mob.deploy --native`.
+4. **Link the `.a` into iOS build** — hand-add `run.addArg(...)`
+   for `native/<name>/target/aarch64-apple-ios/release/lib<name>.a`
+   inside `addLink()` in `ios/build_device.zig`. Same pattern as
+   the `sqlite_static_lib` hook already there.
+5. **Rustler crate version pin** — scaffold currently pins
+   `rustler = "0.32"` in the generated `Cargo.toml`. Rustler 0.32
+   hardcodes `nif_init` (no per-crate symbol). Rustler 0.37+ derives
+   `<crate>_nif_init` from `CARGO_CRATE_NAME` automatically, which
+   is exactly what mob's static-NIF table expects. **Bump the
+   Cargo.toml template to `rustler = "0.37"` (or latest).**
+6. **rustler::init! deprecation** — the macro warns "deprecated:
+   only one argument expected" with the 0.37 form. The scaffold's
+   `rustler::init!("Elixir.<Mod>", [greet]);` should drop the
+   functions list and use `#[rustler::nif]` exclusively (auto-
+   discovery via inventory).
+
+**Empirically verified 2026-05-12 on physical iPhone**:
+- Scaffolded `mix mob.add_nif greet_rust --type rustler --demo --yes`
+- Hand-bumped `Cargo.toml` to `rustler = "0.37"` and added
+  `staticlib` to crate-type.
+- `cargo rustc --release --target aarch64-apple-ios --crate-type staticlib`
+- Hand-added the `.a` to addLink's lib list in `build_device.zig`.
+- `mix mob.deploy --native --ios-device` → succeeds.
+- `Mob.Test.tap(node, :run)` →
+  `result: "Hello from Rust!"` and
+  `[info] [greet_rust-nif] call 1 returned: "Hello from Rust!"`
+
+So the path works; what's missing is automation. Steps 1-2 are
+scaffold-side (mob_dev). Steps 3-4 are build-template-side
+(mob_new templates). Step 5 is a one-line bump. Step 6 is a
+template polish.
+
+### Zigler — blocked upstream
+
+`mob.add_nif --type zigler --demo` fails at host compile on macOS 26
+before iOS even enters the picture (issue #15). Until Zigler supports
+Zig 0.16+, no automated iOS-device path is possible on this Mac.
+Linux and older macOS users can verify zigler --demo end-to-end
+following the same pattern as C/Rust above.
