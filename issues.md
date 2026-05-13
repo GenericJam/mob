@@ -876,7 +876,7 @@ the sim, agents lose the fast path and burn cycles on screenshots.
 
 ---
 
-## 15. `mix mob.add_nif --type zigler` — Zig toolchain mismatch (FIXED for the PATH-priority bug; **partial: macOS 26 upstream incompat remains**, 2026-05-12)
+## 15. `mix mob.add_nif --type zigler` — Zig toolchain mismatch (FIXED for the PATH-priority bug + macOS 26 host-dev path via fork, 2026-05-13; **iPhone deploy still pending — Zigler lacks cross-compile**)
 
 **Resolution (partial, 2026-05-12, mob_dev commit forthcoming):** The
 scaffold now queues `mix zig.get` after adding the `:zigler ~> 0.15`
@@ -888,14 +888,47 @@ mob-pinned 0.17-dev). A test pins the contract: every
 the generated stub now spells out the toolchain pin so users
 understand why `mix zig.get` ran.
 
-**Still broken on macOS 26 (Sequoia/Tahoe):** even with the correct
-Zig 0.15.2, building the example NIF on macOS 26 fails with a
-cascade of undefined symbols starting with
-`__availability_version_check`. This is a Zig-stdlib /
-compiler_rt issue tracked upstream — Zig 0.15 was built before
-macOS 26's tighter library linking and references SDK symbols that
-the newer linker won't resolve. The fix is Zig 0.16+ (which Zigler
-0.15.2 doesn't yet support). Linux and older macOS are unaffected.
+**macOS 26 host-dev (FIXED 2026-05-13 via fork).** Forked Zigler
+to `github.com/GenericJam/zigler` branch `zig-016-port` with a
+minimal port of `priv/beam/` to Zig 0.16's stdlib. Zig 0.16.0
+stable (released 2026-04-13) works on macOS 26. The mob_dev
+scaffold now pulls Zigler from this fork by default. Once
+upstream Zigler ships a 0.16 release (community issue #578),
+the dep pin flips back to hex.
+
+**Port details:** 5 files changed in priv/beam/, ~50 net lines.
+The Zig 0.15→0.16 stdlib breaking changes that hit Zigler:
+
+  - `std.fs.File.stdout()` moved to `std.Io.File.stdout()`, and
+    `File.writer/1` now takes an `Io` instance as its first arg
+    (sema.zig + sema_doc.zig)
+  - `@Type(.{ .@"struct" = ... })` split into per-variant
+    builtins: `@Struct`, `@Tuple`, `@Enum`, `@Union`, `@Pointer`,
+    `@Int`, `@Fn`, `@Vector`. Parallel-array signatures replace
+    the old array-of-records (get.zig + payload.zig)
+  - `std.debug.SelfInfo.open(allocator)` removed — replaced by
+    zero-value `init` const + per-method `Io` parameter. Stubbed
+    out for now (stacktrace.zig); NIF crashes lose per-frame
+    source-location info until proper port lands.
+
+**Empirically verified on macOS 26.4:**
+
+  iex> TestMigration.Nifs.GreetZig.greet()
+  "Hello from Zig!"
+
+**Still pending — iPhone deploy.** Zigler 0.15.x has no cross-
+compile target or `staticlib` crate-type options. Its builder
+emits a `dylib` for the host only. Getting `--type zigler --demo`
+working on iPhone requires either:
+
+  1. Extending Zigler's build pipeline to accept a target triple
+     + crate_type (a feature add, not a port)
+  2. Bypassing Zigler's build entirely for the on-device path
+     and using `zig build-lib --target aarch64-ios --crate-type
+     static` directly with the user's `~Z` source
+
+Option 1 is the right contribution to upstream Zigler — file as
+a follow-up. Option 2 is more invasive in mob_dev.
 
 
 
