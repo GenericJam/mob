@@ -11,6 +11,8 @@
         enabled: [
           {Credo.Check.Readability.Specs, files: %{excluded: ["test/"]}},
           {Credo.Check.Refactor.UnlessWithElse, []},
+          # ex_slop — runs the recommended bundle of AI-slop checks.
+          {ExSlop, []},
           # jump_credo_checks
           {Jump.CredoChecks.AvoidFunctionLevelElse, []},
           {Jump.CredoChecks.AvoidLoggerConfigureInTest, []},

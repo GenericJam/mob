@@ -159,6 +159,10 @@ defmodule Mob.MixProject do
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:jump_credo_checks, "~> 0.1.0", only: [:dev, :test], runtime: false},
+      # ex_slop — Credo check that catches AI-generated Elixir patterns
+      # (blanket rescue, narrator-style docs, redundant Enum chains, etc).
+      # Wired in via .credo.exs as `{ExSlop, []}` in the enabled list.
+      {:ex_slop, "~> 0.4", only: [:dev, :test], runtime: false},
       {:erlfmt, "~> 1.8", only: :dev, runtime: false},
       # Known Elixir 1.20-rc.4 dep warning (cosmetic, dev-only):
       #   lib/mix_unused/filter.ex:61 — `_.._ inside match is deprecated`.
