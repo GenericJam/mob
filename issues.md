@@ -873,3 +873,165 @@ sim verification. Use `Mob.Test` against any connected physical device
 **Where this matters** — every dev iteration on a sim. This is the
 agentic-coding loop's foundation; if `Mob.Test` doesn't work against
 the sim, agents lose the fast path and burn cycles on screenshots.
+
+---
+
+## 15. `mix mob.add_nif --type zigler` ships a `:zigler ~> 0.15` pin that doesn't build on current Zig
+
+**Symptom** — After scaffolding with `mix mob.add_nif foo --type zigler`,
+`mix compile` fails inside the zigler dep's sema phase:
+
+```
+/_build/dev/lib/zigler/priv/beam/get.zig:718:12: error: invalid builtin function: '@Type'
+    return @Type(.{ .@"struct" = constructed_struct });
+/_build/dev/lib/zigler/priv/beam/payload.zig:36:12: error: invalid builtin function: '@Type'
+    return @Type(result_type_info);
+/_build/dev/lib/zigler/priv/beam/sema.zig:282:27: error: root source file struct 'fs' has no member named 'File'
+    const stdout = std.fs.File.stdout();
+```
+
+**Why** — `:zigler ~> 0.15` resolves to `zigler 0.15.2`, which targets a
+Zig stdlib snapshot from before the `@Type` builtin signature change
+and before `std.fs.File.stdout()` was removed. The installed Zig
+(currently `0.17.0-dev.269+ebff43698`, the version mob_dev builds with)
+is past both changes.
+
+The Elixir-side scaffolding itself is correct — it emits a clean
+`use Zig, otp_app: :app` module with an example `pub fn` in a `~Z`
+sigil. The bug is only the version pin.
+
+**Fix options**
+
+1. **Bump the zigler dep pin.** Check what version of zigler (if any)
+   tracks Zig 0.17-dev. If a newer zigler release is compatible, bump
+   the version in `MobDev.AddNif.maybe_add_zigler_dep/2`.
+
+2. **Pin Zig instead.** Mob already pins a specific Zig version via
+   `~/zig/zig-aarch64-macos-0.17.0-dev.269+ebff43698/`. If zigler 0.15
+   needs an earlier Zig, document the supported range, or vendor a
+   second Zig install for the zigler path.
+
+3. **Skip zigler-via-Hex entirely.** Zigler's "compile a .so" model
+   doesn't fit Mob's static-link constraint anyway (the moduledoc
+   already warns about this). The static-link path requires manual
+   wire-up regardless of zigler. Consider removing `--type zigler`
+   from `mob.add_nif` and pointing users at writing the Zig directly
+   through the existing `ios/build.zig` + `android/jni/*.zig`
+   pipelines that the framework already uses.
+
+**Where this matters** — anyone trying `mix mob.add_nif --type zigler`
+hits this on first compile. The error is multi-line stdlib-internal
+output that doesn't suggest "your version pin is wrong" — easy to
+read as "Zigler is broken" and give up.
+
+**Empirically verified 2026-05-12** in `~/code/test_migration` against
+`zigler 0.15.2` + `zig 0.17.0-dev.269`. The Elixir scaffold ran cleanly
+(stub + mob.exs entry + driver_tab regen all succeeded); the failure is
+purely the dep's Zig source not matching the installed Zig.
+
+---
+
+## 16. `mix mob.add_nif --type rustler` Rust crate fails to link on macOS host (no `-undefined dynamic_lookup`)
+
+**Symptom** — After scaffolding with `mix mob.add_nif foo --type rustler`,
+`mix compile` invokes Cargo which fails the link step:
+
+```
+Undefined symbols for architecture arm64:
+  "_enif_raise_exception", referenced from:
+    rustler::codegen_runtime::NifReturned::apply in librustler-*.rlib
+  "_enif_schedule_nif", referenced from:
+    rustler::codegen_runtime::NifReturned::apply in librustler-*.rlib
+ld: symbol(s) not found for architecture arm64
+error: could not compile `foo_rustler` (lib) due to 1 previous error
+```
+
+**Why** — Rustler's default `crate-type = ["cdylib"]` builds a `.dylib`
+that gets `dlopen`'d at NIF load. The `enif_*` symbols come from the
+*host* BEAM process at load time, not from a library the .dylib links
+against. Apple's `ld` errors out on the undefined symbols unless told
+explicitly to defer them.
+
+On Linux this isn't an issue (`ld.bfd`/`ld.lld` defer by default). On
+macOS, Rustler-on-host needs `.cargo/config.toml`:
+
+```toml
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
+```
+
+Our scaffolding doesn't emit this file. The user hits the cryptic
+link error and has to know to search "Rustler macOS undefined symbols"
+to find the answer.
+
+**Fix** — `MobDev.AddNif.add_rustler_files/3` (the writer that creates
+`native/<name>/Cargo.toml` + `src/lib.rs` + `.gitignore`) should also
+emit `native/<name>/.cargo/config.toml` with the dynamic_lookup
+rustflags pinned for both Apple targets.
+
+Note the static-link path that Mob actually ships with is different —
+the moduledoc warns this scaffold's default `cdylib` won't work on
+iOS/Android anyway; the user has to switch to `staticlib` and wire
+the resulting `.a` into `ios/build.zig` + `android/jni/`. But the
+host-dev flow (sim, `mix run`) should at least compile cleanly so
+the user can iterate before doing the static-link work.
+
+**Empirically verified 2026-05-12** in `~/code/test_migration` against
+`rustler 0.37.3`. Scaffold succeeded; first `mix compile` failed at
+the cdylib link step on macOS arm64.
+
+---
+
+## 17. NIF surface discoverability — `--python` vs `--type {c, zigler, rustler}`
+
+**Symptom** — Three NIF-related Mix surfaces, three different shapes:
+
+- `mix mob.add_nif <name> --type {c, zigler, rustler, elixir-only}`
+  — scaffold a *new* NIF (you write the native side).
+- `mix mob.enable pythonx` — wire a *pre-built* hex NIF dep (CPython)
+  into an existing project, including OTP-bundle changes.
+- `mix mob.new --python` — sugar for "generate project then enable
+  pythonx".
+
+A user thinking "I want to add a NIF" finds `mob.add_nif`, sees C/
+Zigler/Rustler under `--type`, and reasonably wonders why pythonx
+isn't there.
+
+**Why the split exists** — they're conceptually different:
+
+- `add_nif` produces *stubs to fill in* (your own C/Rust/Zig).
+- `enable pythonx` *wires a third-party prebuilt NIF dep* — there's no
+  user-written native code, but there IS OTP-runtime work (bundling
+  Python.framework on iOS, packaging the Android Python lib dir).
+
+Future third-party NIF deps that need similar bundling work (a
+TensorFlow Lite wrapper, an OpenCV wrapper, a RocksDB NIF) would
+naturally also live under `mob.enable`, not `mob.add_nif`. Conflating
+the two surfaces will eventually break.
+
+**Fix options**
+
+1. **Add a discoverability alias.** `mob.add_nif --type pythonx`
+   becomes a thin shim that prints `"pythonx is a third-party dep,
+   delegating to mob.enable pythonx"` and chains to it. Cheap; keeps
+   the conceptual split clean; surfaces the right command via the
+   wrong one.
+
+2. **Document the split in both task moduledocs.** `mob.add_nif`'s
+   `@moduledoc` mentions "for third-party NIF deps, see `mob.enable`";
+   `mob.enable`'s mentions the inverse. Cheapest; relies on users
+   reading `--help`.
+
+3. **Keep both routes.** `mob.add_nif --type pythonx` does the same
+   thing as `mob.enable pythonx`. Most consistent surface, but
+   conflates the two concepts conceptually (a user might then expect
+   `mob.add_nif --type tflite` to also Just Work).
+
+**Recommendation** — (1) for now. The split is conceptually right,
+but discoverability is poor.
+
+**Where this matters** — when a user types `mix mob.add_nif --help`
+and tries to figure out how to add Python.
