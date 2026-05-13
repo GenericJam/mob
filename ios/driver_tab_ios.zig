@@ -70,9 +70,15 @@ extern fn mob_nif_nif_init() callconv(.c) ?*anyopaque;
 // system threads the flag in via `b.addOptions()` in build_device.zig
 // (iter 3); see addZigObject. For simulator builds the option module
 // either isn't provided OR has sqlite_static = false.
+//
+// emlx_nif is linked statically when the project opts into MLX via
+// `mix mob.enable mlx`. Same threading mechanism — a separate flag
+// keeps the two NIFs independent.
 const build_options = @import("build_options");
 const sqlite_static = build_options.sqlite_static;
+const emlx_static = build_options.emlx_static;
 extern fn sqlite3_nif_nif_init() callconv(.c) ?*anyopaque;
+extern fn emlx_nif_nif_init() callconv(.c) ?*anyopaque;
 
 // ── Static driver table ────────────────────────────────────────────────────
 // inet + ram_file are the only drivers in the iOS bundle. NULL-terminator
@@ -107,8 +113,15 @@ const base_nifs = [_]ErtsStaticNif{
     .{ .nif_init = mob_nif_nif_init, .is_builtin = 0, .nif_mod = THE_NON_VALUE, .entry = null },
 };
 
-const sqlite_nif = ErtsStaticNif{
+const sqlite3_nif_const = ErtsStaticNif{
     .nif_init = sqlite3_nif_nif_init,
+    .is_builtin = 0,
+    .nif_mod = THE_NON_VALUE,
+    .entry = null,
+};
+
+const emlx_nif_const = ErtsStaticNif{
+    .nif_init = emlx_nif_nif_init,
     .is_builtin = 0,
     .nif_mod = THE_NON_VALUE,
     .entry = null,
@@ -121,9 +134,16 @@ const sentinel = ErtsStaticNif{
     .entry = null,
 };
 
+// 2^N branching: one branch per subset of enabled guarded NIFs. Order
+// matters — most-specific subsets first so the comptime `if` doesn't
+// mistakenly take a shadowed branch.
 export var erts_static_nif_tab = blk: {
-    if (sqlite_static) {
-        break :blk base_nifs ++ [_]ErtsStaticNif{ sqlite_nif, sentinel };
+    if (sqlite_static and emlx_static) {
+        break :blk base_nifs ++ [_]ErtsStaticNif{ sqlite3_nif_const, emlx_nif_const, sentinel };
+    } else if (emlx_static) {
+        break :blk base_nifs ++ [_]ErtsStaticNif{ emlx_nif_const, sentinel };
+    } else if (sqlite_static) {
+        break :blk base_nifs ++ [_]ErtsStaticNif{ sqlite3_nif_const, sentinel };
     } else {
         break :blk base_nifs ++ [_]ErtsStaticNif{sentinel};
     }
