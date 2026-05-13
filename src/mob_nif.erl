@@ -177,7 +177,11 @@
     webview_go_back/0,
     %% Native view components
     register_component/1,
-    deregister_component/1
+    deregister_component/1,
+    %% DNS — in-process getaddrinfo so iOS apps bypass BEAM's
+    %% broken inet_gethost path. See `Mob.DNS` for the Elixir
+    %% wrapper and `guides/dns_on_ios.md` for the why.
+    resolve_ipv4/1
 ]).
 
 -on_load(init/0).
@@ -259,3 +263,4 @@ webview_can_go_back() -> erlang:nif_error(not_loaded).
 webview_go_back() -> erlang:nif_error(not_loaded).
 register_component(_Pid) -> erlang:nif_error(not_loaded).
 deregister_component(_Handle) -> erlang:nif_error(not_loaded).
+resolve_ipv4(_Host) -> erlang:nif_error(not_loaded).
