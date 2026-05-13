@@ -1082,7 +1082,52 @@ and tries to figure out how to add Python.
 
 ---
 
-## 18. NIF source auto-wiring missing for `mob.add_nif --type {c, rustler}` builds
+## 18. NIF source auto-wiring missing for `mob.add_nif --type {c, rustler}` builds — **FIXED 2026-05-13**
+
+**Resolution (2026-05-13, mob_dev + mob_new).** Auto-wiring landed
+in both build templates and the Mix-task build pipeline. `mix mob.deploy
+--native --ios-device` now:
+
+1. Reads `:static_nifs` from `mob.exs`, filtering to user-declared entries
+   (the baked-in NIFs in `MobDev.StaticNifs.default_nifs/0` are excluded
+   — those live in `libbeam.a`).
+2. For each entry, runs `MobDev.NativeBuild.classify_project_nif/2`:
+   - `c_src/<name>.c` exists → C path
+   - `native/<name>/Cargo.toml` exists → Rust path
+   - neither → `:elixir_only` (no native wiring, just the stub raises)
+3. For Rust NIFs: invokes `cargo rustc --release --target aarch64-apple-ios
+   --crate-type staticlib --manifest-path native/<name>/Cargo.toml`
+   (or the `-sim` target for iOS sim builds).
+4. Passes the resolved lists to `zig build` as `-D` args:
+   - `-Dproject_root=<absolute project root>`
+   - `-Dproject_c_nifs=<comma-separated names>`
+   - `-Dproject_rust_libs=<comma-separated absolute .a paths>`
+5. `build_device.zig` (and `build.zig` for sim) iterates the names and
+   emits `addCObject` for each C NIF with
+   `-DSTATIC_ERLANG_NIF -DSTATIC_ERLANG_NIF_LIBNAME=<name>`, and adds
+   each Rust `.a` to the linker's lib list.
+
+**Empirically verified 2026-05-13 on physical iPhone:** scaffolded
+`greet_c --type c --demo` and `greet_rust --type rustler --demo`
+in test_migration with **zero hand-editing of `build_device.zig`**.
+`mix mob.deploy --native --ios-device` succeeded; `Mob.Test.tap` on
+both demo screens returned the expected strings (`~c"Hello from C!"`
+and `"Hello from Rust!"`).
+
+Old workaround code in this issue's earlier history (the hand-edit
+sample) is now superseded — the scaffold's pre-deploy step does it
+all. The companion changes from this same session (Cargo.toml emits
+`["staticlib", "cdylib"]` and `rustler = "0.37"`) make the cross-compile
+step Just Work without user intervention.
+
+**Still hand-work for new project setup**: one-time `rustup target add
+aarch64-apple-ios` (and `aarch64-apple-ios-sim` for sim). `mix mob.doctor`
+could prompt for this — filed as a follow-up.
+
+**Android auto-wiring** (`android/jni/CMakeLists.txt` reading
+`:static_nifs`) is still to do — the iOS work establishes the pattern.
+
+
 
 **Symptom** — After `mix mob.add_nif foo --type c`, the next native
 build (`mix mob.deploy --native`) leaves `c_src/foo.c` unlinked.
