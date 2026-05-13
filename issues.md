@@ -876,7 +876,28 @@ the sim, agents lose the fast path and burn cycles on screenshots.
 
 ---
 
-## 15. `mix mob.add_nif --type zigler` ships a `:zigler ~> 0.15` pin that doesn't build on current Zig
+## 15. `mix mob.add_nif --type zigler` — Zig toolchain mismatch (FIXED for the PATH-priority bug; **partial: macOS 26 upstream incompat remains**, 2026-05-12)
+
+**Resolution (partial, 2026-05-12, mob_dev commit forthcoming):** The
+scaffold now queues `mix zig.get` after adding the `:zigler ~> 0.15`
+dep, so Zigler installs and uses its pinned Zig 0.15.2 from the
+user-cache directory instead of falling through to
+`System.find_executable("zig")` (which on this machine picks up the
+mob-pinned 0.17-dev). A test pins the contract: every
+`--type zigler` scaffold run must queue `zig.get`. The moduledoc on
+the generated stub now spells out the toolchain pin so users
+understand why `mix zig.get` ran.
+
+**Still broken on macOS 26 (Sequoia/Tahoe):** even with the correct
+Zig 0.15.2, building the example NIF on macOS 26 fails with a
+cascade of undefined symbols starting with
+`__availability_version_check`. This is a Zig-stdlib /
+compiler_rt issue tracked upstream — Zig 0.15 was built before
+macOS 26's tighter library linking and references SDK symbols that
+the newer linker won't resolve. The fix is Zig 0.16+ (which Zigler
+0.15.2 doesn't yet support). Linux and older macOS are unaffected.
+
+
 
 **Symptom** — After scaffolding with `mix mob.add_nif foo --type zigler`,
 `mix compile` fails inside the zigler dep's sema phase:
@@ -931,7 +952,30 @@ purely the dep's Zig source not matching the installed Zig.
 
 ---
 
-## 16. `mix mob.add_nif --type rustler` Rust crate fails to link on macOS host (no `-undefined dynamic_lookup`)
+## 16. `mix mob.add_nif --type rustler` Rust crate fails to link on macOS host (no `-undefined dynamic_lookup`) — **FIXED 2026-05-12**
+
+**Resolution (2026-05-12, mob_dev commit forthcoming):** The
+scaffold now emits `native/<name>/.cargo/config.toml` with the
+required `rustflags` for both Apple targets:
+
+```toml
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
+```
+
+Empirically verified: scaffolding `mix mob.add_nif foo_rustler
+--type rustler` and running `mix compile` on macOS arm64 now
+succeeds (links to `priv/native/foo_rustler.so`). A test pins
+the contract — every `--type rustler` scaffold run creates a
+`.cargo/config.toml` with both targets and the dynamic_lookup
+flags.
+
+Linux is unaffected — `rustflags` scope is Apple-only.
+
+
 
 **Symptom** — After scaffolding with `mix mob.add_nif foo --type rustler`,
 `mix compile` invokes Cargo which fails the link step:
