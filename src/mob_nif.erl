@@ -96,6 +96,14 @@
     clear_text/0,
     long_press_xy/3,
     swipe_xy/4,
+    %% Peripheral.VendorUsb (Android USB host; iOS returns :unsupported)
+    vendor_usb_list_devices/1,
+    vendor_usb_request_permission/1,
+    vendor_usb_open/1,
+    vendor_usb_bulk_write/3,
+    vendor_usb_start_reading/2,
+    vendor_usb_stop_reading/1,
+    vendor_usb_close/1,
     %% DNS — see Mob.DNS and guides/dns_on_ios.md
     resolve_ipv4/1
 ]).
@@ -180,6 +188,14 @@
     %% Native view components
     register_component/1,
     deregister_component/1,
+    %% Peripheral.VendorUsb
+    vendor_usb_list_devices/1,
+    vendor_usb_request_permission/1,
+    vendor_usb_open/1,
+    vendor_usb_bulk_write/3,
+    vendor_usb_start_reading/2,
+    vendor_usb_stop_reading/1,
+    vendor_usb_close/1,
     %% DNS — in-process getaddrinfo so iOS apps bypass BEAM's
     %% broken inet_gethost path. See `Mob.DNS` for the Elixir
     %% wrapper and `guides/dns_on_ios.md` for the why.
@@ -265,4 +281,12 @@ webview_can_go_back() -> erlang:nif_error(not_loaded).
 webview_go_back() -> erlang:nif_error(not_loaded).
 register_component(_Pid) -> erlang:nif_error(not_loaded).
 deregister_component(_Handle) -> erlang:nif_error(not_loaded).
+%% Peripheral.VendorUsb
+vendor_usb_list_devices(_FilterJson) -> erlang:nif_error(not_loaded).
+vendor_usb_request_permission(_Ref) -> erlang:nif_error(not_loaded).
+vendor_usb_open(_OptsJson) -> erlang:nif_error(not_loaded).
+vendor_usb_bulk_write(_Session, _Bytes, _TimeoutMs) -> erlang:nif_error(not_loaded).
+vendor_usb_start_reading(_Session, _ChunkBytes) -> erlang:nif_error(not_loaded).
+vendor_usb_stop_reading(_Session) -> erlang:nif_error(not_loaded).
+vendor_usb_close(_Session) -> erlang:nif_error(not_loaded).
 resolve_ipv4(_Host) -> erlang:nif_error(not_loaded).

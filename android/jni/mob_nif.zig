@@ -200,6 +200,16 @@ pub const BridgeMethods = extern struct {
     clear_text: jni.JMethodID = null,
     long_press_xy: jni.JMethodID = null,
     swipe_xy: jni.JMethodID = null,
+    // ── Mob.Peripheral.VendorUsb ─────────────────────────────────────────
+    // Each takes a pid as jlong (so Kotlin can echo it back when calling
+    // mob_deliver_vendor_usb_*) plus the operation's typed payload.
+    vendor_usb_list_devices: jni.JMethodID = null,
+    vendor_usb_request_permission: jni.JMethodID = null,
+    vendor_usb_open: jni.JMethodID = null,
+    vendor_usb_bulk_write: jni.JMethodID = null,
+    vendor_usb_start_reading: jni.JMethodID = null,
+    vendor_usb_stop_reading: jni.JMethodID = null,
+    vendor_usb_close: jni.JMethodID = null,
 };
 
 /// Exported with C ABI so mob_nif.c (and beam_jni.c for the senders in
@@ -2028,6 +2038,161 @@ pub export fn mob_deliver_alert_action(action: [*:0]const u8) callconv(.c) void 
     _ = erts.enif_send(null, &pid, env, msg);
 }
 
+// ── Mob.Peripheral.VendorUsb delivery functions ──────────────────────────
+//
+// Six typed delivery functions, called from beam_jni.c's
+// Java_..._MobBridge_nativeDeliverVendorUsb* thunks when Kotlin-side USB
+// events fire (enumeration result, permission grant/deny, device opened,
+// inbound chunk, write completion, lifecycle events). They build a
+// 5-tuple `{:peripheral, :vendor_usb, tag, session, payload}` and post
+// it to `pid`. session==-1 → atom :nil; session>=0 → integer.
+//
+// devices_json / permission_*_json / opened_json carry a JSON binary
+// payload that the Elixir side decodes via
+// `Mob.VendorUsb.normalize_message/1` (mirrors the :mob_file_result
+// JSON-binary precedent for camera/photos/files/audio/scan).
+
+/// Session integer or :nil atom, depending on whether the Kotlin side
+/// knows a session yet.
+inline fn vendorUsbSessionTerm(env: ?*erts.ErlNifEnv, session: c_int) erts.ERL_NIF_TERM {
+    return if (session < 0) erts.atom(env, "nil") else erts.enif_make_int(env, session);
+}
+
+pub export fn mob_deliver_vendor_usb_devices(jpid: jni.JLong, json_array: ?[*:0]const u8) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+
+    const len: usize = if (json_array) |p| jni.strlen(p) else 0;
+    var jb: erts.ErlNifBinary = undefined;
+    _ = erts.enif_alloc_binary(len, &jb);
+    if (len > 0) {
+        if (json_array) |p| @memcpy(jb.data[0..len], p[0..len]);
+    }
+
+    const msg = erts.makeTuple(env, .{
+        erts.atom(env, "peripheral"),
+        erts.atom(env, "vendor_usb"),
+        erts.atom(env, "devices_json"),
+        erts.atom(env, "nil"),
+        erts.enif_make_binary(env, &jb),
+    });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+pub export fn mob_deliver_vendor_usb_permission(jpid: jni.JLong, granted: c_int, device_json: ?[*:0]const u8) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+
+    const len: usize = if (device_json) |p| jni.strlen(p) else 0;
+    var jb: erts.ErlNifBinary = undefined;
+    _ = erts.enif_alloc_binary(len, &jb);
+    if (len > 0) {
+        if (device_json) |p| @memcpy(jb.data[0..len], p[0..len]);
+    }
+
+    const tag = if (granted != 0)
+        erts.atom(env, "permission_granted_json")
+    else
+        erts.atom(env, "permission_denied_json");
+
+    const msg = erts.makeTuple(env, .{
+        erts.atom(env, "peripheral"),
+        erts.atom(env, "vendor_usb"),
+        tag,
+        erts.atom(env, "nil"),
+        erts.enif_make_binary(env, &jb),
+    });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+pub export fn mob_deliver_vendor_usb_opened(jpid: jni.JLong, session: c_int, device_json: ?[*:0]const u8) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+
+    const len: usize = if (device_json) |p| jni.strlen(p) else 0;
+    var jb: erts.ErlNifBinary = undefined;
+    _ = erts.enif_alloc_binary(len, &jb);
+    if (len > 0) {
+        if (device_json) |p| @memcpy(jb.data[0..len], p[0..len]);
+    }
+
+    const msg = erts.makeTuple(env, .{
+        erts.atom(env, "peripheral"),
+        erts.atom(env, "vendor_usb"),
+        erts.atom(env, "opened_json"),
+        vendorUsbSessionTerm(env, session),
+        erts.enif_make_binary(env, &jb),
+    });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+pub export fn mob_deliver_vendor_usb_data(jpid: jni.JLong, session: c_int, bytes: ?[*]const u8, nbytes: usize) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+
+    var db: erts.ErlNifBinary = undefined;
+    _ = erts.enif_alloc_binary(nbytes, &db);
+    if (nbytes > 0) {
+        if (bytes) |p| @memcpy(db.data[0..nbytes], p[0..nbytes]);
+    }
+
+    const msg = erts.makeTuple(env, .{
+        erts.atom(env, "peripheral"),
+        erts.atom(env, "vendor_usb"),
+        erts.atom(env, "data"),
+        vendorUsbSessionTerm(env, session),
+        erts.enif_make_binary(env, &db),
+    });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+pub export fn mob_deliver_vendor_usb_write_complete(jpid: jni.JLong, session: c_int, bytes_written: c_int) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+
+    const keys = [_]erts.ERL_NIF_TERM{erts.atom(env, "bytes")};
+    const vals = [_]erts.ERL_NIF_TERM{erts.enif_make_int(env, bytes_written)};
+    const map = erts.makeMap(env, &keys, &vals) orelse return;
+
+    const msg = erts.makeTuple(env, .{
+        erts.atom(env, "peripheral"),
+        erts.atom(env, "vendor_usb"),
+        erts.atom(env, "write_complete"),
+        vendorUsbSessionTerm(env, session),
+        map,
+    });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+pub export fn mob_deliver_vendor_usb_event(jpid: jni.JLong, session: c_int, tag: ?[*:0]const u8, reason: ?[*:0]const u8) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+
+    const payload = if (reason) |r|
+        erts.enif_make_atom(env, r)
+    else
+        erts.atom(env, "ok");
+    const tag_term = if (tag) |t|
+        erts.enif_make_atom(env, t)
+    else
+        erts.atom(env, "error");
+
+    const msg = erts.makeTuple(env, .{
+        erts.atom(env, "peripheral"),
+        erts.atom(env, "vendor_usb"),
+        tag_term,
+        vendorUsbSessionTerm(env, session),
+        payload,
+    });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
 // ── Capability NIFs (thin shims to Kotlin) ───────────────────────────────
 
 export fn nif_request_permission(
@@ -2713,6 +2878,208 @@ export fn nif_device_model(
     return erts.enif_make_string(env, "Android", erts.ERL_NIF_LATIN1);
 }
 
+// ── Mob.Peripheral.VendorUsb NIFs ────────────────────────────────────────
+//
+// Thin wrappers over MobBridge's @JvmStatic vendor_usb_* methods. Each
+// runs on the caller's BEAM scheduler, dispatches to Kotlin via the
+// cached jmethodID, and returns :ok. Results (devices listed, permission
+// granted, read chunks, etc.) flow back asynchronously via the
+// mob_deliver_vendor_usb_* exports above, which Kotlin invokes from its
+// USB receiver / reader thread through the beam_jni.c thunks.
+//
+// bulk_write is marked DIRTY_IO in the NIF table because it does a
+// blocking copy of up to 16 KiB into a Java byte[] + a synchronous
+// Kotlin static call that ends up in UsbDeviceConnection.bulkTransfer.
+
+/// Sentinel-style guard: if `method` is null (MobBridge.kt doesn't have
+/// the matching vendor_usb_* @JvmStatic), send a single
+/// `{:peripheral, :vendor_usb, :error, nil, :unsupported}` to the caller
+/// and short-circuit the NIF with :ok. Mirrors the iOS stub behaviour so
+/// downstream code paths look the same whether the user is on iOS or an
+/// Android app generated from an older mob_new template.
+fn vendorUsbUnsupported(env: ?*erts.ErlNifEnv) erts.ERL_NIF_TERM {
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    const msg_env = erts.enif_alloc_env() orelse return erts.ok(env);
+    defer erts.enif_free_env(msg_env);
+    const msg = erts.makeTuple(msg_env, .{
+        erts.atom(msg_env, "peripheral"),
+        erts.atom(msg_env, "vendor_usb"),
+        erts.atom(msg_env, "error"),
+        erts.atom(msg_env, "nil"),
+        erts.atom(msg_env, "unsupported"),
+    });
+    _ = erts.enif_send(null, &pid, msg_env, msg);
+    return erts.ok(env);
+}
+
+export fn nif_vendor_usb_list_devices(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.vendor_usb_list_devices == null) return vendorUsbUnsupported(env);
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const json = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(json);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.vendor_usb_list_devices, pid, json);
+}
+
+export fn nif_vendor_usb_request_permission(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.vendor_usb_request_permission == null) return vendorUsbUnsupported(env);
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const ref = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(ref);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.vendor_usb_request_permission, pid, ref);
+}
+
+export fn nif_vendor_usb_open(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.vendor_usb_open == null) return vendorUsbUnsupported(env);
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const json = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(json);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.vendor_usb_open, pid, json);
+}
+
+export fn nif_vendor_usb_bulk_write(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.vendor_usb_bulk_write == null) return vendorUsbUnsupported(env);
+    var session: c_int = 0;
+    if (erts.enif_get_int(env, argv[0], &session) == 0) return erts.badarg(env);
+    const bin = getBinOrIolist(env, argv[1]) orelse return erts.badarg(env);
+    var timeout_ms: c_int = 1000;
+    if (erts.enif_get_int(env, argv[2], &timeout_ms) == 0) return erts.badarg(env);
+
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    defer detachIfAttached(attached);
+
+    // Copy the bytes into a fresh Java `byte[]` so Kotlin can hand it to
+    // UsbDeviceConnection.bulkTransfer without re-resolving the BEAM
+    // binary. SetByteArrayRegion is a straight memcpy; the byte[]
+    // outlives this NIF call but Kotlin will let it GC once the bulk
+    // transfer returns.
+    const size: jni.JSize = @intCast(bin.size);
+    const jbytes = jni.newByteArray(jenv, size);
+    if (jbytes != null) {
+        // BEAM stores binary contents as unsigned bytes; JNI's byte[] is
+        // signed (jbyte = int8_t). A bit-for-bit copy is fine — the
+        // signed/unsigned distinction is irrelevant for bulk I/O bytes.
+        jni.setByteArrayRegion(jenv, jbytes, 0, size, @ptrCast(bin.data));
+        jenv.*.CallStaticVoidMethod.?(
+            jenv,
+            Bridge.cls,
+            Bridge.vendor_usb_bulk_write,
+            pidToJlong(pid),
+            @as(jni.JInt, session),
+            jbytes,
+            @as(jni.JInt, timeout_ms),
+        );
+        jni.deleteLocalRef(jenv, jbytes);
+    }
+    return erts.ok(env);
+}
+
+export fn nif_vendor_usb_start_reading(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.vendor_usb_start_reading == null) return vendorUsbUnsupported(env);
+    var session: c_int = 0;
+    if (erts.enif_get_int(env, argv[0], &session) == 0) return erts.badarg(env);
+    var chunk_bytes: c_int = 4096;
+    if (erts.enif_get_int(env, argv[1], &chunk_bytes) == 0) return erts.badarg(env);
+
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    defer detachIfAttached(attached);
+
+    jenv.*.CallStaticVoidMethod.?(
+        jenv,
+        Bridge.cls,
+        Bridge.vendor_usb_start_reading,
+        pidToJlong(pid),
+        @as(jni.JInt, session),
+        @as(jni.JInt, chunk_bytes),
+    );
+    return erts.ok(env);
+}
+
+export fn nif_vendor_usb_stop_reading(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.vendor_usb_stop_reading == null) return vendorUsbUnsupported(env);
+    var session: c_int = 0;
+    if (erts.enif_get_int(env, argv[0], &session) == 0) return erts.badarg(env);
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    defer detachIfAttached(attached);
+
+    jenv.*.CallStaticVoidMethod.?(
+        jenv,
+        Bridge.cls,
+        Bridge.vendor_usb_stop_reading,
+        @as(jni.JInt, session),
+    );
+    return erts.ok(env);
+}
+
+export fn nif_vendor_usb_close(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.vendor_usb_close == null) return vendorUsbUnsupported(env);
+    var session: c_int = 0;
+    if (erts.enif_get_int(env, argv[0], &session) == 0) return erts.badarg(env);
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    defer detachIfAttached(attached);
+
+    jenv.*.CallStaticVoidMethod.?(
+        jenv,
+        Bridge.cls,
+        Bridge.vendor_usb_close,
+        @as(jni.JInt, session),
+    );
+    return erts.ok(env);
+}
+
 // ── nif_load: cache all method IDs at BEAM startup ───────────────────────
 
 /// Required-method helper. Returns false if the method isn't on the
@@ -2811,6 +3178,21 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     if (!cacheRequired(jenv, "notify_register_push", "(JLjava/lang/String;)V", &Bridge.notify_register_push)) return -1;
     if (!cacheRequired(jenv, "background_keep_alive", "()V", &Bridge.background_keep_alive)) return -1;
     if (!cacheRequired(jenv, "background_stop", "()V", &Bridge.background_stop)) return -1;
+
+    // Mob.Peripheral.VendorUsb. Optional rather than required so apps
+    // generated from an older `mob_new` template (without the matching
+    // MobBridge.kt vendor_usb block from mob_new#2) still load — every
+    // vendor_usb NIF below short-circuits with `:unsupported` when the
+    // matching methodID is null. The user-visible effect on a stale
+    // app is "call returns :ok but you get a single :error event with
+    // reason :unsupported", which mirrors the iOS stubs' behaviour.
+    cacheOptional(jenv, "vendor_usb_list_devices", "(JLjava/lang/String;)V", &Bridge.vendor_usb_list_devices);
+    cacheOptional(jenv, "vendor_usb_request_permission", "(JLjava/lang/String;)V", &Bridge.vendor_usb_request_permission);
+    cacheOptional(jenv, "vendor_usb_open", "(JLjava/lang/String;)V", &Bridge.vendor_usb_open);
+    cacheOptional(jenv, "vendor_usb_bulk_write", "(JI[BI)V", &Bridge.vendor_usb_bulk_write);
+    cacheOptional(jenv, "vendor_usb_start_reading", "(JII)V", &Bridge.vendor_usb_start_reading);
+    cacheOptional(jenv, "vendor_usb_stop_reading", "(I)V", &Bridge.vendor_usb_stop_reading);
+    cacheOptional(jenv, "vendor_usb_close", "(I)V", &Bridge.vendor_usb_close);
 
     g_launch_notif_mutex = erts.enif_mutex_create("mob_launch_notif_mutex");
     if (g_launch_notif_mutex == null) {
@@ -2921,6 +3303,14 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "device_foreground", .arity = 0, .fptr = nif_device_foreground, .flags = 0 },
     .{ .name = "device_os_version", .arity = 0, .fptr = nif_device_os_version, .flags = 0 },
     .{ .name = "device_model", .arity = 0, .fptr = nif_device_model, .flags = 0 },
+    // ── Mob.Peripheral.VendorUsb (Android USB host) ──────────────────────────
+    .{ .name = "vendor_usb_list_devices", .arity = 1, .fptr = nif_vendor_usb_list_devices, .flags = 0 },
+    .{ .name = "vendor_usb_request_permission", .arity = 1, .fptr = nif_vendor_usb_request_permission, .flags = 0 },
+    .{ .name = "vendor_usb_open", .arity = 1, .fptr = nif_vendor_usb_open, .flags = 0 },
+    .{ .name = "vendor_usb_bulk_write", .arity = 3, .fptr = nif_vendor_usb_bulk_write, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
+    .{ .name = "vendor_usb_start_reading", .arity = 2, .fptr = nif_vendor_usb_start_reading, .flags = 0 },
+    .{ .name = "vendor_usb_stop_reading", .arity = 1, .fptr = nif_vendor_usb_stop_reading, .flags = 0 },
+    .{ .name = "vendor_usb_close", .arity = 1, .fptr = nif_vendor_usb_close, .flags = 0 },
 };
 
 var mob_nif_entry: erts.ErlNifEntry = .{

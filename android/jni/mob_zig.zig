@@ -158,10 +158,16 @@ pub const JNI_VERSION_1_6: c_int = 0x00010006;
 pub const JNI_OK: c_int = 0;
 
 pub const JBoolean = u8;
+pub const JByte = i8;
 pub const JInt = i32;
 pub const JLong = i64;
 pub const JFloat = f32;
 pub const JDouble = f64;
+/// `jsize` is a typedef alias for `jint` in jni.h; keep them as distinct
+/// names here so the byte-array helpers below read like the JNI signatures
+/// they wrap.
+pub const JSize = JInt;
+pub const JByteArray = JObject;
 
 pub const JObject = ?*anyopaque;
 pub const JClass = JObject;
@@ -392,12 +398,16 @@ pub const JNINativeInterface = extern struct {
     // 171: GetArrayLength — typed (used by nif_screen_info).
     GetArrayLength: ?*const fn (env: *JNIEnv, arr: JObject) callconv(.c) JInt,
 
-    // 172-178: ObjectArray + primitive-array constructors — unused.
+    // 172-178: ObjectArray + primitive-array constructors. NewByteArray is
+    // typed because nif_vendor_usb_bulk_write needs it (Mob.VendorUsb's
+    // raw-USB write path hands an iolist→binary across the JNI boundary
+    // as a `byte[]`). The others stay opaque until something else needs
+    // them.
     NewObjectArray: ?*anyopaque,
     GetObjectArrayElement: ?*anyopaque,
     SetObjectArrayElement: ?*anyopaque,
     NewBooleanArray: ?*anyopaque,
-    NewByteArray: ?*anyopaque,
+    NewByteArray: ?*const fn (env: *JNIEnv, len: JSize) callconv(.c) JByteArray,
     NewCharArray: ?*anyopaque,
     NewShortArray: ?*anyopaque,
 
@@ -434,12 +444,20 @@ pub const JNINativeInterface = extern struct {
     GetIntArrayRegion: ?*anyopaque,
     GetLongArrayRegion: ?*anyopaque,
     GetFloatArrayRegion: ?*const fn (env: *JNIEnv, arr: JObject, start: JInt, len: JInt, buf: [*]f32) callconv(.c) void,
+    GetDoubleArrayRegion: ?*anyopaque,
 
-    // The remaining ~30 slots (Get/Set*ArrayRegion tail, RegisterNatives,
-    // MonitorEnter/Exit, GetJavaVM, NewWeakGlobalRef, ExceptionCheck,
-    // DirectByteBuffer ops, GetObjectRefType) are not used by mob_nif.zig
-    // today. Add when a later iter needs them — the rule is "match jni.h
-    // up to the last USED slot".
+    // 204-211: SetXxxArrayRegion. SetByteArrayRegion is typed because
+    // nif_vendor_usb_bulk_write copies BEAM-side bytes into a fresh
+    // `byte[]` via NewByteArray + SetByteArrayRegion before the static
+    // method call.
+    SetBooleanArrayRegion: ?*anyopaque,
+    SetByteArrayRegion: ?*const fn (env: *JNIEnv, arr: JByteArray, start: JSize, len: JSize, buf: [*]const JByte) callconv(.c) void,
+
+    // The remaining ~25 slots (Set*ArrayRegion tail past byte,
+    // RegisterNatives, MonitorEnter/Exit, GetJavaVM, NewWeakGlobalRef,
+    // ExceptionCheck, DirectByteBuffer ops, GetObjectRefType) are not
+    // used by mob_nif.zig today. Add when a later iter needs them — the
+    // rule is "match jni.h up to the last USED slot".
 };
 
 /// JavaVM vtable — used for GetEnv / AttachCurrentThread / DetachCurrentThread.
@@ -525,6 +543,14 @@ pub inline fn getArrayLength(env: *JNIEnv, arr: JObject) JInt {
 
 pub inline fn getFloatArrayRegion(env: *JNIEnv, arr: JObject, start: JInt, len: JInt, buf: [*]f32) void {
     env.*.GetFloatArrayRegion.?(env, arr, start, len, buf);
+}
+
+pub inline fn newByteArray(env: *JNIEnv, len: JSize) JByteArray {
+    return env.*.NewByteArray.?(env, len);
+}
+
+pub inline fn setByteArrayRegion(env: *JNIEnv, arr: JByteArray, start: JSize, len: JSize, buf: [*]const JByte) void {
+    env.*.SetByteArrayRegion.?(env, arr, start, len, buf);
 }
 
 pub inline fn getEnv(vm: *JavaVM, version: JInt) ?*JNIEnv {
