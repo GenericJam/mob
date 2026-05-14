@@ -8,10 +8,23 @@ defmodule Mob.DNSTest do
 
   setup do
     original_lookup = :inet_db.res_option(:lookup)
+    original_ns = :inet_db.res_option(:nameservers)
 
     on_exit(fn ->
       # Restore the lookup order so other tests aren't affected.
       :inet_db.set_lookup(original_lookup)
+
+      # Restore nameservers — `configure_pure_beam/1` adds {8.8.8.8, 53}
+      # and {1.1.1.1, 53} by default, which would leak across tests.
+      # `set_resolv_conf("")` clears all then `add_ns/1` per restored entry.
+      for {ip, port} <- :inet_db.res_option(:nameservers) do
+        :inet_db.del_ns(ip, port)
+      end
+
+      for {ip, port} <- original_ns do
+        :inet_db.add_ns(ip, port)
+      end
+
       # Best-effort host-table cleanup for the names we used.
       for host <-
             ~c"a.test a.test.local b.test missing.test bogus.test"
@@ -138,6 +151,62 @@ defmodule Mob.DNSTest do
       :inet_db.set_lookup([:file | :inet_db.res_option(:lookup)])
 
       assert DNS.resolved?("chain.test")
+    end
+  end
+
+  # ── configure_pure_beam/1 ──────────────────────────────────────────────
+  #
+  # Flips BEAM's lookup chain to `[:file, :dns]` and seeds nameservers so
+  # `:inet.getaddr/2` resolves via raw DNS queries from inside BEAM
+  # instead of the iOS-broken `:native` (inet_gethost) path. Pure state
+  # mutation on `:inet_db`; nothing to mock.
+
+  describe "configure_pure_beam/1" do
+    test "sets the lookup chain to [:file, :dns]" do
+      DNS.configure_pure_beam(nameservers: [])
+      assert :inet_db.res_option(:lookup) == [:file, :dns]
+    end
+
+    test "seeds Google + Cloudflare DNS by default" do
+      DNS.configure_pure_beam()
+      nameservers = :inet_db.res_option(:nameservers)
+      ips = Enum.map(nameservers, fn {ip, _port} -> ip end)
+      assert {8, 8, 8, 8} in ips
+      assert {1, 1, 1, 1} in ips
+    end
+
+    test "honors a custom :nameservers list" do
+      DNS.configure_pure_beam(nameservers: [{9, 9, 9, 9}])
+      ips = :inet_db.res_option(:nameservers) |> Enum.map(fn {ip, _port} -> ip end)
+      assert {9, 9, 9, 9} in ips
+      refute {8, 8, 8, 8} in ips
+    end
+
+    test ":nameservers: [] sets the lookup chain but skips ns seeding" do
+      # Snapshot ns count before so we don't false-positive on a leftover
+      # from another test (setup restores, but order isn't guaranteed).
+      before = length(:inet_db.res_option(:nameservers))
+      DNS.configure_pure_beam(nameservers: [])
+      assert :inet_db.res_option(:lookup) == [:file, :dns]
+      assert length(:inet_db.res_option(:nameservers)) == before
+    end
+
+    test "is idempotent — calling twice doesn't duplicate nameservers" do
+      DNS.configure_pure_beam(nameservers: [{8, 8, 8, 8}])
+      first = length(:inet_db.res_option(:nameservers))
+      DNS.configure_pure_beam(nameservers: [{8, 8, 8, 8}])
+      second = length(:inet_db.res_option(:nameservers))
+      assert first == second
+    end
+
+    test "preserves manually-seeded :file entries (composes with resolve/1)" do
+      # The whole point of `:file` being first in the chain — manually-
+      # resolved hosts (Apple-resolver-backed) still win over the :dns
+      # fallback, so a user can use configure_pure_beam as a default and
+      # selectively call resolve/1 for VPN/mDNS hosts.
+      :inet_db.add_host({203, 0, 113, 50}, [~c"compose.test"])
+      DNS.configure_pure_beam(nameservers: [])
+      assert DNS.resolved?("compose.test")
     end
   end
 end

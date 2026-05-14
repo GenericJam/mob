@@ -1,4 +1,4 @@
-# DNS on iOS — Why Req / Finch / Mint Fail Until You Call `Mob.DNS.resolve/1`
+# DNS on iOS — Why Req / Finch / Mint Fail Without Configuring BEAM's DNS Path
 
 If you're running a mob app on iOS and you call out to an HTTPS endpoint
 by hostname — `Req.get!("https://api.example.com/...")` — the request
@@ -6,27 +6,31 @@ fails. The same code works on macOS, Linux, the iOS simulator, Android,
 and physical Android. **Only the iOS device sees the failure**, and the
 error is usually some flavour of "nxdomain" or "lookup failed."
 
-This document explains why that happens and how to make your app's HTTP
-calls work on iOS with one extra line at startup.
+This document explains why that happens and how to fix it.
 
 ---
 
 ## TL;DR
 
 ```elixir
-# Once, before your first HTTP call (typically in your app's on_start/0):
-Mob.DNS.preresolve([
-  "api.example.com",
-  "auth.example.com"
-])
+# Once, in your app's on_start/0 (already in the mob.new template):
+Mob.DNS.configure_pure_beam()
 
 # Now Req / Finch / Mint / HTTPoison / Tesla all work normally:
 Req.get!("https://api.example.com/things")
 ```
 
-`Mob.DNS.resolve/1` is idempotent and cheap. You can also use the bulk
-form `preresolve/1` for a fixed list of backends, or call `resolve/1`
-lazily right before the first request to a given host.
+`configure_pure_beam/1` flips BEAM's lookup chain from the broken
+`:native` (port-program) path to `[:file, :dns]` — BEAM does raw DNS
+queries from inside Erlang via `gen_udp` / `gen_tcp`, no fork, no
+`execve`. Defaults to Google + Cloudflare as fallback nameservers;
+override with `nameservers:` if you need to.
+
+For hosts that need iOS's own resolver — VPN-pushed DNS, `.local` /
+mDNS, search-domain expansion, captive portals — use the per-host
+`Mob.DNS.resolve/1` / `preresolve/1` path described below. Both
+mechanisms compose; the per-host calls always win because `:file` is
+first in the chain.
 
 ---
 
@@ -64,29 +68,61 @@ does NOT affect" below.
 
 ---
 
-## How `Mob.DNS` works around it
+## Two ways to fix it
 
-iOS doesn't block calling libc functions in-process — only `execve`.
-`Mob.DNS` calls Darwin's `getaddrinfo` directly via a NIF, then seeds
-the result into `:inet_db` (BEAM's in-process host table) so subsequent
-`:inet.getaddr/2` calls find it from the file table without ever
-spawning anything.
+`Mob.DNS` exposes two complementary mechanisms. They compose — call
+`configure_pure_beam` once at startup as the default, then `resolve/1`
+only for the specific hosts where Apple-resolver semantics matter.
 
-The NIF does three things:
+### 1. `configure_pure_beam/1` — pure-BEAM DNS as default
 
-1. Calls `getaddrinfo(host, NULL, &hints, &result)` with `hints.ai_family = AF_INET`.
-2. Walks the result chain for the first IPv4 address.
-3. Returns `{:ok, {a, b, c, d}}` or `{:error, reason}`.
+```elixir
+def on_start do
+  Mob.DNS.configure_pure_beam()
+  # …rest of startup…
+end
+```
 
-The Elixir wrapper then:
+What it does:
 
-1. Calls `:inet_db.add_host(ip, [host])` to seed the file table.
-2. Calls `:inet_db.set_lookup([:file | other])` to put `:file` at the
-   front of BEAM's lookup chain (so seeded entries win over the broken
-   `:native` path).
+1. Calls `:inet_db.set_lookup([:file, :dns])`. The `:dns` method
+   resolves via raw UDP/TCP queries performed inside BEAM by
+   `inet_res` (`gen_udp` / `gen_tcp`). No port program, no fork, no
+   `execve`. iOS doesn't block sockets, so this Just Works.
+2. Seeds fallback nameservers — defaults to Google + Cloudflare
+   (`{8,8,8,8}` and `{1,1,1,1}`). Override via `nameservers:` opt.
 
-Both operations are idempotent. Calling `resolve/1` for the same host
-twice is harmless.
+After this, `:inet.getaddr/2` (and therefore the entire HTTP-library
+ecosystem) resolves any public hostname without per-host setup.
+
+### 2. `Mob.DNS.resolve/1` / `preresolve/1` — Apple-resolver-backed, per host
+
+```elixir
+{:ok, _ip} = Mob.DNS.resolve("internal.corp.local")
+```
+
+What it does:
+
+1. Calls Darwin's `getaddrinfo` directly via a NIF (iOS allows
+   in-process libc calls — only `execve` of foreign binaries is
+   blocked).
+2. Walks the result for the first IPv4 address.
+3. Seeds it into `:inet_db`'s file table via `:inet_db.add_host/2`.
+4. Ensures `:file` is first in the lookup chain so the seeded entry
+   wins over whatever comes after.
+
+Because the NIF goes through Apple's resolver, this path honours
+**everything iOS knows about DNS** — VPN-pushed nameservers, search
+domains, `.local` / mDNS, captive portals, encrypted-DNS configured
+in iOS Settings. The pure-BEAM `:dns` path does none of that; it
+just queries whatever nameservers you seeded.
+
+### How they compose
+
+`configure_pure_beam` puts `:file` first in the chain. So when you
+later call `resolve/1` for `internal.corp.local`, the Apple-resolved
+IP is added to the file table and **always wins** over the `:dns`
+fallback. The two paths don't conflict.
 
 ---
 
@@ -135,21 +171,49 @@ iOS has no comparable mechanism. The `Mob.DNS` NIF is the workaround.
 
 ---
 
+## Trade-offs — pure-BEAM vs. Apple-resolver
+
+| Concern | `configure_pure_beam` (`:dns` method) | `resolve/1` / `preresolve/1` (libc NIF) |
+|---|---|---|
+| Who runs the DNS query? | BEAM's `inet_res` — raw UDP/TCP from Erlang | Apple's resolver, in-process via libc |
+| Nameservers used | Whatever you seeded (defaults to Google + Cloudflare) | Whatever iOS knows about — DHCP, VPN, configured DoH/DoT |
+| Captive portals (hotel / airport Wi-Fi) | Often broken — captive nets hijack DNS in ways the OS handles, raw UDP doesn't | Handled by iOS |
+| Corporate / VPN DNS for internal hostnames | Doesn't work unless you also seed the corporate resolver | Works — iOS picks up DNS pushed by the VPN profile |
+| Search-domain expansion (single-label `https://api/`) | Not applied | Applied by iOS resolver |
+| `.local` / mDNS service discovery | Doesn't work | Works |
+| IPv6 dual-stack (Happy Eyeballs) | Manual | Automatic |
+| TTL respected; auto-refresh when an IP rotates | Yes (DNS TTLs honoured per lookup) | No — `inet_db` seed persists until you re-`resolve/1` |
+| Cost per lookup | UDP round-trip every time `:dns` fires | Zero after the first call (cached in `inet_db`) |
+| Per-host setup required? | No | Yes (`resolve/1` per hostname, or `preresolve/1` for a batch) |
+| Code surface | One function call at startup | NIF + Elixir wrapper |
+
+**Default to `configure_pure_beam`.** It covers everything most apps
+talk to (consumer Wi-Fi or cellular + public-internet endpoints) with
+one line of setup.
+
+**Reach for `resolve/1` per-host** when you specifically need the
+Apple-resolver behaviour from the table above. The two compose — the
+manually-seeded entry always wins over the `:dns` fallback because
+`:file` is first in the chain.
+
+---
+
 ## When to call `resolve` / `preresolve`
 
-**At app startup, for known-fixed backends.** This is the simplest
-pattern — list every backend your app talks to and resolve them once
-in `on_start/0`:
+**At app startup, for known-fixed backends.** List the backends that
+need Apple-resolver semantics (VPN, mDNS, etc.) and resolve them
+alongside the `configure_pure_beam` call:
 
 ```elixir
 def on_start do
-  Mob.Dist.ensure_started(...)
+  Mob.DNS.configure_pure_beam()                      # public-internet hosts
 
-  Mob.DNS.preresolve([
-    "api.example.com",
-    "auth.example.com",
-    "analytics.example.com"
+  Mob.DNS.preresolve([                               # OS-resolver-special hosts
+    "internal.corp.local",
+    "files.local"
   ])
+
+  # …rest of startup…
 end
 ```
 
