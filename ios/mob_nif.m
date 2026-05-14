@@ -2089,9 +2089,14 @@ static ERL_NIF_TERM nif_request_permission(ErlNifEnv *env, int argc, const ERL_N
                                                    ok ? "granted" : "denied");
                                        }];
     } else if (strcmp(cap, "location") == 0) {
-        // Location permission is requested via CLLocationManager when get_once/start are called.
-        // Here we just signal granted for iOS (the actual dialog shows at location call time).
-        mob_send3(&pid, "permission", "location", "granted");
+        // Honest location-permission flow: drive CLLocationManager
+        // directly and let its delegate report the user's actual
+        // choice. See request_location_permission/1 below for the
+        // delegate setup. Previously this branch synthesised
+        // `:granted` unconditionally — that lied about denials, hid
+        // the "not determined → no plist key" failure mode, and made
+        // Mob.Permissions behave differently on iOS vs Android.
+        request_location_permission(pid);
     } else if (strcmp(cap, "notifications") == 0) {
         UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
         [center
@@ -2137,6 +2142,67 @@ static ERL_NIF_TERM nif_biometric_authenticate(ErlNifEnv *env, int argc,
     return enif_make_atom(env, "ok");
 }
 
+// ── Location permission ───────────────────────────────────────────────────
+//
+// Separated from the location-updates delegate below so a screen can
+// request authorization without also starting (and paying for) GPS
+// updates. The delegate fires once per real-user choice; we map
+// AuthorizedWhenInUse / AuthorizedAlways → :granted, Denied /
+// Restricted → :denied. NotDetermined is the transient state before
+// the dialog has been answered — we keep the delegate alive (static
+// strong refs) so iOS can call back into it when the answer arrives.
+
+@interface MobLocationPermissionDelegate : NSObject <CLLocationManagerDelegate>
+@property(nonatomic) ErlNifPid pid;
+@property(nonatomic) BOOL resolved;
+@end
+
+static MobLocationPermissionDelegate *g_permission_delegate = nil;
+static CLLocationManager *g_permission_manager = nil;
+
+@implementation MobLocationPermissionDelegate
+// `locationManagerDidChangeAuthorization:` is the iOS 14+ replacement
+// for `locationManager:didChangeAuthorizationStatus:`. Mob targets
+// iOS 17+ (see ios/build_device.zig minimum-deployment) so the older
+// callback is omitted.
+- (void)locationManagerDidChangeAuthorization:(CLLocationManager *)manager {
+    CLAuthorizationStatus status = manager.authorizationStatus;
+    if (status == kCLAuthorizationStatusNotDetermined) {
+        // Dialog is still on screen / the OS hasn't picked an initial
+        // state. We'll be called again with the user's choice.
+        return;
+    }
+    if (self.resolved) {
+        // Subsequent authorization changes (user revokes/grants via
+        // Settings) — fire the event again so the screen can react.
+        // Marked here for symmetry, no early return.
+    }
+    self.resolved = YES;
+
+    ErlNifPid p = self.pid;
+    BOOL granted = (status == kCLAuthorizationStatusAuthorizedWhenInUse ||
+                    status == kCLAuthorizationStatusAuthorizedAlways);
+    mob_send3(&p, "permission", "location", granted ? "granted" : "denied");
+}
+@end
+
+static void request_location_permission(ErlNifPid pid) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (!g_permission_manager) {
+          g_permission_manager = [[CLLocationManager alloc] init];
+      }
+      g_permission_delegate = [[MobLocationPermissionDelegate alloc] init];
+      g_permission_delegate.pid = pid;
+      g_permission_manager.delegate = g_permission_delegate;
+      // Reading `authorizationStatus` here would tell us if we should
+      // skip the request entirely, but doing so synchronously can
+      // momentarily return NotDetermined on first launch. Calling
+      // `requestWhenInUseAuthorization` is idempotent — already-granted
+      // permissions short-circuit and the delegate fires immediately.
+      [g_permission_manager requestWhenInUseAuthorization];
+    });
+}
+
 // ── Location ──────────────────────────────────────────────────────────────
 
 @interface MobLocationDelegate : NSObject <CLLocationManagerDelegate>
@@ -2178,6 +2244,29 @@ static CLLocationManager *g_location_manager = nil;
     ERL_NIF_TERM msg =
         enif_make_tuple3(e, enif_make_atom(e, "location"), enif_make_atom(e, "error"),
                          enif_make_atom(e, "unavailable"));
+    enif_send(NULL, &p, e, msg);
+    enif_free_env(e);
+}
+// Surface authorization-state changes through the same delegate so a
+// screen that called `Mob.Location.get_once/1` without first going
+// through `Mob.Permissions.request/2` still hears about denial —
+// without this, `didFailWithError` doesn't fire on denial and the
+// screen sits at "waiting for fix…" forever. The permission-only
+// delegate above sends `{:permission, :location, ...}`; here we send
+// `{:location, :error, :permission_denied}` so the screen's
+// `handle_info({:location, :error, _}, _)` path catches it.
+- (void)locationManagerDidChangeAuthorization:(CLLocationManager *)mgr {
+    CLAuthorizationStatus status = mgr.authorizationStatus;
+    if (status == kCLAuthorizationStatusNotDetermined) return;
+    if (status == kCLAuthorizationStatusAuthorizedWhenInUse ||
+        status == kCLAuthorizationStatusAuthorizedAlways) {
+        return;
+    }
+    ErlNifPid p = self.pid;
+    ErlNifEnv *e = enif_alloc_env();
+    ERL_NIF_TERM msg =
+        enif_make_tuple3(e, enif_make_atom(e, "location"), enif_make_atom(e, "error"),
+                         enif_make_atom(e, "permission_denied"));
     enif_send(NULL, &p, e, msg);
     enif_free_env(e);
 }

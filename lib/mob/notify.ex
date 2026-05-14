@@ -3,6 +3,11 @@ defmodule Mob.Notify do
   Local and push notifications.
 
   Requires `:notifications` permission (request via `Mob.Permissions.request/2`).
+  No `Info.plist` key needed on iOS. Android 13+ (API 33) requires
+  `POST_NOTIFICATIONS` in `AndroidManifest.xml`; older Android
+  versions are user-controlled via system settings. The default
+  `mix mob.new` template ships `POST_NOTIFICATIONS`. See the
+  [permissions guide](permissions.html) for the cross-platform table.
 
   All notifications arrive via `handle_info` regardless of app state (foreground,
   background, or relaunched after being killed). No special `mount/3` handling needed.

@@ -25,6 +25,16 @@ end
 
 **No permission needed:** haptics, clipboard, share sheet, file picker.
 
+> **`Mob.Permissions.request/2` is only half the picture.** Each
+> permission-gated capability also needs an `Info.plist` usage
+> description (iOS) and `AndroidManifest.xml` `uses-permission` entry
+> (Android). The default `mix mob.new` template covers camera +
+> microphone on iOS and most capabilities on Android, but leaves
+> location, photo library, etc. for you to add explicitly. See
+> [permissions](permissions.html) for the per-capability table, the
+> iOS-specific gotchas, and a diagnostic checklist for "the dialog
+> never appears".
+
 ## Haptic feedback
 
 `Mob.Haptic.trigger/2` fires synchronously (no `handle_info` needed) and returns the socket:
