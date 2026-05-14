@@ -164,4 +164,95 @@ defmodule Mob.UI do
       children: []
     }
   end
+
+  @doc """
+  Returns a `:gpu_view` leaf node — a fragment-shader-driven GPU surface
+  backed by `MTKView` + Metal on iOS. The native side compiles the
+  supplied shader (Metal Shading Language) into a render pipeline, binds
+  the supplied uniforms in declaration order at fragment buffer slot 0,
+  and renders a full-screen quad at the display refresh rate.
+
+  Android support (`GLSurfaceView` + GLES 3.0) is not in v1.
+
+  ## Props
+
+    * `:id` — required atom that identifies the GPU view across re-renders
+      (so the native side keeps the same Metal pipeline / texture cache).
+    * `:width` / `:height` — pt/dp, required.
+    * `:shader` — either a string of Metal Shading Language source (iOS),
+      or a map `%{ios: "...MSL..."}` (escape hatch — same as the string
+      form; the map form exists so future platforms can be added without
+      breaking the API).
+    * `:uniforms` — an **ordered list of values** packed into the shader's
+      `Uniforms` struct in declaration order. Each element is one of:
+      * a number — `float` (or `uint` if integer-typed at the BEAM level)
+      * a 2-element list `[a, b]` — `float2`
+      * a 4-element list `[a, b, c, d]` — `float4`
+      (`float3` deliberately not supported in v1 — its 16-byte
+      alignment with 12-byte size makes the layout API messier than
+      it's worth here.)
+
+  Shader compile errors are caught natively and surfaced as a translucent
+  overlay on top of the GpuView with the error message.
+
+  ## Why a list, not a map
+
+  Elixir map iteration order is **not stable** across runtimes or map
+  sizes — `%{a: 1, b: 2, c: 3}` can iterate in any order. The natural
+  MSL layout for a `Uniforms` struct is positional, so we mirror that
+  on the BEAM side. List position 0 → first struct member, etc.
+
+  A map form is still accepted as a backward-compat fallback but will
+  pack in whatever order the runtime decides, so the shader-side struct
+  has to match an unstable order — not recommended.
+
+  ## Example — Mandelbrot at the display's refresh rate
+
+      @shader File.read!("priv/shaders/mandelbrot.metal")
+
+      Mob.UI.gpu_view(
+        id: :mandelbrot,
+        width: 350,
+        height: 350,
+        shader: @shader,
+        # MSL: struct Uniforms { float2 center; float zoom; uint max_iter; };
+        uniforms: [[cx, cy], zoom, max_iter]
+      )
+
+  ## What the framework auto-provides
+
+  The host emits a built-in vertex shader that draws a full-screen quad
+  and produces a `VertexOut { float4 position [[position]]; float2 uv; }`.
+  Your fragment shader receives that as `[[stage_in]]` and reads
+  `in.uv` (0..1 across the view) plus the user uniforms at buffer slot 0.
+  Don't redeclare `VertexOut`, `vertex_main`, or the metal_stdlib include
+  in your shader — the host prepends them.
+
+  ## Required fragment entry point
+
+  Your shader must export `fragment_main`:
+
+      fragment half4 fragment_main(VertexOut in [[stage_in]],
+                                   constant Uniforms& u [[buffer(0)]]) { ... }
+  """
+  @spec gpu_view(keyword() | map()) :: map()
+  def gpu_view(props) when is_list(props), do: gpu_view(Map.new(props))
+
+  def gpu_view(%{} = props) do
+    %{
+      type: :gpu_view,
+      props:
+        Map.take(props, [
+          :id,
+          :width,
+          :height,
+          :shader,
+          :uniforms,
+          :on_tap,
+          :on_drag,
+          :on_pinch
+        ]),
+      children: []
+    }
+  end
 end
