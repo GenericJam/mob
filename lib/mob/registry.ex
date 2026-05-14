@@ -98,8 +98,6 @@ defmodule Mob.Registry do
   # ── Private ───────────────────────────────────────────────────────────────
 
   defp build_initial do
-    Enum.reduce(@builtins, %{}, fn {name, mappings}, acc ->
-      Map.put(acc, name, Map.new(mappings))
-    end)
+    Map.new(@builtins, fn {name, mappings} -> {name, Map.new(mappings)} end)
   end
 end

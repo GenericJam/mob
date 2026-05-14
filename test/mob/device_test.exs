@@ -14,10 +14,7 @@ defmodule Mob.DeviceTest do
     start_supervised!({Mob.Device.Android, []})
 
     {:ok, pid} =
-      case GenServer.start_link(Device, [], name: :"device_#{System.unique_integer([:positive])}") do
-        {:ok, p} -> {:ok, p}
-        other -> other
-      end
+      GenServer.start_link(Device, [], name: :"device_#{System.unique_integer([:positive])}")
 
     on_exit(fn ->
       if Process.alive?(pid), do: GenServer.stop(pid)
