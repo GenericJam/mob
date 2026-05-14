@@ -411,4 +411,4 @@ sync. Bump in one commit.
 | How is OTP cross-compiled per target? | `~/code/mob_dev/build_release.md` |
 | Where does the `@otp_hash` get bumped? | `~/code/mob_dev/lib/mob_dev/otp_downloader.ex` |
 | What does the per-project `ios/build.sh` template look like? | `~/code/mob_new/priv/templates/mob.new/ios/build.sh.eex` (or wherever the template lives) |
-| Where is the OTP source tree? | `~/code/otp` (currently at `OTP-29.0-rc2-256-g73ba6e0f92`, erts-16.3) |
+| Where is the OTP source tree? | `~/code/otp` (track `maint-29` for OTP 29.0+, erts-17.0+) |
