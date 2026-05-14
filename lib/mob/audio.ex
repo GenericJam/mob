@@ -3,6 +3,12 @@ defmodule Mob.Audio do
   Microphone recording and audio playback.
 
   Recording requires `:microphone` permission (`Mob.Permissions.request/2`).
+  iOS additionally needs `NSMicrophoneUsageDescription` in
+  `Info.plist`; Android needs `RECORD_AUDIO` in
+  `AndroidManifest.xml`. The default `mix mob.new` templates ship
+  both. See the [permissions guide](permissions.html) for the
+  cross-platform table.
+
   Playback requires no permission.
 
   ## Recording
