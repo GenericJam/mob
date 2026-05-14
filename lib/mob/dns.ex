@@ -27,24 +27,44 @@ defmodule Mob.DNS do
 
   ## How to use it
 
-  Resolve each hostname your app talks to **before** the first
-  Req / Finch / Mint call to that host. Once resolved, `:inet_db`
-  retains the mapping for the lifetime of the BEAM, so subsequent
-  HTTP calls go through without you doing anything else.
+  ### Recommended (set-and-forget): `configure_pure_beam/1`
 
-      # At app startup, or before the first call:
-      {:ok, _ip} = Mob.DNS.resolve("api.example.com")
+  At app startup, flip BEAM's lookup chain from the broken `:native`
+  path to `[:file, :dns]` and seed fallback nameservers. After this,
+  every `:inet.getaddr/2` resolves via raw DNS queries from inside
+  BEAM (no port program, no `execve`), and the usual HTTP libraries
+  just work:
 
-      # Now this just works on iOS:
-      Req.get!("https://api.example.com/v1/things")
+      def on_start do
+        Mob.DNS.configure_pure_beam()
+        # …rest of startup…
+      end
 
-  For a small fixed set of hosts, the convenience helper
-  `preresolve/1` does the whole list at once:
+  Defaults to Google + Cloudflare DNS. Override via opt if your
+  network requires it. See `configure_pure_beam/1` for details and
+  trade-offs vs the Apple-resolver-via-NIF path below.
+
+  ### Per-host (when Apple-resolver semantics matter): `resolve/1`
+
+  For hostnames that need iOS's resolver — VPN-pushed DNS, `.local`
+  / mDNS, search-domain expansion, captive portals — call
+  `resolve/1` for each one. Idempotent and cheap; safe to call
+  alongside `configure_pure_beam/0` (the `:file` lookup runs first,
+  so manually-resolved entries win over the `:dns` fallback).
+
+      {:ok, _ip} = Mob.DNS.resolve("internal.corp.local")
+
+  For a small fixed set, `preresolve/1` does the whole list at
+  once:
 
       Mob.DNS.preresolve([
-        "api.example.com",
-        "auth.example.com"
+        "internal.corp.local",
+        "service.local"
       ])
+
+  Both paths compose. The recommended pattern is `configure_pure_beam`
+  at startup as the default, then `resolve/1` only for the OS-resolver
+  specials.
 
   ## Scope and limitations
 
@@ -131,6 +151,79 @@ defmodule Mob.DNS do
   end
 
   @doc """
+  Configure BEAM's DNS path so `:inet.getaddr/2` (and Req / Finch /
+  Mint / `gen_tcp:connect/3` with a hostname) works without per-host
+  setup.
+
+  Sets the lookup chain to `[:file, :dns]` and seeds fallback
+  nameservers. Both ops are idempotent.
+
+  ## Why
+
+  BEAM's default `:native` lookup spawns `inet_gethost`, which iOS
+  refuses to `execve`. The `:dns` lookup, by contrast, performs raw
+  UDP/TCP DNS queries from inside BEAM via `gen_udp` / `gen_tcp` —
+  no port program, no fork. iOS doesn't block sockets, so the `:dns`
+  path Just Works.
+
+  After calling this, the whole `:inet`-mediated HTTP stack stops
+  needing a per-host `resolve/1` call. `:file` stays first in the
+  chain so any host you do `resolve/1` manually still wins — the two
+  paths compose.
+
+  ## When NOT to default to this
+
+  Reach for per-host `resolve/1` (which uses libc `getaddrinfo` via
+  the NIF, going through Apple's resolver) when you need any of:
+
+    * VPN-pushed DNS for internal hostnames
+    * `.local` / mDNS service discovery
+    * Search-domain expansion (single-label hostnames like `https://api/`)
+    * Captive-portal-aware lookup
+    * Encrypted-DNS-at-OS-level (DoH / DoT configured in iOS Settings)
+
+  These all require Apple's resolver, which only the NIF path
+  consults. The pure-BEAM `:dns` path queries whatever nameservers
+  you seed and nothing else.
+
+  ## Opts
+
+    * `:nameservers` — list of nameserver IP tuples (IPv4 or IPv6).
+      Defaults to `[{8, 8, 8, 8}, {1, 1, 1, 1}]` (Google + Cloudflare).
+      Pass any list, including `[]` to skip seeding (e.g. if your
+      app's `:kernel` env already configures them). Common
+      alternatives:
+
+        * `[{9, 9, 9, 9}]` — Quad9 (privacy-leaning, no logging)
+        * `[{10, 0, 0, 1}, {10, 0, 0, 2}]` — your corporate resolvers
+
+  ## Idempotent
+
+  Calling this twice is a no-op on the second call — duplicate
+  nameservers aren't added, the lookup chain isn't reordered.
+
+  ## Examples
+
+      # Default — most apps need nothing more
+      Mob.DNS.configure_pure_beam()
+
+      # Override the fallback nameservers
+      Mob.DNS.configure_pure_beam(nameservers: [{9, 9, 9, 9}])
+
+      # Set the lookup chain but skip nameserver seeding
+      Mob.DNS.configure_pure_beam(nameservers: [])
+  """
+  @spec configure_pure_beam([{:nameservers, [:inet.ip_address()]}]) :: :ok
+  def configure_pure_beam(opts \\ []) do
+    nameservers = Keyword.get(opts, :nameservers, [{8, 8, 8, 8}, {1, 1, 1, 1}])
+
+    set_lookup_chain([:file, :dns])
+    Enum.each(nameservers, &add_ns_if_missing/1)
+
+    :ok
+  end
+
+  @doc """
   True when `host` is already seeded in `:inet_db`.
 
   Useful for short-circuiting in caller code that wants to avoid an
@@ -177,5 +270,28 @@ defmodule Mob.DNS do
         :inet_db.set_lookup(with_file)
         :ok
     end
+  end
+
+  # Set the lookup chain to exactly `chain` if it isn't already.
+  # Used by `configure_pure_beam/1` to flip to `[:file, :dns]`.
+  defp set_lookup_chain(chain) do
+    if :inet_db.res_option(:lookup) != chain do
+      :inet_db.set_lookup(chain)
+    end
+
+    :ok
+  end
+
+  # Add a nameserver to `:inet_db` if not already configured.
+  # `:inet_db.res_option(:nameservers)` returns `[{ip, port}]`;
+  # `add_ns/1` adds at default port 53.
+  defp add_ns_if_missing(ns) do
+    existing = :inet_db.res_option(:nameservers)
+
+    unless Enum.any?(existing, fn {ip, _port} -> ip == ns end) do
+      :inet_db.add_ns(ns)
+    end
+
+    :ok
   end
 end
