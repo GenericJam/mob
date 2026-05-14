@@ -443,6 +443,12 @@ struct MobNodeView: View {
                 MobCanvasView(node: node)
                     .padding(node.paddingEdgeInsets)
 
+            case .gpuView:
+                MobGpuView(node: node)
+                    .ifLet(node.fixedWidth  > 0 ? node.fixedWidth  : nil) { v, w in v.frame(width: CGFloat(w)) }
+                    .ifLet(node.fixedHeight > 0 ? node.fixedHeight : nil) { v, h in v.frame(height: CGFloat(h)) }
+                    .padding(node.paddingEdgeInsets)
+
             @unknown default:
                 EmptyView()
             }
