@@ -218,6 +218,85 @@ These are the things we've burned ourselves on. Following them isn't optional.
 - **Don't add features beyond what was requested.** A bug fix doesn't need
   surrounding cleanup; a one-shot doesn't need a helper.
 
+## Don't write this slop
+
+LLMs reach for the same anti-patterns over and over. The list below is the
+shape of code our `mix credo --strict` (via `ex_slop`) refuses to merge — but
+catching it post-hoc costs a round-trip. Don't write it in the first place.
+
+**Error handling**
+- No blanket `rescue _ -> nil` or `rescue _e -> {:error, "..."}`. Rescue the
+  specific exception or let it crash.
+- No `rescue e -> Logger.error(...); :error` — that logs the bug into oblivion.
+  Either reraise or return a typed error tuple the caller can match on.
+- No `try/rescue` around functions that don't raise (`Map.get`, `Enum.find`,
+  `String.split`). Look up whether the function actually raises before wrapping it.
+
+**Database access**
+- Filter in SQL, not in Elixir: `from(u in User, where: u.active)` —
+  not `Repo.all(User) |> Enum.filter(& &1.active)`.
+- No N+1 in `Enum.map`: don't `Enum.map(ids, &Repo.get(...))`. Use `Repo.all(from … where: id in ^ids)`.
+- Don't write a GenServer whose entire job is `Map.get`/`Map.put` on state —
+  use ETS, Agent, or a struct passed by value.
+
+**Maps**
+- Pick one key type per map. Don't `Map.get(m, :key) || Map.get(m, "key")` —
+  normalize once at the boundary.
+- Iterate the map directly. Not `Map.keys(m) |> Enum.map(fn k -> m[k] end)`.
+
+**Enum / list idioms** — use the function that exists:
+- `Enum.reject(&is_nil/1)`     not `Enum.filter(&(&1 != nil))`
+- `Enum.empty?(x)`             not `length(x) == 0`
+- `List.last(x)` / `Enum.at(x, -1)` not `Enum.at(x, length(x) - 1)`
+- `Map.new/2`                  not `Enum.reduce(%{}, fn ..., &Map.put/3)`
+- `Enum.into(list, %{})`       only if you actually have a Collectable target;
+  for a plain literal target it's just `Map.new`.
+- `Enum.filter`                not `Enum.flat_map(fn x -> if cond, do: [x], else: [] end)`
+- `Enum.sum`                   not a hand-rolled reduce with `+`
+- `Enum.max` / `Kernel.max`    not `if a > b, do: a, else: b`
+- `Enum.sort(list, :desc)`     not `Enum.sort(list) |> Enum.reverse()`
+- `Enum.min(list)`             not `Enum.sort(list) |> Enum.at(0)`
+- `Enum.map_join(list, sep, &f/1)` not `Enum.map(list, &f/1) |> Enum.join(sep)`
+
+**`with` blocks**
+- No identity `else` clause. `with :ok <- foo() do :ok end` — drop the
+  `else err -> err` part.
+
+**Strings**
+- `String.length(s)` not `length(String.graphemes(s))`.
+- For counting specific ASCII chars, prefer `:binary.matches/2` over graphemes.
+- No manual string reverse via graphemes + reverse + join — use `String.reverse/1`.
+
+**Paths**
+- `Application.app_dir(:my_app, "priv/...")` over `Path.expand("...priv...", __DIR__)`.
+  The Mix-task code in `mob_dev` is an exception — it needs cwd-relative paths
+  for the *user's* project.
+
+**Docs and comments**
+- No "This module provides functionality for..." moduledoc. State *why* it
+  exists or what's surprising; if there's nothing to say, omit it.
+- No obvious comments (`# Fetch the user` above `Repo.get(User, id)`).
+- No narrator comments (`# We need to...`, `# Here we...`).
+- No step comments (`# Step 1: Do X`, `# Step 2: Do Y`) — function names cover that.
+- No `@doc false` on a `defp` — private already means undocumented.
+- Boilerplate `## Parameters / ## Returns` sections are noise unless the
+  parameters are non-obvious.
+
+**Code shape**
+- Don't shadow `Kernel` functions with local variables named `length`, `min`,
+  `max`, `node`, etc.
+- Don't rebind a parameter inside the function body. Pick a new name.
+- Don't write `x = foo(); x` at the end of a function — just `foo()`.
+- Don't extract `[a, b] = list` only to immediately rebuild `[a, b]`.
+- Use the same name for the same parameter across all clauses of a function.
+
+> **Periodic check:** `ex_slop` and the related (but heavier) [`credence`](https://hex.pm/packages/credence)
+> linter add new AI-pattern checks regularly. Both ecosystems are young —
+> when something here feels stale or you spot a new ExSlop release, skim
+> the changelogs and update this section. Credence has ~70 rules ExSlop
+> doesn't port yet; if any get backported (or if `credence` becomes worth
+> wiring in alongside Credo), revisit `mob/CLAUDE.md` and the deps lists.
+
 ## Keep this file up to date
 
 The next agent's first decision will be informed by this file. Stale guidance
