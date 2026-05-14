@@ -14,6 +14,13 @@ defmodule Mob.Permissions do
     - `:notifications`
 
   Capabilities that need *no* permission: haptics, clipboard, share sheet, file picker.
+
+  > **Beyond `request/2`**: each capability also needs a matching
+  > `Info.plist` key (iOS) and `AndroidManifest.xml` entry. Without
+  > them the dialog is silently suppressed and you get no event. See
+  > the [permissions guide](permissions.html) for the per-capability
+  > table and the most common failure modes — it's the first place
+  > to check when "the dialog never appears".
   """
 
   @type capability :: :camera | :microphone | :photo_library | :location | :notifications

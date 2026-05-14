@@ -2,8 +2,13 @@ defmodule Mob.Photos do
   @moduledoc """
   Photo / video library picker.
 
-  On iOS 14+ no permission is required (the picker itself is sandboxed).
-  On Android, `READ_MEDIA_IMAGES` / `READ_MEDIA_VIDEO` may be needed.
+  On iOS 14+ no permission is required for the picker (it runs out of
+  process). `Mob.Storage.save_to_photo_library/2` does require
+  `NSPhotoLibraryAddUsageDescription` in `Info.plist`. On Android,
+  `READ_MEDIA_IMAGES` / `READ_MEDIA_VIDEO` (API 33+) or
+  `READ_EXTERNAL_STORAGE` (API ≤ 32) need to be declared in
+  `AndroidManifest.xml` — `mix mob.new` ships all three. See the
+  [permissions guide](permissions.html) for the cross-platform table.
 
   Results arrive as:
 

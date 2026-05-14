@@ -2,7 +2,13 @@ defmodule Mob.Camera do
   @moduledoc """
   Native camera capture for photos and videos.
 
-  Requires `:camera` permission (and `:microphone` for video).
+  Requires `:camera` permission (and `:microphone` for video). iOS
+  additionally needs `NSCameraUsageDescription` (and
+  `NSMicrophoneUsageDescription` for video) in `Info.plist`;
+  Android needs `CAMERA` (and `RECORD_AUDIO` for video) in
+  `AndroidManifest.xml`. The default `mix mob.new` templates ship
+  both. See the [permissions guide](permissions.html) for the
+  cross-platform table.
 
   Opens the native OS camera UI. Results arrive as:
 
