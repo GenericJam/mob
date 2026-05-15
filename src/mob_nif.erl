@@ -106,6 +106,23 @@
     vendor_usb_start_reading/2,
     vendor_usb_stop_reading/1,
     vendor_usb_close/1,
+    %% Bluetooth Classic (Android; iOS returns :unsupported)
+    bt_list_paired/0,
+    bt_start_discovery/0,
+    bt_cancel_discovery/0,
+    bt_pair/1,
+    bt_unpair/1,
+    bt_disconnect/1,
+    bt_hfp_connect/1,
+    bt_hfp_subscribe_vendor_at/2,
+    bt_hfp_send_vendor_at/3,
+    bt_hfp_start_sco/1,
+    bt_hfp_stop_sco/1,
+    bt_hfp_send_audio/2,
+    bt_spp_connect/1,
+    bt_spp_write/2,
+    bt_hid_connect/1,
+    bt_hid_subscribe_raw/1,
     %% DNS — see Mob.DNS and guides/dns_on_ios.md
     resolve_ipv4/1
 ]).
@@ -200,6 +217,23 @@
     vendor_usb_start_reading/2,
     vendor_usb_stop_reading/1,
     vendor_usb_close/1,
+    %% Bluetooth Classic
+    bt_list_paired/0,
+    bt_start_discovery/0,
+    bt_cancel_discovery/0,
+    bt_pair/1,
+    bt_unpair/1,
+    bt_disconnect/1,
+    bt_hfp_connect/1,
+    bt_hfp_subscribe_vendor_at/2,
+    bt_hfp_send_vendor_at/3,
+    bt_hfp_start_sco/1,
+    bt_hfp_stop_sco/1,
+    bt_hfp_send_audio/2,
+    bt_spp_connect/1,
+    bt_spp_write/2,
+    bt_hid_connect/1,
+    bt_hid_subscribe_raw/1,
     %% DNS — in-process getaddrinfo so iOS apps bypass BEAM's
     %% broken inet_gethost path. See `Mob.DNS` for the Elixir
     %% wrapper and `guides/dns_on_ios.md` for the why.
@@ -295,4 +329,21 @@ vendor_usb_bulk_write(_Session, _Bytes, _TimeoutMs) -> erlang:nif_error(not_load
 vendor_usb_start_reading(_Session, _ChunkBytes) -> erlang:nif_error(not_loaded).
 vendor_usb_stop_reading(_Session) -> erlang:nif_error(not_loaded).
 vendor_usb_close(_Session) -> erlang:nif_error(not_loaded).
+%% Bluetooth Classic
+bt_list_paired() -> erlang:nif_error(not_loaded).
+bt_start_discovery() -> erlang:nif_error(not_loaded).
+bt_cancel_discovery() -> erlang:nif_error(not_loaded).
+bt_pair(_DeviceAndPinJson) -> erlang:nif_error(not_loaded).
+bt_unpair(_DeviceJson) -> erlang:nif_error(not_loaded).
+bt_disconnect(_Session) -> erlang:nif_error(not_loaded).
+bt_hfp_connect(_DeviceJson) -> erlang:nif_error(not_loaded).
+bt_hfp_subscribe_vendor_at(_Session, _CompanyIdsJson) -> erlang:nif_error(not_loaded).
+bt_hfp_send_vendor_at(_Session, _Cmd, _Args) -> erlang:nif_error(not_loaded).
+bt_hfp_start_sco(_Session) -> erlang:nif_error(not_loaded).
+bt_hfp_stop_sco(_Session) -> erlang:nif_error(not_loaded).
+bt_hfp_send_audio(_Session, _Pcm) -> erlang:nif_error(not_loaded).
+bt_spp_connect(_DeviceJson) -> erlang:nif_error(not_loaded).
+bt_spp_write(_Session, _Bytes) -> erlang:nif_error(not_loaded).
+bt_hid_connect(_DeviceJson) -> erlang:nif_error(not_loaded).
+bt_hid_subscribe_raw(_Session) -> erlang:nif_error(not_loaded).
 resolve_ipv4(_Host) -> erlang:nif_error(not_loaded).
