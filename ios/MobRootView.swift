@@ -829,9 +829,24 @@ private struct MobCameraPreviewView: UIViewRepresentable {
         view.cameraLayer.videoGravity = .resizeAspectFill
         // Connect immediately if the session is already running.
         view.cameraLayer.session = g_preview_session
+        rotatePreviewConnection(view: view)
         // Observe future session changes (start, stop, facing swap).
         context.coordinator.startObserving(view: view)
         return view
+    }
+
+    // Pin the preview to portrait so what the user sees matches the
+    // upright frame we ship to the model. Without this, the sensor's
+    // landscape-native output renders sideways in a portrait UI.
+    private func rotatePreviewConnection(view: CameraPreviewUIView) {
+        guard let conn = view.cameraLayer.connection else { return }
+        if #available(iOS 17.0, *) {
+            if conn.isVideoRotationAngleSupported(90) {
+                conn.videoRotationAngle = 90
+            }
+        } else if conn.isVideoOrientationSupported {
+            conn.videoOrientation = .portrait
+        }
     }
 
     func updateUIView(_ view: CameraPreviewUIView, context: Context) {}
@@ -849,7 +864,17 @@ private struct MobCameraPreviewView: UIViewRepresentable {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                self?.hostView?.cameraLayer.session = g_preview_session
+                guard let view = self?.hostView else { return }
+                view.cameraLayer.session = g_preview_session
+                if let conn = view.cameraLayer.connection {
+                    if #available(iOS 17.0, *) {
+                        if conn.isVideoRotationAngleSupported(90) {
+                            conn.videoRotationAngle = 90
+                        }
+                    } else if conn.isVideoOrientationSupported {
+                        conn.videoOrientation = .portrait
+                    }
+                }
             }
         }
 

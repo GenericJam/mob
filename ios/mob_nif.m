@@ -2806,6 +2806,25 @@ static ERL_NIF_TERM nif_camera_start_frame_stream(ErlNifEnv *env, int argc,
       }
       [g_preview_session commitConfiguration];
 
+      // Rotate the connection to portrait so the model sees upright
+      // pixels. The sensor's native orientation is landscape-right;
+      // without this, YOLO sees a 90°-rotated scene and misclassifies
+      // everything (a jar becomes a horizontal bar that looks like
+      // "laptop"). 90° rotation maps landscape sensor → portrait
+      // upright. videoRotationAngle is iOS 17+; older builds get the
+      // deprecated videoOrientation as a fallback.
+      AVCaptureConnection *conn = [output connectionWithMediaType:AVMediaTypeVideo];
+      if (conn) {
+          if (@available(iOS 17.0, *)) {
+              if ([conn isVideoRotationAngleSupported:90.0])
+                  conn.videoRotationAngle = 90.0;
+          } else {
+              if ([conn isVideoOrientationSupported])
+                  conn.videoOrientation = AVCaptureVideoOrientationPortrait;
+          }
+          NSLog(@"[mob/camera] frame output rotated to portrait");
+      }
+
       if (!g_preview_session.isRunning) {
           [g_preview_session startRunning];
           NSLog(@"[mob/camera] session startRunning (from frame_stream)");
