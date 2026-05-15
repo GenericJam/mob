@@ -41,6 +41,10 @@
     audio_play/2,
     audio_stop_playback/0,
     audio_set_volume/1,
+    %% Native AI
+    ai_generate_text/2,
+    ai_recognize_text/2,
+    ai_transcribe_audio/2,
     %% Motion sensors
     motion_start/2,
     motion_stop/0,
@@ -140,6 +144,9 @@
     audio_play/2,
     audio_stop_playback/0,
     audio_set_volume/1,
+    ai_generate_text/2,
+    ai_recognize_text/2,
+    ai_transcribe_audio/2,
     motion_start/2,
     motion_stop/0,
     scanner_scan/1,
@@ -237,6 +244,9 @@ audio_stop_recording() -> erlang:nif_error(not_loaded).
 audio_play(_Path, _OptsJson) -> erlang:nif_error(not_loaded).
 audio_stop_playback() -> erlang:nif_error(not_loaded).
 audio_set_volume(_Volume) -> erlang:nif_error(not_loaded).
+ai_generate_text(_Prompt, _OptsJson) -> erlang:nif_error(not_loaded).
+ai_recognize_text(_Path, _OptsJson) -> erlang:nif_error(not_loaded).
+ai_transcribe_audio(_Path, _OptsJson) -> erlang:nif_error(not_loaded).
 motion_start(_Sensors, _Interval) -> erlang:nif_error(not_loaded).
 motion_stop() -> erlang:nif_error(not_loaded).
 scanner_scan(_FormatsJson) -> erlang:nif_error(not_loaded).
