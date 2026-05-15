@@ -6155,6 +6155,174 @@ static ERL_NIF_TERM nif_vendor_usb_close(ErlNifEnv *env, int argc, const ERL_NIF
     return enif_make_atom(env, "ok");
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Mob.Bt (Bluetooth Classic) — iOS unsupported stubs
+// ─────────────────────────────────────────────────────────────────────────
+//
+// iOS exposes no public Bluetooth Classic API. (Bluetooth LE is available
+// via CoreBluetooth, but Classic profiles like HFP/SPP/HID need MFi
+// certification which Mob doesn't pursue.) All sixteen NIFs send
+// {:bt, :error, nil, %{reason: :unsupported}} back to the caller and
+// return :ok. Cross-platform screens see the error event and degrade
+// gracefully via Mob.Peripheral.capabilities/0.
+
+static void send_bt_unsupported(ErlNifPid pid) {
+    ErlNifEnv *e = enif_alloc_env();
+    ERL_NIF_TERM reason_key = enif_make_atom(e, "reason");
+    ERL_NIF_TERM reason_val = enif_make_atom(e, "unsupported");
+    ERL_NIF_TERM map;
+    enif_make_map_put(e, enif_make_new_map(e), reason_key, reason_val, &map);
+    ERL_NIF_TERM msg = enif_make_tuple4(e, enif_make_atom(e, "bt"), enif_make_atom(e, "error"),
+                                        enif_make_atom(e, "nil"), map);
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+}
+
+static ERL_NIF_TERM nif_bt_list_paired(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_bt_start_discovery(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_bt_cancel_discovery(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_bt_pair(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_bt_unpair(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_bt_disconnect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_bt_hfp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_bt_hfp_subscribe_vendor_at(ErlNifEnv *env, int argc,
+                                                   const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_bt_hfp_send_vendor_at(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_bt_hfp_start_sco(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_bt_hfp_stop_sco(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_bt_hfp_send_audio(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_bt_spp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_bt_spp_write(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_bt_hid_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_bt_hid_subscribe_raw(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    ErlNifPid pid;
+    enif_self(env, &pid);
+    send_bt_unsupported(pid);
+    return enif_make_atom(env, "ok");
+}
+
 // Scheduling notes for nif_funcs[] below — see docs/decisions/0001-dirty-nifs.md
 // for the full rationale. Short version: most NIFs here either dispatch_async
 // to the main queue and return in microseconds, or dispatch_sync but read a
@@ -6270,6 +6438,23 @@ static ErlNifFunc nif_funcs[] = {
     {"vendor_usb_start_reading", 2, nif_vendor_usb_start_reading, 0},
     {"vendor_usb_stop_reading", 1, nif_vendor_usb_stop_reading, 0},
     {"vendor_usb_close", 1, nif_vendor_usb_close, 0},
+    // Bluetooth Classic (iOS = unsupported)
+    {"bt_list_paired", 0, nif_bt_list_paired, 0},
+    {"bt_start_discovery", 0, nif_bt_start_discovery, 0},
+    {"bt_cancel_discovery", 0, nif_bt_cancel_discovery, 0},
+    {"bt_pair", 1, nif_bt_pair, 0},
+    {"bt_unpair", 1, nif_bt_unpair, 0},
+    {"bt_disconnect", 1, nif_bt_disconnect, 0},
+    {"bt_hfp_connect", 1, nif_bt_hfp_connect, 0},
+    {"bt_hfp_subscribe_vendor_at", 2, nif_bt_hfp_subscribe_vendor_at, 0},
+    {"bt_hfp_send_vendor_at", 3, nif_bt_hfp_send_vendor_at, 0},
+    {"bt_hfp_start_sco", 1, nif_bt_hfp_start_sco, 0},
+    {"bt_hfp_stop_sco", 1, nif_bt_hfp_stop_sco, 0},
+    {"bt_hfp_send_audio", 2, nif_bt_hfp_send_audio, 0},
+    {"bt_spp_connect", 1, nif_bt_spp_connect, 0},
+    {"bt_spp_write", 2, nif_bt_spp_write, 0},
+    {"bt_hid_connect", 1, nif_bt_hid_connect, 0},
+    {"bt_hid_subscribe_raw", 1, nif_bt_hid_subscribe_raw, 0},
     // getaddrinfo can block on the resolver for seconds — dirty-IO so it
     // doesn't head-of-line-block the regular schedulers. See the impl
     // above for the iOS rationale.

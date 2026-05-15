@@ -140,4 +140,64 @@ void mob_send_component_event(int handle, const char *event, const char *payload
 // `scheme` must be "light" or "dark".
 void mob_send_color_scheme_changed(const char *scheme);
 
+// mob_beam.h additions for Mob.Bt
+//
+// Append these to the existing mob_beam.h, after the
+// mob_deliver_vendor_usb_* block. Order matches the
+// `pub export fn mob_deliver_bt_*` definitions in mob_nif.zig.
+//
+// All BT deliveries take a jlong pid (ErlNifPid round-tripped through
+// Kotlin) and post a 4-tuple `{:bt|:bt_hfp|:bt_spp|:bt_hid, tag, session_or_nil, payload}`
+// to that pid. Payload shape varies by event; see mob_nif.zig for details.
+
+// ── Discovery (no-payload 2-tuples) ──────────────────────────────────────
+void mob_deliver_bt_discovery_started(jlong pid);
+void mob_deliver_bt_discovery_finished(jlong pid);
+void mob_deliver_bt_discovery_cancelled(jlong pid);
+
+// ── Discovery / pairing events (3-tuples, no session) ────────────────────
+void mob_deliver_bt_discovered(jlong pid, const char *address, const char *name, int bonded);
+void mob_deliver_bt_paired(jlong pid, const char *address, const char *name, int bonded);
+void mob_deliver_bt_pair_failed(jlong pid, const char *address, const char *reason);
+void mob_deliver_bt_unpaired(jlong pid, const char *address);
+void mob_deliver_bt_error(jlong pid, const char *reason);
+
+// ── Legacy JSON paired-devices envelope (compat with older mob_new templates) ──
+void mob_deliver_bt_paired_devices(jlong pid, const char *json);
+
+// ── Paired-list streaming (begin / entry / finish) ──────────────────────
+// Kotlin invokes begin, then 0..N entry calls, then finish. The finish
+// call emits a single `{:bt, :paired_list, list}` to the originating pid.
+void mob_deliver_bt_paired_list_begin(jlong pid);
+void mob_deliver_bt_paired_list_entry(jlong pid, const char *address, const char *name, int bonded);
+void mob_deliver_bt_paired_list_finish(jlong pid);
+
+// ── HFP profile (8 deliveries) ──────────────────────────────────────────
+void mob_deliver_bt_hfp_connecting(jlong pid, int session, const char *address);
+void mob_deliver_bt_hfp_connected(jlong pid, int session, const char *address, const char *name);
+void mob_deliver_bt_hfp_connect_failed(jlong pid, const char *address, const char *reason);
+void mob_deliver_bt_hfp_disconnected(jlong pid, int session, const char *reason_atom);
+void mob_deliver_bt_hfp_vendor_subscribed(jlong pid, int session);
+void mob_deliver_bt_hfp_vendor_at(jlong pid, int session, const char *cmd, int cmd_type,
+                                  const char *args, const char *address);
+void mob_deliver_bt_hfp_sco_started(jlong pid, int session, const char *address);
+void mob_deliver_bt_hfp_sco_stopped(jlong pid, int session);
+void mob_deliver_bt_hfp_sco_audio(jlong pid, int session, const char *pcm, size_t len);
+void mob_deliver_bt_hfp_error(jlong pid, int session, const char *reason);
+
+// ── SPP profile (6 deliveries) ──────────────────────────────────────────
+void mob_deliver_bt_spp_connected(jlong pid, int session, const char *address, const char *name);
+void mob_deliver_bt_spp_connect_failed(jlong pid, const char *address, const char *reason);
+void mob_deliver_bt_spp_disconnected(jlong pid, int session, const char *reason_atom);
+void mob_deliver_bt_spp_data(jlong pid, int session, const char *bytes, size_t len);
+void mob_deliver_bt_spp_written(jlong pid, int session, int size);
+void mob_deliver_bt_spp_error(jlong pid, int session, const char *reason);
+
+// ── HID profile (5 deliveries) ──────────────────────────────────────────
+void mob_deliver_bt_hid_connected(jlong pid, int session, const char *address);
+void mob_deliver_bt_hid_connect_failed(jlong pid, const char *address, const char *reason);
+void mob_deliver_bt_hid_disconnected(jlong pid, int session, const char *reason_atom);
+void mob_deliver_bt_hid_input(jlong pid, int session, int type, int code, int value);
+void mob_deliver_bt_hid_raw_report(jlong pid, int session, const char *bytes, size_t len);
+
 #endif // MOB_BEAM_H
