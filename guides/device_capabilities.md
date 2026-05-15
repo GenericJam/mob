@@ -205,6 +205,78 @@ end
 
 iOS uses `AVAudioPlayer` / `AVPlayer`. Android uses `MediaPlayer`.
 
+## Foundation Models
+
+iOS only. Generates text with Apple's on-device Foundation Models framework.
+Requires an eligible physical device with Apple Intelligence enabled; the iOS
+simulator reports this capability as unavailable.
+
+Apple docs:
+[Foundation Models](https://developer.apple.com/documentation/foundationmodels) and
+[Adding intelligent app features with generative models](https://developer.apple.com/documentation/foundationmodels/adding-intelligent-app-features-with-generative-models).
+
+```elixir
+socket =
+  Mob.FoundationModels.generate_text(socket, "Turn this note into a short action list",
+    instructions: "Return compact plain text.",
+    temperature: 0.2,
+    maximum_response_tokens: 240
+  )
+
+def handle_info({:foundation_models, :generated_text, %{text: text}}, socket) do
+  {:noreply, Mob.Socket.assign(socket, :result, text)}
+end
+
+def handle_info({:foundation_models, :error, %{reason: reason}}, socket) do
+  {:noreply, Mob.Socket.assign(socket, :error, reason)}
+end
+```
+
+## Vision text recognition
+
+iOS only for now. Recognizes text in a local image file with Apple's Vision
+framework. Combine with `Mob.Photos.pick/2` to OCR a user-selected image.
+
+Apple docs:
+[VNRecognizeTextRequest](https://developer.apple.com/documentation/vision/vnrecognizetextrequest).
+
+```elixir
+socket =
+  Mob.Vision.recognize_text(socket, image_path,
+    recognition_level: :accurate,
+    uses_language_correction: true
+  )
+
+def handle_info({:vision, :recognized_text, %{text: text}}, socket) do
+  {:noreply, Mob.Socket.assign(socket, :ocr_text, text)}
+end
+```
+
+## Speech transcription
+
+iOS only for now. Transcribes an existing audio file with Apple's Speech
+framework. Use `Mob.Audio` to record microphone input first.
+
+Apple docs:
+[SFSpeechRecognizer](https://developer.apple.com/documentation/speech/sfspeechrecognizer) and
+[SFSpeechURLRecognitionRequest](https://developer.apple.com/documentation/speech/sfspeechurlrecognitionrequest).
+
+```elixir
+socket =
+  Mob.Speech.transcribe_audio(socket, recording_path,
+    locale: "en-US",
+    requires_on_device_recognition: false
+  )
+
+def handle_info({:speech, :transcribed_audio, %{text: text}}, socket) do
+  {:noreply, Mob.Socket.assign(socket, :transcript, text)}
+end
+```
+
+Speech recognition requires iOS speech authorization. If
+`requires_on_device_recognition` is true, iOS may reject locales that do not
+support local recognition.
+
 ## Location
 
 Requires `:location` permission.

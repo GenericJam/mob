@@ -2433,7 +2433,7 @@ export fn nif_audio_set_volume(
     return erts.ok(env);
 }
 
-export fn nif_ai_generate_text(
+export fn nif_foundation_models_generate_text(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
     argv: [*]const erts.ERL_NIF_TERM,
@@ -2443,7 +2443,7 @@ export fn nif_ai_generate_text(
     return erts.atom(env, "unsupported");
 }
 
-export fn nif_ai_recognize_text(
+export fn nif_vision_recognize_text(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
     argv: [*]const erts.ERL_NIF_TERM,
@@ -2453,7 +2453,7 @@ export fn nif_ai_recognize_text(
     return erts.atom(env, "unsupported");
 }
 
-export fn nif_ai_transcribe_audio(
+export fn nif_speech_transcribe_audio(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
     argv: [*]const erts.ERL_NIF_TERM,
@@ -3303,9 +3303,9 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "audio_play", .arity = 2, .fptr = nif_audio_play, .flags = 0 },
     .{ .name = "audio_stop_playback", .arity = 0, .fptr = nif_audio_stop_playback, .flags = 0 },
     .{ .name = "audio_set_volume", .arity = 1, .fptr = nif_audio_set_volume, .flags = 0 },
-    .{ .name = "ai_generate_text", .arity = 2, .fptr = nif_ai_generate_text, .flags = 0 },
-    .{ .name = "ai_recognize_text", .arity = 2, .fptr = nif_ai_recognize_text, .flags = 0 },
-    .{ .name = "ai_transcribe_audio", .arity = 2, .fptr = nif_ai_transcribe_audio, .flags = 0 },
+    .{ .name = "foundation_models_generate_text", .arity = 2, .fptr = nif_foundation_models_generate_text, .flags = 0 },
+    .{ .name = "vision_recognize_text", .arity = 2, .fptr = nif_vision_recognize_text, .flags = 0 },
+    .{ .name = "speech_transcribe_audio", .arity = 2, .fptr = nif_speech_transcribe_audio, .flags = 0 },
     .{ .name = "motion_start", .arity = 2, .fptr = nif_motion_start, .flags = 0 },
     .{ .name = "motion_stop", .arity = 0, .fptr = nif_motion_stop, .flags = 0 },
     .{ .name = "scanner_scan", .arity = 1, .fptr = nif_scanner_scan, .flags = 0 },

@@ -136,7 +136,7 @@ Mob.Notify.register_push(socket)
 def handle_info({:push_token, :ios, token}, socket), do: ...
 ```
 
-Also: `Mob.Clipboard`, `Mob.Share`, `Mob.Photos`, `Mob.Files`, `Mob.Audio`, `Mob.Motion`, `Mob.Biometric`, `Mob.Scanner`, `Mob.Permissions`.
+Also: `Mob.Clipboard`, `Mob.Share`, `Mob.Photos`, `Mob.Files`, `Mob.Audio`, `Mob.FoundationModels`, `Mob.Vision`, `Mob.Speech`, `Mob.Motion`, `Mob.Biometric`, `Mob.Scanner`, `Mob.Permissions`.
 
 ## What's in the box
 
@@ -156,6 +156,7 @@ The pre-built OTP runtime that ships with each app includes:
 
 Native APIs surfaced via `Mob.*` modules (above) cover camera,
 location, audio, files, biometrics, push, clipboard, share, scanner,
+Foundation Models, Vision, Speech,
 motion sensors, permissions.
 
 The OTP runtime tarball is ~80 MB compressed; sliced per-arch by

@@ -75,6 +75,7 @@ defmodule Mob.MixProject do
         "guides/theming.md": [title: "Theming"],
         "guides/navigation.md": [title: "Navigation"],
         "guides/device_capabilities.md": [title: "Device Capabilities"],
+        "guides/native_intelligence.md": [title: "Native Intelligence APIs"],
         "guides/native_extensions.md": [title: "Native Extensions (NIFs, features)"],
         "guides/dns_on_ios.md": [title: "DNS on iOS"],
         "guides/push_notifications.md": [title: "Push Notifications"],
@@ -111,6 +112,9 @@ defmodule Mob.MixProject do
           Mob.Photos,
           Mob.Files,
           Mob.Audio,
+          Mob.FoundationModels,
+          Mob.Vision,
+          Mob.Speech,
           Mob.Motion,
           Mob.Scanner,
           Mob.Notify
