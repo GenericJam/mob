@@ -65,7 +65,7 @@ defmodule Mob.Bt.Hid do
   """
   @spec connect(socket :: term(), Bt.device()) :: term()
   def connect(socket, device) do
-    json = encode_device(device)
+    json = Bt.encode_device(device)
     :mob_nif.bt_hid_connect(json)
     socket
   end
@@ -82,18 +82,5 @@ defmodule Mob.Bt.Hid do
   def subscribe_raw(socket, session_id) when is_integer(session_id) do
     :mob_nif.bt_hid_subscribe_raw(session_id)
     socket
-  end
-
-  @doc false
-  # ─────────────────────────────────────────────────────────────
-  # JSON helpers
-  # ─────────────────────────────────────────────────────────────
-
-  defp encode_device(device) do
-    device
-    |> Map.new()
-    |> Map.reject(fn {_k, v} -> is_nil(v) end)
-    |> :json.encode()
-    |> IO.iodata_to_binary()
   end
 end

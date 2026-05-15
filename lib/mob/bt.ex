@@ -163,16 +163,22 @@ defmodule Mob.Bt do
     socket
   end
 
-  # Internal — JSON helpers (nil-safe per the VendorUsb playbook)
+  # Internal JSON helpers, exposed `@doc false` so the test suite can
+  # exercise the encoded shape directly (the public functions all dead-end
+  # in a NIF call). Nil-safe per the VendorUsb playbook.
   # ─────────────────────────────────────────────────────────────
 
-  defp encode_pair(device, nil), do: encode_device(device)
+  @doc false
+  @spec encode_pair(device(), String.t() | nil) :: binary()
+  def encode_pair(device, nil), do: encode_device(device)
 
-  defp encode_pair(device, pin) when is_binary(pin) do
+  def encode_pair(device, pin) when is_binary(pin) do
     device |> Map.put(:pin, pin) |> encode_device()
   end
 
-  defp encode_device(device) do
+  @doc false
+  @spec encode_device(map()) :: binary()
+  def encode_device(device) do
     device
     |> Map.new()
     |> drop_nil_values()

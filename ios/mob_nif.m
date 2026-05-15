@@ -5721,11 +5721,8 @@ static void send_bt_unsupported(ErlNifPid pid) {
     ERL_NIF_TERM reason_val = enif_make_atom(e, "unsupported");
     ERL_NIF_TERM map;
     enif_make_map_put(e, enif_make_new_map(e), reason_key, reason_val, &map);
-    ERL_NIF_TERM msg = enif_make_tuple4(e,
-                                        enif_make_atom(e, "bt"),
-                                        enif_make_atom(e, "error"),
-                                        enif_make_atom(e, "nil"),
-                                        map);
+    ERL_NIF_TERM msg = enif_make_tuple4(e, enif_make_atom(e, "bt"), enif_make_atom(e, "error"),
+                                        enif_make_atom(e, "nil"), map);
     enif_send(NULL, &pid, e, msg);
     enif_free_env(e);
 }
@@ -5793,7 +5790,8 @@ static ERL_NIF_TERM nif_bt_hfp_connect(ErlNifEnv *env, int argc, const ERL_NIF_T
     return enif_make_atom(env, "ok");
 }
 
-static ERL_NIF_TERM nif_bt_hfp_subscribe_vendor_at(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+static ERL_NIF_TERM nif_bt_hfp_subscribe_vendor_at(ErlNifEnv *env, int argc,
+                                                   const ERL_NIF_TERM argv[]) {
     (void)argc;
     (void)argv;
     ErlNifPid pid;
@@ -5873,7 +5871,6 @@ static ERL_NIF_TERM nif_bt_hid_subscribe_raw(ErlNifEnv *env, int argc, const ERL
     send_bt_unsupported(pid);
     return enif_make_atom(env, "ok");
 }
-
 
 // Scheduling notes for nif_funcs[] below — see docs/decisions/0001-dirty-nifs.md
 // for the full rationale. Short version: most NIFs here either dispatch_async
