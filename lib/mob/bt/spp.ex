@@ -59,20 +59,21 @@ defmodule Mob.Bt.Spp do
   """
   @spec connect(socket :: term(), Bt.device(), keyword()) :: term()
   def connect(socket, device, opts \\ []) do
+    json = encode_connect(device, opts)
+    :mob_nif.bt_spp_connect(json)
+    socket
+  end
+
+  @doc false
+  @spec encode_connect(Bt.device(), keyword()) :: binary()
+  def encode_connect(device, opts) when is_list(opts) do
     uuid = Keyword.get(opts, :uuid, @standard_spp_uuid)
     secure = Keyword.get(opts, :secure, true)
 
-    json =
-      device
-      |> Map.new()
-      |> Map.put(:uuid, uuid)
-      |> Map.put(:secure, secure)
-      |> Map.reject(fn {_k, v} -> is_nil(v) end)
-      |> :json.encode()
-      |> IO.iodata_to_binary()
-
-    :mob_nif.bt_spp_connect(json)
-    socket
+    device
+    |> Map.put(:uuid, uuid)
+    |> Map.put(:secure, secure)
+    |> Bt.encode_device()
   end
 
   @doc """
@@ -91,5 +92,4 @@ defmodule Mob.Bt.Spp do
     :mob_nif.bt_spp_write(session_id, bytes)
     socket
   end
-
 end

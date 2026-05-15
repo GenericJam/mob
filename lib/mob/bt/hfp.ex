@@ -71,7 +71,7 @@ defmodule Mob.Bt.Hfp do
   """
   @spec connect(socket :: term(), Bt.device()) :: term()
   def connect(socket, device) do
-    json = encode_device(device)
+    json = Bt.encode_device(device)
     :mob_nif.bt_hfp_connect(json)
     socket
   end
@@ -104,10 +104,19 @@ defmodule Mob.Bt.Hfp do
   @spec subscribe_vendor_at(socket :: term(), Bt.session_id(), keyword()) :: term()
   def subscribe_vendor_at(socket, session_id, opts \\ [])
       when is_integer(session_id) and is_list(opts) do
-    company_ids = Keyword.get(opts, :company_ids, [])
-    json = Jason.encode!(%{company_ids: company_ids})
+    json = encode_vendor_at_opts(opts)
     :mob_nif.bt_hfp_subscribe_vendor_at(session_id, json)
     socket
+  end
+
+  @doc false
+  @spec encode_vendor_at_opts(keyword()) :: binary()
+  def encode_vendor_at_opts(opts) when is_list(opts) do
+    company_ids = Keyword.get(opts, :company_ids, [])
+
+    %{company_ids: company_ids}
+    |> :json.encode()
+    |> IO.iodata_to_binary()
   end
 
   @doc """
@@ -162,18 +171,5 @@ defmodule Mob.Bt.Hfp do
       when is_integer(session_id) and is_binary(pcm_bytes) do
     :mob_nif.bt_hfp_send_audio(session_id, pcm_bytes)
     socket
-  end
-
-  @doc false
-  # ─────────────────────────────────────────────────────────────
-  # JSON helpers
-  # ─────────────────────────────────────────────────────────────
-
-  defp encode_device(device) do
-    device
-    |> Map.new()
-    |> Map.reject(fn {_k, v} -> is_nil(v) end)
-    |> :json.encode()
-    |> IO.iodata_to_binary()
   end
 end

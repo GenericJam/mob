@@ -140,7 +140,6 @@ void mob_send_component_event(int handle, const char *event, const char *payload
 // `scheme` must be "light" or "dark".
 void mob_send_color_scheme_changed(const char *scheme);
 
-
 // mob_beam.h additions for Mob.Bt
 //
 // Append these to the existing mob_beam.h, after the
