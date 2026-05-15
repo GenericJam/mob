@@ -2326,6 +2326,30 @@ export fn nif_camera_stop_preview(
     return erts.ok(env);
 }
 
+// Live camera frame stream — Android implementation pending (needs
+// Camera2 + ImageAnalysis wiring on the Kotlin side). Returns
+// :unsupported for now so the iOS demo unblocks without breaking the
+// Android build. Track in https://github.com/GenericJam/mob/issues
+export fn nif_camera_start_frame_stream(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    return erts.atom(env, "unsupported");
+}
+
+export fn nif_camera_stop_frame_stream(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    return erts.atom(env, "unsupported");
+}
+
 export fn nif_photos_pick(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -3266,6 +3290,8 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "camera_capture_video", .arity = 1, .fptr = nif_camera_capture_video, .flags = 0 },
     .{ .name = "camera_start_preview", .arity = 1, .fptr = nif_camera_start_preview, .flags = 0 },
     .{ .name = "camera_stop_preview", .arity = 0, .fptr = nif_camera_stop_preview, .flags = 0 },
+    .{ .name = "camera_start_frame_stream", .arity = 1, .fptr = nif_camera_start_frame_stream, .flags = 0 },
+    .{ .name = "camera_stop_frame_stream", .arity = 0, .fptr = nif_camera_stop_frame_stream, .flags = 0 },
     .{ .name = "photos_pick", .arity = 2, .fptr = nif_photos_pick, .flags = 0 },
     .{ .name = "files_pick", .arity = 1, .fptr = nif_files_pick, .flags = 0 },
     .{ .name = "audio_start_recording", .arity = 1, .fptr = nif_audio_start_recording, .flags = 0 },
