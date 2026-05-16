@@ -99,6 +99,29 @@ manually with a screenshot or `Mob.Test` interaction before committing.
 
 ---
 
+## Release flow
+
+See [`RELEASE.md`](RELEASE.md) for the canonical release process —
+trigger model (mix.exs is the source of truth), version-bump rules
+(patch default, always ask, never auto-bump), CHANGELOG conventions,
+local preflight, and the per-step idempotency of `release.yml`.
+
+**Pre-push hook**: `.githooks/pre-push` runs `mix format
+--check-formatted`, `mix credo --strict`, and `mix compile
+--warnings-as-errors` on every push (~5-10 s). When the push touches
+`mix.exs` it additionally runs the full test suite as the release
+preflight. The hook is committed in the repo; activate it once per
+clone or worktree with:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+git stores `core.hooksPath` locally per-clone, so every worktree
+needs the same one-liner.
+
+---
+
 ## Native App Test Harness — Vision
 
 ### What mob is (beyond the UI framework)
