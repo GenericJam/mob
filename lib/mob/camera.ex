@@ -29,10 +29,11 @@ defmodule Mob.Camera do
                                        format: :rgb_f32,
                                        timestamp_ms: t, dropped: n}}, socket)
 
-  The native side handles resize + format conversion (vImage on iOS) so
-  the BEAM never sees raw camera buffers. Late frames are dropped on
-  the native side — the BEAM mailbox can't unbounded-grow if your
-  receiver lags behind the camera's 30 fps cadence.
+  The native side handles resize + format conversion (vImage on iOS,
+  CameraX ImageAnalysis + Bitmap on Android) so the BEAM never sees
+  raw camera buffers. Late frames are dropped on the native side —
+  the BEAM mailbox can't unbounded-grow if your receiver lags behind
+  the camera's 30 fps cadence.
   """
 
   @doc """
@@ -107,10 +108,10 @@ defmodule Mob.Camera do
       - `:rgb_f32` (default) — interleaved RGB floats normalised to
         `[0.0, 1.0]`. Byte size: `width * height * 3 * 4`. Ready for
         `Nx.from_binary(bin, :f32, ...) |> Nx.reshape({1, h, w, 3})`.
-      - `:bgra_u8` — raw 32-bit BGRA bytes, native iOS pixel layout.
-        Byte size: `width * height * 4`. 4× smaller than `:rgb_f32`;
-        useful for forwarding to another NIF or doing custom
-        preprocessing.
+      - `:bgra_u8` — raw 32-bit BGRA bytes (native iOS pixel layout;
+        Android repacks ARGB → BGRA for parity). Byte size:
+        `width * height * 4`. 4× smaller than `:rgb_f32`; useful for
+        forwarding to another NIF or doing custom preprocessing.
 
     * `:facing` — `:back` (default) or `:front`. Same camera the
       preview uses; calling `start_frame_stream/2` alone will activate
