@@ -50,7 +50,14 @@ jobs:
         run: mix credo --strict
 
       - name: erlfmt check (src/)
-        run: mix erlfmt --check src/
+        # erlfmt is `only: :dev` in mix.exs, so the test-env dep tree
+        # doesn't include it. Override MIX_ENV for just this step instead
+        # of broadening the dep's `only:` (keeps the test env minimal).
+        env:
+          MIX_ENV: dev
+        run: |
+          mix deps.get
+          mix erlfmt --check src/
 
       - name: Tests
         run: mix test
