@@ -233,7 +233,12 @@ defmodule Mob.Device do
       :mob_nif.device_set_dispatcher(self())
       :ok
     rescue
-      _ -> {:error, :nif_not_loaded}
+      # Tolerate the two failure modes that mean "the NIF isn't here":
+      # UndefinedFunctionError when the stub itself is unloadable, and
+      # ErlangError when the stub is loaded but device_set_dispatcher
+      # raises (e.g. because :erlang.load_nif/2 hasn't run yet on a
+      # host-mode build). Anything else really is a bug worth crashing on.
+      _ in [UndefinedFunctionError, ErlangError] -> {:error, :nif_not_loaded}
     end
   end
 

@@ -167,6 +167,14 @@ defmodule Mob.MixProject do
       # Wired in via .credo.exs as `{ExSlop, []}` in the enabled list.
       {:ex_slop, "~> 0.4", only: [:dev, :test], runtime: false},
       {:erlfmt, "~> 1.8", only: :dev, runtime: false},
+      # mix_audit — CVE scan over mix.lock against the Erlef advisory feed.
+      # Invocation note: `mix deps.audit` alone fails with
+      # `YamlElixir.read_from_file/1 is undefined` because mix_audit doesn't
+      # ensure_all_started its yaml_elixir transitive dep before parsing
+      # the advisory files. CI works around this with `mix do app.start +
+      # deps.audit` (the app.start prefix starts the host app, which
+      # transitively starts yaml_elixir via the runtime tree).
+      {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       # Known Elixir 1.20-rc.4 dep warning (cosmetic, dev-only):
       #   lib/mix_unused/filter.ex:61 — `_.._ inside match is deprecated`.
       # No upstream fix shipped yet (0.4.1 is latest, from 2024). Bump

@@ -1,10 +1,16 @@
 defmodule Mob.Screen do
   @moduledoc """
-  The behaviour and process wrapper for a Mob screen.
+  Behaviour and GenServer wrapper for a Mob screen.
 
-  A screen is a supervised GenServer. Its state is a `Mob.Socket`. Lifecycle
-  callbacks (`mount`, `render`, `handle_event`, `handle_info`, `terminate`) map
-  directly to the GenServer lifecycle.
+  Each screen runs as a supervised GenServer whose state is a `Mob.Socket`.
+  Putting one process per screen — instead of one big process for the whole
+  app — gives you isolation: a buggy `handle_event` crashes its own screen
+  and the supervisor restarts it without taking down navigation, audio,
+  background services, or the BEAM itself. Lifecycle callbacks (`mount`,
+  `render`, `handle_event`, `handle_info`, `terminate`) map directly to the
+  GenServer lifecycle, so the BEAM's existing concurrency tools (selective
+  receive, monitors, hot code push) work on screens without any Mob-specific
+  scaffolding.
 
   ## Usage
 
