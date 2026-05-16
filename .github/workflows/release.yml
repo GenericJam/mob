@@ -3,8 +3,12 @@ name: release
 on:
   push:
     tags:
-      - '[0-9]+.[0-9]+.[0-9]+'
-      - '[0-9]+.[0-9]+.[0-9]+-*'
+      # GitHub Actions filter patterns are glob (minimatch), NOT regex.
+      # `+` outside extglob `+(...)` is a literal `+`, not a quantifier —
+      # so the regex-looking `[0-9]+.[0-9]+.[0-9]+` matches strings like
+      # `5+.5+.5+` and never `0.6.5`. Plain `*` is the right glob.
+      - '*.*.*'        # X.Y.Z
+      - '*.*.*-*'      # X.Y.Z-prerelease (rc, alpha, beta, etc.)
 
 # Only one release run per tag at a time. Cancelling in-progress is
 # deliberately OFF — a release in flight should always finish.
