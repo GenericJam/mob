@@ -4,8 +4,12 @@ name: release
 # `version: "X.Y.Z"` line, commit, push — the workflow detects the change,
 # tags it, creates the GitHub Release, and publishes to Hex.
 #
-# Re-running manually (e.g. to retry a failed Hex publish without bumping
-# again) is via the Actions tab's "Run workflow" button (workflow_dispatch).
+# Re-running manually (e.g. to back-fill a Hex publish that was skipped
+# because the tag pre-existed) is via the Actions tab's "Run workflow"
+# button (workflow_dispatch). Each step is independently idempotent:
+# tag-already-exists, release-already-exists, and version-already-on-Hex
+# are each detected per-step, so re-runs only do work that's actually
+# missing.
 on:
   push:
     branches: [master]
@@ -24,9 +28,9 @@ jobs:
     name: Release from mix.exs
     runs-on: ubuntu-latest
     env:
-      # Reads the repo secret. Below steps gate on `env.HEX_API_KEY != ''`
-      # so a missing secret skips the Hex publish cleanly instead of
-      # failing with an auth error.
+      # Reads the repo secret. Steps that need it gate on
+      # `env.HEX_API_KEY != ''` so a missing secret skips cleanly instead
+      # of failing with an auth error.
       HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
     steps:
       - uses: actions/checkout@v4
@@ -42,9 +46,8 @@ jobs:
         id: version
         run: |
           # Pull the `version: "X.Y.Z"` from the project/0 keyword list.
-          # Tolerates leading whitespace, any quoting style, but expects
-          # a literal double-quoted string (which is the Elixir-mix
-          # convention).
+          # Tolerates leading whitespace, expects a literal double-quoted
+          # string (Elixir-mix convention).
           version=$(grep -E '^\s*version:\s*"' mix.exs | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
           if [ -z "$version" ]; then
             echo "::error::Could not extract version from mix.exs"
@@ -53,25 +56,34 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Detected version: $version"
 
-      - name: Check if tag already exists
-        id: tag_check
+      # ── Tag (idempotent: skip if exists) ────────────────────────────
+      - name: Create + push tag (if missing)
         run: |
-          if git rev-parse "refs/tags/${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+          tag="${{ steps.version.outputs.version }}"
+          if git rev-parse "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::notice::Tag $tag already exists — skipping tag creation"
+          else
+            git tag "$tag"
+            git push origin "$tag"
+            echo "Created and pushed tag $tag"
+          fi
+
+      # ── GitHub Release (idempotent: skip if exists) ─────────────────
+      - name: Check if GitHub Release exists
+        id: release_check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.version.outputs.version }}"
+          if gh release view "$tag" -R "${{ github.repository }}" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Tag ${{ steps.version.outputs.version }} already exists — nothing to release. Bump mix.exs to create a new one."
+            echo "::notice::GitHub Release $tag already exists — skipping release creation"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create + push tag
-        if: steps.tag_check.outputs.exists == 'false'
-        run: |
-          tag="${{ steps.version.outputs.version }}"
-          git tag "$tag"
-          git push origin "$tag"
-
       - name: Extract CHANGELOG section
-        if: steps.tag_check.outputs.exists == 'false'
+        if: steps.release_check.outputs.exists == 'false'
         id: changelog
         run: |
           if [ -f CHANGELOG.md ]; then
@@ -90,7 +102,7 @@ jobs:
           fi
 
       - name: Create GitHub Release
-        if: steps.tag_check.outputs.exists == 'false'
+        if: steps.release_check.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
@@ -98,23 +110,41 @@ jobs:
           body_path: ${{ steps.changelog.outputs.has_body == 'true' && '/tmp/release-body.md' || '' }}
           generate_release_notes: ${{ steps.changelog.outputs.has_body != 'true' }}
 
+      # ── Hex publish (idempotent: skip if version already on Hex) ────
       - name: Set up BEAM
-        if: steps.tag_check.outputs.exists == 'false' && env.HEX_API_KEY != ''
+        if: env.HEX_API_KEY != ''
         uses: erlef/setup-beam@v1
         with:
           elixir-version: '1.19'
           otp-version: '28'
 
+      - name: Check if version is already on Hex
+        if: env.HEX_API_KEY != ''
+        id: hex_check
+        run: |
+          # `mix hex.info <pkg> <vsn>` exits 0 if the version is published,
+          # non-zero otherwise. The package name is the project's `app:` value
+          # in mix.exs — same heuristic as for the version extract.
+          pkg=$(grep -E '^\s*app:\s*:' mix.exs | head -1 | sed 's/.*:\s*:\([a-z_][a-z0-9_]*\).*/\1/')
+          vsn="${{ steps.version.outputs.version }}"
+          if mix hex.info "$pkg" "$vsn" 2>/dev/null | grep -q "Config:"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Hex package $pkg $vsn already published — skipping mix hex.publish"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "package=$pkg" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: mix hex.publish
-        if: steps.tag_check.outputs.exists == 'false' && env.HEX_API_KEY != ''
+        if: env.HEX_API_KEY != '' && steps.hex_check.outputs.exists == 'false'
         # `--yes` skips the interactive confirm. `mix hex.publish` (no
         # subcommand) ships both the package archive AND docs in one call.
         run: |
           mix deps.get
           mix hex.publish --yes
 
-      - name: Skip Hex publish notice
-        if: steps.tag_check.outputs.exists == 'false' && env.HEX_API_KEY == ''
+      - name: Skip Hex publish notice (no API key)
+        if: env.HEX_API_KEY == ''
         run: |
           echo "::notice::HEX_API_KEY secret is not set on this repository."
           echo "::notice::Skipping Hex publish. Add the secret at"
