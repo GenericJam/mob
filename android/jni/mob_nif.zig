@@ -3649,7 +3649,12 @@ pub export fn mob_deliver_bt_paired_list_finish(pid_long: jni.JLong) callconv(.c
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
 
-    var list = erts.enif_make_list(env, 0);
+    // Empty list as the cons-cdr seed. `enif_make_list` is variadic in
+    // C and intentionally not exposed in mob_erts.zig (see the comment
+    // on the make_list bindings); `enif_make_list_from_array` with
+    // count=0 returns the same empty-list term via the non-variadic ABI.
+    const empty: [0]erts.ERL_NIF_TERM = .{};
+    var list = erts.enif_make_list_from_array(env, &empty, 0);
     var i: usize = snapshot.count;
     while (i > 0) {
         i -= 1;
