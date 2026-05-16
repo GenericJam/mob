@@ -951,7 +951,13 @@ defmodule Mob.Test do
 
           {:ok, elements}
         rescue
-          _ -> {:error, :parse_error}
+          # The iOS accessibility-tree payload is opaque JSON whose shape
+          # has historically drifted across iOS versions. Narrow to the
+          # concrete decode/extraction failures we can predict, so a real
+          # bug (e.g. an arithmetic error inside the mapper) still raises
+          # instead of getting silently downgraded to :parse_error.
+          _ in [KeyError, ArgumentError, MatchError, FunctionClauseError, Protocol.UndefinedError] ->
+            {:error, :parse_error}
         end
 
       {reason, _code} ->
