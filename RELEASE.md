@@ -32,6 +32,57 @@ minor only when:
 When unsure, propose patch and confirm with the user. Cheaper to
 upgrade after agreement than to downgrade after a commit lands.
 
+## When a bump is warranted
+
+A version bump isn't only for code changes. Cut a patch release any
+time the published artifact would meaningfully differ:
+
+- **New functionality** — any added public function, new component
+  attribute, new template, new Mix task. Must ship with **tests** that
+  exercise the new behaviour and **docs** in the right place
+  (module/function `@doc`, guides under `guides/`, or template
+  comments for generator changes).
+- **Bug fix** affecting behaviour visible to downstream apps.
+- **Doc improvements** — module docstring rewrites, guide additions,
+  README clarifications. HexDocs is built from the published Hex
+  release, so doc-only changes without a bump never reach
+  hexdocs.pm. If a contributor improved how the library is documented,
+  the bump is what makes that improvement visible.
+- **Dependency bump** that downstream consumers should pick up
+  (security advisory, transitive runtime fix).
+
+NOT warranted on their own:
+
+- CI workflow tweaks (`.github/workflows/*`)
+- Pre-push hook changes (`.githooks/*`)
+- Internal test refactors that don't change behaviour
+- Worktree cleanup, gitignore edits
+
+When in doubt: if the next person to pull from Hex would benefit from
+having this change, bump. If it only affects contributors working in
+the repo directly, don't.
+
+## Tests + docs for new functionality
+
+Two non-negotiables for anything that ships:
+
+1. **Tests cover the new behaviour.** A unit test asserting the new
+   public API works as advertised. For renderer changes,
+   `test/mob/renderer_test.exs` is the canonical pattern; for
+   generator-template additions, assert on the rendered output via
+   `MobNew.ProjectGeneratorTest`. Tests that exist but don't fail
+   when the feature is broken don't count.
+2. **Docs land in the right place.** Module-level `@moduledoc` for
+   the WHY a module exists, function-level `@doc` for any non-obvious
+   public function. Cross-cutting topics belong in `guides/` (e.g.
+   `guides/styling.md`, `guides/security.md`). Generator templates
+   document inline via comments since they ship verbatim into user
+   apps.
+
+The pre-push hook does NOT enforce these — they require human
+judgement (a test asserting `1 + 1 == 2` technically exists). But
+they're table stakes for any commit that warrants a version bump.
+
 ## Step-by-step
 
 ### 1. Update `CHANGELOG.md`

@@ -8,6 +8,24 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.6.6]
+
+### Added
+- `RELEASE.md` — canonical release-process documentation covering the
+  mix.exs-driven trigger model, the patch-bump-default-with-mandatory-
+  permission rule, CHANGELOG conventions, when a bump is warranted (new
+  functionality, bug fixes, doc improvements, dep bumps) vs. when it
+  isn't (CI tweaks, hook changes, internal refactors), the
+  tests-and-docs-with-new-functionality non-negotiables, and the
+  per-step idempotency of `release.yml`. Linked from `mob_dev` and
+  `mob_new` CLAUDE.md by URL so the canonical process is one file.
+- `.githooks/pre-push` — committed pre-push hook that runs the cheap
+  preflight (format + credo + warnings-as-errors) on every push and
+  the full release preflight (test suite + `mob.security_scan` where
+  present) only when `mix.exs` changed. Activate per-clone with
+  `git config core.hooksPath .githooks`.
+- `CLAUDE.md` "Release flow" section linking to the new docs.
+
 ## [0.6.5]
 
 ### Fixed
