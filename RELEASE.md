@@ -79,9 +79,23 @@ Two non-negotiables for anything that ships:
    document inline via comments since they ship verbatim into user
    apps.
 
+After writing or substantially editing `@moduledoc` / `@doc` strings,
+run `mix docs` locally and open `doc/index.html` to confirm
+rendering. Common gotchas: heredoc strings need a blank line before
+code fences; ExDoc resolves `Mob.Foo` references but not
+`Mob.Foo.bar` without backticks; broken module refs render as `nil`
+instead of a link; tables need an empty line above to render.
+Local preview catches these before they reach hexdocs.pm.
+
+Publishing to hexdocs.pm is **automatic** — `release.yml`'s
+`mix hex.publish --yes` step ships package + docs in one call. There
+is no separate "publish docs" step. A correct version bump (and only
+that) is what makes new docs visible at hexdocs.pm/<package>/<version>.
+
 The pre-push hook does NOT enforce these — they require human
-judgement (a test asserting `1 + 1 == 2` technically exists). But
-they're table stakes for any commit that warrants a version bump.
+judgement (a test asserting `1 + 1 == 2` technically exists, an
+empty `@doc ""` technically has docs). But they're table stakes for
+any commit that warrants a version bump.
 
 ## Step-by-step
 
