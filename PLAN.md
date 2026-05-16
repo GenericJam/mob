@@ -2252,3 +2252,130 @@ If batch 5+ benchmarks show meaningful overhead, add per-category enable so
 subscribers only register OS observers they actually use. For batches 1–4
 this isn't worth the API surface — the cost is dominated by the OS firing
 the notification, which happens regardless of whether we observe.
+
+---
+
+## CI & integration testing
+
+### Status quo (2026-05-15)
+
+- **mob**: `.github/workflows/onboarding.yml` exists. Runs the `test/onboarding/`
+  suite (generator tests + simulator/emulator-driven device tests) on push to
+  main, PRs touching `lib/**` / `priv/templates/**` / `test/onboarding/**`,
+  and nightly cron. **Does not run the plain `mix test` suite.** Local
+  developer-run only.
+- **mob_dev**: no CI. ~1,338 tests run locally only.
+- **mob_new**: no CI. ~237 tests run locally only.
+
+### The gap this session surfaced
+
+A round-trip deploy of `mandelbrot_demo` to the iPhone + Android emulator
+caught **five latent bugs across two recently-merged PRs** in one pass:
+
+  * `mob#9` (Bluetooth Classic, HeroesLament) — `enif_make_list` not bound in
+    `mob_erts.zig`; Android arm64 link failure.
+  * `mob_new#4` (BT templates, HeroesLament) — missing `}` before the BT JNI
+    thunks; every subsequent `JNIEXPORT void JNICALL` rejected by clang.
+  * `mob_new#4` — duplicate Kotlin imports (`IntentFilter`,
+    `ConcurrentHashMap`, `AtomicInteger`); kotlinc "Conflicting import".
+  * GpuView Android template — missing `androidx.compose.foundation.layout.fillMaxSize`
+    import; kotlinc unresolved reference.
+  * GpuView Android template — orphan comment in the import block tripped
+    ktlint's `import-ordering` rule.
+
+All five passed `mix test` and `mix credo --strict` on both repos. They only
+surface when the toolchain actually runs — and currently the toolchain only
+runs on a developer's laptop during a manual `mix mob.deploy`. By the time
+five things had piled up, the diff to bisect was non-trivial.
+
+The pattern: **mob's test suite intentionally doesn't compile native code**
+(Zig / Kotlin / C). Generator tests render templates and grep for strings,
+which catches refactor drift but not syntactic regressions.
+
+### Three-layer plan
+
+#### Layer 1: per-repo unit-test CI (≈1–2 hours total)
+
+Add a `.github/workflows/test.yml` to each of `mob`, `mob_dev`, `mob_new`
+that runs on push and PR:
+
+```yaml
+- erlef/setup-beam@v1   # OTP + Elixir
+- mix deps.get
+- mix compile --warnings-as-errors
+- mix format --check-formatted
+- mix credo --strict
+- mix test
+- (mob only) mix erlfmt --check src/
+- (mob only) xcrun clang-format --dry-run -Werror …
+```
+
+Sharing details:
+- `actions/cache` on `deps/` and `_build/test/` keyed by `mix.lock`.
+- Run on `ubuntu-latest` for everything except the iOS/Swift bits (which
+  need macOS); the existing onboarding workflow already pays the macos-15
+  premium for full device tests — we don't need to for the Elixir suite.
+- mob_new tests do `mix phx.new lv_test` under the hood (40+ sec/run); CI
+  time ~3 minutes per run. Acceptable.
+
+This catches: every regression the local `mix test` would catch, plus
+contributors who don't run the formatters / credo locally.
+
+Does **not** catch the 5 bugs above — those needed an actual compile.
+
+#### Layer 2: native-build smoke test (≈4–8 hours)
+
+A separate job that runs less frequently (PR only or nightly cron) and
+actually compiles the generated project:
+
+```yaml
+# After test.yml passes:
+- mix mob.new ci_smoke --local
+- mix mob.install
+- cd ci_smoke && mix mob.deploy --native --android --device emulator-XXXX
+- # Boot Android emulator via reactivecircus/android-emulator-runner
+- # Use mob.connect + Mob.Test.screen/1 to assert the home screen mounts
+```
+
+This catches the Bluetooth / GpuView class of bug because Gradle / kotlinc /
+zig actually run. **Costs roughly 10 minutes per run** (Android emulator
+boot is the dominant cost) — too expensive for every push, but worth
+running on PR to `master` and nightly.
+
+The existing onboarding workflow's `with-devices` job is structurally close
+to this; could be extended rather than building from scratch.
+
+#### Layer 3: behavioural integration (already partial)
+
+`test/onboarding/failure_modes_test.exs` + the `with-devices` matrix
+already exercise multi-device deploys against a real simulator/emulator.
+The current scope is install/deploy/doctor — not per-component rendering
+behaviour.
+
+Future work: add Mandelbrot-style "render this thing, screenshot it,
+assert the pixel-hash matches a baseline" tests for each native component
+(`<CameraPreview>`, `<WebView>`, `<GpuView>`, `<Canvas>`). Mostly a
+question of writing a baseline harness; the screenshot+assert infrastructure
+exists in `Mob.Test`. Probably 1–2 days for the first three components,
+then ~1 hour per additional component.
+
+### Effort summary
+
+| Layer | Effort | Coverage | Priority |
+|---|---|---|---|
+| 1 — unit-test CI on 3 repos | 1–2 hours | Elixir-level regressions, formatter drift | **High** — biggest signal-per-hour win |
+| 2 — native-build smoke (Android + iOS) | 4–8 hours | Native compile bugs (this session's 5) | Medium — recurring source of "merged but broken" |
+| 3 — per-component screenshot diffs | 1–2 days | Renderer / native-bridge regressions | Lower — pays off once Layer 2 exists |
+
+### Open questions before starting
+
+- **Required vs informational checks?** Layer 1 should probably block PR
+  merge. Layer 2 cycle time (~10 min) makes it borderline; might be
+  "informational" with a clear failure summary in the PR.
+- **Where do mob_dev / mob_new tests run for cost?** Both can stay on
+  ubuntu-latest; the only macOS-required bits are iOS simulator + Xcode
+  toolchain, which Layer 2 needs.
+- **Caching strategy.** `deps/` is straightforward. `_build/test/` for
+  Elixir is cheap to recompute (~30s) so cache is nice but not essential.
+  Android SDK download is slow (~2 min cold); cache that aggressively in
+  Layer 2.
