@@ -37,6 +37,7 @@ typedef NS_ENUM(NSInteger, MobNodeType) {
     MobNodeTypeNativeView,
     MobNodeTypeIcon,
     MobNodeTypeCanvas,
+    MobNodeTypeGpuView,
 };
 
 NS_ASSUME_NONNULL_BEGIN
@@ -236,6 +237,18 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, nullable) NSArray *canvasOps;
 @property(nonatomic) CGFloat canvasWidth;  // pt; required (>0)
 @property(nonatomic) CGFloat canvasHeight; // pt; required (>0)
+
+// GpuView — Metal shader source + per-frame uniforms. The native side
+// compiles `gpuShaderMSL` into an MTLRenderPipelineState (cached by
+// the source hash) and binds `gpuUniforms` to fragment buffer slot 0
+// every frame. Shader compile errors surface as a translucent overlay
+// on top of the view. See `Mob.UI.gpu_view/1` for the BEAM-side
+// contract and the iOS-only / MSL-only scope.
+@property(nonatomic, copy, nullable) NSString *gpuShaderMSL;
+// May be an NSArray (preferred — ordered uniform list) or NSDictionary
+// (legacy — iteration order undefined). See MobGpuView.swift for the
+// expected packing semantics per element.
+@property(nonatomic, strong, nullable) id gpuUniforms;
 
 // Children
 @property(nonatomic, strong, nonnull) NSMutableArray<MobNode *> *children;
