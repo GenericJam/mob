@@ -636,6 +636,8 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         node.nodeType = MobNodeTypeIcon;
     else if ([type isEqualToString:@"canvas"])
         node.nodeType = MobNodeTypeCanvas;
+    else if ([type isEqualToString:@"gpu_view"])
+        node.nodeType = MobNodeTypeGpuView;
 
     NSDictionary *props = dict[@"props"];
     if ([props isKindOfClass:[NSDictionary class]]) {
@@ -1089,6 +1091,24 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         id canvasH = props[@"height"];
         if (canvasH && node.nodeType == MobNodeTypeCanvas)
             node.canvasHeight = [canvasH doubleValue];
+
+        // gpu_view props: shader (string OR %{ios: "..."} map) + uniforms map.
+        // Map form is the "I already have hand-tuned MSL" escape hatch.
+        if (node.nodeType == MobNodeTypeGpuView) {
+            id shader = props[@"shader"];
+            if ([shader isKindOfClass:[NSString class]]) {
+                node.gpuShaderMSL = shader;
+            } else if ([shader isKindOfClass:[NSDictionary class]]) {
+                id iosShader = ((NSDictionary *)shader)[@"ios"];
+                if ([iosShader isKindOfClass:[NSString class]])
+                    node.gpuShaderMSL = iosShader;
+            }
+
+            id uniforms = props[@"uniforms"];
+            if ([uniforms isKindOfClass:[NSArray class]] ||
+                [uniforms isKindOfClass:[NSDictionary class]])
+                node.gpuUniforms = uniforms;
+        }
 
         // webview props
         id webViewUrl = props[@"url"];

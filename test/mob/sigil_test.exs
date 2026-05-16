@@ -199,6 +199,15 @@ defmodule Mob.SigilTest do
       node = ~MOB(<TextField value="x" />)
       assert node.type == :text_field
     end
+
+    test "GpuView resolves to :gpu_view (and is on the iOS whitelist)" do
+      # If GpuView drops off priv/tags/ios.txt, the sigil emits a
+      # compile-time warning and the test breaks loudly via the stderr
+      # capture used elsewhere in this file. For the type atom alone,
+      # this just checks the snake_case conversion.
+      node = ~MOB(<GpuView />)
+      assert node.type == :gpu_view
+    end
   end
 
   # ── parity with raw maps ─────────────────────────────────────────────────────
