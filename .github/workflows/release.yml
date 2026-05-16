@@ -57,3 +57,42 @@ jobs:
           # last tag.
           body_path: ${{ steps.changelog.outputs.has_body == 'true' && '/tmp/release-body.md' || '' }}
           generate_release_notes: ${{ steps.changelog.outputs.has_body != 'true' }}
+
+  hex_publish:
+    name: Publish to Hex
+    needs: github_release
+    runs-on: ubuntu-latest
+    env:
+      # Reads the repo secret. If it's unset (or scoped to a different
+      # event), `if: env.HEX_API_KEY != ''` below skips the publish step
+      # cleanly instead of failing with an auth error.
+      HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        if: env.HEX_API_KEY != ''
+        with:
+          elixir-version: '1.19'
+          otp-version: '28'
+
+      - name: Fetch deps
+        if: env.HEX_API_KEY != ''
+        run: mix deps.get
+
+      - name: mix hex.publish
+        if: env.HEX_API_KEY != ''
+        # `--yes` skips the interactive confirm. `mix hex.publish` (no
+        # subcommand) ships both the package archive AND docs in one
+        # call, which matches what most maintainers want per release.
+        # If a version was already published manually this will fail
+        # loudly — that's the right signal, not a silent skip.
+        run: mix hex.publish --yes
+
+      - name: Skip notice (no HEX_API_KEY configured)
+        if: env.HEX_API_KEY == ''
+        run: |
+          echo "::notice::HEX_API_KEY secret is not set on this repository."
+          echo "::notice::Skipping Hex publish. Add the secret at"
+          echo "::notice::https://github.com/${{ github.repository }}/settings/secrets/actions"
+          echo "::notice::and re-tag (or re-run this workflow) to publish."
