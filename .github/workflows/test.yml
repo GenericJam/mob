@@ -1,0 +1,121 @@
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }}
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: '1.19'
+            otp: '28'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+
+      - name: Cache deps + _build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: mix-${{ runner.os }}-${{ matrix.elixir }}-${{ matrix.otp }}-
+
+      - run: mix deps.get
+      - run: mix deps.compile
+      - run: mix compile --warnings-as-errors
+
+      - name: Format check
+        run: mix format --check-formatted
+
+      - name: Credo (strict)
+        run: mix credo --strict
+
+      - name: erlfmt check (src/)
+        run: mix erlfmt --check src/
+
+      - name: Tests
+        run: mix test
+
+  native_lint:
+    name: Native formatters (clang-format + swiftlint)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: clang-format (iOS Objective-C + Android JNI headers)
+        # xcrun ships clang-format with the Xcode CLT, which the macos-15
+        # runner already has — no install step.
+        run: |
+          xcrun clang-format --dry-run -Werror \
+            ios/mob_nif.m \
+            android/jni/mob_beam.h
+
+      - name: Install swiftlint
+        run: brew install swiftlint
+
+      - name: swiftlint
+        # swiftlint emits warnings for some pre-existing patterns
+        # (force_cast in MobRootView.swift). Treat the run as
+        # informational until those are triaged; flip to --strict later.
+        continue-on-error: true
+        run: swiftlint lint --reporter github-actions-logging ios/
+
+  security_scan:
+    name: Security scan (mix_audit)
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()
+    # Informational: a finding shouldn't block the workflow gate while we
+    # establish a baseline. Flip to fail-on-vuln once we've triaged what's
+    # already in the dep tree.
+    continue-on-error: true
+    env:
+      MIX_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.19'
+          otp-version: '28'
+
+      - name: Cache deps + _build (reuse test job's key)
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: mix-${{ runner.os }}-1.19-28-${{ hashFiles('**/mix.lock') }}
+          restore-keys: mix-${{ runner.os }}-1.19-28-
+
+      - run: mix deps.get
+      - run: mix deps.compile
+
+      # mix_audit scans mix.lock against the Erlef advisory feed. Lightweight
+      # entry-level scan; the richer multi-layer scan lives in mob_dev's
+      # `mix mob.security_scan` (we don't depend on mob_dev here to avoid a
+      # dev-only dependency cycle).
+      - name: Install mix_audit
+        run: mix archive.install hex mix_audit --force
+
+      - name: Audit deps
+        run: mix deps.audit
