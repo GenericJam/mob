@@ -63,9 +63,10 @@ defmodule Mob.MixProject do
       main: "readme",
       logo: "assets/logo/logo_full_color.png",
       source_url: "https://github.com/genericjam/mob",
-      source_url_pattern: "https://github.com/genericjam/mob/blob/main/%{path}#L%{line}",
+      source_url_pattern: "https://github.com/genericjam/mob/blob/master/%{path}#L%{line}",
       extras: [
         "README.md": [title: "Mob"],
+        "CHANGELOG.md": [title: "Changelog"],
         "guides/why_beam.md": [title: "Why the BEAM?"],
         "guides/getting_started.md": [title: "Getting Started"],
         "guides/architecture.md": [title: "Architecture & Prior Art"],
@@ -148,7 +149,7 @@ defmodule Mob.MixProject do
         lib src priv
         android ios assets
         mix.exs mix.lock
-        README.md LICENSE
+        README.md CHANGELOG.md LICENSE
       )
     ]
   end

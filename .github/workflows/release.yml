@@ -1,0 +1,59 @@
+name: release
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-*'
+
+# Only one release run per tag at a time. Cancelling in-progress is
+# deliberately OFF — a release in flight should always finish.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # required to create a GitHub Release
+
+jobs:
+  github_release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so action-gh-release can build a changelog from the
+          # commits between this tag and the previous one.
+          fetch-depth: 0
+
+      - name: Extract CHANGELOG section for this tag
+        id: changelog
+        run: |
+          if [ -f CHANGELOG.md ]; then
+            # Pull the section under "## [<tag>]" or "## <tag>" up to the
+            # next "## " heading. If nothing matches, the body falls back
+            # to auto-generated commit notes.
+            awk -v tag="${{ github.ref_name }}" '
+              $0 ~ "^## \\[" tag "\\]" || $0 ~ "^## " tag "( |$)" { in_section=1; next }
+              in_section && /^## / { exit }
+              in_section { print }
+            ' CHANGELOG.md > /tmp/release-body.md
+            if [ -s /tmp/release-body.md ]; then
+              echo "has_body=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "has_body=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "has_body=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          # If CHANGELOG.md had a matching section, use it. Otherwise let
+          # the action auto-generate notes from the commit log since the
+          # last tag.
+          body_path: ${{ steps.changelog.outputs.has_body == 'true' && '/tmp/release-body.md' || '' }}
+          generate_release_notes: ${{ steps.changelog.outputs.has_body != 'true' }}
