@@ -206,7 +206,11 @@ final class MobGpuMTKView: MTKView, MTKViewDelegate {
             // the supplied shader exports a function with a different name,
             // make_function returns nil and we surface that to the user.
             guard let fragmentFn = library.makeFunction(name: "fragment_main") else {
-                showError("fragment_main not found — your shader must define `fragment half4 fragment_main(VertexOut in [[stage_in]], constant Uniforms& u [[buffer(0)]])`")
+                showError(
+                    "fragment_main not found — your shader must define " +
+                    "`fragment half4 fragment_main(VertexOut in [[stage_in]], " +
+                    "constant Uniforms& u [[buffer(0)]])`"
+                )
                 return
             }
             let desc = MTLRenderPipelineDescriptor()
