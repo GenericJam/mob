@@ -262,18 +262,18 @@ end
 ## iOS Speech transcription
 
 Transcribes an existing audio file with Apple's Speech framework. Use
-`Mob.Files.pick/2` for user-selected audio or `Mob.Audio` to record microphone
-input first.
+`Mob.Audio` to record microphone input first, then transcribe the saved
+recording path.
 
 Apple docs:
 [SFSpeechRecognizer](https://developer.apple.com/documentation/speech/sfspeechrecognizer) and
 [SFSpeechURLRecognitionRequest](https://developer.apple.com/documentation/speech/sfspeechurlrecognitionrequest).
 
 ```elixir
-socket =
-  Mob.Files.pick(socket, types: ["public.audio", "public.mpeg-4-audio", "audio/*"])
+socket = Mob.Audio.start_recording(socket, format: :aac, quality: :high)
+socket = Mob.Audio.stop_recording(socket)
 
-def handle_info({:files, :picked, [%{path: path} | _]}, socket) do
+def handle_info({:audio, :recorded, %{path: path}}, socket) do
   socket =
     Mob.IOS.Speech.transcribe_audio(socket, path,
       locale: "en-US",
@@ -306,9 +306,9 @@ The lightest simulator smoke test is:
    `Mob.IOS.Vision.recognize_text/3` with the selected photo path.
 2. Add a photo with readable text to the simulator photo library, select it in
    the picker, and confirm OCR returns the expected text.
-3. Build a second action with `Mob.Files.pick/2`, select an audio file from the
-   native document picker, and pass the selected path to
-   `Mob.IOS.Speech.transcribe_audio/3`.
+3. Build two audio actions: one calls `Mob.Audio.start_recording/2`; the other
+   calls `Mob.Audio.stop_recording/1`. Pass the recorded file path from
+   `{:audio, :recorded, %{path: path}}` to `Mob.IOS.Speech.transcribe_audio/3`.
 4. Confirm Foundation Models returns the expected simulator-unavailable error.
 
 For path-based debugging in a simulator app that is already installed, the

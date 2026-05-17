@@ -9,12 +9,13 @@ defmodule Mob.IOS.Speech do
   https://developer.apple.com/documentation/speech/sfspeechurlrecognitionrequest
 
   Calls are asynchronous. Results are delivered to the calling process. Pair
-  this with `Mob.Files.pick/2` when the audio should come from the native
-  document picker:
+  this with `Mob.Audio.start_recording/2` and `Mob.Audio.stop_recording/1` when
+  the audio should come from the microphone:
 
-      socket = Mob.Files.pick(socket, types: ["public.audio", "audio/*"])
+      socket = Mob.Audio.start_recording(socket, format: :aac, quality: :high)
+      socket = Mob.Audio.stop_recording(socket)
 
-      def handle_info({:files, :picked, [%{path: path} | _]}, socket) do
+      def handle_info({:audio, :recorded, %{path: path}}, socket) do
         {:noreply, Mob.IOS.Speech.transcribe_audio(socket, path)}
       end
 
