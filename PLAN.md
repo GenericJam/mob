@@ -2252,3 +2252,44 @@ If batch 5+ benchmarks show meaningful overhead, add per-category enable so
 subscribers only register OS observers they actually use. For batches 1–4
 this isn't worth the API surface — the cost is dominated by the OS firing
 the notification, which happens regardless of whether we observe.
+
+---
+
+## MobBridge.kt / MobBridge.swift duplication (drift hazard)
+
+Today each Mob app carries its own copy of `MobBridge.kt` (and the iOS
+equivalent). They're scaffolded once and then diverge — `nxeigen_probe`'s
+is 3068 lines; `mob_lv_test`'s is 1657. When Mob adds a feature that
+needs Kotlin support (e.g., the camera frame stream wiring earlier this
+month) every app has to be patched independently. When a Kotlin-side bug
+is fixed in one app (e.g., the canvas viewport-scaling fix that landed
+in nxeigen_probe — see `Mob.Canvas` `@moduledoc` and
+`guides/troubleshooting.md`) the fix doesn't propagate.
+
+This is sustainable while there are ~2 Mob apps. It will become a real
+problem at ~10.
+
+**Options:**
+
+* **Ship MobBridge as an AAR / Swift package** the apps depend on.
+  Per-app `MobBridge.kt` becomes a thin shim that just registers
+  app-specific things (the app's package name for JNI, app-specific
+  intent filters, etc.). The bulk of the renderer / UI / Compose code
+  is library-managed.
+* **Generate MobBridge from a single Elixir source** during
+  `mix mob.deploy --native`. Like Phoenix's `mix phx.gen.*`, but as
+  a regenerate-on-every-build step rather than a one-shot scaffold.
+  Apps wouldn't edit MobBridge by hand at all.
+* **Status quo with strong cross-app diff tooling** — a
+  `mix mob.audit_bridge` task that diffs all known MobBridge.kt's and
+  flags drift. Cheap to implement but doesn't fix the root cause.
+
+The AAR / Swift-package path is cleanest but has a real engineering
+cost (Compose-in-library packaging on Android is finicky; SwiftPM
+target setup is finicky). The generator path is the smallest
+incremental change from today's scaffold.
+
+**First known bug caused by this duplication:** Canvas viewport
+scaling (pixel-vs-logical-units). See `Mob.Canvas` `@moduledoc`
+section "Implementing the renderer" for the per-app fix recipe; the
+duplication issue is the meta-problem.
