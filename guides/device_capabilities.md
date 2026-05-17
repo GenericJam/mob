@@ -295,6 +295,34 @@ The lightest simulator smoke test is:
    to `Mob.IOS.Speech.transcribe_audio/3`.
 4. Confirm Foundation Models returns the expected simulator-unavailable error.
 
+For a simulator app that is already installed, the useful setup commands are:
+
+```sh
+SIM_ID="booted"
+BUNDLE_ID="com.example.my_mob_app"
+CONTAINER="$(xcrun simctl get_app_container "$SIM_ID" "$BUNDLE_ID" data)"
+
+cp ./ocr_fixture.png "$CONTAINER/Documents/ocr_fixture.png"
+```
+
+Then pass the copied path to the app:
+
+```elixir
+image_path = "/path/from/xcrun/simctl/get_app_container/Documents/ocr_fixture.png"
+Mob.IOS.Vision.recognize_text(socket, image_path)
+```
+
+For Speech, recording inside the Mob app is the most representative smoke test:
+
+```elixir
+socket = Mob.Audio.start_recording(socket)
+socket = Mob.Audio.stop_recording(socket)
+
+def handle_info({:audio, :recorded, %{path: path}}, socket) do
+  {:noreply, Mob.IOS.Speech.transcribe_audio(socket, path)}
+end
+```
+
 ### Scope and follow-up ideas
 
 This first bridge includes plain Foundation Models text generation, Vision OCR
