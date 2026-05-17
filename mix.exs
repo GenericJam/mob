@@ -4,7 +4,7 @@ defmodule Mob.MixProject do
   def project do
     [
       app: :mob,
-      version: "0.6.6",
+      version: "0.6.7",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -76,6 +76,7 @@ defmodule Mob.MixProject do
         "guides/theming.md": [title: "Theming"],
         "guides/navigation.md": [title: "Navigation"],
         "guides/device_capabilities.md": [title: "Device Capabilities"],
+        "guides/mobile_surface_matrix.md": [title: "Mobile Surface Matrix"],
         "guides/permissions.md": [title: "Permissions"],
         "guides/native_extensions.md": [title: "Native Extensions (NIFs, features)"],
         "guides/dns_on_ios.md": [title: "DNS on iOS"],
