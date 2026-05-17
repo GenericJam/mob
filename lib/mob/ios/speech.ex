@@ -8,9 +8,15 @@ defmodule Mob.IOS.Speech do
   https://developer.apple.com/documentation/speech/sfspeechrecognizer
   https://developer.apple.com/documentation/speech/sfspeechurlrecognitionrequest
 
-  Calls are asynchronous. Results are delivered to the calling process:
+  Calls are asynchronous. Results are delivered to the calling process. Pair
+  this with `Mob.Files.pick/2` when the audio should come from the native
+  document picker:
 
-      Mob.IOS.Speech.transcribe_audio(socket, "/path/to/audio.m4a")
+      socket = Mob.Files.pick(socket, types: ["public.audio", "audio/*"])
+
+      def handle_info({:files, :picked, [%{path: path} | _]}, socket) do
+        {:noreply, Mob.IOS.Speech.transcribe_audio(socket, path)}
+      end
 
       def handle_info({:speech, :transcribed_audio, %{text: text}}, socket) do
         {:noreply, Mob.Socket.assign(socket, :transcript, text)}

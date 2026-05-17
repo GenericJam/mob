@@ -6,9 +6,15 @@ defmodule Mob.IOS.Vision do
   See Apple's API documentation:
   https://developer.apple.com/documentation/vision/vnrecognizetextrequest
 
-  Calls are asynchronous. Results are delivered to the calling process:
+  Calls are asynchronous. Results are delivered to the calling process. Pair
+  this with `Mob.Photos.pick/2` when the image should come from the user's
+  photo library:
 
-      Mob.IOS.Vision.recognize_text(socket, "/path/to/image.png")
+      socket = Mob.Photos.pick(socket, max: 1, types: [:image])
+
+      def handle_info({:photos, :picked, [%{path: path} | _]}, socket) do
+        {:noreply, Mob.IOS.Vision.recognize_text(socket, path)}
+      end
 
       def handle_info({:vision, :recognized_text, %{text: text}}, socket) do
         {:noreply, Mob.Socket.assign(socket, :ocr_text, text)}

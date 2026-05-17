@@ -242,10 +242,17 @@ Apple docs:
 
 ```elixir
 socket =
-  Mob.IOS.Vision.recognize_text(socket, image_path,
-    recognition_level: :accurate,
-    uses_language_correction: true
-  )
+  Mob.Photos.pick(socket, max: 1, types: [:image])
+
+def handle_info({:photos, :picked, [%{path: path} | _]}, socket) do
+  socket =
+    Mob.IOS.Vision.recognize_text(socket, path,
+      recognition_level: :accurate,
+      uses_language_correction: true
+    )
+
+  {:noreply, socket}
+end
 
 def handle_info({:vision, :recognized_text, %{text: text}}, socket) do
   {:noreply, Mob.Socket.assign(socket, :ocr_text, text)}
@@ -255,7 +262,8 @@ end
 ## iOS Speech transcription
 
 Transcribes an existing audio file with Apple's Speech framework. Use
-`Mob.Audio` to record microphone input first.
+`Mob.Files.pick/2` for user-selected audio or `Mob.Audio` to record microphone
+input first.
 
 Apple docs:
 [SFSpeechRecognizer](https://developer.apple.com/documentation/speech/sfspeechrecognizer) and
@@ -263,10 +271,17 @@ Apple docs:
 
 ```elixir
 socket =
-  Mob.IOS.Speech.transcribe_audio(socket, recording_path,
-    locale: "en-US",
-    requires_on_device_recognition: false
-  )
+  Mob.Files.pick(socket, types: ["public.audio", "public.mpeg-4-audio", "audio/*"])
+
+def handle_info({:files, :picked, [%{path: path} | _]}, socket) do
+  socket =
+    Mob.IOS.Speech.transcribe_audio(socket, path,
+      locale: "en-US",
+      requires_on_device_recognition: false
+    )
+
+  {:noreply, socket}
+end
 
 def handle_info({:speech, :transcribed_audio, %{text: text}}, socket) do
   {:noreply, Mob.Socket.assign(socket, :transcript, text)}
@@ -287,15 +302,17 @@ support local recognition.
 
 The lightest simulator smoke test is:
 
-1. Build a Mob app that exposes a screen with a text field for an image path and
-   calls `Mob.IOS.Vision.recognize_text/3`.
-2. Copy an image with readable text into the simulator app's Documents
-   directory, then run OCR against that path.
-3. Record audio with `Mob.Audio.start_recording/2` and pass the resulting path
-   to `Mob.IOS.Speech.transcribe_audio/3`.
+1. Build a Mob app that exposes a screen with `Mob.Photos.pick/2` and calls
+   `Mob.IOS.Vision.recognize_text/3` with the selected photo path.
+2. Add a photo with readable text to the simulator photo library, select it in
+   the picker, and confirm OCR returns the expected text.
+3. Build a second action with `Mob.Files.pick/2`, select an audio file from the
+   native document picker, and pass the selected path to
+   `Mob.IOS.Speech.transcribe_audio/3`.
 4. Confirm Foundation Models returns the expected simulator-unavailable error.
 
-For a simulator app that is already installed, the useful setup commands are:
+For path-based debugging in a simulator app that is already installed, the
+useful setup commands are:
 
 ```sh
 SIM_ID="booted"
