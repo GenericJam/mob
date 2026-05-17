@@ -136,7 +136,7 @@ Mob.Notify.register_push(socket)
 def handle_info({:push_token, :ios, token}, socket), do: ...
 ```
 
-Also: `Mob.Clipboard`, `Mob.Share`, `Mob.Photos`, `Mob.Files`, `Mob.Audio`, `Mob.FoundationModels`, `Mob.Vision`, `Mob.Speech`, `Mob.Motion`, `Mob.Biometric`, `Mob.Scanner`, `Mob.Permissions`.
+Also: `Mob.Clipboard`, `Mob.Share`, `Mob.Photos`, `Mob.Files`, `Mob.Audio`, `Mob.IOS.FoundationModels`, `Mob.IOS.Vision`, `Mob.IOS.Speech`, `Mob.Motion`, `Mob.Biometric`, `Mob.Scanner`, `Mob.Permissions`.
 
 ## What's in the box
 

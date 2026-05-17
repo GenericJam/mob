@@ -1,4 +1,4 @@
-defmodule Mob.Speech do
+defmodule Mob.IOS.Speech do
   @moduledoc """
   iOS Speech framework transcription.
 
@@ -10,7 +10,7 @@ defmodule Mob.Speech do
 
   Calls are asynchronous. Results are delivered to the calling process:
 
-      Mob.Speech.transcribe_audio(socket, "/path/to/audio.m4a")
+      Mob.IOS.Speech.transcribe_audio(socket, "/path/to/audio.m4a")
 
       def handle_info({:speech, :transcribed_audio, %{text: text}}, socket) do
         {:noreply, Mob.Socket.assign(socket, :transcript, text)}

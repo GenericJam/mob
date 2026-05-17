@@ -1,7 +1,7 @@
-defmodule Mob.VisionTest do
+defmodule Mob.IOS.VisionTest do
   use ExUnit.Case, async: true
 
-  alias Mob.Vision
+  alias Mob.IOS.Vision
 
   describe "recognize_text_opts/1" do
     test "defaults to accurate OCR with language correction" do

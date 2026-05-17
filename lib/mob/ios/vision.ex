@@ -1,4 +1,4 @@
-defmodule Mob.Vision do
+defmodule Mob.IOS.Vision do
   @moduledoc """
   iOS Vision framework capabilities.
 
@@ -8,7 +8,7 @@ defmodule Mob.Vision do
 
   Calls are asynchronous. Results are delivered to the calling process:
 
-      Mob.Vision.recognize_text(socket, "/path/to/image.png")
+      Mob.IOS.Vision.recognize_text(socket, "/path/to/image.png")
 
       def handle_info({:vision, :recognized_text, %{text: text}}, socket) do
         {:noreply, Mob.Socket.assign(socket, :ocr_text, text)}

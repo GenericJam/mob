@@ -1,7 +1,7 @@
-defmodule Mob.FoundationModelsTest do
+defmodule Mob.IOS.FoundationModelsTest do
   use ExUnit.Case, async: true
 
-  alias Mob.FoundationModels
+  alias Mob.IOS.FoundationModels
 
   describe "generate_text_opts/1" do
     test "defaults are string keyed" do

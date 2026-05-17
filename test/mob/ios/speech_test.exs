@@ -1,7 +1,7 @@
-defmodule Mob.SpeechTest do
+defmodule Mob.IOS.SpeechTest do
   use ExUnit.Case, async: true
 
-  alias Mob.Speech
+  alias Mob.IOS.Speech
 
   describe "transcribe_audio_opts/1" do
     test "defaults to platform locale and server-capable recognition" do

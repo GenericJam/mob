@@ -205,9 +205,9 @@ end
 
 iOS uses `AVAudioPlayer` / `AVPlayer`. Android uses `MediaPlayer`.
 
-## Foundation Models
+## iOS Foundation Models
 
-iOS only. Generates text with Apple's on-device Foundation Models framework.
+Generates text with Apple's on-device Foundation Models framework.
 Requires an eligible physical device with Apple Intelligence enabled; the iOS
 simulator reports this capability as unavailable.
 
@@ -217,7 +217,7 @@ Apple docs:
 
 ```elixir
 socket =
-  Mob.FoundationModels.generate_text(socket, "Turn this note into a short action list",
+  Mob.IOS.FoundationModels.generate_text(socket, "Turn this note into a short action list",
     instructions: "Return compact plain text.",
     temperature: 0.2,
     maximum_response_tokens: 240
@@ -232,17 +232,17 @@ def handle_info({:foundation_models, :error, %{reason: reason}}, socket) do
 end
 ```
 
-## Vision text recognition
+## iOS Vision text recognition
 
-iOS only for now. Recognizes text in a local image file with Apple's Vision
-framework. Combine with `Mob.Photos.pick/2` to OCR a user-selected image.
+Recognizes text in a local image file with Apple's Vision framework. Combine
+with `Mob.Photos.pick/2` to OCR a user-selected image.
 
 Apple docs:
 [VNRecognizeTextRequest](https://developer.apple.com/documentation/vision/vnrecognizetextrequest).
 
 ```elixir
 socket =
-  Mob.Vision.recognize_text(socket, image_path,
+  Mob.IOS.Vision.recognize_text(socket, image_path,
     recognition_level: :accurate,
     uses_language_correction: true
   )
@@ -252,10 +252,10 @@ def handle_info({:vision, :recognized_text, %{text: text}}, socket) do
 end
 ```
 
-## Speech transcription
+## iOS Speech transcription
 
-iOS only for now. Transcribes an existing audio file with Apple's Speech
-framework. Use `Mob.Audio` to record microphone input first.
+Transcribes an existing audio file with Apple's Speech framework. Use
+`Mob.Audio` to record microphone input first.
 
 Apple docs:
 [SFSpeechRecognizer](https://developer.apple.com/documentation/speech/sfspeechrecognizer) and
@@ -263,7 +263,7 @@ Apple docs:
 
 ```elixir
 socket =
-  Mob.Speech.transcribe_audio(socket, recording_path,
+  Mob.IOS.Speech.transcribe_audio(socket, recording_path,
     locale: "en-US",
     requires_on_device_recognition: false
   )
@@ -276,6 +276,36 @@ end
 Speech recognition requires iOS speech authorization. If
 `requires_on_device_recognition` is true, iOS may reject locales that do not
 support local recognition.
+
+### iOS native intelligence testing
+
+| Capability | iOS simulator | Physical iPhone |
+|---|---:|---:|
+| `Mob.IOS.FoundationModels.generate_text/3` | No. The simulator does not provide the on-device system language model. | Yes, on Apple Intelligence-capable devices with Apple Intelligence enabled and the model ready. |
+| `Mob.IOS.Vision.recognize_text/3` | Yes. Pass a readable image path in the simulator app container or pick a simulator photo. | Yes. |
+| `Mob.IOS.Speech.transcribe_audio/3` | Usually yes for file transcription, subject to simulator Speech authorization and runtime locale/service availability. | Yes, subject to Speech authorization and locale support. |
+
+The lightest simulator smoke test is:
+
+1. Build a Mob app that exposes a screen with a text field for an image path and
+   calls `Mob.IOS.Vision.recognize_text/3`.
+2. Copy an image with readable text into the simulator app's Documents
+   directory, then run OCR against that path.
+3. Record audio with `Mob.Audio.start_recording/2` and pass the resulting path
+   to `Mob.IOS.Speech.transcribe_audio/3`.
+4. Confirm Foundation Models returns the expected simulator-unavailable error.
+
+### Scope and follow-up ideas
+
+This first bridge includes plain Foundation Models text generation, Vision OCR
+from a local image path, and Speech transcription from a local audio file.
+
+Not included yet: Foundation Models structured generation with `@Generable`,
+streaming partial Foundation Models responses, tool calling, multi-turn session
+persistence, Vision requests beyond text recognition, live Speech recognition,
+custom Speech language models, Natural Language framework features, image
+generation, Private Cloud Compute-backed server features, and Android ML Kit or
+platform-equivalent implementations.
 
 ## Location
 

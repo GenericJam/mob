@@ -1,4 +1,4 @@
-defmodule Mob.FoundationModels do
+defmodule Mob.IOS.FoundationModels do
   @moduledoc """
   iOS Foundation Models text generation.
 
@@ -9,13 +9,13 @@ defmodule Mob.FoundationModels do
 
   Calls are asynchronous. Results are delivered to the calling process:
 
-      Mob.FoundationModels.generate_text(socket, "Summarize this note")
+      Mob.IOS.FoundationModels.generate_text(socket, "Summarize this note")
 
       def handle_info({:foundation_models, :generated_text, %{text: text}}, socket) do
         {:noreply, Mob.Socket.assign(socket, :summary, text)}
       end
 
-      def handle_info({:foundation_models, :error, %{operation: :generate_text, reason: reason}}, socket) do
+      def handle_info({:foundation_models, :error, %{reason: reason}}, socket) do
         {:noreply, Mob.Socket.assign(socket, :error, reason)}
       end
 
