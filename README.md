@@ -138,6 +138,12 @@ def handle_info({:push_token, :ios, token}, socket), do: ...
 
 Also: `Mob.Clipboard`, `Mob.Share`, `Mob.Photos`, `Mob.Files`, `Mob.Audio`, `Mob.Motion`, `Mob.Biometric`, `Mob.Scanner`, `Mob.Permissions`.
 
+For a full audit of what mob covers vs. what's missing vs. what's
+out of scope (compared against React Native + Expo SDK capabilities),
+see the [Mobile Surface Matrix](https://hexdocs.pm/mob/mobile_surface_matrix.html).
+Set realistic expectations before starting an app; spot plugin
+candidates if you want to fill a gap.
+
 ## What's in the box
 
 The pre-built OTP runtime that ships with each app includes:
