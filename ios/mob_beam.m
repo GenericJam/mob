@@ -246,22 +246,47 @@ void mob_start_beam(const char *app_module) {
     //   would return the Mac's USB IP (wrong). Always use 127.0.0.1 on simulator.
 #ifdef MOB_BUNDLE_OTP
     // Physical device: WiFi/LAN → USB link-local → loopback fallback.
+    // Two physical devices on different LAN IPs already get distinct node
+    // names via the @host_ip part. MOB_NODE_SUFFIX is honored here too,
+    // for scripted scenarios where multiple builds of the same app run on
+    // distinct devices behind one IP (rare, but the override is harmless
+    // when unused).
     static char lan_ip_buf[64], link_local_buf[64];
     const char *lan_ip = find_lan_ip(lan_ip_buf, sizeof(lan_ip_buf));
     const char *ll_ip = lan_ip ? NULL : find_link_local_ip(link_local_buf, sizeof(link_local_buf));
     const char *host_ip = lan_ip ? lan_ip : (ll_ip ? ll_ip : "127.0.0.1");
     static char eval_expr[280], node_name[128], beams_dir[512];
     snprintf(eval_expr, sizeof(eval_expr), "%s:start().", app_module);
-    snprintf(node_name, sizeof(node_name), "%s_ios@%s", app_module, host_ip);
+    const char *phys_suffix = getenv("MOB_NODE_SUFFIX");
+    if (phys_suffix && phys_suffix[0]) {
+        snprintf(node_name, sizeof(node_name), "%s_ios_%s@%s", app_module, phys_suffix, host_ip);
+    } else {
+        snprintf(node_name, sizeof(node_name), "%s_ios@%s", app_module, host_ip);
+    }
 #else
-    // Simulator: use 127.0.0.1 but include a short UDID suffix so concurrent
+    // Simulator: use 127.0.0.1 but include a short suffix so concurrent
     // simulators get unique node names and don't conflict in Mac's EPMD.
-    // SIMULATOR_UDID is set automatically by the iOS simulator runtime.
+    //
+    // Node-suffix resolution order (mirrors Android's Mob.Dist behaviour):
+    //   1. MOB_NODE_SUFFIX env var — explicit override, e.g. set by
+    //      `mix mob.deploy --node-suffix foo` (forwarded to simctl via
+    //      SIMCTL_CHILD_MOB_NODE_SUFFIX). Use this when the auto-derived
+    //      UDID suffix isn't what you want (running two distinct apps in
+    //      one sim, scripting a specific naming scheme, etc.).
+    //   2. SIMULATOR_UDID-derived hex (first 8 hex chars). Set
+    //      automatically by the iOS simulator runtime; gives every sim a
+    //      unique suffix out of the box so concurrent sims don't collide.
+    //   3. No suffix — bare `<app>_ios@127.0.0.1`. Only hit when neither
+    //      env var is set.
     const char *host_ip = "127.0.0.1";
+    const char *node_suffix_override = getenv("MOB_NODE_SUFFIX");
     const char *sim_udid = getenv("SIMULATOR_UDID");
-    static char sim_short[9];
+    static char sim_short[64];
     sim_short[0] = '\0';
-    if (sim_udid) {
+    if (node_suffix_override && node_suffix_override[0]) {
+        strncpy(sim_short, node_suffix_override, sizeof(sim_short) - 1);
+        sim_short[sizeof(sim_short) - 1] = '\0';
+    } else if (sim_udid) {
         int n = 0;
         for (int i = 0; sim_udid[i] && n < 8; i++) {
             unsigned char c = (unsigned char)sim_udid[i];
