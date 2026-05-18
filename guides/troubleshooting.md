@@ -390,6 +390,11 @@ app sandbox forbids. Every hostname lookup through `:inet` fails immediately.
 Android works because its OTP helpers ship as `lib*.so` in `jniLibs/`, which
 SELinux allows to exec; iOS has no equivalent escape hatch.
 
+`Mob.App.start/0` already switches the lookup chain to `[:file]` on iOS so
+distribution and local-loopback TCP work without setup. That doesn't help
+public-internet hostnames though — you still need to opt into one of the
+DNS strategies below to talk to Req / Finch / Mint endpoints.
+
 **Fix:** Call `Mob.DNS.resolve/1` once per backend before your first request,
 typically in your app's `on_start/0`:
 
