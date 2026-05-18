@@ -160,6 +160,8 @@ pub const BridgeMethods = extern struct {
     camera_capture_video: jni.JMethodID = null,
     camera_start_preview: jni.JMethodID = null,
     camera_stop_preview: jni.JMethodID = null,
+    camera_start_frame_stream: jni.JMethodID = null,
+    camera_stop_frame_stream: jni.JMethodID = null,
     alert_show: jni.JMethodID = null,
     action_sheet_show: jni.JMethodID = null,
     toast_show: jni.JMethodID = null,
@@ -2010,6 +2012,56 @@ pub export fn mob_deliver_file_result(
     _ = erts.enif_send(null, &pid, env, msg);
 }
 
+/// `mob_deliver_camera_frame` — called from beam_jni.c after a
+/// CameraX ImageAnalysis frame has been converted to the requested
+/// pixel format. Posts the iOS-equivalent
+/// `{:camera, :frame, %{bytes, width, height, format, timestamp_ms, dropped}}`
+/// message to the BEAM caller pid. The `bytes` payload is copied into
+/// a fresh BEAM binary so the caller can release the underlying Kotlin
+/// ByteArray as soon as this function returns.
+pub export fn mob_deliver_camera_frame(
+    jpid: jni.JLong,
+    bytes: [*]const u8,
+    nbytes: usize,
+    width: c_int,
+    height: c_int,
+    format: [*:0]const u8,
+    timestamp_ms: jni.JLong,
+    dropped: jni.JLong,
+) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+
+    var pix: erts.ErlNifBinary = undefined;
+    if (erts.enif_alloc_binary(nbytes, &pix) == 0) return;
+    @memcpy(pix.data[0..nbytes], bytes[0..nbytes]);
+
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_atom(env, "bytes"),
+        erts.enif_make_atom(env, "width"),
+        erts.enif_make_atom(env, "height"),
+        erts.enif_make_atom(env, "format"),
+        erts.enif_make_atom(env, "timestamp_ms"),
+        erts.enif_make_atom(env, "dropped"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_binary(env, &pix),
+        erts.enif_make_int(env, width),
+        erts.enif_make_int(env, height),
+        erts.enif_make_atom(env, format),
+        erts.enif_make_int64(env, timestamp_ms),
+        erts.enif_make_int64(env, dropped),
+    };
+    const payload = erts.makeMap(env, &keys, &vals) orelse return;
+    const msg = erts.makeTuple(env, .{
+        erts.atom(env, "camera"),
+        erts.atom(env, "frame"),
+        payload,
+    });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
 pub export fn mob_deliver_push_token(jpid: jni.JLong, token: [*:0]const u8) callconv(.c) void {
     var pid = pidFromLong(jpid);
     const env = erts.enif_alloc_env() orelse return;
@@ -2343,18 +2395,22 @@ export fn nif_camera_stop_preview(
     return erts.ok(env);
 }
 
-// Live camera frame stream — Android implementation pending (needs
-// Camera2 + ImageAnalysis wiring on the Kotlin side). Returns
-// :unsupported for now so the iOS demo unblocks without breaking the
-// Android build. Track in https://github.com/GenericJam/mob/issues
+// Live camera frame stream. CameraX ImageAnalysis on the Kotlin side
+// converts YUV → RGB f32, then calls back via
+// `nativeDeliverCameraFrame` → `mob_deliver_camera_frame` to post a
+// `{:camera, :frame, %{...}}` message to the caller pid.
 export fn nif_camera_start_frame_stream(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
     argv: [*]const erts.ERL_NIF_TERM,
 ) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
-    _ = argv;
-    return erts.atom(env, "unsupported");
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const json = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(json);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr(env, Bridge.camera_start_frame_stream, pid, json);
 }
 
 export fn nif_camera_stop_frame_stream(
@@ -2364,7 +2420,11 @@ export fn nif_camera_stop_frame_stream(
 ) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     _ = argv;
-    return erts.atom(env, "unsupported");
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.camera_stop_frame_stream);
+    detachIfAttached(attached);
+    return erts.ok(env);
 }
 
 export fn nif_photos_pick(
@@ -4535,6 +4595,8 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     if (!cacheRequired(jenv, "camera_capture_video", "(JLjava/lang/String;)V", &Bridge.camera_capture_video)) return -1;
     if (!cacheRequired(jenv, "camera_start_preview", "(JLjava/lang/String;)V", &Bridge.camera_start_preview)) return -1;
     if (!cacheRequired(jenv, "camera_stop_preview", "()V", &Bridge.camera_stop_preview)) return -1;
+    if (!cacheRequired(jenv, "camera_start_frame_stream", "(JLjava/lang/String;)V", &Bridge.camera_start_frame_stream)) return -1;
+    if (!cacheRequired(jenv, "camera_stop_frame_stream", "()V", &Bridge.camera_stop_frame_stream)) return -1;
     if (!cacheRequired(jenv, "photos_pick", "(JLjava/lang/String;)V", &Bridge.photos_pick)) return -1;
     if (!cacheRequired(jenv, "files_pick", "(JLjava/lang/String;)V", &Bridge.files_pick)) return -1;
     if (!cacheRequired(jenv, "audio_start_recording", "(JLjava/lang/String;)V", &Bridge.audio_start_recording)) return -1;

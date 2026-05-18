@@ -358,3 +358,46 @@ See the [DNS on iOS guide](dns_on_ios.md) for the full story, including why
 manual resolution rather than automatic interception, what to do if the IP
 changes mid-session, and which libraries (NIFs that do their own
 `getaddrinfo`) don't need this fix.
+
+---
+
+## `Mob.Canvas` draw ops appear shifted, cropped, or in the wrong place
+
+**Symptom:** Lines, rectangles, or other Canvas draw operations land at
+the wrong screen coordinates. Bounding boxes drawn over a
+`<CameraPreview>` are noticeably offset (typically down-and-right on
+high-density Android devices, or off by some scale factor) and may
+extend outside the visible canvas area.
+
+**Cause:** The host app's `MobBridge` Canvas renderer is interpreting
+coordinates as raw pixels (or as dp with no viewport scaling) instead
+of treating the Canvas's declared `width` / `height` props as a
+logical viewport. The intended contract is documented in
+`Mob.Canvas`'s `@moduledoc`: a draw op at `(width / 2, height / 2)`
+lands in the dead centre of the rendered canvas regardless of actual
+pixel size or device density. Older / scaffolded `MobBridge.kt`s
+predate this contract and shipped a 1 coord = 1 pixel renderer.
+
+**Fix:** Apply the viewport-scaling recipe documented in
+`Mob.Canvas`'s `@moduledoc` ("Implementing the renderer" section) to
+your app's `MobBridge.kt` `MobCanvas` composable. Short version:
+inside `Canvas { ... }`, compute
+
+```kotlin
+val sx = if (width  > 0f) size.width  / width  else 1f
+val sy = if (height > 0f) size.height / height else 1f
+```
+
+and multiply every x-coord / width by `sx` and every y-coord / height
+by `sy` inside `drawCanvasOp`. Scalar sizes (stroke widths, circle
+radii, text sizes) use the average `(sx + sy) / 2` so they don't
+squash when the viewport is non-square.
+
+The same fix applies to `MobBridge.swift` on iOS — Compose and SwiftUI
+both deliver pixel-space draw scopes that need translating.
+
+**Why this isn't fixed once-and-for-all in Mob itself:** Mob ships
+zero host-app Kotlin / Swift today; every app's `MobBridge` is its
+own diverged copy. A future Mob improvement is to ship the renderer
+as a generated module or an AAR / Swift package so this kind of
+contract drift can't happen. Tracked in PLAN.md.

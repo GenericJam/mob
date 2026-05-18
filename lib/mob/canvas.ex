@@ -8,9 +8,63 @@ defmodule Mob.Canvas do
   raw strings ("#ff0000") — they are resolved by `Mob.Renderer` against
   the active theme before serialisation to the native side.
 
-  All coordinates are canvas-local in points/dp, top-left origin
-  (matches SwiftUI `Canvas` and Jetpack Compose `Canvas` natively, no
-  translation cost).
+  ## Coordinate system (important — read this once)
+
+  All coordinates are **canvas-local logical units**, top-left origin.
+  The unit is whatever the host app's `<Canvas>` component declared
+  via the `width` and `height` props on the canvas — a draw op at
+  `(width / 2, height / 2)` lands in the dead centre of the rendered
+  canvas regardless of the canvas's actual on-screen pixel size.
+
+  This deliberately differs from raw Compose `DrawScope.size` (which
+  is in pixels) and from raw SwiftUI `Canvas` (which is in points).
+  The renderer multiplies every coordinate by
+  `(actual_pixels / declared_logical_units)` per axis so callers
+  don't have to thread density and parent-constraint information
+  through every draw call.
+
+  Practical consequence: a YOLO model that outputs bbox coords in
+  `0..640` can be drawn directly on a `<Canvas width=640 height=640>`
+  and the boxes will line up with the underlying preview image
+  regardless of the actual on-screen size or device density.
+
+  See "Implementing the renderer" below for the contract the host
+  app's Kotlin / Swift `MobBridge` must honor.
+
+  ## Implementing the renderer (host app's `MobBridge`)
+
+  Mob ships no host-app code; each app's `MobBridge.kt` /
+  `MobBridge.swift` contains the Canvas renderer. The viewport-scaling
+  contract above is non-obvious and easy to get wrong — the original
+  per-app implementations interpreted coordinates as raw pixels, which
+  made bounding-box overlays drift on every device where 1 dp ≠ 1 px
+  (i.e., every modern Android device). Reference recipe for Compose:
+
+      @Composable
+      private fun MobCanvas(node: MobNode, modifier: Modifier) {
+        val width  = floatProp(node.props, "width")  ?: 0f
+        val height = floatProp(node.props, "height") ?: 0f
+        val ops    = ... // List<Map<String, Any?>>
+
+        val sized = if (width > 0f && height > 0f)
+          modifier.size(width.dp, height.dp) else modifier
+
+        Canvas(modifier = sized) {
+          // size.width / size.height are in PIXELS.
+          val sx = if (width  > 0f) size.width  / width  else 1f
+          val sy = if (height > 0f) size.height / height else 1f
+          ops.forEach { op -> drawCanvasOp(op, sx, sy) }
+        }
+      }
+
+  Every coord then passes through `coord * sx` / `coord * sy` in the
+  draw step. Scalar sizes (stroke widths, circle radii, text sizes)
+  use the average `(sx + sy) / 2` so they don't squash when the
+  declared viewport is non-square.
+
+  See `nxeigen_probe`'s
+  `android/app/src/main/java/com/example/nxeigen_probe/MobBridge.kt`
+  for the full working implementation.
 
   ## Op map equivalence
 

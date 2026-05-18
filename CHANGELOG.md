@@ -8,6 +8,30 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.6.8]
+
+### Added
+- **`Mob.Camera.start_frame_stream/2` now works on Android.** The
+  Camera2 + CameraX `ImageAnalysis` use case is wired through to BEAM
+  as `{:camera, :frame, %{bytes, width, height, format, timestamp_ms,
+  dropped}}` messages. Previously this NIF returned `:unsupported` on
+  Android — iOS-only. The Android implementation supports the same
+  `format: :rgb_f32` the iOS side does (`:bgra_u8` planned for a
+  follow-up).
+- **`Mob.Canvas` moduledoc** documents the viewport-scaling contract:
+  the `width`/`height` props are logical viewport units, NOT pixels.
+  The renderer scales draw-op coordinates against the actual on-screen
+  pixel size. New tests in `test/mob/canvas_test.exs` pin the
+  contract so future readers don't regress to interpreting them as
+  raw pixels.
+
+### Notes
+- Combined with `mob_dev 0.5.9`'s `mix mob.enable tflite` and the
+  `nx_tflite_mob 0.0.3` Hex package, the cross-platform live YOLO
+  demo (`mob_yolo_demo`) now runs end-to-end with only Hex deps.
+  Measured perf: 24 ms iPhone SE A15 via Core ML → ANE; 75–117 ms
+  Moto G Power 5G (Dimensity / BXM-8-256) via NNAPI / `mtk-gpu_shim`.
+
 ## [0.6.7]
 
 ### Added
