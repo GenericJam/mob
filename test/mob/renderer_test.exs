@@ -544,6 +544,22 @@ defmodule Mob.RendererTest do
       assert decoded["props"]["return_key"] == "next"
     end
 
+    test "secure boolean is passed through unchanged" do
+      tree = %{type: :text_field, props: %{value: "", secure: true}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["secure"] == true
+    end
+
+    test "secure defaults to absent when unset" do
+      tree = %{type: :text_field, props: %{value: ""}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      refute Map.has_key?(decoded["props"], "secure")
+    end
+
     test "register_tap receives {pid, tag} for tagged taps" do
       pid = self()
       tree = %{type: :button, props: %{text: "Tap", on_tap: {pid, :my_action}}, children: []}

@@ -797,6 +797,10 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         if ([returnKey isKindOfClass:[NSString class]])
             node.returnKeyStr = returnKey;
 
+        id secure = props[@"secure"];
+        if ([secure isKindOfClass:[NSNumber class]])
+            node.isSecure = [secure boolValue];
+
         id onFocus = props[@"on_focus"];
         if (onFocus && [onFocus isKindOfClass:[NSNumber class]]) {
             int handle = [onFocus intValue];

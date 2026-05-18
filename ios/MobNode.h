@@ -125,6 +125,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy, nonnull)
     NSString *keyboardTypeStr; // "default","number","decimal","email","phone","url"
 @property(nonatomic, copy, nonnull) NSString *returnKeyStr; // "done","next","go","search","send"
+@property(nonatomic, assign) BOOL isSecure;                 // mask input (SecureField on iOS)
 @property(nonatomic, copy, nullable) void (^onFocus)(void);
 @property(nonatomic, copy, nullable) void (^onBlur)(void);
 @property(nonatomic, copy, nullable) void (^onSubmit)(void);

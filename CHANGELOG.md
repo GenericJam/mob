@@ -8,6 +8,22 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Added
+- `text_field` now accepts a `secure: true` prop. iOS renders the field
+  as a SwiftUI `SecureField` (masked input) instead of the plain
+  `TextField`. The prop flows through the existing renderer
+  passthrough; cleartext still reaches the BEAM via `on_change` so apps
+  can hash/store the value as normal. Android consumes the same prop
+  via `PasswordVisualTransformation` once `mob_new`'s `MobBridge.kt.eex`
+  template is updated in a companion PR — until then the prop is a
+  graceful no-op on Android (renders as a regular field), no breakage.
+
+  Reveal-toggle ("eye" button) is intentionally deferred — its
+  interaction with SwiftUI focus retention requires a `ZStack`-and-opacity
+  rebuild of `MobTextField` and warrants its own change.
+
 ## [0.6.14]
 
 ### Added
@@ -85,7 +101,6 @@ Android implementation and `Mob.Canvas` viewport docs, now actually on Hex.
   demo (`mob_yolo_demo`) now runs end-to-end with only Hex deps.
   Measured perf: 24 ms iPhone SE A15 via Core ML → ANE; 75–117 ms
   Moto G Power 5G (Dimensity / BXM-8-256) via NNAPI / `mtk-gpu_shim`.
-
 ## [0.6.7]
 
 ### Added
