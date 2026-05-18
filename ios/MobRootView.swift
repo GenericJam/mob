@@ -297,15 +297,23 @@ struct MobNodeView: View {
                     .mobGestures(node)
 
             case .button:
+                // Padding + background INSIDE the Button's label, not outside.
+                // SwiftUI's Button only registers taps on its content view's
+                // bounds — applying `.padding()` to the Button itself leaves
+                // the padded area visually present but not tappable, so users
+                // tap the visible edge of the button and nothing happens.
+                // contentShape(Rectangle()) ensures the full padded area is
+                // hit-testable even when the background is .clear.
                 Button(action: { node.onTap?() }) {
                     Text(node.text ?? "")
                         .font(node.resolvedFont)
                         .foregroundColor(node.textColor.map { Color($0) } ?? Color.clear)
                         .lineLimit(1)
                         .frame(maxWidth: node.fillWidth ? .infinity : nil)
+                        .padding(node.paddingEdgeInsets)
+                        .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
+                        .contentShape(Rectangle())
                 }
-                .padding(node.paddingEdgeInsets)
-                .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: node.cornerRadius))
                 .ifLet(node.accessibilityId) { view, id in
                     view.accessibilityIdentifier(id)
