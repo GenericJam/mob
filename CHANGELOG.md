@@ -8,6 +8,23 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.6.9]
+
+### Fixed
+- **CI pipeline unblocked.** The 0.6.8 push failed two CI gates and never
+  reached Hex; this release ships the same code with the gates green:
+  - `android/jni/mob_beam.h` reformatted to satisfy `xcrun clang-format
+    --dry-run -Werror` (the camera-frame delivery declaration was split
+    across three lines in a style clang-format wanted on two).
+  - `decimal` bumped 2.4.0 → 3.1.0 (transitive via `ecto_sqlite3` /
+    `jason`) to clear advisory **GHSA-rhv4-8758-jx7v** — unbounded
+    exponent in `Decimal.new/1` enables an unauthenticated DoS, affects
+    `< 3.0.0`. `jason` bumped 1.4.4 → 1.4.5 since older Jason capped
+    `decimal` to `~> 1.0 or ~> 2.0`.
+
+No source-level changes since 0.6.8 — same `Mob.Camera.start_frame_stream/2`
+Android implementation and `Mob.Canvas` viewport docs, now actually on Hex.
+
 ## [0.6.8]
 
 ### Added
