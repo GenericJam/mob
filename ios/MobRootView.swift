@@ -221,7 +221,12 @@ struct MobNodeView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in MobNodeView(node: child) }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // fill_height: true lets a column flex to fill its parent so children
+                // with Spacer() or fill_height of their own can pin to the bottom.
+                // Without maxHeight the VStack hugs its content vertically and a
+                // trailing footer sits directly below the last child instead of the
+                // parent's bottom edge.
+                .frame(maxWidth: .infinity, maxHeight: node.fillHeight ? .infinity : nil, alignment: .topLeading)
                 .padding(node.paddingEdgeInsets)
                 .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
                 .ifLet(node.onTap) { view, tap in
