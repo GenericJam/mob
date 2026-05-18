@@ -1028,8 +1028,17 @@ private struct MobTextField: View {
         }
     }
 
+    @ViewBuilder
+    private var field: some View {
+        if node.isSecure {
+            SecureField(placeholder, text: $text)
+        } else {
+            TextField(placeholder, text: $text)
+        }
+    }
+
     var body: some View {
-        TextField(placeholder, text: $text)
+        field
             .focused($isFocused)
             .keyboardType(keyboardType)
             .submitLabel(submitLabel)
