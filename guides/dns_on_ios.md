@@ -34,6 +34,25 @@ first in the chain.
 
 ---
 
+## What mob already does for you
+
+Before any of this matters, `Mob.App.start/0` runs
+`Mob.App.configure_ios_inet_db/0` on iOS (both simulator and device),
+which switches the lookup chain to `[:file]` and seeds `localhost`.
+That's the minimum needed so `Node.connect`, `:erpc.call`, and
+`gen_tcp.connect/3` with a binary host don't crash the calling
+process on the first lookup. Apps don't have to do anything for
+distribution and local-loopback TCP to work.
+
+`Mob.DNS.configure_pure_beam/1` is the next step *on top of that* —
+it upgrades the chain to `[:file, :dns]` and seeds fallback
+nameservers so outbound HTTP to public hosts works. The framework
+default doesn't enable `:dns` because apps that don't talk to the
+public internet shouldn't pay for fallback-nameserver state they
+won't use.
+
+---
+
 ## Why this exists
 
 BEAM resolves hostnames the same way it always has: it spawns an

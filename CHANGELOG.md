@@ -24,6 +24,9 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   interaction with SwiftUI focus retention requires a `ZStack`-and-opacity
   rebuild of `MobTextField` and warrants its own change.
 
+### Fixed
+- iOS: `Mob.App.start/0` now switches `:inet_db` to file-only lookup and seeds `localhost` before any user code runs — BEAM's default `:native` lookup tries to `execve` the `inet_gethost` port program, which the iOS sandbox refuses, crashing the first `Node.connect` / `:erpc.call` / `gen_tcp.connect/3` with `:badarg`. Apps no longer need to set the lookup chain themselves; `Mob.DNS.configure_pure_beam/1` still composes on top for outbound DNS. See `guides/dns_on_ios.md`.
+
 ## [0.6.14]
 
 ### Added
