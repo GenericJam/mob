@@ -102,9 +102,8 @@ void mob_deliver_location(jlong pid, double lat, double lon, double acc, double 
 void mob_deliver_motion(jlong pid, double ax, double ay, double az, double gx, double gy, double gz,
                         long long ts);
 void mob_deliver_file_result(jlong pid, const char *event, const char *sub, const char *json_items);
-void mob_deliver_camera_frame(jlong pid, const unsigned char *bytes, size_t nbytes,
-                              int width, int height, const char *format,
-                              jlong timestamp_ms, jlong dropped);
+void mob_deliver_camera_frame(jlong pid, const unsigned char *bytes, size_t nbytes, int width,
+                              int height, const char *format, jlong timestamp_ms, jlong dropped);
 void mob_deliver_push_token(jlong pid, const char *token);
 void mob_deliver_notification(jlong pid, const char *json);
 void mob_set_launch_notification(const char *json);
