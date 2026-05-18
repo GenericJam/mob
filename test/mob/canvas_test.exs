@@ -245,4 +245,40 @@ defmodule Mob.CanvasTest do
       assert via_helper == via_literal
     end
   end
+
+  describe "coordinate system contract (pinned, for the renderer)" do
+    # These tests don't render anything — the actual viewport scaling
+    # happens in the host app's MobBridge.kt / MobBridge.swift. The
+    # tests pin the *contract* the renderer must honor, so that
+    # contract is captured in code and a future renderer rewrite has
+    # something concrete to test against.
+
+    test "coordinates are canvas-local logical units, not pixels" do
+      # A draw op at (width/2, height/2) must land in the center of
+      # the canvas regardless of the canvas's actual rendered pixel
+      # size. The wire format carries the logical numbers; the host
+      # renderer applies (size.pixels / declared_logical_units) per
+      # axis. See Mob.Canvas @moduledoc "Coordinate system" section.
+      op = Canvas.circle(320, 240, 10, color: :primary, fill: true)
+      assert op.x == 320
+      assert op.y == 240
+      # No density / scale information is encoded into the wire — the
+      # renderer derives it from the actual composable size at draw
+      # time.
+      refute Map.has_key?(op, :density)
+      refute Map.has_key?(op, :scale)
+    end
+
+    test "scalar sizes (stroke width, radius, text size) are logical units too" do
+      # The renderer must scale these by (sx + sy) / 2 so they don't
+      # squash when the viewport is non-square. The wire carries the
+      # raw numbers; no per-axis hint.
+      stroke = Canvas.line(0, 0, 100, 100, color: :primary, width: 4)
+      assert stroke.width == 4
+      refute Map.has_key?(stroke, :width_px)
+
+      circ = Canvas.circle(50, 50, 12, color: :primary)
+      assert circ.r == 12
+    end
+  end
 end
