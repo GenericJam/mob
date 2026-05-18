@@ -3,7 +3,11 @@ defmodule Mob.Dist do
   Platform-aware Erlang distribution startup.
 
   On iOS, distribution is started at BEAM launch via flags in mob_beam.m
-  (`-name mob_demo@127.0.0.1`), so nothing extra is needed here.
+  (`-name mob_demo@127.0.0.1`), so nothing extra is needed here. The
+  iOS node name is auto-suffixed per-simulator (from `SIMULATOR_UDID`)
+  and can be overridden via `MOB_NODE_SUFFIX` (forwarded by
+  `mix mob.deploy --node-suffix` via simctl's `SIMCTL_CHILD_*`
+  mechanism, planned).
 
   On Android, starting distribution at BEAM launch races with Android's hwui
   thread pool initialization (~125ms window), corrupting an internal mutex and
