@@ -316,6 +316,123 @@ supervisor (no independent OTP app), it's still a plugin.
 Mob.Storage. The plugin reads its own settings with
 `Mob.Plugin.get_setting(:mob_chat_kit, :default_channel)`.
 
+## Code-generated plugins (spec version 2+)
+
+Some plugins need to derive their contributions from the *host app's*
+configuration at compile time, not declare them statically. The
+canonical case is an Ash integration: define `N` Ash resources in
+the host app, and a `mob_ash` plugin generates `N × 3` screens (list,
+detail, form) plus any matching UI components — all baked into the
+build, not runtime.
+
+For these plugins the static `:screens` list isn't enough. Spec
+version 2 adds the `:screens_generator` field that returns the same
+shape at compile time:
+
+```elixir
+%{
+  name: :mob_ash,
+  mob_version: "~> 0.6",
+  plugin_spec_version: 2,   # bumped — requires v2
+  description: "Generate Mob screens from Ash resources",
+
+  # Either static (tier 3) or generated (this section), not both.
+  # Generator is {Module, :function, args}; mob_dev calls it during
+  # the compile step and uses the returned list as if it had been
+  # declared statically.
+  screens_generator: {MobAsh.ScreenGenerator, :generate, []},
+
+  ui_components: [
+    %{tag: "AshForm",  atom: :ash_form,  props: [:resource, :action, :record]},
+    %{tag: "AshList",  atom: :ash_list,  props: [:resource, :filter, :sort]},
+    %{tag: "AshField", atom: :ash_field, props: [:attribute, :record]}
+  ],
+
+  ios: %{swift_files: ["priv/native/ios/MobAshForm.swift", ...]},
+  android: %{composable_files: [...]}
+}
+```
+
+The generator function returns a list with the same shape as
+`:screens`:
+
+```elixir
+defmodule MobAsh.ScreenGenerator do
+  def generate do
+    # Read host app's Ash domain registration.
+    domains = MobDev.Plugin.host_config(:my_app, :ash_domains, [])
+
+    for domain <- domains,
+        resource <- domain.resources(),
+        screen <- [:list, :detail, :form] do
+      module = generated_module_name(resource, screen)
+      route  = generated_route(resource, screen)
+
+      # Actually create the module at compile time via Module.create/3.
+      create_screen_module(module, resource, screen)
+
+      %{module: module, default_route: route}
+    end
+  end
+end
+```
+
+`MobDev.Plugin.host_config/3` is the explicit, audited API for
+generators to read the host's `config :my_app, ...` during compile.
+Calls outside this surface (e.g. reading `mob.exs` directly,
+introspecting other plugins) require `:host_config_keys` declared
+in the manifest so the audit can verify what the generator touches.
+
+### Other generator fields
+
+Spec version 2 adds matching generator forms for any section that
+benefits from dynamic computation:
+
+- `:nifs_generator` — useful when the NIF set depends on host config
+  (e.g., conditionally include a feature)
+- `:ui_components_generator` — for plugins that synthesize components
+  from a schema (form-builders, data-bound widgets)
+
+A plugin can mix static and generator forms across different
+sections — static `:nifs` + generated `:screens` is fine.
+
+### Why generators at compile time, not runtime
+
+Mob plugins are statically merged for App Store / Play Store
+compatibility. Runtime plugin registration would require dynamic
+module loading which our build posture forbids. Compile-time
+generators produce real modules that ship in the binary the same as
+hand-written ones. Hot-push works for any pure-Elixir generated
+modules (same rule as static screens); native-touching generators
+require a rebuild.
+
+### What a host app looks like
+
+The Ash integration story for an end user:
+
+```elixir
+# mix.exs
+{:mob_ash, "~> 0.1"}
+
+# mob.exs
+config :mob, :plugins, [:mob_ash]
+
+# my_app.ex (the host's Ash domain)
+config :my_app, :ash_domains, [MyApp.Blog, MyApp.Auth]
+
+# That's it. Compile produces:
+#   MobAsh.Generated.Blog.Post.ListScreen
+#   MobAsh.Generated.Blog.Post.DetailScreen
+#   MobAsh.Generated.Blog.Post.FormScreen
+#   MobAsh.Generated.Auth.User.ListScreen
+#   ... etc, all baked into the build.
+```
+
+Adding a resource to the Ash domain regenerates its screen set on
+next compile. Removing one removes the screens. The host's
+`App.navigation/1` can either wire them up by convention or pick a
+subset.
+
 ## Install + activation flow
 
 Two-step opt-in by design.
@@ -515,3 +632,100 @@ A few choices to flag:
   build pins this. Plugins follow the same rule; the build embeds
   plugin NIFs into the host's `libpigeon.so`. Restrictive vs. React
   Native; necessary for App Store shipping.
+
+## Future: full-language plugins
+
+This section parks an idea that's coherent but explicitly out of
+scope for the current spec. Mob's lane is Elixir-first / BEAM-native
+(see `plugin_extraction_plan.md` "Scope"). A determined plugin author
+who wants to write entire screens in Python, Lua, JS, or any other
+language-with-an-embedded-interpreter could in principle build that
+on top of the plugin system — but the framework doesn't ship the
+glue.
+
+### What would be needed
+
+A new manifest concept — a **screen dispatcher**:
+
+```elixir
+%{
+  name: :mob_python_app,
+  mob_version: "~> 0.6",
+  plugin_spec_version: 3,   # speculative — not part of v2
+
+  requires: [:mob_pythonx],
+
+  screen_dispatcher: %{
+    kind: :python,
+    module: MobPythonApp.Dispatcher,
+    callbacks: [
+      mount: 3,
+      render: 1,
+      handle_event: 3
+    ]
+  }
+}
+```
+
+A screen registered with `kind: :python` would route its lifecycle
+callbacks through the dispatcher instead of expecting an Elixir
+module. The dispatcher resolves them however it wants — calling
+into the embedded Python interpreter, in this case.
+
+The user's authoring story would then look like:
+
+```python
+# app/screens/home.py
+import mob
+
+@mob.screen("home")
+class HomeScreen:
+    def mount(self, params, session):
+        return {"count": 0}
+
+    def render(self, assigns):
+        return mob.ui.column([
+            mob.ui.text(f"Count: {assigns['count']}"),
+            mob.ui.button("Tap", on_tap=("incr", None))
+        ])
+
+    def handle_event(self, name, _, assigns):
+        if name == "incr":
+            return {"count": assigns["count"] + 1}
+```
+
+### Why it's parked
+
+- **Lane discipline.** Mob's value rests on Elixir + BEAM
+  ergonomics. Diverting design effort into "Python frontends are
+  equally first-class" weakens the core lane without obviously
+  reaching parity with React Native / Flutter / native SDKs in their
+  own lanes.
+- **The hooks are conceptually clear; the implementation is
+  bottomless.** Sketching the screen-dispatcher takes a paragraph.
+  Making it actually pleasant (debugging, hot-reload across the
+  language seam, error attribution, asset bundling, IDE support) is
+  multi-month framework work. Worth doing only if the demand is
+  clear.
+- **The hybrid model captures the win without the cost.** Apps that
+  use Mob screens in Elixir but call into Rust (via `mob_rustler`)
+  or Python (via `mob_pythonx`) for specific concerns — ML, perf-
+  sensitive paths, scripting layers — get most of the benefit
+  without forcing the entire screen surface through an interpreter.
+  See `plugin_extraction_plan.md` "Scope" for the recommended
+  hybrid pattern.
+
+### What stays open
+
+- The plugin spec versioning leaves room. If a plugin author builds
+  a full Python (or Lua, JS, etc.) frontend on top of the current
+  spec, the framework can codify the screen-dispatcher concept in a
+  later spec bump without breaking anyone.
+- The BEAM-native path is unaffected. Gleam, LFE, Hamler, or any
+  BEAM language can already author Mob screens today — Mob's API is
+  just BEAM modules, the sigil is the only Elixir-flavoured part. A
+  `mob_gleam` ergonomic-wrappers plugin is a perfectly reasonable
+  community project that needs no framework changes.
+
+The door stays open. Walking through it is on the ambitious
+plugin author, not the framework.
