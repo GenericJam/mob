@@ -89,6 +89,28 @@ defmodule Mob.ThemeTest do
     end
   end
 
+  describe "flags_map/1" do
+    test "returns glass: false on default theme" do
+      assert Theme.flags_map(Theme.default()) == %{glass: false}
+    end
+
+    test "reflects glass: true override" do
+      assert Theme.flags_map(Theme.build(glass: true)) == %{glass: true}
+    end
+  end
+
+  describe "Mob.Theme.ObsidianGlass" do
+    test "is Obsidian with glass: true" do
+      t = Mob.Theme.ObsidianGlass.theme()
+      obsidian = Mob.Theme.Obsidian.theme()
+
+      assert t.glass == true
+      assert t.primary == obsidian.primary
+      assert t.surface == obsidian.surface
+      assert t.background == obsidian.background
+    end
+  end
+
   describe "color_map/1" do
     test "maps semantic names to their values" do
       m = Theme.color_map(Theme.default())

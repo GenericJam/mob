@@ -1055,6 +1055,13 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         if (cornerRadius)
             node.cornerRadius = [cornerRadius doubleValue];
 
+        // Liquid Glass opt-in — set by Mob.Renderer when the active theme
+        // has `glass: true`. MobBox swaps a solid background for
+        // `.glassEffect()` on iOS 26+, or `.ultraThinMaterial` on iOS 17–25.
+        id useGlass = props[@"glass"];
+        if (useGlass)
+            node.useGlass = [useGlass boolValue];
+
         id fillWidth = props[@"fill_width"];
         if (fillWidth)
             node.fillWidth = [fillWidth boolValue];
