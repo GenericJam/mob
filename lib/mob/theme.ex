@@ -155,6 +155,8 @@ defmodule Mob.Theme do
   @spec set(t() | module() | {module(), keyword()} | keyword()) :: :ok
   def set(%__MODULE__{} = theme) do
     Application.put_env(:mob, :theme, theme)
+    notify_native(theme)
+    :ok
   end
 
   def set(mod) when is_atom(mod) do
@@ -172,6 +174,54 @@ defmodule Mob.Theme do
   @doc "Return the currently active theme (or the neutral base if none is set)."
   @spec current() :: t()
   def current, do: Application.get_env(:mob, :theme, default())
+
+  @doc """
+  Returns the active theme's palette resolved to ARGB integers — semantic
+  tokens (`:primary`, `:on_surface`, …) walked through the theme's color
+  map and then through `Mob.Renderer.colors/0`. Used to push concrete
+  values to the native side (`Mob.Theme.set/1` does this automatically;
+  callers usually don't need to invoke this directly).
+  """
+  @spec resolved_palette(t()) :: %{atom() => non_neg_integer()}
+  def resolved_palette(theme \\ current()) do
+    palette = Mob.Renderer.colors()
+
+    theme
+    |> color_map()
+    |> Map.new(fn {key, value} -> {key, resolve_color(value, palette)} end)
+  end
+
+  defp resolve_color(value, palette) when is_atom(value) do
+    case Map.get(palette, value) do
+      nil -> value
+      int -> int
+    end
+  end
+
+  defp resolve_color(value, _palette) when is_integer(value), do: value
+  defp resolve_color(value, _palette), do: value
+
+  # Push the resolved palette + theme flags to the native side so Compose
+  # MaterialTheme / SwiftUI environment can follow runtime theme changes.
+  # Wrapped in try/rescue/catch because the NIF isn't loaded on the host
+  # BEAM (tests, IEx without a device) and we don't want `Mob.Theme.set/1`
+  # to crash in those contexts.
+  defp notify_native(theme) do
+    payload = Map.put(resolved_palette(theme), :_glass, theme.glass)
+    json = IO.iodata_to_binary(:json.encode(stringify_keys(payload)))
+
+    try do
+      :mob_nif.set_theme(json)
+    rescue
+      _ -> :ok
+    catch
+      _, _ -> :ok
+    end
+  end
+
+  defp stringify_keys(map) do
+    Map.new(map, fn {k, v} -> {Atom.to_string(k), v} end)
+  end
 
   @doc """
   Returns the current OS appearance: `:light` or `:dark`.

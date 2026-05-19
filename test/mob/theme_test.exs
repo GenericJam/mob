@@ -89,6 +89,49 @@ defmodule Mob.ThemeTest do
     end
   end
 
+  describe "resolved_palette/1" do
+    test "resolves atom tokens through theme + palette to ARGB ints" do
+      m = Theme.resolved_palette(Theme.build(primary: :emerald_500, on_primary: :white))
+      # emerald_500 = 0xFF10B981, white = 0xFFFFFFFF
+      assert m.primary == 0xFF10B981
+      assert m.on_primary == 0xFFFFFFFF
+    end
+
+    test "passes raw ARGB ints through unchanged" do
+      m = Theme.resolved_palette(Theme.build(primary: 0xFF7C3AED, surface: 0xFF16162A))
+      assert m.primary == 0xFF7C3AED
+      assert m.surface == 0xFF16162A
+    end
+
+    test "leaves unknown atom values intact (no palette match)" do
+      m = Theme.resolved_palette(Theme.build(primary: :corporate_pink))
+      assert m.primary == :corporate_pink
+    end
+
+    test "default theme resolves every token to an int" do
+      m = Theme.resolved_palette(Theme.default())
+
+      for {key, value} <- m do
+        assert is_integer(value), "expected #{key} to resolve to integer, got #{inspect(value)}"
+      end
+    end
+  end
+
+  describe "set/1 native push" do
+    setup do
+      on_exit(fn -> Mob.Theme.set(%Mob.Theme{}) end)
+      :ok
+    end
+
+    # set/1 calls :mob_nif.set_theme which isn't loaded on the host BEAM.
+    # The notify_native helper has to catch that without bubbling — anything
+    # else would break apps that call Mob.Theme.set/1 in unit tests.
+    test "does not crash on host BEAM (NIF stub absent)" do
+      assert :ok = Mob.Theme.set(Mob.Theme.build(primary: :emerald_500))
+      assert :ok = Mob.Theme.set(Mob.Theme.Obsidian)
+    end
+  end
+
   describe "flags_map/1" do
     test "returns glass: false on default theme" do
       assert Theme.flags_map(Theme.default()) == %{glass: false}

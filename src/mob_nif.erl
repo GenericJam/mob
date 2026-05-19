@@ -7,6 +7,7 @@
     log/1, log/2,
     set_transition/1,
     set_root/1,
+    set_theme/1,
     register_tap/1,
     clear_taps/0,
     exit_app/0,
@@ -134,6 +135,7 @@
     log/2,
     set_transition/1,
     set_root/1,
+    set_theme/1,
     register_tap/1,
     clear_taps/0,
     exit_app/0,
@@ -250,6 +252,14 @@ log(_Msg) -> erlang:nif_error(not_loaded).
 log(_Level, _Msg) -> erlang:nif_error(not_loaded).
 set_transition(_Trans) -> erlang:nif_error(not_loaded).
 set_root(_Json) -> erlang:nif_error(not_loaded).
+
+%% set_theme(JsonBinary) — push resolved theme palette to the native side.
+%% Lets Compose's MaterialTheme / SwiftUI environment follow runtime
+%% Mob.Theme.set/1 calls instead of being baked into the host project's
+%% MainActivity / app entry point. Called from Mob.Theme.set/1; the host
+%% bridge consumes via MobBridge.setTheme(json) on Android (no-op on iOS,
+%% which doesn't currently route Mob.Theme through native chrome).
+set_theme(_Json) -> erlang:nif_error(not_loaded).
 register_tap(_Pid) -> erlang:nif_error(not_loaded).
 clear_taps() -> erlang:nif_error(not_loaded).
 exit_app() -> erlang:nif_error(not_loaded).

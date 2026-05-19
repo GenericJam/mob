@@ -143,6 +143,7 @@ fn atomToAndroidPriority(env: ?*erts.ErlNifEnv, level_atom: erts.ERL_NIF_TERM) c
 pub const BridgeMethods = extern struct {
     cls: jni.JClass = null,
     set_root: jni.JMethodID = null,
+    set_theme: jni.JMethodID = null,
     move_to_back: jni.JMethodID = null,
     get_safe_area: jni.JMethodID = null,
     get_color_scheme: jni.JMethodID = null,
@@ -1762,6 +1763,30 @@ export fn nif_clipboard_get(
     }
     detachIfAttached(attached);
     return out;
+}
+
+// nif_set_theme/1 — push the resolved theme palette (as JSON) to Kotlin so
+// Compose MaterialTheme follows runtime `Mob.Theme.set/1` calls. The
+// `setTheme(String)` Bridge method is optional (older MobBridge templates
+// predate it); if the cache lookup at load time didn't find it, this
+// returns :ok without doing anything so apps don't crash on a theme push.
+export fn nif_set_theme(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.set_theme == null) return erts.ok(env);
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const json = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(json);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jjson = jni.newStringUTF(jenv, json);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.set_theme, jjson);
+    jni.deleteLocalRef(jenv, jjson);
+    detachIfAttached(attached);
+    return erts.ok(env);
 }
 
 // nif_open_url/1 — Intent ACTION_VIEW with the URI.
@@ -4578,6 +4603,11 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     // :light.
     cacheOptional(jenv, "getColorScheme", "()Ljava/lang/String;", &Bridge.get_color_scheme);
 
+    // setTheme() is optional — older MobBridge templates predate the
+    // BEAM-driven theme push. When absent, nif_set_theme just returns :ok
+    // and the host's MaterialTheme stays at whatever the app code set.
+    cacheOptional(jenv, "setTheme", "(Ljava/lang/String;)V", &Bridge.set_theme);
+
     if (!cacheRequired(jenv, "haptic", "(Ljava/lang/String;)V", &Bridge.haptic)) return -1;
     if (!cacheRequired(jenv, "clipboardPut", "(Ljava/lang/String;)V", &Bridge.clipboard_put)) return -1;
     if (!cacheRequired(jenv, "clipboardGet", "()Ljava/lang/String;", &Bridge.clipboard_get)) return -1;
@@ -4720,6 +4750,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "log", .arity = 2, .fptr = nif_log2, .flags = 0 },
     .{ .name = "set_transition", .arity = 1, .fptr = nif_set_transition, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
     .{ .name = "set_root", .arity = 1, .fptr = nif_set_root, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
+    .{ .name = "set_theme", .arity = 1, .fptr = nif_set_theme, .flags = 0 },
     .{ .name = "register_tap", .arity = 1, .fptr = nif_register_tap, .flags = 0 },
     .{ .name = "clear_taps", .arity = 0, .fptr = nif_clear_taps, .flags = 0 },
     .{ .name = "exit_app", .arity = 0, .fptr = nif_exit_app, .flags = 0 },
