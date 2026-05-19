@@ -38,6 +38,40 @@ defmodule Mob.SigilTest do
     end
   end
 
+  # ── UTF-8 handling ──────────────────────────────────────────────────────────
+
+  # Regression: `ascii_string([not: ?"])` in the parser double-encoded any
+  # byte ≥128 (each source byte was treated as a Latin-1 codepoint and
+  # re-encoded as UTF-8). Switching to `utf8_string/2` matches by codepoint
+  # and preserves the source bytes verbatim.
+  describe "UTF-8 in template source" do
+    test "en-dash literal in string attr is preserved byte-for-byte" do
+      node = ~MOB(<Text text="Agenda – May 23" />)
+      assert node.props.text == "Agenda – May 23"
+      assert byte_size(node.props.text) == 17
+    end
+
+    test "em-dash literal in string attr is preserved" do
+      node = ~MOB(<Text text="Live — coding" />)
+      assert node.props.text == "Live — coding"
+    end
+
+    test "middle dot, smart quotes, accents preserved" do
+      node = ~MOB(<Text text="Track 1 · café · “quoted”" />)
+      assert node.props.text == "Track 1 · café · “quoted”"
+    end
+
+    test "emoji preserved" do
+      node = ~MOB(<Text text="🚀 ship it" />)
+      assert node.props.text == "🚀 ship it"
+    end
+
+    test "non-ASCII literal inside {expr} string is preserved" do
+      node = ~MOB(<Text text={"Agenda – May 23"} />)
+      assert node.props.text == "Agenda – May 23"
+    end
+  end
+
   # ── self-closing: expression attributes ─────────────────────────────────────
 
   describe "self-closing with expression attrs" do
