@@ -69,6 +69,47 @@ The plan has three phases:
 
 Each phase has its own checklist below. Tick boxes as work lands.
 
+There's a **Phase 0** below — preconditions that must be true before
+the rest is productive. Do those first.
+
+## Phase 0 — Preconditions
+
+Done before Phase 1 begins. None of these are large; collectively
+they unblock the rest.
+
+- [ ] Design docs committed to master: `MOB_PLUGINS.md`,
+  `MOB_STYLES.md`, `MOB_PLUGIN_SECURITY.md`, this file. Push to
+  origin so the design is reviewable by anyone tracking the repo.
+- [ ] Premature implementation reverted from any active branches
+  (the in-flight Swift edits to `MobToggle` / `MobTextField` were
+  reverted on the material-3 worktree; the worktree itself should
+  be retired or repurposed — its branch name no longer matches the
+  work).
+- [ ] `plugins/` directory created at the working host's level
+  (initial host: `mob_m3_test`). This is where the Phase 1
+  prototype `path:` deps will live.
+- [ ] **Rustler env-var fix tested and confirmed working on a
+  physical Android device.** This unblocks the tier-1.5 Rust NIF
+  prototype in Phase 1 and the eventual `mob_rustler` extraction
+  in Wave 1.5. Brief: `agent_briefs/rustler_env_var_test.md`.
+- [ ] `MobDev.Plugin.host_config/3` API stubbed (can be a one-line
+  `Application.get_env/3` wrapper for now — the point is the call
+  surface exists so Phase 1 prototypes can use it). The spec-v2
+  generator prototypes need this.
+
+These preconditions are independent and parallelizable. Items 1-3
+and 5 are author-driven (Kevin or in-conversation work). Item 4 is
+delegated to the agent brief.
+
+### Phase 0 exit criteria
+
+- [ ] Design corpus visible on `origin/master`.
+- [ ] `plugins/` directory exists, ready to receive `path:`-deps.
+- [ ] At least one rustler-based NIF demo deploys to a physical
+  Android device and resolves `enif_*` symbols correctly.
+- [ ] `MobDev.Plugin.host_config/3` callable from a generated
+  context (verified by a trivial test reading a known config key).
+
 ## Phase 1 — Prototype plugins
 
 Six local-only packages under `plugins/` in the working directory,
@@ -244,6 +285,24 @@ the *trust model and manifest-signing format* should be locked before
 extracting modules that previously enjoyed implicit trust as part of
 core.
 
+### Phase 2 exit criteria
+
+- [ ] `mix mob.audit_plugins` runs against the Phase 1 prototypes
+  and produces correct results (clean findings for the well-behaved
+  ones; flagged findings for any deliberately-crafted test cases).
+- [ ] Manifest signing format locked: format documented in
+  `MOB_PLUGIN_SECURITY.md` is stable; reference implementation
+  signs + verifies a prototype manifest end-to-end.
+- [ ] Capability enforcement demonstrably refuses to merge an
+  undeclared iOS framework or Android permission. Test by adding
+  an undeclared framework to a prototype's source and confirming
+  the build fails with a clear error.
+- [ ] `:acknowledge_unsafe_plugins` flow works: building with an
+  unsigned plugin without the acknowledgement fails; with it,
+  succeeds + prints the persistent banner.
+- [ ] `mix mob.plugins` output shows signing/audit/vetting status
+  for each installed plugin.
+
 ## Phase 3 — Extraction waves
 
 Once Phase 1 + Phase 2's manifest signing is in place, migrate
@@ -344,6 +403,26 @@ The framework's job is to make sure these compose cleanly — a mob
 app should be able to install `mob_llm` + `mob_speech` +
 `mob_agent_kit` and have them work together without per-pair glue.
 
+### Phase 3 exit criteria
+
+Per-wave exit criteria — a wave isn't done until all of these hold
+for every plugin in it:
+
+- [ ] Plugin is a real Hex package (or stable git tag), versioned,
+  documented, hexdocs published.
+- [ ] In-core module replaced with a deprecation shim that
+  re-exports from the new plugin for one minor cycle (with a
+  deprecation warning), then removed in the cycle after.
+- [ ] Contract tests demonstrate parity with the previous in-core
+  behavior — same API surface, same return shapes.
+- [ ] `mob_new` generator updated to depend on the plugin via the
+  wizard's opt-in question.
+- [ ] CHANGELOG and migration notes published.
+
+Phase 3 as a whole is done when every wave's plugins are landed +
+the deprecation shims are removed. Realistically a multi-quarter
+process; expect to release intermediate mob versions during.
+
 ## What stays in core, finalised
 
 Re-stated here so the boundary is explicit.
@@ -403,8 +482,87 @@ testable.
   constraint fails needs polish — clear "this plugin needs an
   update" message + suggested action.
 
+## Risk register
+
+Top risks worth tracking. Listed with current mitigation thinking; revisit when each phase begins.
+
+- **Phase 1 surfaces a manifest design flaw.** Building the seven
+  prototypes is the test of whether `MOB_PLUGINS.md` / `MOB_STYLES.md`
+  hold up. *Mitigation:* prototypes are local `path:` deps, not
+  published — the manifest spec can revise via spec_version bump
+  before any plugin is in user hands.
+- **Native build complexity for tier-1.5 (Rust, Python) plugins.**
+  Cross-target toolchain coordination is hairy. *Mitigation:* the
+  rustler env-var fix (Phase 0) confirms the static-link path works
+  end-to-end; Pythonx is already running on-device in the existing
+  codebase, so the extraction is reorganization, not new R&D.
+- **Plugin combinatorial blow-up.** With 20+ plugins on Hex, pairwise
+  testing is intractable. *Mitigation:* per `MOB_STYLES.md`, the
+  cascade is computed Elixir-side and native dispatch is a flat
+  table — plugins compose by construction, not by ad-hoc glue. CI
+  matrix is "no plugins" + "all common combinations" + per-plugin.
+- **Migration friction for existing Mob apps.** When `lib/mob/bt.ex`
+  moves to `mob_bluetooth`, every app using `Mob.Bt` breaks.
+  *Mitigation:* one-cycle deprecation shim re-exporting the moved
+  module. Concrete pattern documented per-wave in Phase 3.
+- **Supply-chain trust expectations exceed what we can guarantee.**
+  `MOB_PLUGIN_SECURITY.md` is explicit that mob is not a sandbox and
+  the curated allowlist isn't gatekept entry. *Mitigation:*
+  prominently surface the trust model + non-promises in user docs;
+  don't oversell.
+- **filmor / rustler upstream relationship.** The PR may stall or
+  not land; the env-var approach may need iteration. *Mitigation:*
+  the `GenericJam/rustler` fork already exists; users can pin to it
+  via `[patch.crates-io]` indefinitely if upstream doesn't merge.
+  Worst case is a maintained fork.
+- **Time to value.** Phase 3 is multi-quarter. Users and contributors
+  may lose interest if there's nothing concrete to point at.
+  *Mitigation:* Phase 1 prototypes produce visible deliverables in
+  weeks, not months. The `mob_m3` style package (a fast Wave 4 win)
+  is a flagship that motivates the work.
+
+## Kickoff checklist
+
+Day-1 concrete actions, in order. Tick as work starts.
+
+- [ ] Push the design corpus (this file + `MOB_PLUGINS.md` +
+  `MOB_STYLES.md` + `MOB_PLUGIN_SECURITY.md`) from local master to
+  `origin/master`. The commits are already landed locally; this
+  publishes them.
+- [ ] Hand off `agent_briefs/rustler_env_var_test.md` to a coding
+  agent. It runs in parallel; results come back independently.
+- [ ] Create `mob_m3_test/plugins/` directory.
+- [ ] Scaffold `plugins/mob_palette_demo` (tier 0 — easiest). Confirm
+  `mix.exs` + `mix compile` accept it as a `path:` dep with no
+  manifest. This validates the lowest-friction plugin shape.
+- [ ] Stub `MobDev.Plugin.host_config/3` in `mob_dev` as a one-line
+  wrapper around `Application.get_env/3`. Commit + bump mob_dev
+  patch version.
+- [ ] Decide the working host for Phase 1: `mob_m3_test` (current
+  test app) or a dedicated `mob_plugin_demo` repo. The latter
+  decouples plugin-system iteration from theme work but adds repo
+  overhead. Default to the current `mob_m3_test` unless there's a
+  reason to split.
+
+After this checklist, Phase 1 prototypes start landing one at a
+time. Order suggestion (easiest → hardest):
+
+1. `mob_palette_demo` (tier 0 — no manifest)
+2. `mob_demo_haptic_extras` (tier 1 — NIF baseline)
+3. `mob_demo_signature_pad` (tier 2 — new component)
+4. `mob_style_neutral_loud` (style — exercises `MOB_STYLES.md`)
+5. `mob_demo_kv_browser` (tier 3 — multi-screen)
+6. `mob_demo_uptime_kit` (tier 4 — sub-app)
+7. `mob_demo_ash_resources` (code-generated — depends on
+   `host_config/3` stub)
+8. `mob_demo_rust_nif` (tier 1.5 — depends on Phase 0 rustler fix)
+
+Items 7 and 8 are unblocked by Phase 0 work; you can start in any
+order once Phase 0 lands.
+
 ## Status
 
+Phase 0: in design.
 Phase 1: not started.
-Phase 2 (design): `MOB_PLUGIN_SECURITY.md` stub written; implementation pending.
-Phase 3: blocked on Phase 1.
+Phase 2 (design): captured in `MOB_PLUGIN_SECURITY.md`; implementation pending.
+Phase 3: blocked on Phase 1 + Phase 2's manifest signing.
