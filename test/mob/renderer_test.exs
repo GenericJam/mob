@@ -955,4 +955,83 @@ defmodule Mob.RendererTest do
       assert op["cap"] == "round"
     end
   end
+
+  describe "theme glass flag" do
+    setup do
+      on_exit(fn -> Mob.Theme.set(%Mob.Theme{}) end)
+      :ok
+    end
+
+    defp box_with_background do
+      %{
+        type: :box,
+        props: %{background: :surface},
+        children: [%{type: :text, props: %{text: "card"}, children: []}]
+      }
+    end
+
+    defp set_root_json do
+      MockNIF.calls()
+      |> Enum.find_value(fn
+        {:set_root, [json]} -> :json.decode(json)
+        _ -> nil
+      end)
+    end
+
+    test "Box with a background gets glass: true when theme.glass is on" do
+      Mob.Theme.set(glass: true)
+      Renderer.render(box_with_background(), :ios, MockNIF)
+
+      tree = set_root_json()
+      assert tree["type"] == "box"
+      assert tree["props"]["glass"] == true
+    end
+
+    test "Box with no background does NOT get glass: true (nothing to swap)" do
+      Mob.Theme.set(glass: true)
+
+      Renderer.render(
+        %{type: :box, props: %{}, children: []},
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      refute Map.has_key?(tree["props"], "glass")
+    end
+
+    test "non-box surface-style nodes are NOT marked (text, scroll, column)" do
+      Mob.Theme.set(glass: true)
+
+      Renderer.render(
+        %{
+          type: :column,
+          props: %{background: :surface},
+          children: [%{type: :text, props: %{text: "x", background: :surface}, children: []}]
+        },
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      refute Map.has_key?(tree["props"], "glass")
+      refute Map.has_key?(hd(tree["children"])["props"], "glass")
+    end
+
+    test "default theme (glass: false) emits no glass prop" do
+      Mob.Theme.set(%Mob.Theme{})
+      Renderer.render(box_with_background(), :ios, MockNIF)
+
+      tree = set_root_json()
+      refute Map.has_key?(tree["props"], "glass")
+    end
+
+    test "Mob.Theme.ObsidianGlass triggers the flag at the boundary" do
+      Mob.Theme.set(Mob.Theme.ObsidianGlass)
+      Renderer.render(box_with_background(), :ios, MockNIF)
+
+      tree = set_root_json()
+      assert tree["props"]["glass"] == true
+    end
+  end
 end

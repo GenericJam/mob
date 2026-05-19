@@ -106,7 +106,20 @@ defmodule Mob.Theme do
     radius_sm: 6,
     radius_md: 10,
     radius_lg: 16,
-    radius_pill: 100
+    radius_pill: 100,
+
+    # ── Material / effect flags ────────────────────────────────────────────
+    # When true, surface-style nodes (currently `Box` with a `background:` set)
+    # render with a translucent material instead of a solid fill:
+    #
+    #   * iOS 26+: Liquid Glass via `.glassEffect()`
+    #   * iOS 17–25: graceful fallback to `.ultraThinMaterial` background
+    #   * Android: no-op (the flag is plumbed but Material 3's glassy-surface
+    #     story isn't first-class yet — left as a follow-up)
+    #
+    # Off by default; opt in via a preset (`Mob.Theme.ObsidianGlass`) or by
+    # passing `glass: true` to `Mob.Theme.build/1`.
+    glass: false
   ]
 
   @type t :: %__MODULE__{}
@@ -207,6 +220,10 @@ defmodule Mob.Theme do
   def spacing_map(%__MODULE__{space_scale: scale}) do
     Map.new(@spacing_base, fn {k, v} -> {k, round(v * scale)} end)
   end
+
+  @doc false
+  @spec flags_map(t()) :: %{atom() => boolean()}
+  def flags_map(%__MODULE__{glass: glass}), do: %{glass: glass}
 
   @doc false
   @spec radius_map(t()) :: %{atom() => non_neg_integer()}
