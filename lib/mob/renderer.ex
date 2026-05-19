@@ -225,7 +225,9 @@ defmodule Mob.Renderer do
       colors: Theme.color_map(theme),
       spacing: Theme.spacing_map(theme),
       radii: Theme.radius_map(theme),
-      type_scale: theme.type_scale
+      type_scale: theme.type_scale,
+      flags: Theme.flags_map(theme),
+      platform: platform
     }
 
     nif.clear_taps()
@@ -254,13 +256,29 @@ defmodule Mob.Renderer do
   defp prepare(%{type: type, props: props, children: children}, nif, platform, ctx) do
     defaults = Map.get(@component_defaults, type, %{})
     with_defaults = Map.merge(defaults, props)
+    with_theme_flags = inject_theme_flags(type, with_defaults, ctx)
 
     %{
       "type" => Atom.to_string(type),
-      "props" => prepare_props(with_defaults, nif, platform, ctx),
+      "props" => prepare_props(with_theme_flags, nif, platform, ctx),
       "children" => Enum.map(children, &prepare(&1, nif, platform, ctx))
     }
   end
+
+  # When the active theme has `glass: true`, mark surface-style nodes so the
+  # native side can swap solid fills for a translucent material (Liquid Glass
+  # on iOS 26+; ultraThinMaterial on iOS 17–25). Only iOS reads the flag
+  # today; Android receives it but ignores it (Material 3 doesn't have a
+  # first-class glassy surface yet).
+  #
+  # A node is "surface-style" if it has a `background:` set — that's what
+  # the user perceives as a card / sheet. Other nodes (text, scroll, etc.)
+  # pass through untouched.
+  defp inject_theme_flags(:box, props, %{flags: %{glass: true}}) do
+    if Map.has_key?(props, :background), do: Map.put(props, :glass, true), else: props
+  end
+
+  defp inject_theme_flags(_type, props, _ctx), do: props
 
   defp prepare_props(props, nif, platform, ctx) do
     # 1. Merge any %Mob.Style{} under the :style key (inline props win)
