@@ -177,6 +177,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, nullable) UIColor *borderColor;
 @property(nonatomic) CGFloat borderWidth; // pt; default 0 = no border
 
+// Liquid Glass opt-in (set by Mob.Renderer when the active theme has
+// `glass: true` AND the node has a `background:`). MobBox replaces the
+// solid fill with `.glassEffect()` on iOS 26+, falling back to
+// `.ultraThinMaterial` on iOS 17–25. The original `backgroundColor` is
+// preserved so the swap can be undone at runtime by toggling the theme.
+@property(nonatomic) BOOL useGlass;
+
 // image
 @property(nonatomic, copy, nullable) NSString *src;
 @property(nonatomic, copy, nonnull) NSString *contentModeStr; // "fit" | "fill" | "stretch"

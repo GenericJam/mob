@@ -507,7 +507,7 @@ private struct MobBox: View {
             }
         }
         .padding(node.paddingEdgeInsets)
-        .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
+        .mobBoxBackground(node: node)
         .overlay(
             // Border opt-in via border_color + border_width on the BEAM side.
             // When width is 0 (default) the stroke draws nothing — no perf cost.
@@ -524,6 +524,34 @@ private struct MobBox: View {
         }
         .mobGestures(node)
         // (offset is applied uniformly by MobNodeView's body; not here)
+    }
+}
+
+// Backgrounds for `MobBox`. When the active theme has `glass: true` the BEAM
+// renderer sets `useGlass` on every box that has a `background:` so we swap
+// the solid fill for a translucent material. Liquid Glass landed on iOS 26;
+// on older systems we fall back to `.ultraThinMaterial` (visually similar,
+// less expensive). Without `useGlass` the original solid behaviour is kept.
+private extension View {
+    @ViewBuilder
+    func mobBoxBackground(node: MobNode) -> some View {
+        let radius = node.cornerRadius
+        let shape: AnyShape =
+            radius > 0
+            ? AnyShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+            : AnyShape(Rectangle())
+
+        if node.useGlass {
+            // Liquid Glass on iOS 26+; otherwise the closest visual approximation
+            // that ships in older system SDKs.
+            if #available(iOS 26.0, *) {
+                self.glassEffect(.regular, in: shape)
+            } else {
+                self.background(.ultraThinMaterial, in: shape)
+            }
+        } else {
+            self.background(node.backgroundColor.map { Color($0) } ?? Color.clear)
+        }
     }
 }
 
