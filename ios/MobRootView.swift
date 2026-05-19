@@ -544,8 +544,13 @@ private extension View {
         if node.useGlass {
             // Liquid Glass on iOS 26+; otherwise the closest visual approximation
             // that ships in older system SDKs.
+            //
+            // `Glass.clear` (vs `Glass.regular`) — the surface is noticeably
+            // more transparent; what's behind shows through. Card-style
+            // surfaces look "floating" rather than "frosted". Switch to
+            // `.regular` if a tinted, opaque-leaning glass is wanted.
             if #available(iOS 26.0, *) {
-                self.glassEffect(.regular, in: shape)
+                self.glassEffect(.clear, in: shape)
             } else {
                 self.background(.ultraThinMaterial, in: shape)
             }
