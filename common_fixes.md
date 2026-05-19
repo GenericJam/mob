@@ -125,19 +125,50 @@ Then after crash: `adb shell "run-as com.mob.demo cat /data/user/0/com.mob.demo/
 
 ## iOS BEAM crashes with `eaddrinuse` when Android is also connected
 
-**Symptom**: iOS simulator app exits immediately. `xcrun simctl launch --console` shows:
+**Symptom**: iOS simulator app exits immediately after launch — sim returns to
+the home screen, no app UI ever renders. No crash report. `Documents/beam_stdout.log`
+inside the sim's app container (or `xcrun simctl launch --console`) shows:
 `Protocol 'inet_tcp': register/listen error: eaddrinuse`
 
-**Root cause**: `mob_beam.m` defaults to dist port 9100 when `MOB_DIST_PORT` is not set.
-When an Android device is connected, `adb forward tcp:9100 tcp:9100` is active and holds
-port 9100 on localhost. The iOS BEAM tries to bind the same port for Erlang distribution
-and fails.
+**Root cause**: When an Android device or emulator is connected, `mob_dev`'s
+Tunnel sets up `adb forward tcp:9100 tcp:9100` (and 9101+ for additional
+devices) which binds those ports on `127.0.0.1`. iOS simulators share the
+Mac's network stack, so any sim trying to bind the same port collides.
 
-**Fix**: Default iOS dist port changed from 9100 → 9101 in `mob/ios/mob_beam.m`.
-Per the port assignment scheme: Android = 9100, iOS sim = 9101.
-Requires a native rebuild (`mix mob.deploy --native --ios`).
+`mob_beam.m`'s default is 9101 (good), but `mob_dev`'s `MobDev.Discovery.IOS.launch_app/3`
+and `MobDev.Tunnel.dist_port/1` actively set `SIMCTL_CHILD_MOB_DIST_PORT` per-device
+starting at 9100, overriding the safe default. Single-device iOS-sim deploys
+(`mix mob.deploy --device <udid>`) hit index 0 → port 9100 → collision.
 
-**Fixed in**: `mob/ios/mob_beam.m` (2026-04-14).
+**Workaround**: Pass an explicit port outside the adb forward range:
+
+```bash
+mix mob.deploy --device <ios-sim-udid> --dist-port 9200
+```
+
+The `--dist-port` flag landed in `mob_dev 0.5.10` (paired with `mob 0.6.10`'s
+`MOB_NODE_SUFFIX` env var support).
+
+**Diagnostic first-pass** when an iOS sim launches and immediately dies:
+
+```bash
+lsof -nP -iTCP:9100-9199 -sTCP:LISTEN | grep adb
+```
+
+Anything held by adb is poisoned for sim use until the Android device is
+unplugged or the auto-allocator routes around it.
+
+**Real fix (open)**: `MobDev.Tunnel` should base iOS-sim dist ports above the
+adb forward range (e.g. 9200+) so the auto-allocator is collision-free without
+needing `--dist-port`. The 2026-04-14 fix in `mob_beam.m` (default port 9100 →
+9101) was correct for the env-var-not-set path but mob_dev now actively sets
+the env var, so the framework-side default no longer protects.
+
+**Surfaced in**: `guides/troubleshooting.md` ("iOS simulator: BEAM dies silently
+when an Android device is also connected") and `~/.claude/.../memory/feedback_ios_sim_adb_port_collision.md`.
+
+**Fixed in**: `mob/ios/mob_beam.m` default (2026-04-14). Regressed via mob_dev
+launcher setting the env var explicitly; rediscovered 2026-05-19.
 
 ---
 
