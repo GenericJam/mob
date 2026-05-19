@@ -8,6 +8,17 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.6.14]
+
+### Added
+- **`:mob_nif.set_theme/1` — push resolved theme palette to native.** Lets a Compose `MaterialTheme` wrapper follow runtime `Mob.Theme.set(...)` calls instead of being baked into MainActivity at compile time. Otherwise Material 3 system chrome (NavigationBar, Button, etc.) stays at the default light scheme while the BEAM-side primitives switch to whatever theme is active — a visible mismatch when an app uses Obsidian / ObsidianGlass.
+- **`Mob.Theme.resolved_palette/1`** — exposes the "semantic token → theme map → palette → ARGB int" resolution path that the renderer uses internally. The native side gets concrete integers it can hand to `Color(...)` directly.
+
+### Notes
+- iOS implements the NIF as a no-op for symmetry — SwiftUI in `MobRootView.swift` renders every surface via mob primitives with explicit color props, so there's no system chrome that needs the push.
+- The Android `MobBridge.setTheme(String)` Java hook is looked up via `cacheOptional`, so older templates that predate this load fine; the NIF just returns `:ok` without dispatching when the method isn't on the bridge.
+- The mob_new generator templates that wire `MaterialTheme` ↔ `setTheme` in newly-generated apps will follow in a separate release; existing apps adopt manually (a `MutableState` in MobBridge.kt + `MaterialTheme(colorScheme = …)` wrap in MainActivity.kt).
+
 ## [0.6.13]
 
 ### Changed
