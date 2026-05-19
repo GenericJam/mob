@@ -1779,6 +1779,19 @@ static ERL_NIF_TERM nif_set_transition(ErlNifEnv *env, int argc, const ERL_NIF_T
 // Accepts a JSON binary, parses it to a MobNode tree, and pushes it to the
 // SwiftUI view model. Runs on the BEAM thread — MobViewModel dispatches to main.
 
+// nif_set_theme/1 — accept the resolved theme palette (as JSON) from
+// Mob.Theme.set/1 and push it to the SwiftUI side. iOS doesn't use system
+// chrome whose appearance depends on a global theme (we render every
+// surface via mob's primitives with explicit color props), so the iOS
+// implementation is a no-op that just confirms receipt. Kept here for
+// symmetry with the Android implementation, which needs it to drive
+// Material 3's NavigationBar / Button colour scheme.
+static ERL_NIF_TERM nif_set_theme(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    return enif_make_atom(env, "ok");
+}
+
 static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifBinary bin;
     if (!enif_inspect_binary(env, argv[0], &bin) &&
@@ -6410,6 +6423,7 @@ static ErlNifFunc nif_funcs[] = {
     {"log", 2, nif_log2, 0},
     {"set_transition", 1, nif_set_transition, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"set_root", 1, nif_set_root, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"set_theme", 1, nif_set_theme, 0},
     {"register_tap", 1, nif_register_tap, 0},
     {"clear_taps", 0, nif_clear_taps, 0},
     {"exit_app", 0, nif_exit_app, 0},
