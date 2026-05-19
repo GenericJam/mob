@@ -215,6 +215,153 @@ end
 
 iOS uses `AVAudioPlayer` / `AVPlayer`. Android uses `MediaPlayer`.
 
+## iOS Foundation Models
+
+Generates text with Apple's on-device Foundation Models framework.
+Requires an eligible physical device with Apple Intelligence enabled; the iOS
+simulator reports this capability as unavailable.
+
+Apple docs:
+[Foundation Models](https://developer.apple.com/documentation/foundationmodels) and
+[Adding intelligent app features with generative models](https://developer.apple.com/documentation/foundationmodels/adding-intelligent-app-features-with-generative-models).
+
+```elixir
+socket =
+  Mob.IOS.FoundationModels.generate_text(socket, "Turn this note into a short action list",
+    instructions: "Return compact plain text.",
+    temperature: 0.2,
+    maximum_response_tokens: 240
+  )
+
+def handle_info({:foundation_models, :generated_text, %{text: text}}, socket) do
+  {:noreply, Mob.Socket.assign(socket, :result, text)}
+end
+
+def handle_info({:foundation_models, :error, %{reason: reason}}, socket) do
+  {:noreply, Mob.Socket.assign(socket, :error, reason)}
+end
+```
+
+## iOS Vision text recognition
+
+Recognizes text in a local image file with Apple's Vision framework. Combine
+with `Mob.Photos.pick/2` to OCR a user-selected image.
+
+Apple docs:
+[VNRecognizeTextRequest](https://developer.apple.com/documentation/vision/vnrecognizetextrequest).
+
+```elixir
+socket =
+  Mob.Photos.pick(socket, max: 1, types: [:image])
+
+def handle_info({:photos, :picked, [%{path: path} | _]}, socket) do
+  socket =
+    Mob.IOS.Vision.recognize_text(socket, path,
+      recognition_level: :accurate,
+      uses_language_correction: true
+    )
+
+  {:noreply, socket}
+end
+
+def handle_info({:vision, :recognized_text, %{text: text}}, socket) do
+  {:noreply, Mob.Socket.assign(socket, :ocr_text, text)}
+end
+```
+
+## iOS Speech transcription
+
+Transcribes an existing audio file with Apple's Speech framework. Use
+`Mob.Audio` to record microphone input first, then transcribe the saved
+recording path.
+
+Apple docs:
+[SFSpeechRecognizer](https://developer.apple.com/documentation/speech/sfspeechrecognizer) and
+[SFSpeechURLRecognitionRequest](https://developer.apple.com/documentation/speech/sfspeechurlrecognitionrequest).
+
+```elixir
+socket = Mob.Audio.start_recording(socket, format: :aac, quality: :high)
+socket = Mob.Audio.stop_recording(socket)
+
+def handle_info({:audio, :recorded, %{path: path}}, socket) do
+  socket =
+    Mob.IOS.Speech.transcribe_audio(socket, path,
+      locale: "en-US",
+      requires_on_device_recognition: false
+    )
+
+  {:noreply, socket}
+end
+
+def handle_info({:speech, :transcribed_audio, %{text: text}}, socket) do
+  {:noreply, Mob.Socket.assign(socket, :transcript, text)}
+end
+```
+
+Speech recognition requires iOS speech authorization. If
+`requires_on_device_recognition` is true, iOS may reject locales that do not
+support local recognition.
+
+### iOS native intelligence testing
+
+| Capability | iOS simulator | Physical iPhone |
+|---|---:|---:|
+| `Mob.IOS.FoundationModels.generate_text/3` | No. The simulator does not provide the on-device system language model. | Yes, on Apple Intelligence-capable devices with Apple Intelligence enabled and the model ready. |
+| `Mob.IOS.Vision.recognize_text/3` | Yes. Pass a readable image path in the simulator app container or pick a simulator photo. | Yes. |
+| `Mob.IOS.Speech.transcribe_audio/3` | Usually yes for file transcription, subject to simulator Speech authorization and runtime locale/service availability. | Yes, subject to Speech authorization and locale support. |
+
+The lightest simulator smoke test is:
+
+1. Build a Mob app that exposes a screen with `Mob.Photos.pick/2` and calls
+   `Mob.IOS.Vision.recognize_text/3` with the selected photo path.
+2. Add a photo with readable text to the simulator photo library, select it in
+   the picker, and confirm OCR returns the expected text.
+3. Build two audio actions: one calls `Mob.Audio.start_recording/2`; the other
+   calls `Mob.Audio.stop_recording/1`. Pass the recorded file path from
+   `{:audio, :recorded, %{path: path}}` to `Mob.IOS.Speech.transcribe_audio/3`.
+4. Confirm Foundation Models returns the expected simulator-unavailable error.
+
+For path-based debugging in a simulator app that is already installed, the
+useful setup commands are:
+
+```sh
+SIM_ID="booted"
+BUNDLE_ID="com.example.my_mob_app"
+CONTAINER="$(xcrun simctl get_app_container "$SIM_ID" "$BUNDLE_ID" data)"
+
+cp ./ocr_fixture.png "$CONTAINER/Documents/ocr_fixture.png"
+```
+
+Then pass the copied path to the app:
+
+```elixir
+image_path = "/path/from/xcrun/simctl/get_app_container/Documents/ocr_fixture.png"
+Mob.IOS.Vision.recognize_text(socket, image_path)
+```
+
+For Speech, recording inside the Mob app is the most representative smoke test:
+
+```elixir
+socket = Mob.Audio.start_recording(socket)
+socket = Mob.Audio.stop_recording(socket)
+
+def handle_info({:audio, :recorded, %{path: path}}, socket) do
+  {:noreply, Mob.IOS.Speech.transcribe_audio(socket, path)}
+end
+```
+
+### Scope and follow-up ideas
+
+This first bridge includes plain Foundation Models text generation, Vision OCR
+from a local image path, and Speech transcription from a local audio file.
+
+Not included yet: Foundation Models structured generation with `@Generable`,
+streaming partial Foundation Models responses, tool calling, multi-turn session
+persistence, Vision requests beyond text recognition, live Speech recognition,
+custom Speech language models, Natural Language framework features, image
+generation, Private Cloud Compute-backed server features, and Android ML Kit or
+platform-equivalent implementations.
+
 ## Location
 
 Requires `:location` permission.

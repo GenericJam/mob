@@ -1992,6 +1992,122 @@ static ERL_NIF_TERM nif_share_text(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
     return enif_make_atom(env, "ok");
 }
 
+// ── Native text capability helpers ─────────────────────────────────────────
+
+static NSString *mob_native_text_string_arg(ErlNifEnv *env, ERL_NIF_TERM term) {
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, term, &bin) &&
+        !enif_inspect_iolist_as_binary(env, term, &bin))
+        return nil;
+
+    return [[NSString alloc] initWithBytes:bin.data length:bin.size encoding:NSUTF8StringEncoding];
+}
+
+static ERL_NIF_TERM mob_native_text_make_utf8_binary(ErlNifEnv *env, NSString *text) {
+    const char *utf8 = text ? text.UTF8String : "";
+    size_t len = utf8 ? strlen(utf8) : 0;
+    ErlNifBinary bin;
+    enif_alloc_binary(len, &bin);
+    if (len > 0)
+        memcpy(bin.data, utf8, len);
+    return enif_make_binary(env, &bin);
+}
+
+static void mob_native_text_send_success(ErlNifPid pid, const char *family, const char *event,
+                                         NSString *text) {
+    ErlNifEnv *e = enif_alloc_env();
+    ERL_NIF_TERM keys[1] = {enif_make_atom(e, "text")};
+    ERL_NIF_TERM vals[1] = {mob_native_text_make_utf8_binary(e, text)};
+    ERL_NIF_TERM payload;
+    enif_make_map_from_arrays(e, keys, vals, 1, &payload);
+    ERL_NIF_TERM msg = enif_make_tuple3(e, enif_make_atom(e, family), enif_make_atom(e, event), payload);
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+}
+
+static void mob_native_text_send_error(ErlNifPid pid, const char *family, const char *operation,
+                                       NSString *reason) {
+    ErlNifEnv *e = enif_alloc_env();
+    ERL_NIF_TERM keys[2] = {enif_make_atom(e, "operation"), enif_make_atom(e, "reason")};
+    ERL_NIF_TERM vals[2] = {enif_make_atom(e, operation), mob_native_text_make_utf8_binary(e, reason)};
+    ERL_NIF_TERM payload;
+    enif_make_map_from_arrays(e, keys, vals, 2, &payload);
+    ERL_NIF_TERM msg = enif_make_tuple3(e, enif_make_atom(e, family), enif_make_atom(e, "error"), payload);
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+}
+
+static ERL_NIF_TERM nif_foundation_models_generate_text(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    // Apple Foundation Models:
+    // https://developer.apple.com/documentation/foundationmodels
+    NSString *prompt = mob_native_text_string_arg(env, argv[0]);
+    NSString *optionsJSON = mob_native_text_string_arg(env, argv[1]);
+    if (!prompt || !optionsJSON)
+        return enif_make_badarg(env);
+
+    ErlNifPid pid;
+    enif_self(env, &pid);
+
+    [MobFoundationModels generateText:prompt
+                          optionsJSON:optionsJSON
+                           completion:^(NSString *text, NSString *error) {
+                             if (error)
+                                 mob_native_text_send_error(pid, "foundation_models", "generate_text",
+                                                            error);
+                             else
+                                 mob_native_text_send_success(pid, "foundation_models",
+                                                              "generated_text", text);
+                           }];
+
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_vision_recognize_text(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    // Apple Vision VNRecognizeTextRequest:
+    // https://developer.apple.com/documentation/vision/vnrecognizetextrequest
+    NSString *path = mob_native_text_string_arg(env, argv[0]);
+    NSString *optionsJSON = mob_native_text_string_arg(env, argv[1]);
+    if (!path || !optionsJSON)
+        return enif_make_badarg(env);
+
+    ErlNifPid pid;
+    enif_self(env, &pid);
+
+    [MobVision recognizeTextAtPath:path
+                       optionsJSON:optionsJSON
+                        completion:^(NSString *text, NSString *error) {
+                          if (error)
+                              mob_native_text_send_error(pid, "vision", "recognize_text", error);
+                          else
+                              mob_native_text_send_success(pid, "vision", "recognized_text", text);
+                        }];
+
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_speech_transcribe_audio(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    // Apple Speech SFSpeechURLRecognitionRequest:
+    // https://developer.apple.com/documentation/speech/sfspeechurlrecognitionrequest
+    NSString *path = mob_native_text_string_arg(env, argv[0]);
+    NSString *optionsJSON = mob_native_text_string_arg(env, argv[1]);
+    if (!path || !optionsJSON)
+        return enif_make_badarg(env);
+
+    ErlNifPid pid;
+    enif_self(env, &pid);
+
+    [MobSpeech transcribeAudioAtPath:path
+                         optionsJSON:optionsJSON
+                          completion:^(NSString *text, NSString *error) {
+                            if (error)
+                                mob_native_text_send_error(pid, "speech", "transcribe_audio", error);
+                            else
+                                mob_native_text_send_success(pid, "speech", "transcribed_audio", text);
+                          }];
+
+    return enif_make_atom(env, "ok");
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Device capability NIFs
 // ════════════════════════════════════════════════════════════════════════════
@@ -6430,6 +6546,9 @@ static ErlNifFunc nif_funcs[] = {
     {"audio_play", 2, nif_audio_play, 0},
     {"audio_stop_playback", 0, nif_audio_stop_playback, 0},
     {"audio_set_volume", 1, nif_audio_set_volume, 0},
+    {"foundation_models_generate_text", 2, nif_foundation_models_generate_text, 0},
+    {"vision_recognize_text", 2, nif_vision_recognize_text, 0},
+    {"speech_transcribe_audio", 2, nif_speech_transcribe_audio, 0},
     {"motion_start", 2, nif_motion_start, 0},
     {"motion_stop", 0, nif_motion_stop, 0},
     {"scanner_scan", 1, nif_scanner_scan, 0},

@@ -114,6 +114,9 @@ defmodule Mob.MixProject do
           Mob.Photos,
           Mob.Files,
           Mob.Audio,
+          Mob.IOS.FoundationModels,
+          Mob.IOS.Vision,
+          Mob.IOS.Speech,
           Mob.Motion,
           Mob.Scanner,
           Mob.Notify
