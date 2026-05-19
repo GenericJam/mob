@@ -90,9 +90,16 @@ defmodule Mob.Sigil do
     |> label("attribute name")
 
   # String attribute value: "..."
+  #
+  # `utf8_string/2` (not `ascii_string/2`) so non-ASCII bytes in the
+  # template source — em-dash, en-dash, smart quotes, accented letters,
+  # emoji — are matched as UTF-8 codepoints and emitted as UTF-8 binary
+  # segments. `ascii_string([not: ?"])` accepts those bytes but its
+  # `integer` body re-encodes each one as a Latin-1 codepoint then UTF-8
+  # (so `–` E2 80 93 comes out as C3 A2 C2 80 C2 93 — double-encoded).
   string_value =
     ignore(ascii_char([?"]))
-    |> ascii_string([not: ?"], min: 0)
+    |> utf8_string([not: ?"], min: 0)
     |> ignore(ascii_char([?"]))
     |> tag(:string_val)
 
@@ -167,11 +174,15 @@ defmodule Mob.Sigil do
   # Balanced brace content: captures everything between an outer { } pair,
   # preserving inner { } pairs recursively. Returns a single joined string.
   # Used by expr_value and expr_child so that {%{a: 1}} and {fn -> ... end} work.
+  # `utf8_string/2` (not `ascii_string/2`) — same reason as `string_value`
+  # above: brace content can be arbitrary Elixir source including literal
+  # non-ASCII strings, and `ascii_string` would double-encode those bytes
+  # before they reach `Code.string_to_quoted!/2`.
   defparsec(
     :brace_content,
     repeat(
       choice([
-        ascii_string([not: ?{, not: ?}], min: 1),
+        utf8_string([not: ?{, not: ?}], min: 1),
         string("{")
         |> parsec(:brace_content)
         |> string("}")
