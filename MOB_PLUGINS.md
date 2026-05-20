@@ -433,6 +433,103 @@ next compile. Removing one removes the screens. The host's
 `App.navigation/1` can either wire them up by convention or pick a
 subset.
 
+### The contract is generic — Ash is one example
+
+The `:screens_generator` + `host_config/3` API doesn't know about
+Ash. Any host-side registry of resource-like things can drive
+screen generation. A `mob_ecto` sketch shows the same pattern
+without Ash as a dependency:
+
+```elixir
+%{
+  name: :mob_ecto,
+  mob_version: "~> 0.6",
+  plugin_spec_version: 2,
+  description: "Generate Mob screens from Ecto schemas",
+
+  screens_generator: {MobEcto.ScreenGenerator, :generate, []},
+
+  ui_components: [
+    %{tag: "EctoForm",  atom: :ecto_form,  props: [:schema, :changeset]},
+    %{tag: "EctoList",  atom: :ecto_list,  props: [:schema, :query]},
+    %{tag: "EctoField", atom: :ecto_field, props: [:field, :record]}
+  ]
+}
+```
+
+The host registers its schemas the same way Ash domains are
+registered:
+
+```elixir
+# my_app.ex
+config :my_app, :ecto_schemas, [MyApp.Blog.Post, MyApp.Auth.User]
+```
+
+And the generator iterates schemas instead of resources:
+
+```elixir
+defmodule MobEcto.ScreenGenerator do
+  def generate do
+    schemas = MobDev.Plugin.host_config(:my_app, :ecto_schemas, [])
+
+    for schema <- schemas,
+        screen <- [:list, :detail, :form] do
+      module = generated_module_name(schema, screen)
+      route  = generated_route(schema, screen)
+      create_screen_module(module, schema, screen)
+      %{module: module, default_route: route}
+    end
+  end
+end
+```
+
+mob_ash and mob_ecto have identical contracts with mob_dev — they
+differ only in how they introspect the host's resource definitions.
+The same pattern fits Phoenix schemas, Memento tables, or any
+custom host-side registry.
+
+### Working with Ash beyond the basics
+
+If a host app wants to share resource code between the Phoenix
+server and the mob_ash generator — the same `User` attributes,
+validations, or calculations on both sides — the recommended path
+is **Spark Fragments**, the existing Ash mechanism for composable
+DSL fragments:
+
+```elixir
+defmodule Shared.User.Attributes do
+  use Spark.Dsl.Fragment, of: Ash.Resource
+
+  attributes do
+    attribute :email, :string
+    attribute :name, :string
+  end
+end
+
+# server-side resource
+defmodule MyApp.Auth.User do
+  use Ash.Resource, fragments: [Shared.User.Attributes]
+  # + server-only actions, policies, data layer
+end
+
+# mobile-side resource (read by mob_ash's generator)
+defmodule MyApp.Mobile.User do
+  use Ash.Resource, fragments: [Shared.User.Attributes]
+  # + mobile-safe action subset
+end
+```
+
+Per-action exposure granularity ("expose only `:read` and `:create`
+to mobile") is a host-app concern, expressed by which actions live
+on the mobile-side resource module. mob_dev does not need a DSL
+for this — the generator sees whatever resources the host registers
+in `config :my_app, :ash_domains` and generates screens for their
+declared actions.
+
+This keeps mob_dev's contract Ash-agnostic while giving Ash users
+a clean path for the server/mobile code-sharing question without
+mob_dev needing to know anything about it.
+
 ## Install + activation flow
 
 Two-step opt-in by design.
