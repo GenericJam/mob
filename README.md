@@ -144,6 +144,35 @@ see the [Mobile Surface Matrix](https://hexdocs.pm/mob/mobile_surface_matrix.htm
 Set realistic expectations before starting an app; spot plugin
 candidates if you want to fill a gap.
 
+## Background execution
+
+The BEAM runs on the device, but it does **not** keep running once the app is
+backgrounded. iOS suspends the whole process within seconds — schedulers stop,
+GenServers freeze, and any distribution / socket connections drop. Android does
+the same unless you run a foreground service (the persistent-notification kind).
+This is an OS constraint every mobile runtime lives with, not a Mob limitation.
+
+So a server can't push straight into a long-lived GenServer — the OS has to wake
+you first, via APNs (iOS) or FCM (Android). The shape is:
+
+```elixir
+# Register for a push token; your server stores it and sends through APNs/FCM.
+# See the mob_push package for the server side.
+Mob.Notify.register_push(socket)
+def handle_info({:push_token, :ios, token}, socket), do: ...
+
+# React to the OS suspending / resuming the app. A push wakes the app, the BEAM
+# resumes, your handler runs in a short window, then the OS suspends you again.
+Mob.Device.subscribe([:app])
+def handle_info({:mob_device, :did_enter_background}, socket), do: ...
+def handle_info({:mob_device, :will_enter_foreground}, socket), do: ...
+```
+
+`Mob.Device.foreground?/0` reports the current state. For true always-on (e.g. a
+live connection held open), an Android foreground service is the only path; iOS
+will not allow it. Otherwise treat the device as push-driven: server → APNs/FCM →
+OS wakes app → BEAM handles the event → BEAM suspends again.
+
 ## What's in the box
 
 The pre-built OTP runtime that ships with each app includes:
