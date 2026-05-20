@@ -8,7 +8,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.6.15]
 
 ### Added
 - `text_field` now accepts a `secure: true` prop. iOS renders the field
@@ -26,6 +26,10 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ### Fixed
 - iOS: `Mob.App.start/0` now switches `:inet_db` to file-only lookup and seeds `localhost` before any user code runs — BEAM's default `:native` lookup tries to `execve` the `inet_gethost` port program, which the iOS sandbox refuses, crashing the first `Node.connect` / `:erpc.call` / `gen_tcp.connect/3` with `:badarg`. Apps no longer need to set the lookup chain themselves; `Mob.DNS.configure_pure_beam/1` still composes on top for outbound DNS. See `guides/dns_on_ios.md`.
+- iOS: `Column` now honours `fill_height: true`. The `.column` case in `MobRootView` only set `maxWidth`, so a `Column` with `fill_height: true` would collapse to its children's natural height — breaking the canonical `<Column fill_width fill_height>` header/flex/footer pattern. Now sets `maxHeight: .infinity` when the prop is set and switches alignment to `.topLeading` so children anchor at the top when the column flexes. Default (no `fill_height`) behavior is unchanged.
+
+### Docs
+- Plugin system design corpus: `MOB_PLUGINS.md` (capability-plugin manifest, tiers 0-4, spec-v2 code-generated plugins), `MOB_STYLES.md` (style preset system, namespaced cherry-pick, stable per-primitive prop contract), `MOB_PLUGIN_SECURITY.md` (three-layer trust model, dev-mode escape hatches, `:acknowledge_unsafe_plugins`), `plugin_extraction_plan.md` (Phase 0 → Phase 3 + risk register + kickoff checklist). Locks scope to Elixir-first, BEAM-native, Gen-AI-enabled; parks full-language non-BEAM frontends at speculative `plugin_spec_version: 3`. Companion `agent_briefs/rustler_env_var_test.md` covers filmor's env-var-based fix in `rusterlium/rustler#726`.
 
 ## [0.6.14]
 
