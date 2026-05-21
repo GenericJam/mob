@@ -3138,6 +3138,12 @@ static ErlNifPid g_playback_pid;
 static NSString *g_playback_path = nil;
 static MobAudioPlayerDelegate *g_player_delegate = nil;
 
+// Forward declarations: defined in the "Scheduled audio playback"
+// section below but referenced by nif_audio_stop_playback /
+// nif_audio_set_volume above it.
+static NSMutableArray *g_scheduled_players;
+static dispatch_queue_t g_scheduled_players_queue;
+
 @implementation MobAudioPlayerDelegate
 - (void)audioPlayerDidFinishPlaying:(AVAudioPlayer *)player successfully:(BOOL)flag {
     NSString *path = g_playback_path;
@@ -3316,6 +3322,14 @@ static ERL_NIF_TERM nif_audio_stop_playback(ErlNifEnv *env, int argc, const ERL_
       [g_av_player pause];
       g_av_player = nil;
       g_playback_path = nil;
+      // Stop and drop every scheduled play_at player too.
+      if (g_scheduled_players) {
+          dispatch_sync(g_scheduled_players_queue, ^{
+            for (AVAudioPlayer *p in g_scheduled_players)
+                [p stop];
+            [g_scheduled_players removeAllObjects];
+          });
+      }
       [[AVAudioSession sharedInstance] setActive:NO error:nil];
     });
     return enif_make_atom(env, "ok");
@@ -3327,7 +3341,139 @@ static ERL_NIF_TERM nif_audio_set_volume(ErlNifEnv *env, int argc, const ERL_NIF
     dispatch_async(dispatch_get_main_queue(), ^{
       g_audio_player.volume = (float)vol;
       g_av_player.volume = (float)vol;
+      // Mirror onto every currently-scheduled play_at player.
+      if (g_scheduled_players) {
+          dispatch_sync(g_scheduled_players_queue, ^{
+            for (AVAudioPlayer *p in g_scheduled_players)
+                p.volume = (float)vol;
+          });
+      }
     });
+    return enif_make_atom(env, "ok");
+}
+
+// ── Scheduled audio playback (sample-accurate sync) ────────────────────────
+//
+// AVAudioPlayer's `-playAtTime:` schedules playback against the audio
+// hardware clock (`deviceCurrentTime`). The first `AVAudioEngine` +
+// `scheduleBuffer:atTime:` cut of this code crashed the BEAM whenever a
+// scheduled buffer hit playback time on a physical iPhone — likely a
+// thread / audio-session interaction we never fully diagnosed. The
+// `playAtTime:` path is simpler (no engine, no PCM buffers, no
+// completionHandler reaching back into Erlang from an audio thread),
+// well-documented since iOS 4, and gives the same sample-accurate
+// scheduling guarantee.
+//
+// One `AVAudioPlayer` per scheduled note. The player is retained in a
+// global mutable array so ARC doesn't release it before the audio
+// hardware reads it; it's removed `duration + 1s` after its scheduled
+// fire time.
+
+static NSMutableArray *g_scheduled_players = nil;
+static dispatch_queue_t g_scheduled_players_queue = NULL;
+
+static void ensure_scheduled_players(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+      g_scheduled_players = [NSMutableArray array];
+      g_scheduled_players_queue =
+          dispatch_queue_create("mob.audio.scheduled_players", DISPATCH_QUEUE_SERIAL);
+    });
+}
+
+// audio_play_at(Path, OptsJson, AtWallMs)
+//
+// Schedules `Path` to begin playback at absolute local wall-clock time
+// `AtWallMs` (in `System.system_time(:millisecond)` terms — caller is
+// responsible for converting from server time via `Mob.ClockSync` or
+// equivalent). Past targets play ASAP.
+//
+// Successive calls schedule independent players; they mix together. Use
+// `audio_stop_playback` to interrupt anything currently in flight.
+static ERL_NIF_TERM nif_audio_play_at(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary path_bin, opts_bin, at_bin;
+
+    if (!enif_inspect_binary(env, argv[0], &path_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &path_bin))
+        return enif_make_badarg(env);
+    if (!enif_inspect_binary(env, argv[1], &opts_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[1], &opts_bin))
+        return enif_make_badarg(env);
+    // `at_wall_ms` arrives as a binary string. Marshaling as a string
+    // sidesteps cross-platform NIF symbol differences (Mob's Android
+    // ERTS build doesn't dynamically export `enif_get_int64`); we keep
+    // the iOS side on the same wire format for symmetry.
+    if (!enif_inspect_binary(env, argv[2], &at_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[2], &at_bin))
+        return enif_make_badarg(env);
+
+    NSString *at_str = [[NSString alloc] initWithBytes:at_bin.data
+                                                length:at_bin.size
+                                              encoding:NSUTF8StringEncoding];
+    int64_t at_wall_ms = (int64_t)at_str.longLongValue;
+
+    NSString *path = [[NSString alloc] initWithBytes:path_bin.data
+                                              length:path_bin.size
+                                            encoding:NSUTF8StringEncoding];
+    NSString *opts_str = [[NSString alloc] initWithBytes:opts_bin.data
+                                                  length:opts_bin.size
+                                                encoding:NSUTF8StringEncoding];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      ensure_scheduled_players();
+
+      [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback error:nil];
+      [[AVAudioSession sharedInstance] setActive:YES error:nil];
+
+      NSDictionary *o =
+          [NSJSONSerialization JSONObjectWithData:[opts_str dataUsingEncoding:NSUTF8StringEncoding]
+                                          options:0
+                                            error:nil];
+      double volume = o[@"volume"] ? [o[@"volume"] doubleValue] : 1.0;
+
+      NSURL *url = [NSURL fileURLWithPath:path];
+      NSError *err = nil;
+      AVAudioPlayer *player = [[AVAudioPlayer alloc] initWithContentsOfURL:url error:&err];
+      if (!player || err) {
+          NSLog(@"[mob audio] play_at open failed: %@", err);
+          return;
+      }
+      player.volume = (float)volume;
+      [player prepareToPlay];
+
+      // Convert wall-clock target → player's audio-clock domain. The
+      // player's `deviceCurrentTime` ticks at the audio hardware rate;
+      // adding (target_wall - now_wall) seconds gives the corresponding
+      // moment on that clock. Time skew between gettimeofday and the
+      // audio clock is irrelevant over the few seconds we schedule.
+      NSTimeInterval now_device = player.deviceCurrentTime;
+      struct timeval tv;
+      gettimeofday(&tv, NULL);
+      NSTimeInterval now_wall = (NSTimeInterval)tv.tv_sec + (NSTimeInterval)tv.tv_usec / 1e6;
+      NSTimeInterval target_wall = (NSTimeInterval)at_wall_ms / 1000.0;
+      NSTimeInterval delta = target_wall - now_wall;
+
+      if (delta <= 0) {
+          [player play];
+      } else {
+          NSTimeInterval target_device = now_device + delta;
+          [player playAtTime:target_device];
+      }
+
+      dispatch_async(g_scheduled_players_queue, ^{
+        [g_scheduled_players addObject:player];
+      });
+
+      // Release this player after it's done playing. `+ 1.0` provides
+      // generous slack so a slightly-late dispatch doesn't release a
+      // still-playing player.
+      NSTimeInterval clear_after = MAX(0.0, delta) + player.duration + 1.0;
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(clear_after * NSEC_PER_SEC)),
+                     g_scheduled_players_queue, ^{
+                       [g_scheduled_players removeObject:player];
+                     });
+    });
+
     return enif_make_atom(env, "ok");
 }
 
@@ -6453,6 +6599,7 @@ static ErlNifFunc nif_funcs[] = {
     {"audio_start_recording", 1, nif_audio_start_recording, 0},
     {"audio_stop_recording", 0, nif_audio_stop_recording, 0},
     {"audio_play", 2, nif_audio_play, 0},
+    {"audio_play_at", 3, nif_audio_play_at, 0},
     {"audio_stop_playback", 0, nif_audio_stop_playback, 0},
     {"audio_set_volume", 1, nif_audio_set_volume, 0},
     {"motion_start", 2, nif_motion_start, 0},

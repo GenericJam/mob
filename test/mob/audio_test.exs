@@ -71,4 +71,58 @@ defmodule Mob.AudioTest do
       assert_raise FunctionClauseError, fn -> Audio.set_volume(socket, nil) end
     end
   end
+
+  describe "play_at_opts/1" do
+    test "default volume is 1.0" do
+      assert Audio.play_at_opts([]) == %{"volume" => 1.0}
+    end
+
+    test "volume is passed through as float" do
+      assert Audio.play_at_opts(volume: 0.5) == %{"volume" => 0.5}
+    end
+
+    test "integer volume is coerced to float" do
+      opts = Audio.play_at_opts(volume: 1)
+      assert opts["volume"] === 1.0
+    end
+
+    test "does NOT include a loop key — play_at is single-shot" do
+      # Scheduled playback is one-shot by design. Looping a sample-aligned
+      # buffer requires re-scheduling each iteration on the audio hardware
+      # clock, which is not what we want for orchestra cues.
+      refute Map.has_key?(Audio.play_at_opts([]), "loop")
+    end
+
+    test "keys are strings, not atoms" do
+      opts = Audio.play_at_opts([])
+      assert Map.has_key?(opts, "volume")
+      refute Map.has_key?(opts, :volume)
+    end
+  end
+
+  describe "play_at/4 guard" do
+    test "rejects a non-integer at_wall_ms" do
+      socket = Mob.Socket.new(MyScreen)
+
+      assert_raise FunctionClauseError, fn ->
+        Audio.play_at(socket, "/tmp/x.wav", 1.5)
+      end
+    end
+
+    test "rejects a string at_wall_ms" do
+      socket = Mob.Socket.new(MyScreen)
+
+      assert_raise FunctionClauseError, fn ->
+        Audio.play_at(socket, "/tmp/x.wav", "now")
+      end
+    end
+
+    test "rejects nil at_wall_ms" do
+      socket = Mob.Socket.new(MyScreen)
+
+      assert_raise FunctionClauseError, fn ->
+        Audio.play_at(socket, "/tmp/x.wav", nil)
+      end
+    end
+  end
 end
