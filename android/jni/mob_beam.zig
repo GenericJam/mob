@@ -296,6 +296,30 @@ export fn mob_start_beam(app_module: [*:0]const u8) callconv(.c) void {
     _ = jni.setenv("ERL_CRASH_DUMP", crash_dump, 1);
     _ = jni.setenv("ERL_CRASH_DUMP_SECONDS", "30", 1);
 
+    // RUSTLER_NIF_LIB_PATH — tells rustler where the .so containing it
+    // (libpigeon.so in Mob's static-link model) lives, so its
+    // DlsymNifFiller can dlopen(path, RTLD_NOW | RTLD_NOLOAD) directly
+    // instead of dlopen(NULL). On Bionic, dlopen(NULL) returns the app
+    // process namespace which misses sibling .so's exported symbols even
+    // when System.loadLibrary'd with RTLD_GLOBAL — see filmor's comment on
+    // rusterlium/rustler#726. dladdr on a function we know is in this .so
+    // (mob_start_beam itself) gives us dli_fname = the absolute load path.
+    {
+        var info = std.mem.zeroes(jni.DlInfo);
+        const probe: *const anyopaque = @ptrCast(&mob_start_beam);
+        if (jni.dladdr(probe, &info) != 0) {
+            if (info.dli_fname) |fname| {
+                _ = jni.setenv("RUSTLER_NIF_LIB_PATH", fname, 1);
+                _ = jni.__android_log_print(
+                    jni.ANDROID_LOG_INFO,
+                    "MobBeam",
+                    "RUSTLER_NIF_LIB_PATH=%s",
+                    fname,
+                );
+            }
+        }
+    }
+
     var eval_expr_buf: [280]u8 = undefined;
     const eval_expr = formatZ(&eval_expr_buf, "{s}:start().", .{app_module});
 

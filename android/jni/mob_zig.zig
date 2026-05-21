@@ -71,6 +71,19 @@ pub extern fn closedir(dirp: *DIR) c_int;
 pub extern fn nanosleep(req: *const Timespec, rem: ?*Timespec) c_int;
 pub extern fn snprintf(buf: [*]u8, size: usize, fmt: [*:0]const u8, ...) c_int;
 
+/// dladdr — POSIX/glibc/Bionic extension. Given an address, fills in
+/// information about the shared object containing it. Used by the
+/// BEAM launcher to discover libpigeon.so's absolute path so it can
+/// be passed to rustler (and any other consumer) via env var.
+pub const DlInfo = extern struct {
+    dli_fname: ?[*:0]const u8,
+    dli_fbase: ?*anyopaque,
+    dli_sname: ?[*:0]const u8,
+    dli_saddr: ?*anyopaque,
+};
+
+pub extern fn dladdr(addr: *const anyopaque, info: *DlInfo) c_int;
+
 /// POSIX clock identifiers. We only use CLOCK_MONOTONIC for throttle
 /// timestamps in the gesture/scroll/drag/pinch sender path — it ticks
 /// forward at a constant rate regardless of wall-clock NTP adjustments.

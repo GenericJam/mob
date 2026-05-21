@@ -8,6 +8,16 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.6.16]
+
+### Added
+- **`mob_beam.zig` exports `RUSTLER_NIF_LIB_PATH` before BEAM start.** Calls `dladdr(&mob_start_beam)` to discover the absolute path of the host `.so` (e.g. `lib<app>.so`) and `setenv()`s it as `RUSTLER_NIF_LIB_PATH`. Pairs with the matching upstream rustler change (rusterlium/rustler#726): rustler's `DlsymNifFiller::new()` on Android reads the env var first, falls back to its existing dladdr-self probe when unset. End result: rustler-based Rust NIFs statically linked into Mob's main `.so` now resolve `enif_*` symbols correctly on Bionic without any per-app patching. Existing rustler users on Android who *don't* run inside Mob see no change — the dladdr fallback covers them.
+- **`mob_zig.zig` exposes `dladdr` + `DlInfo`** to other Zig consumers under `jni.dladdr` / `jni.DlInfo`. Hand-declared to match the libc/Bionic surface; same hand-declared FFI policy as the rest of `mob_zig.zig` (we don't use `@cImport` here).
+
+### Notes
+- The setenv runs unconditionally — even apps that don't ship a rustler NIF get the env var set. Harmless. The env var only affects rustler's own startup logic when a rustler-built NIF loads.
+- Verified end-to-end on a physical arm64 Android device (moto g power 2021): host sets path → rustler reads env var → `dlopen(path, RTLD_NOW | RTLD_NOLOAD)` → `dlsym` all `enif_*` exports → Rust NIF `greet/0` executes and returns `"Hello from Rust!"` to BEAM.
+
 ## [0.6.15]
 
 ### Added
