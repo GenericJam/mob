@@ -8,6 +8,11 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.6.18]
+
+### Changed
+- **`RUSTLER_NIF_LIB_PATH` → `RUSTLER_BEAM_LIBRARY_PATH`** in `mob_beam.zig`'s host setenv block. Matches the env var name filmor chose for the alternative upstream rustler PR (rusterlium/rustler#733), which is what'll land upstream instead of our #726. End-to-end tested on physical arm64 Android with filmor's branch: Mob sets the env var → rustler reads it → Rust NIF resolves and executes. Mob users on rustler 0.37 Hex release (no patch) see no change; users on the GenericJam fork OR on whatever rustler version eventually ships #733 get matching behaviour.
+
 ## [0.6.17]
 
 ### Added
