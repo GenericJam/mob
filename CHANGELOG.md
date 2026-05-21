@@ -8,6 +8,16 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.6.17]
+
+### Added
+- **`Mob.Audio.play_at/4`** — sample-accurate scheduled audio playback. Takes an absolute local wall-clock target (`System.system_time(:millisecond)` ms-since-epoch) and hands it to the audio *hardware* clock for firing, rather than waking the BEAM via `Process.send_after`. The hardware-clock path eliminates timer-wheel + scheduler jitter from the end-to-end sync error, leaving per-device first-sample latency (~30–80 ms, calibratable) as the dominant remaining term. iOS only in this release; Android still falls through to the existing `MediaPlayer` path (port to AAudio is pending).
+- iOS: `nif_audio_play_at(Path, OptsJson, AtWallMs)` backed by a dedicated `AVAudioEngine` + `AVAudioPlayerNode`. The wall-time target is converted to an `AVAudioTime` `hostTime` via `mach_absolute_time` + `mach_timebase_info`, then handed to `-[AVAudioPlayerNode scheduleBuffer:atTime:options:completionHandler:]`. Past targets schedule ASAP. Multiple `play_at` calls accumulate on the player's timeline — use `audio_stop_playback` to flush.
+- `audio_set_volume` and `audio_stop_playback` now also reach the scheduled-engine player so cross-API mixing behaves sanely.
+
+### Use case
+- Distributed orchestra / multi-device musical performance where every phone must start the same sample at the same wall-clock instant. Pair with an NTP-style server-clock-sync helper on the caller side; this API takes the converted local-clock target.
+
 ## [0.6.16]
 
 ### Added

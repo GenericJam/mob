@@ -175,6 +175,7 @@ pub const BridgeMethods = extern struct {
     audio_start_recording: jni.JMethodID = null,
     audio_stop_recording: jni.JMethodID = null,
     audio_play: jni.JMethodID = null,
+    audio_play_at: jni.JMethodID = null,
     audio_stop_playback: jni.JMethodID = null,
     audio_set_volume: jni.JMethodID = null,
     motion_start: jni.JMethodID = null,
@@ -1619,6 +1620,20 @@ fn callBridgePidStr2(env: ?*erts.ErlNifEnv, method: jni.JMethodID, pid: erts.Erl
     return erts.ok(env);
 }
 
+fn callBridgePidStr3(env: ?*erts.ErlNifEnv, method: jni.JMethodID, pid: erts.ErlNifPid, a1: ?[*:0]const u8, a2: ?[*:0]const u8, a3: ?[*:0]const u8) erts.ERL_NIF_TERM {
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const j1: jni.JString = if (a1) |a| jni.newStringUTF(jenv, a) else null;
+    const j2: jni.JString = if (a2) |a| jni.newStringUTF(jenv, a) else null;
+    const j3: jni.JString = if (a3) |a| jni.newStringUTF(jenv, a) else null;
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, method, pidToJlong(pid), j1, j2, j3);
+    if (j1 != null) jni.deleteLocalRef(jenv, j1);
+    if (j2 != null) jni.deleteLocalRef(jenv, j2);
+    if (j3 != null) jni.deleteLocalRef(jenv, j3);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
 /// Read a jstring into an `ErlNifBinary` via UTF-8. Returns the binary
 /// term + 1 (success) or 0 (null jstring / GetStringUTFChars failed).
 /// Deletes the local ref on success.
@@ -2524,6 +2539,30 @@ export fn nif_audio_play(
     var pid: erts.ErlNifPid = undefined;
     _ = erts.enif_self(env, &pid);
     return callBridgePidStr2(env, Bridge.audio_play, pid, path, opts);
+}
+
+export fn nif_audio_play_at(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const path_bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const opts_bin = getBinOrIolist(env, argv[1]) orelse return erts.badarg(env);
+    // `at_wall_ms` arrives as a binary string. The wall-clock-ms-since-1970
+    // value doesn't fit in `c_int`, and Mob's Android ERTS build doesn't
+    // export `enif_get_int64` dynamically. Marshaling as a string sidesteps
+    // both issues — matches the pattern audio_set_volume uses for floats.
+    const at_bin = getBinOrIolist(env, argv[2]) orelse return erts.badarg(env);
+    const path = binToCString(path_bin) orelse return erts.atom(env, "error");
+    defer freeCString(path);
+    const opts = binToCString(opts_bin) orelse return erts.atom(env, "error");
+    defer freeCString(opts);
+    const at_str = binToCString(at_bin) orelse return erts.atom(env, "error");
+    defer freeCString(at_str);
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+    return callBridgePidStr3(env, Bridge.audio_play_at, pid, path, opts, at_str);
 }
 
 export fn nif_audio_stop_playback(
@@ -4632,6 +4671,7 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     if (!cacheRequired(jenv, "audio_start_recording", "(JLjava/lang/String;)V", &Bridge.audio_start_recording)) return -1;
     if (!cacheRequired(jenv, "audio_stop_recording", "()V", &Bridge.audio_stop_recording)) return -1;
     if (!cacheRequired(jenv, "audio_play", "(JLjava/lang/String;Ljava/lang/String;)V", &Bridge.audio_play)) return -1;
+    if (!cacheRequired(jenv, "audio_play_at", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", &Bridge.audio_play_at)) return -1;
     if (!cacheRequired(jenv, "audio_stop_playback", "()V", &Bridge.audio_stop_playback)) return -1;
     if (!cacheRequired(jenv, "audio_set_volume", "(Ljava/lang/String;)V", &Bridge.audio_set_volume)) return -1;
     if (!cacheRequired(jenv, "storage_dir", "(Ljava/lang/String;)Ljava/lang/String;", &Bridge.storage_dir)) return -1;
@@ -4776,6 +4816,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "audio_start_recording", .arity = 1, .fptr = nif_audio_start_recording, .flags = 0 },
     .{ .name = "audio_stop_recording", .arity = 0, .fptr = nif_audio_stop_recording, .flags = 0 },
     .{ .name = "audio_play", .arity = 2, .fptr = nif_audio_play, .flags = 0 },
+    .{ .name = "audio_play_at", .arity = 3, .fptr = nif_audio_play_at, .flags = 0 },
     .{ .name = "audio_stop_playback", .arity = 0, .fptr = nif_audio_stop_playback, .flags = 0 },
     .{ .name = "audio_set_volume", .arity = 1, .fptr = nif_audio_set_volume, .flags = 0 },
     .{ .name = "motion_start", .arity = 2, .fptr = nif_motion_start, .flags = 0 },

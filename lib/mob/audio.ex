@@ -104,4 +104,50 @@ defmodule Mob.Audio do
     :mob_nif.audio_set_volume(volume / 1.0)
     socket
   end
+
+  @doc """
+  Schedule `path` to begin playing at absolute local wall-clock time
+  `at_wall_ms` (in `System.system_time(:millisecond)` terms — caller is
+  responsible for translating from a server-supplied target time via their
+  own clock-sync component).
+
+  The audio hardware clock — not BEAM's timer wheel — fires playback at
+  the requested instant. Multiple `play_at/3` calls accumulate on the
+  player's timeline (call `stop_playback/1` to flush). If `at_wall_ms` is
+  already in the past, the buffer plays as soon as the audio engine can.
+
+  Options:
+    - `volume: float 0.0–1.0` (default `1.0`)
+
+  Result arrives as `{:audio, :playback_finished, %{path: path}}` when
+  the scheduled buffer drains, or `{:audio, :playback_error,
+  %{reason: reason}}` if the file fails to open.
+
+  iOS: `AVAudioEngine` + `AVAudioPlayerNode.scheduleBuffer(_:at:options:)`,
+  with the `at:` `AVAudioTime` constructed from `mach_absolute_time` so the
+  buffer starts at the requested host time.
+
+  Android: TODO — falls back to immediate playback on Android until the
+  AAudio port lands.
+  """
+  @spec play_at(Mob.Socket.t(), String.t(), integer(), keyword()) :: Mob.Socket.t()
+  def play_at(socket, path, at_wall_ms, opts \\ []) when is_integer(at_wall_ms) do
+    # at_wall_ms is shipped as a binary string. ms-since-epoch values exceed
+    # the 32-bit range that mob's Android ERTS build can read via
+    # `enif_get_int`, and the `enif_get_int64` symbol isn't dynamically
+    # exported on that build. Strings cross both NIF boundaries cleanly.
+    :mob_nif.audio_play_at(
+      path,
+      :json.encode(play_at_opts(opts)),
+      Integer.to_string(at_wall_ms)
+    )
+
+    socket
+  end
+
+  @doc false
+  @spec play_at_opts(keyword()) :: %{String.t() => term()}
+  def play_at_opts(opts) do
+    %{"volume" => Keyword.get(opts, :volume, 1.0) * 1.0}
+  end
 end
