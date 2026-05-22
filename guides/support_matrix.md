@@ -14,7 +14,7 @@ producing an APK that crashes at install or runtime.
 
 | Platform | ABIs | Minimum OS | Source of constraint |
 |---|---|---|---|
-| Android | `arm64-v8a`, `x86_64` (emulator) | API 28 / Android 9 | Mob ships pre-built BEAM/erts for these slices only. The OTP runtime tarballs hosted in `mob_dev`'s GitHub releases don't include an `armeabi-v7a` build, so 32-bit Android phones cannot run Mob — vanilla apps too, not just Pythonx-enabled ones. |
+| Android | `arm64-v8a`, `x86_64` (emulator), `armeabi-v7a` | API 28 / Android 9 | Mob ships pre-built BEAM/erts tarballs for each supported slice. Android emulators on x86_64 hosts require the `otp-android-x86_64-*` release asset; `armeabi-v7a` works for vanilla Mob apps but remains unsupported for Pythonx-enabled apps. |
 | iOS | `arm64` (device + sim on Apple Silicon), `x86_64` (sim on Intel Macs) | iOS 13 | Mob's iOS template `IPHONEOS_DEPLOYMENT_TARGET` is set to 13.0 and the bundled OTP is arm64-only. Older iOS versions (and 32-bit hardware — i.e. iPhone 5/5c) cannot run Mob. |
 
 This floor is enforced at deploy time by `MobDev.SupportMatrix.check_device/2`,
@@ -44,28 +44,20 @@ for the full pipeline.
 
 The instinct is "people with low-income or older hardware deserve to
 be considered, even if Google or Apple have abandoned them." That's
-real, and the team agrees with it.
+real, and the team agrees with it. For vanilla Mob apps, that means the
+base runtime includes an `armeabi-v7a` slice alongside modern arm64 and
+x86_64 emulator support.
 
-But the cost of supporting `armeabi-v7a` Android (the most common
-"old / cheap" floor) is not a polish job. It's:
+Feature-specific native dependencies can still tighten the floor.
+Pythonx is the current example: Chaquopy no longer ships a 32-bit
+Android distribution, so Pythonx-enabled Mob apps require `arm64-v8a`
+or `x86_64` even though vanilla Mob can run on `armeabi-v7a`.
 
-- Building OTP/erts for `armeabi-v7a` and hosting the tarballs in
-  `mob_dev`'s GitHub release infrastructure
-- Cross-compiling every Mob NIF for `armeabi-v7a`
-- Replacing the Chaquopy bundle with a self-built CPython 3.13 +
-  stdlib + C extensions (Chaquopy can't help — they dropped 32-bit
-  upstream)
-- Maintaining two parallel build matrices indefinitely
-
-For a device class Google's own Play Store has tagged "deprecated for
-new apps." Multi-week effort, structural maintenance burden,
-diminishing returns each year as the target shrinks.
-
-The trade-off we made instead: declare the floor explicitly, validate
-it at the earliest possible moment, and tell the user *which* of their
-devices won't work and *why* — including which upstream vendor's
-decision is the cause. They get the full picture before they invest
-time, instead of a cryptic gradle error after a 5-minute build.
+The trade-off we make: declare the floor explicitly, validate it at the
+earliest possible moment, and tell the user *which* of their devices
+won't work and *why* — including which upstream vendor's decision is
+the cause. They get the full picture before they invest time, instead
+of a cryptic gradle error after a 5-minute build.
 
 If you have hardware that falls below the floor and want to discuss
 whether a path exists, open an issue. We'd rather hear the use case
