@@ -659,6 +659,7 @@ the framework calls `render/1` again and pushes the diff to the native layer.
 - [Theming](theming.md) — color tokens, named themes, runtime switching
 - [Data & Persistence](data.md) — `Mob.State` for preferences, Ecto + SQLite for structured data
 - [Device Capabilities](device_capabilities.md) — camera, location, haptics, notifications
+- [Background Execution](background_execution.md) — push wakeups, foreground services, and OS background limits
 - [LiveView Mode](liveview.md) — full Phoenix LiveView app inside a native WebView (the two-bridge architecture, `mix mob.enable liveview`)
 - [Testing](testing.md) — unit tests and live device inspection
 - [Troubleshooting](troubleshooting.md) — if something isn't working, start here
