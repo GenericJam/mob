@@ -2072,12 +2072,11 @@ void mob_iap_send_products(const void *pid_bytes, const char *json) {
     ErlNifPid pid;
     memcpy(&pid, pid_bytes, sizeof(ErlNifPid));
     ErlNifEnv *e = enif_alloc_env();
-    ERL_NIF_TERM tag = enif_make_tuple2(e, enif_make_atom(e, "iap"), enif_make_atom(e, "products"));
     ERL_NIF_TERM json_bin;
     size_t len = strlen(json);
     unsigned char *buf = enif_make_new_binary(e, len, &json_bin);
     memcpy(buf, json, len);
-    ERL_NIF_TERM msg = enif_make_tuple2(e, tag, json_bin);
+    ERL_NIF_TERM msg = enif_make_tuple3(e, enif_make_atom(e, "iap"), enif_make_atom(e, "products"), json_bin);
     enif_send(NULL, &pid, e, msg);
     enif_free_env(e);
     free((void *)pid_bytes);
@@ -2088,12 +2087,11 @@ void mob_iap_send_transaction(const void *pid_bytes, const char *tag, const char
     ErlNifPid pid;
     memcpy(&pid, pid_bytes, sizeof(ErlNifPid));
     ErlNifEnv *e = enif_alloc_env();
-    ERL_NIF_TERM inner = enif_make_tuple2(e, enif_make_atom(e, "iap"), enif_make_atom(e, tag));
     ERL_NIF_TERM json_bin;
     size_t len = strlen(json);
     unsigned char *buf = enif_make_new_binary(e, len, &json_bin);
     memcpy(buf, json, len);
-    ERL_NIF_TERM msg = enif_make_tuple2(e, inner, json_bin);
+    ERL_NIF_TERM msg = enif_make_tuple3(e, enif_make_atom(e, "iap"), enif_make_atom(e, tag), json_bin);
     enif_send(NULL, &pid, e, msg);
     enif_free_env(e);
     free((void *)pid_bytes);

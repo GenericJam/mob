@@ -83,15 +83,14 @@ Java_com_mob_iap_MobIapBridge_sendToBeam(JNIEnv *env, jclass cls,
     const char *json_str = (*env)->GetStringUTFChars(env, json, NULL);
 
     ErlNifEnv *e = enif_alloc_env();
-    ERL_NIF_TERM inner = enif_make_tuple2(e, enif_make_atom(e, "iap"),
-                                          enif_make_atom(e, tag_str));
 
     ERL_NIF_TERM json_bin;
     size_t len = strlen(json_str);
     unsigned char *buf = enif_make_new_binary(e, len, &json_bin);
     memcpy(buf, json_str, len);
 
-    ERL_NIF_TERM msg = enif_make_tuple2(e, inner, json_bin);
+    ERL_NIF_TERM msg = enif_make_tuple3(e, enif_make_atom(e, "iap"),
+                                         enif_make_atom(e, tag_str), json_bin);
     enif_send(NULL, p, e, msg);
     enif_free_env(e);
     free(p);
