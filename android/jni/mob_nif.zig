@@ -241,6 +241,9 @@ pub export var Bridge: BridgeMethods = .{};
 extern var g_jvm: ?*jni.JavaVM;
 extern var g_activity: jni.JObject;
 
+// mob_iap plugin init — optional; iap.c short-circuits when plugin absent.
+extern fn mob_iap_init(env: *jni.JNIEnv, activity: jni.JObject) callconv(.c) void;
+
 // ── get_jenv: attach the current thread if needed ────────────────────────
 // Returns the env pointer; *attached is set to 1 iff this call had to
 // attach (caller must DetachCurrentThread when done). Match the C
@@ -4736,6 +4739,11 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
         return -1;
     }
 
+    // mob_iap plugin — optional; iap.c short-circuits when class absent.
+    if (g_activity != null) {
+        mob_iap_init(jenv, g_activity);
+    }
+
     g_launch_notif_mutex = erts.enif_mutex_create("mob_launch_notif_mutex");
     if (g_launch_notif_mutex == null) {
         loge_nif("nif_load: failed to create launch notif mutex", .{});
@@ -4758,6 +4766,129 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
 
     logi_nif("Mob NIF loaded (Compose backend)", .{});
     return 0;
+}
+
+// ── In-App Purchase NIF stubs (mob_iap plugin) ─────────────────────────
+// Thin wrappers that extract the BEAM pid and product IDs, then delegate
+// to the JNI bridge in iap.c. The actual StoreKit 2 / Play Billing work
+// happens on the JVM/ObjC side.
+
+// NOTE: iap.c JNI callbacks receive ErlNifPid* via jlong. They MUST
+// call free() on that pointer after enif_send completes.
+extern fn mob_iap_fetch_products(pid: *erts.ErlNifPid, ids: [*:null]const ?[*:0]const u8, count: c_int) void;
+extern fn mob_iap_purchase(pid: *erts.ErlNifPid, product_id: [*:0]const u8) void;
+extern fn mob_iap_restore(pid: *erts.ErlNifPid) void;
+extern fn mob_iap_current_entitlements(pid: *erts.ErlNifPid) void;
+extern fn mob_iap_manage_subscriptions() void;
+
+fn nif_iap_fetch_products(
+    env: ?*erts.ErlNifEnv,
+    _: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    var pid: erts.ErlNifPid = undefined;
+    if (erts.enif_self(env, &pid) == null) {
+        return erts.badarg(env);
+    }
+
+    var list_len: c_uint = 0;
+    if (erts.enif_get_list_length(env, argv[0], &list_len) == 0) {
+        return erts.badarg(env);
+    }
+
+    const max = @min(list_len, 128);
+    var ids: [128]?[*:0]const u8 = @splat(null);
+    var head: erts.ERL_NIF_TERM = undefined;
+    var tail: erts.ERL_NIF_TERM = argv[0];
+    var buf: [256]u8 = undefined;
+
+    const alloc = std.heap.c_allocator;
+    for (0..max) |i| {
+        if (erts.enif_get_list_cell(env, tail, &head, &tail) == 0) {
+            for (0..i) |j| alloc.free(std.mem.span(ids[j].?));
+            return erts.badarg(env);
+        }
+        if (!fillBufferFromTerm(env, head, &buf)) {
+            for (0..i) |j| alloc.free(std.mem.span(ids[j].?));
+            return erts.badarg(env);
+        }
+        const cstr: [*:0]u8 = @ptrCast(&buf);
+        const len = std.mem.len(cstr) + 1;
+        const str = alloc.alloc(u8, len) catch {
+            for (0..i) |j| alloc.free(std.mem.span(ids[j].?));
+            return erts.badarg(env);
+        };
+        @memcpy(str[0..len], buf[0..len]);
+        ids[i] = @ptrCast(str.ptr);
+    }
+
+    const pid_ptr = std.heap.c_allocator.alloc(erts.ErlNifPid, 1) catch return erts.badarg(env);
+    pid_ptr[0] = pid;
+    mob_iap_fetch_products(pid_ptr, &ids, @intCast(max));
+    return erts.atom(env, "ok");
+}
+
+fn nif_iap_purchase(
+    env: ?*erts.ErlNifEnv,
+    _: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    var pid: erts.ErlNifPid = undefined;
+    if (erts.enif_self(env, &pid) == null) {
+        return erts.badarg(env);
+    }
+
+    var buf: [4096]u8 = @splat(0);
+    if (!fillBufferFromTerm(env, argv[0], &buf)) {
+        return erts.badarg(env);
+    }
+
+    const pid_ptr = std.heap.c_allocator.alloc(erts.ErlNifPid, 1) catch return erts.badarg(env);
+    pid_ptr[0] = pid;
+    mob_iap_purchase(pid_ptr, @ptrCast(&buf));
+    return erts.atom(env, "ok");
+}
+
+fn nif_iap_restore(
+    env: ?*erts.ErlNifEnv,
+    _: c_int,
+    _: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    var pid: erts.ErlNifPid = undefined;
+    if (erts.enif_self(env, &pid) == null) {
+        return erts.badarg(env);
+    }
+
+    const pid_ptr = std.heap.c_allocator.alloc(erts.ErlNifPid, 1) catch return erts.badarg(env);
+    pid_ptr[0] = pid;
+    mob_iap_restore(pid_ptr);
+    return erts.atom(env, "ok");
+}
+
+fn nif_iap_current_entitlements(
+    env: ?*erts.ErlNifEnv,
+    _: c_int,
+    _: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    var pid: erts.ErlNifPid = undefined;
+    if (erts.enif_self(env, &pid) == null) {
+        return erts.badarg(env);
+    }
+
+    const pid_ptr = std.heap.c_allocator.alloc(erts.ErlNifPid, 1) catch return erts.badarg(env);
+    pid_ptr[0] = pid;
+    mob_iap_current_entitlements(pid_ptr);
+    return erts.atom(env, "ok");
+}
+
+fn nif_iap_manage_subscriptions(
+    env: ?*erts.ErlNifEnv,
+    _: c_int,
+    _: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = env;
+    mob_iap_manage_subscriptions();
+    return erts.atom(env, "ok");
 }
 
 // ── NIF table + ERL_NIF_INIT entry point ─────────────────────────────────
@@ -4874,6 +5005,12 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "bt_spp_write", .arity = 2, .fptr = nif_bt_spp_write, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
     .{ .name = "bt_hid_connect", .arity = 1, .fptr = nif_bt_hid_connect, .flags = 0 },
     .{ .name = "bt_hid_subscribe_raw", .arity = 1, .fptr = nif_bt_hid_subscribe_raw, .flags = 0 },
+    // ── In-App Purchase (mob_iap plugin) ──────────────────────────────────────
+    .{ .name = "iap_fetch_products", .arity = 1, .fptr = nif_iap_fetch_products, .flags = 0 },
+    .{ .name = "iap_purchase", .arity = 1, .fptr = nif_iap_purchase, .flags = 0 },
+    .{ .name = "iap_restore", .arity = 0, .fptr = nif_iap_restore, .flags = 0 },
+    .{ .name = "iap_current_entitlements", .arity = 0, .fptr = nif_iap_current_entitlements, .flags = 0 },
+    .{ .name = "iap_manage_subscriptions", .arity = 0, .fptr = nif_iap_manage_subscriptions, .flags = 0 },
 };
 
 var mob_nif_entry: erts.ErlNifEntry = .{

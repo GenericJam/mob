@@ -2039,6 +2039,163 @@ static void mob_send3(const ErlNifPid *pid, const char *a1, const char *a2, cons
     enif_free_env(e);
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// IAP bridge helpers — called from MobIapBridge.swift via @_silgen_name
+// ════════════════════════════════════════════════════════════════════════════
+
+// Send {:iap, atom} to the BEAM process identified by serialized ErlNifPid.
+// pid_bytes points to a serialized ErlNifPid copied by the NIF caller.
+static void mob_iap_send2(const void *pid_bytes, const char *tag, const char *atom) {
+    ErlNifPid pid;
+    memcpy(&pid, pid_bytes, sizeof(ErlNifPid));
+    ErlNifEnv *e = enif_alloc_env();
+    ERL_NIF_TERM msg = enif_make_tuple2(e, enif_make_atom(e, tag), enif_make_atom(e, atom));
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+    free((void *)pid_bytes);
+}
+
+// Send {:iap, tag, atom} to the BEAM.
+static void mob_iap_send3(const void *pid_bytes, const char *tag, const char *a1, const char *a2) {
+    ErlNifPid pid;
+    memcpy(&pid, pid_bytes, sizeof(ErlNifPid));
+    ErlNifEnv *e = enif_alloc_env();
+    ERL_NIF_TERM msg =
+        enif_make_tuple3(e, enif_make_atom(e, tag), enif_make_atom(e, a1), enif_make_atom(e, a2));
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+    free((void *)pid_bytes);
+}
+
+// Send {:iap, :products, binary_json} — JSON list of product maps.
+static void mob_iap_send_products(const void *pid_bytes, const char *json) {
+    ErlNifPid pid;
+    memcpy(&pid, pid_bytes, sizeof(ErlNifPid));
+    ErlNifEnv *e = enif_alloc_env();
+    ERL_NIF_TERM tag = enif_make_tuple2(e, enif_make_atom(e, "iap"), enif_make_atom(e, "products"));
+    ERL_NIF_TERM json_bin;
+    size_t len = strlen(json);
+    unsigned char *buf = enif_make_new_binary(e, len, &json_bin);
+    memcpy(buf, json, len);
+    ERL_NIF_TERM msg = enif_make_tuple2(e, tag, json_bin);
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+    free((void *)pid_bytes);
+}
+
+// Send {:iap, tag, binary_json} — a single transaction as JSON map.
+static void mob_iap_send_transaction(const void *pid_bytes, const char *tag, const char *json) {
+    ErlNifPid pid;
+    memcpy(&pid, pid_bytes, sizeof(ErlNifPid));
+    ErlNifEnv *e = enif_alloc_env();
+    ERL_NIF_TERM inner = enif_make_tuple2(e, enif_make_atom(e, "iap"), enif_make_atom(e, tag));
+    ERL_NIF_TERM json_bin;
+    size_t len = strlen(json);
+    unsigned char *buf = enif_make_new_binary(e, len, &json_bin);
+    memcpy(buf, json, len);
+    ERL_NIF_TERM msg = enif_make_tuple2(e, inner, json_bin);
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+    free((void *)pid_bytes);
+}
+
+// Send {:iap, tag, binary_json} — a JSON array of transactions.
+static void mob_iap_send_transactions(const void *pid_bytes, const char *tag, const char *json) {
+    mob_iap_send_transaction(pid_bytes, tag, json);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// IAP NIF function implementations
+// ════════════════════════════════════════════════════════════════════════════
+
+// Extract the product IDs list from a term — expects a list of binaries.
+// On failure, frees any ids already allocated and returns 0.
+static size_t iap_extract_product_ids(ErlNifEnv *env, ERL_NIF_TERM list, char **ids,
+                                      size_t max_ids) {
+    unsigned int list_len;
+    if (!enif_get_list_length(env, list, &list_len))
+        return 0;
+    if (list_len > max_ids)
+        return 0;
+
+    ERL_NIF_TERM head, tail = list;
+    for (unsigned int i = 0; i < list_len; i++) {
+        if (!enif_get_list_cell(env, tail, &head, &tail)) {
+            for (unsigned int j = 0; j < i; j++)
+                free(ids[j]);
+            return 0;
+        }
+        ErlNifBinary bin;
+        if (!enif_inspect_binary(env, head, &bin) &&
+            !enif_inspect_iolist_as_binary(env, head, &bin)) {
+            for (unsigned int j = 0; j < i; j++)
+                free(ids[j]);
+            return 0;
+        }
+        ids[i] = strndup((const char *)bin.data, bin.size);
+    }
+    return list_len;
+}
+
+static ERL_NIF_TERM nif_iap_fetch_products(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    char *ids[128];
+    memset(ids, 0, sizeof(ids));
+    size_t count = iap_extract_product_ids(env, argv[0], ids, 128);
+
+    ErlNifPid *pid_copy = malloc(sizeof(ErlNifPid));
+    enif_self(env, pid_copy);
+
+    // Build NSArray<NSString *> and pass to MobIapBridge
+    NSMutableArray *productIds = [NSMutableArray arrayWithCapacity:count];
+    for (size_t i = 0; i < count; i++) {
+        [productIds addObject:[NSString stringWithUTF8String:ids[i]]];
+        free(ids[i]);
+    }
+
+    [MobIapBridge fetchProducts:productIds pidBytes:pid_copy];
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_iap_purchase(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[0], &bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &bin))
+        return enif_make_badarg(env);
+
+    NSString *productId = [[NSString alloc] initWithBytes:bin.data
+                                                   length:bin.size
+                                                 encoding:NSUTF8StringEncoding];
+
+    ErlNifPid *pid_copy = malloc(sizeof(ErlNifPid));
+    enif_self(env, pid_copy);
+
+    [MobIapBridge purchase:productId pidBytes:pid_copy];
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_iap_restore(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifPid *pid_copy = malloc(sizeof(ErlNifPid));
+    enif_self(env, pid_copy);
+
+    [MobIapBridge restorePurchases:pid_copy];
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_iap_current_entitlements(ErlNifEnv *env, int argc,
+                                                 const ERL_NIF_TERM argv[]) {
+    ErlNifPid *pid_copy = malloc(sizeof(ErlNifPid));
+    enif_self(env, pid_copy);
+
+    [MobIapBridge currentEntitlements:pid_copy];
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_iap_manage_subscriptions(ErlNifEnv *env, int argc,
+                                                 const ERL_NIF_TERM argv[]) {
+    [MobIapBridge manageSubscriptions];
+    return enif_make_atom(env, "ok");
+}
+
 // Return the root view controller of the key window in the first active scene.
 static UIViewController *mob_root_vc(void) {
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
@@ -6651,6 +6808,12 @@ static ErlNifFunc nif_funcs[] = {
     // doesn't head-of-line-block the regular schedulers. See the impl
     // above for the iOS rationale.
     {"resolve_ipv4", 1, nif_resolve_ipv4, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    // ── In-App Purchase (mob_iap plugin) ──────────────────────────────────────
+    {"iap_fetch_products", 1, nif_iap_fetch_products, 0},
+    {"iap_purchase", 1, nif_iap_purchase, 0},
+    {"iap_restore", 0, nif_iap_restore, 0},
+    {"iap_current_entitlements", 0, nif_iap_current_entitlements, 0},
+    {"iap_manage_subscriptions", 0, nif_iap_manage_subscriptions, 0},
 };
 
 static int nif_load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info) {

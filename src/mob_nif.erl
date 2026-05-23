@@ -126,7 +126,13 @@
     bt_hid_connect/1,
     bt_hid_subscribe_raw/1,
     %% DNS — see Mob.DNS and guides/dns_on_ios.md
-    resolve_ipv4/1
+    resolve_ipv4/1,
+    %% In-App Purchase (mob_iap plugin)
+    iap_fetch_products/1,
+    iap_purchase/1,
+    iap_restore/0,
+    iap_current_entitlements/0,
+    iap_manage_subscriptions/0
 ]).
 
 -nifs([
@@ -241,7 +247,13 @@
     %% DNS — in-process getaddrinfo so iOS apps bypass BEAM's
     %% broken inet_gethost path. See `Mob.DNS` for the Elixir
     %% wrapper and `guides/dns_on_ios.md` for the why.
-    resolve_ipv4/1
+    resolve_ipv4/1,
+    %% In-App Purchase (mob_iap plugin)
+    iap_fetch_products/1,
+    iap_purchase/1,
+    iap_restore/0,
+    iap_current_entitlements/0,
+    iap_manage_subscriptions/0
 ]).
 
 -on_load(init/0).
@@ -360,3 +372,9 @@ bt_spp_write(_Session, _Bytes) -> erlang:nif_error(not_loaded).
 bt_hid_connect(_DeviceJson) -> erlang:nif_error(not_loaded).
 bt_hid_subscribe_raw(_Session) -> erlang:nif_error(not_loaded).
 resolve_ipv4(_Host) -> erlang:nif_error(not_loaded).
+%% In-App Purchase — NIF stubs (registered by mob_iap plugin)
+iap_fetch_products(_ProductIds) -> erlang:nif_error(not_loaded).
+iap_purchase(_ProductId) -> erlang:nif_error(not_loaded).
+iap_restore() -> erlang:nif_error(not_loaded).
+iap_current_entitlements() -> erlang:nif_error(not_loaded).
+iap_manage_subscriptions() -> erlang:nif_error(not_loaded).
