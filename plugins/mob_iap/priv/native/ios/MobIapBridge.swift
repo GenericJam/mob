@@ -113,7 +113,7 @@ func mob_iap_send_transactions(_ pidBytes: UnsafeRawPointer, _ tag: UnsafePointe
     // MARK: - Restore
 
     /// Restore previous purchases via `AppStore.sync()`. Results as `{:iap, :restored, json}`.
-    @objc public static func restorePurchases(pidBytes: UnsafeRawPointer) {
+    @objc public static func restorePurchases(_ pidBytes: UnsafeRawPointer) {
         Task {
             do {
                 // StoreKit 2: AppStore.sync() re-syncs the transaction history with the App Store.
@@ -144,7 +144,7 @@ func mob_iap_send_transactions(_ pidBytes: UnsafeRawPointer, _ tag: UnsafePointe
 
     /// Fetch current entitlements (active subscriptions + non-consumables).
     /// Results as `{:iap, :entitlements, json}`.
-    @objc public static func currentEntitlements(pidBytes: UnsafeRawPointer) {
+    @objc public static func currentEntitlements(_ pidBytes: UnsafeRawPointer) {
         Task {
             var txMaps: [[String: Any]] = []
             for await verification in Transaction.currentEntitlements {

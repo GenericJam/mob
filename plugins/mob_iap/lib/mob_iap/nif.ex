@@ -3,9 +3,9 @@ defmodule MobIap.Nif do
 
   # Placeholder module for the plugin manifest's `:nifs` entry.
   #
-  # The 6 IAP NIF functions (`iap_fetch_products/1`, `iap_purchase/1`,
-  # `iap_restore/0`, `iap_current_entitlements/0`, `iap_manage_subscriptions/0`,
-  # `iap_verify_receipt/2`) are registered under the existing `:mob_nif` module
+  # The 5 IAP NIF functions (`iap_fetch_products/1`, `iap_purchase/1`,
+  # `iap_restore/0`, `iap_current_entitlements/0`, `iap_manage_subscriptions/0`)
+  # are registered under the existing `:mob_nif` module
   # in `src/mob_nif.erl` — following the pattern of every other Mob device API
   # (Camera, Biometric, Location, etc.).
   #

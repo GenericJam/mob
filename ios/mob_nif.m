@@ -2045,7 +2045,7 @@ static void mob_send3(const ErlNifPid *pid, const char *a1, const char *a2, cons
 
 // Send {:iap, atom} to the BEAM process identified by serialized ErlNifPid.
 // pid_bytes points to a serialized ErlNifPid copied by the NIF caller.
-static void mob_iap_send2(const void *pid_bytes, const char *tag, const char *atom) {
+void mob_iap_send2(const void *pid_bytes, const char *tag, const char *atom) {
     ErlNifPid pid;
     memcpy(&pid, pid_bytes, sizeof(ErlNifPid));
     ErlNifEnv *e = enif_alloc_env();
@@ -2056,7 +2056,7 @@ static void mob_iap_send2(const void *pid_bytes, const char *tag, const char *at
 }
 
 // Send {:iap, tag, atom} to the BEAM.
-static void mob_iap_send3(const void *pid_bytes, const char *tag, const char *a1, const char *a2) {
+void mob_iap_send3(const void *pid_bytes, const char *tag, const char *a1, const char *a2) {
     ErlNifPid pid;
     memcpy(&pid, pid_bytes, sizeof(ErlNifPid));
     ErlNifEnv *e = enif_alloc_env();
@@ -2068,7 +2068,7 @@ static void mob_iap_send3(const void *pid_bytes, const char *tag, const char *a1
 }
 
 // Send {:iap, :products, binary_json} — JSON list of product maps.
-static void mob_iap_send_products(const void *pid_bytes, const char *json) {
+void mob_iap_send_products(const void *pid_bytes, const char *json) {
     ErlNifPid pid;
     memcpy(&pid, pid_bytes, sizeof(ErlNifPid));
     ErlNifEnv *e = enif_alloc_env();
@@ -2084,7 +2084,7 @@ static void mob_iap_send_products(const void *pid_bytes, const char *json) {
 }
 
 // Send {:iap, tag, binary_json} — a single transaction as JSON map.
-static void mob_iap_send_transaction(const void *pid_bytes, const char *tag, const char *json) {
+void mob_iap_send_transaction(const void *pid_bytes, const char *tag, const char *json) {
     ErlNifPid pid;
     memcpy(&pid, pid_bytes, sizeof(ErlNifPid));
     ErlNifEnv *e = enif_alloc_env();
@@ -2100,7 +2100,7 @@ static void mob_iap_send_transaction(const void *pid_bytes, const char *tag, con
 }
 
 // Send {:iap, tag, binary_json} — a JSON array of transactions.
-static void mob_iap_send_transactions(const void *pid_bytes, const char *tag, const char *json) {
+void mob_iap_send_transactions(const void *pid_bytes, const char *tag, const char *json) {
     mob_iap_send_transaction(pid_bytes, tag, json);
 }
 
