@@ -193,6 +193,8 @@ pub inline fn enif_make_uint64(env: ?*ErlNifEnv, i: u64) ERL_NIF_TERM {
 // enif_make_copy.
 pub extern fn enif_alloc_env() ?*ErlNifEnv;
 pub extern fn enif_free_env(env: ?*ErlNifEnv) void;
+pub extern fn enif_alloc(size: usize) ?*anyopaque;
+pub extern fn enif_free(ptr: ?*anyopaque) void;
 pub extern fn enif_make_copy(dst: ?*ErlNifEnv, src_term: ERL_NIF_TERM) ERL_NIF_TERM;
 pub extern fn enif_send(
     caller_env: ?*ErlNifEnv,
@@ -208,6 +210,10 @@ pub extern fn enif_whereis_pid(env: ?*ErlNifEnv, name: ERL_NIF_TERM, pid: *ErlNi
 
 // Tuple inspectors (iter 3c).
 pub extern fn enif_get_tuple(env: ?*ErlNifEnv, tpl: ERL_NIF_TERM, arity: *c_int, array: *[*]const ERL_NIF_TERM) c_int;
+
+// List inspectors.
+pub extern fn enif_get_list_length(env: ?*ErlNifEnv, term: ERL_NIF_TERM, len: *c_uint) c_int;
+pub extern fn enif_get_list_cell(env: ?*ErlNifEnv, term: ERL_NIF_TERM, head: *ERL_NIF_TERM, tail: *ERL_NIF_TERM) c_int;
 
 // Mutex (iter 3c). enif_mutex_create allocates; destroy + try-lock omitted
 // — Mob only uses simple lock/unlock pairs and the mutexes live for the

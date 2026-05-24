@@ -4800,31 +4800,31 @@ fn nif_iap_fetch_products(
     var ids: [128]?[*:0]const u8 = @splat(null);
     var head: erts.ERL_NIF_TERM = undefined;
     var tail: erts.ERL_NIF_TERM = argv[0];
-    var buf: [256]u8 = undefined;
+    var buf: [4096]u8 = undefined;
 
-    const alloc = std.heap.c_allocator;
     for (0..max) |i| {
         if (erts.enif_get_list_cell(env, tail, &head, &tail) == 0) {
-            for (0..i) |j| alloc.free(std.mem.span(ids[j].?));
+            for (0..i) |j| erts.enif_free(@ptrCast(@constCast(ids[j].?)));
             return erts.badarg(env);
         }
         if (!fillBufferFromTerm(env, head, &buf)) {
-            for (0..i) |j| alloc.free(std.mem.span(ids[j].?));
+            for (0..i) |j| erts.enif_free(@ptrCast(@constCast(ids[j].?)));
             return erts.badarg(env);
         }
         const cstr: [*:0]u8 = @ptrCast(&buf);
         const len = std.mem.len(cstr) + 1;
-        const str = alloc.alloc(u8, len) catch {
-            for (0..i) |j| alloc.free(std.mem.span(ids[j].?));
+        const str = erts.enif_alloc(len);
+        if (str == null) {
+            for (0..i) |j| erts.enif_free(@ptrCast(@constCast(ids[j].?)));
             return erts.badarg(env);
-        };
-        @memcpy(str[0..len], buf[0..len]);
-        ids[i] = @ptrCast(str.ptr);
+        }
+        @memcpy(@as([*]u8, @ptrCast(str.?))[0..len], buf[0..len]);
+        ids[i] = @ptrCast(str);
     }
 
-    const pid_ptr = std.heap.c_allocator.alloc(erts.ErlNifPid, 1) catch return erts.badarg(env);
-    pid_ptr[0] = pid;
-    mob_iap_fetch_products(pid_ptr, &ids, @intCast(max));
+    const pid_ptr = erts.enif_alloc(@sizeOf(erts.ErlNifPid)) orelse return erts.badarg(env);
+    @as(*erts.ErlNifPid, @ptrCast(@alignCast(pid_ptr))).* = pid;
+    mob_iap_fetch_products(@ptrCast(@alignCast(pid_ptr)), @ptrCast(&ids[0]), @intCast(max));
     return erts.atom(env, "ok");
 }
 
@@ -4843,9 +4843,9 @@ fn nif_iap_purchase(
         return erts.badarg(env);
     }
 
-    const pid_ptr = std.heap.c_allocator.alloc(erts.ErlNifPid, 1) catch return erts.badarg(env);
-    pid_ptr[0] = pid;
-    mob_iap_purchase(pid_ptr, @ptrCast(&buf));
+    const pid_ptr = erts.enif_alloc(@sizeOf(erts.ErlNifPid)) orelse return erts.badarg(env);
+    @as(*erts.ErlNifPid, @ptrCast(@alignCast(pid_ptr))).* = pid;
+    mob_iap_purchase(@ptrCast(@alignCast(pid_ptr)), @ptrCast(&buf));
     return erts.atom(env, "ok");
 }
 
@@ -4859,9 +4859,9 @@ fn nif_iap_restore(
         return erts.badarg(env);
     }
 
-    const pid_ptr = std.heap.c_allocator.alloc(erts.ErlNifPid, 1) catch return erts.badarg(env);
-    pid_ptr[0] = pid;
-    mob_iap_restore(pid_ptr);
+    const pid_ptr = erts.enif_alloc(@sizeOf(erts.ErlNifPid)) orelse return erts.badarg(env);
+    @as(*erts.ErlNifPid, @ptrCast(@alignCast(pid_ptr))).* = pid;
+    mob_iap_restore(@ptrCast(@alignCast(pid_ptr)));
     return erts.atom(env, "ok");
 }
 
@@ -4875,9 +4875,9 @@ fn nif_iap_current_entitlements(
         return erts.badarg(env);
     }
 
-    const pid_ptr = std.heap.c_allocator.alloc(erts.ErlNifPid, 1) catch return erts.badarg(env);
-    pid_ptr[0] = pid;
-    mob_iap_current_entitlements(pid_ptr);
+    const pid_ptr = erts.enif_alloc(@sizeOf(erts.ErlNifPid)) orelse return erts.badarg(env);
+    @as(*erts.ErlNifPid, @ptrCast(@alignCast(pid_ptr))).* = pid;
+    mob_iap_current_entitlements(@ptrCast(@alignCast(pid_ptr)));
     return erts.atom(env, "ok");
 }
 
@@ -4886,7 +4886,6 @@ fn nif_iap_manage_subscriptions(
     _: c_int,
     _: [*]const erts.ERL_NIF_TERM,
 ) callconv(.c) erts.ERL_NIF_TERM {
-    _ = env;
     mob_iap_manage_subscriptions();
     return erts.atom(env, "ok");
 }

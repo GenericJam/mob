@@ -51,7 +51,7 @@ Java_com_mob_iap_MobIapBridge_sendAtom(JNIEnv *env, jclass cls, jlong pid, jstri
     ERL_NIF_TERM msg = enif_make_tuple2(e, enif_make_atom(e, "iap"), enif_make_atom(e, tag_str));
     enif_send(NULL, p, e, msg);
     enif_free_env(e);
-    free(p);
+    enif_free(p);
 
     (*env)->ReleaseStringUTFChars(env, tag, tag_str);
 }
@@ -69,7 +69,7 @@ Java_com_mob_iap_MobIapBridge_sendAtom3(JNIEnv *env, jclass cls, jlong pid,
                                         enif_make_atom(e, atom_str));
     enif_send(NULL, p, e, msg);
     enif_free_env(e);
-    free(p);
+    enif_free(p);
 
     (*env)->ReleaseStringUTFChars(env, tag, tag_str);
     (*env)->ReleaseStringUTFChars(env, atom, atom_str);
@@ -93,7 +93,7 @@ Java_com_mob_iap_MobIapBridge_sendToBeam(JNIEnv *env, jclass cls,
                                          enif_make_atom(e, tag_str), json_bin);
     enif_send(NULL, p, e, msg);
     enif_free_env(e);
-    free(p);
+    enif_free(p);
 
     (*env)->ReleaseStringUTFChars(env, tag, tag_str);
     (*env)->ReleaseStringUTFChars(env, json, json_str);
