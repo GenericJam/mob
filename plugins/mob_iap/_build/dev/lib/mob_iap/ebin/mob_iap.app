@@ -1,0 +1,1 @@
+{application,mob_iap,[{modules,['Elixir.MobIap','Elixir.MobIap.Nif','Elixir.MobIap.Product','Elixir.MobIap.SettingsScreen','Elixir.MobIap.StoreScreen','Elixir.MobIap.SubscriptionScreen','Elixir.MobIap.Transaction']},{optional_applications,[]},{applications,[kernel,stdlib,elixir,logger,inets,mob,jason]},{description,"mob_iap"},{registered,[]},{vsn,"0.1.0"}]}.

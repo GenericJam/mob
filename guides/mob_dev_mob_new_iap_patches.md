@@ -1,5 +1,9 @@
 # mob_dev / mob_new Patch Spec — IAP Plugin Integration
 
+> **Plugin source:** The `mob_iap` plugin now lives at [`A-Legg/mob_iap`](https://github.com/A-Legg/mob_iap).
+> This document covers the `mob_dev` / `mob_new` build-system changes needed to
+> auto-discover and compile plugin-native code from that (or any other) Hex package.
+
 Generated from end-to-end testing of `mob_iap` on iOS simulator and Android emulator.
 Date: 2026-05-23
 
@@ -203,7 +207,7 @@ Alternatively, a simpler approach: always include the BILLING permission. It has
 # 1. Generate a fresh test app
 mix mob.new iap_test2 --module IapTest2
 cd iap_test2
-# Add {:mob_iap, path: "~/Projects/mob/plugins/mob_iap"} to mix.exs
+# Add {:mob_iap, "~> 0.1"} to mix.exs (or `path: "~/Projects/mob_iap"` for local dev)
 mix deps.get
 
 # 2. iOS sim — should build without manual build.zig edits
