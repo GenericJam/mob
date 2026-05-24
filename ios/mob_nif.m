@@ -2041,6 +2041,18 @@ static void mob_send3(const ErlNifPid *pid, const char *a1, const char *a2, cons
 
 // ════════════════════════════════════════════════════════════════════════════
 // IAP bridge helpers — called from MobIapBridge.swift via @_silgen_name
+//
+// pid_bytes lifetime contract: every mob_iap_send_* below frees pid_bytes
+// before returning. The Swift bridge MUST allocate one ErlNifPid copy per
+// pending operation and call exactly one mob_iap_send_* with it. Calling
+// two send helpers with the same pid_bytes is a use-after-free; storing
+// pid_bytes after a send is a use-after-free. If a single user action
+// could produce multiple events (e.g. :purchase_pending then :purchased),
+// the bridge must store the BEAM pid value itself (not the heap copy)
+// and allocate a fresh ErlNifPid for each enif_send.
+//
+// Symbols are intentionally non-static: Swift's @_silgen_name needs to
+// link them across the bridging-header-less Swift/ObjC NIF boundary.
 // ════════════════════════════════════════════════════════════════════════════
 
 // Send {:iap, atom} to the BEAM process identified by serialized ErlNifPid.
@@ -2076,7 +2088,8 @@ void mob_iap_send_products(const void *pid_bytes, const char *json) {
     size_t len = strlen(json);
     unsigned char *buf = enif_make_new_binary(e, len, &json_bin);
     memcpy(buf, json, len);
-    ERL_NIF_TERM msg = enif_make_tuple3(e, enif_make_atom(e, "iap"), enif_make_atom(e, "products"), json_bin);
+    ERL_NIF_TERM msg =
+        enif_make_tuple3(e, enif_make_atom(e, "iap"), enif_make_atom(e, "products"), json_bin);
     enif_send(NULL, &pid, e, msg);
     enif_free_env(e);
     free((void *)pid_bytes);
@@ -2091,7 +2104,8 @@ void mob_iap_send_transaction(const void *pid_bytes, const char *tag, const char
     size_t len = strlen(json);
     unsigned char *buf = enif_make_new_binary(e, len, &json_bin);
     memcpy(buf, json, len);
-    ERL_NIF_TERM msg = enif_make_tuple3(e, enif_make_atom(e, "iap"), enif_make_atom(e, tag), json_bin);
+    ERL_NIF_TERM msg =
+        enif_make_tuple3(e, enif_make_atom(e, "iap"), enif_make_atom(e, tag), json_bin);
     enif_send(NULL, &pid, e, msg);
     enif_free_env(e);
     free((void *)pid_bytes);
@@ -2136,9 +2150,17 @@ static size_t iap_extract_product_ids(ErlNifEnv *env, ERL_NIF_TERM list, char **
 }
 
 static ERL_NIF_TERM nif_iap_fetch_products(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    if (argc != 1)
+        return enif_make_badarg(env);
+
     char *ids[128];
     memset(ids, 0, sizeof(ids));
     size_t count = iap_extract_product_ids(env, argv[0], ids, 128);
+    // iap_extract_product_ids returns 0 on failure AND frees any partial
+    // allocations itself. An empty input list is also 0 — which is a
+    // valid edge case but useless work, so we reject both with badarg.
+    if (count == 0)
+        return enif_make_badarg(env);
 
     ErlNifPid *pid_copy = malloc(sizeof(ErlNifPid));
     enif_self(env, pid_copy);
@@ -2155,6 +2177,9 @@ static ERL_NIF_TERM nif_iap_fetch_products(ErlNifEnv *env, int argc, const ERL_N
 }
 
 static ERL_NIF_TERM nif_iap_purchase(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    if (argc != 1)
+        return enif_make_badarg(env);
+
     ErlNifBinary bin;
     if (!enif_inspect_binary(env, argv[0], &bin) &&
         !enif_inspect_iolist_as_binary(env, argv[0], &bin))
@@ -2172,6 +2197,9 @@ static ERL_NIF_TERM nif_iap_purchase(ErlNifEnv *env, int argc, const ERL_NIF_TER
 }
 
 static ERL_NIF_TERM nif_iap_restore(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    if (argc != 0)
+        return enif_make_badarg(env);
+
     ErlNifPid *pid_copy = malloc(sizeof(ErlNifPid));
     enif_self(env, pid_copy);
 
@@ -2181,6 +2209,9 @@ static ERL_NIF_TERM nif_iap_restore(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 
 static ERL_NIF_TERM nif_iap_current_entitlements(ErlNifEnv *env, int argc,
                                                  const ERL_NIF_TERM argv[]) {
+    if (argc != 0)
+        return enif_make_badarg(env);
+
     ErlNifPid *pid_copy = malloc(sizeof(ErlNifPid));
     enif_self(env, pid_copy);
 
@@ -2190,6 +2221,9 @@ static ERL_NIF_TERM nif_iap_current_entitlements(ErlNifEnv *env, int argc,
 
 static ERL_NIF_TERM nif_iap_manage_subscriptions(ErlNifEnv *env, int argc,
                                                  const ERL_NIF_TERM argv[]) {
+    if (argc != 0)
+        return enif_make_badarg(env);
+
     [MobIapBridge manageSubscriptions];
     return enif_make_atom(env, "ok");
 }
