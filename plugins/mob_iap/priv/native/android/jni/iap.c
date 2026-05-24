@@ -157,7 +157,7 @@ static jobject iap_jni_build_string_list(JNIEnv *env, const char **strings, int 
         jstring s = (*env)->NewStringUTF(env, strings[i]);
         (*env)->CallBooleanMethod(env, list, list_add, s);
         (*env)->DeleteLocalRef(env, s);
-        free((void *)strings[i]);
+        enif_free((void *)strings[i]);
     }
     (*env)->DeleteLocalRef(env, list_class);
     return list;
@@ -186,11 +186,11 @@ static inline void iap_jni_detach_if_needed(jint attached) {
 // ── NIF wrappers — called from mob_nif.zig ──────────────────────────
 
 void mob_iap_fetch_products(void *pid_ptr, const char **ids, int count) {
-    if (!g_bridge) { free(pid_ptr); return; }
+    if (!g_bridge) { enif_free(pid_ptr); return; }
 
     jint attached;
     JNIEnv *env = iap_jni_get_env(&attached);
-    if (!env) { free(pid_ptr); return; }
+    if (!env) { enif_free(pid_ptr); return; }
 
     jobject list = iap_jni_build_string_list(env, ids, count);
     jlong pid = (jlong)(intptr_t)pid_ptr;
@@ -201,11 +201,11 @@ void mob_iap_fetch_products(void *pid_ptr, const char **ids, int count) {
 }
 
 void mob_iap_purchase(void *pid_ptr, const char *product_id) {
-    if (!g_bridge) { free(pid_ptr); return; }
+    if (!g_bridge) { enif_free(pid_ptr); return; }
 
     jint attached;
     JNIEnv *env = iap_jni_get_env(&attached);
-    if (!env) { free(pid_ptr); return; }
+    if (!env) { enif_free(pid_ptr); return; }
 
     jstring product_jstr = (*env)->NewStringUTF(env, product_id);
     jlong pid = (jlong)(intptr_t)pid_ptr;
@@ -216,11 +216,11 @@ void mob_iap_purchase(void *pid_ptr, const char *product_id) {
 }
 
 void mob_iap_restore(void *pid_ptr) {
-    if (!g_bridge) { free(pid_ptr); return; }
+    if (!g_bridge) { enif_free(pid_ptr); return; }
 
     jint attached;
     JNIEnv *env = iap_jni_get_env(&attached);
-    if (!env) { free(pid_ptr); return; }
+    if (!env) { enif_free(pid_ptr); return; }
 
     jlong pid = (jlong)(intptr_t)pid_ptr;
     (*env)->CallVoidMethod(env, g_bridge, g_restore, pid);
@@ -229,11 +229,11 @@ void mob_iap_restore(void *pid_ptr) {
 }
 
 void mob_iap_current_entitlements(void *pid_ptr) {
-    if (!g_bridge) { free(pid_ptr); return; }
+    if (!g_bridge) { enif_free(pid_ptr); return; }
 
     jint attached;
     JNIEnv *env = iap_jni_get_env(&attached);
-    if (!env) { free(pid_ptr); return; }
+    if (!env) { enif_free(pid_ptr); return; }
 
     jlong pid = (jlong)(intptr_t)pid_ptr;
     (*env)->CallVoidMethod(env, g_bridge, g_entitlements, pid);
