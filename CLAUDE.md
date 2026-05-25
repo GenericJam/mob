@@ -752,3 +752,27 @@ Write small named functions in `<your_app>.IexHelpers`, push with
 `mix mob.deploy`, call by RPC. That keeps the Mac-side script
 minimal and debuggable, and the helpers double as documentation
 of the operations you actually need.
+
+---
+
+## Decision log
+
+Non-obvious decisions — tradeoffs, workarounds, conventions, "why we chose X
+over Y" — go in `decisions/`, **one file per decision**:
+
+    decisions/YYYY-MM-DD-short-slug.md
+
+Each file is a lightweight ADR:
+
+    # <Title>
+    - Date: YYYY-MM-DD
+    - Status: accepted | superseded by <file> | proposed
+    ## Context        — what prompted this
+    ## Decision       — what we chose
+    ## Consequences   — tradeoffs, follow-ups
+
+**Append new files; never edit existing ones.** If a decision changes, add a
+new file and mark the old one `Status: superseded by <new-file>`. One file per
+decision keeps the log conflict-free across parallel agents/worktrees — the
+date-sorted directory listing is the index. Record a decision the moment you
+make a non-obvious call, not later.
