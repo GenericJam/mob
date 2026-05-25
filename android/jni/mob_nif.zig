@@ -2932,6 +2932,19 @@ export fn nif_background_stop(
     return erts.ok(env);
 }
 
+// ── NIF: background_task_complete/2 ──────────────────────────────────────
+// On Android FCM data messages have no completion handler, so this is a
+// no-op that returns :ok.  The Elixir API remains cross-platform.
+export fn nif_background_task_complete(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    return erts.ok(env);
+}
+
 // ── Mob.Device — lifecycle events + queries ──────────────────────────────
 // Android implementation is partial — only `:appearance` (color scheme
 // changes from MainActivity.onConfigurationChanged) is wired today. The
@@ -4971,6 +4984,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "deregister_component", .arity = 1, .fptr = nif_deregister_component, .flags = 0 },
     .{ .name = "background_keep_alive", .arity = 0, .fptr = nif_background_keep_alive, .flags = 0 },
     .{ .name = "background_stop", .arity = 0, .fptr = nif_background_stop, .flags = 0 },
+    .{ .name = "background_task_complete", .arity = 2, .fptr = nif_background_task_complete, .flags = 0 },
     // Mob.Device — lifecycle events + queries (Android stubs except dispatcher set).
     .{ .name = "device_set_dispatcher", .arity = 1, .fptr = nif_device_set_dispatcher, .flags = 0 },
     .{ .name = "device_battery_state", .arity = 0, .fptr = nif_device_battery_state, .flags = 0 },

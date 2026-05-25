@@ -29,4 +29,12 @@ void mob_send_push_token(const char *hex_token);
 // it via handle_info({:notification, ...}) after the root screen is mounted.
 void mob_set_launch_notification_json(const char *json);
 
+// Begin an OS background task (silent push or background fetch).
+// Called from AppDelegate didReceiveRemoteNotification:fetchCompletionHandler:
+// or performFetchWithCompletionHandler:.  Stores the completion handler under
+// a UUID and delivers {:background_task, uuid, type, payload, deadline_us} to
+// the BEAM.  The BEAM must later call :mob_nif.background_task_complete/2.
+void mob_begin_background_task(const char *type, const char *payload_json,
+                                 void (^completion)(UIBackgroundFetchResult));
+
 #endif // MOB_BEAM_H

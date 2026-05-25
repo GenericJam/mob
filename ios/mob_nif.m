@@ -1402,6 +1402,38 @@ static ERL_NIF_TERM nif_background_stop(ErlNifEnv *env, int argc, const ERL_NIF_
     return enif_make_atom(env, "ok");
 }
 
+// ── NIF: background_task_complete/2 ────────────────────────────────────────
+// Signals completion of a background task started by mob_begin_background_task.
+// argv[0] = uuid binary, argv[1] = :new_data | :no_data | :failed
+static ERL_NIF_TERM nif_background_task_complete(ErlNifEnv *env, int argc,
+                                                   const ERL_NIF_TERM argv[]) {
+    char uuid[64];
+    if (!enif_get_string(env, argv[0], uuid, sizeof(uuid), ERL_NIF_LATIN1))
+        return enif_make_badarg(env);
+    char result[16];
+    if (!enif_get_atom(env, argv[1], result, sizeof(result), ERL_NIF_LATIN1))
+        return enif_make_badarg(env);
+
+    UIBackgroundFetchResult r = UIBackgroundFetchResultNoData;
+    if (strcmp(result, "new_data") == 0)
+        r = UIBackgroundFetchResultNewData;
+    else if (strcmp(result, "failed") == 0)
+        r = UIBackgroundFetchResultFailed;
+
+    enif_mutex_lock(g_bg_tasks_mutex);
+    void (^handler)(UIBackgroundFetchResult) = g_bg_tasks[[NSString stringWithUTF8String:uuid]];
+    if (handler)
+        [g_bg_tasks removeObjectForKey:[NSString stringWithUTF8String:uuid]];
+    enif_mutex_unlock(g_bg_tasks_mutex);
+
+    if (handler) {
+        dispatch_async(dispatch_get_main_queue(), ^{ handler(r); });
+        return enif_make_atom(env, "ok");
+    }
+    return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                            enif_make_atom(env, "unknown_task"));
+}
+
 // ── NIF: battery_level/0 ─────────────────────────────────────────────────────
 
 static ERL_NIF_TERM nif_battery_level(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
@@ -1437,6 +1469,13 @@ static ErlNifPid g_device_dispatcher_pid;
 static BOOL g_device_dispatcher_set = NO;
 static dispatch_once_t g_device_observers_once = 0;
 
+// ── Background task registry ─────────────────────────────────────────────
+// Keys: NSString UUID → UIBackgroundFetchResult completion handler.
+// Written by mob_begin_background_task (called from AppDelegate);
+// consumed by nif_background_task_complete (called from the BEAM).
+static NSMutableDictionary<NSString *, void (^)(UIBackgroundFetchResult)> *g_bg_tasks = nil;
+static ErlNifMutex *g_bg_tasks_mutex = nil;
+
 static void mob_device_send_atom(const char *tag, const char *atom_name) {
     if (!g_device_dispatcher_set)
         return;
@@ -1457,6 +1496,41 @@ static void mob_device_send_atom_payload(const char *tag, const char *atom_name,
     enif_send(NULL, &g_device_dispatcher_pid, e, msg);
     enif_free_env(e);
     (void)payload_env;
+}
+
+// Called from AppDelegate didReceiveRemoteNotification:fetchCompletionHandler:
+// and performFetchWithCompletionHandler:.  Stores the completion handler under
+// a UUID, then delivers {:background_task, uuid, type, payload, deadline_us}
+// to the registered device dispatcher.  The BEAM must later call
+// nif_background_task_complete with the same UUID.
+void mob_begin_background_task(const char *type, const char *payload_json,
+                               void (^completion)(UIBackgroundFetchResult)) {
+    if (!g_bg_tasks_mutex)
+        return; // BEAM not ready yet — silently drop; OS will rate-limit us
+
+    NSString *uuid = [[NSUUID UUID] UUIDString];
+    enif_mutex_lock(g_bg_tasks_mutex);
+    if (!g_bg_tasks)
+        g_bg_tasks = [NSMutableDictionary dictionary];
+    g_bg_tasks[uuid] = [completion copy];
+    enif_mutex_unlock(g_bg_tasks_mutex);
+
+    if (!g_device_dispatcher_set)
+        return;
+
+    ErlNifEnv *e = enif_alloc_env();
+    ERL_NIF_TERM payload_term = payload_json
+        ? enif_make_string(e, payload_json, ERL_NIF_LATIN1)
+        : enif_make_atom(e, "nil");
+    ERL_NIF_TERM msg = enif_make_tuple5(e,
+        enif_make_atom(e, "background_task"),
+        enif_make_string(e, [uuid UTF8String], ERL_NIF_LATIN1),
+        enif_make_atom(e, type),
+        payload_term,
+        enif_make_uint64(e, enif_monotonic_time(ERL_NIF_USEC) + 25 * 1000 * 1000) // 25 s deadline
+    );
+    enif_send(NULL, &g_device_dispatcher_pid, e, msg);
+    enif_free_env(e);
 }
 
 static const char *thermal_state_atom(NSProcessInfoThermalState s) {
@@ -6747,6 +6821,7 @@ static ErlNifFunc nif_funcs[] = {
     // ── Core mob functions ───────────────────────────────────────────────────
     {"background_keep_alive", 0, nif_background_keep_alive, 0},
     {"background_stop", 0, nif_background_stop, 0},
+    {"background_task_complete", 2, nif_background_task_complete, 0},
     {"battery_level", 0, nif_battery_level, 0},
     // ── Mob.Device — lifecycle events + queries ──────────────────────────────
     {"device_set_dispatcher", 1, nif_device_set_dispatcher, 0},
@@ -6863,6 +6938,11 @@ static int nif_load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info) {
     g_launch_notif_mutex = enif_mutex_create("mob_launch_notif_mutex");
     if (!g_launch_notif_mutex) {
         LOGE(@"nif_load: failed to create launch notif mutex");
+        return -1;
+    }
+    g_bg_tasks_mutex = enif_mutex_create("mob_bg_tasks_mutex");
+    if (!g_bg_tasks_mutex) {
+        LOGE(@"nif_load: failed to create bg tasks mutex");
         return -1;
     }
     LOGI(@"nif_load: mob_nif ready");
