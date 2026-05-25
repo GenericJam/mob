@@ -35,6 +35,60 @@ defmodule Mob.Background.TaskTest do
         Mob.Background.Task.complete(:not_a_binary, :new_data)
       end
     end
+
+    test "run_and_complete/1 returns {:error, :no_background_task} outside iOS" do
+      result =
+        try do
+          Mob.Background.Task.run_and_complete(fn -> :new_data end)
+        rescue
+          ErlangError -> {:error, :no_background_task}
+          UndefinedFunctionError -> {:error, :no_background_task}
+        end
+
+      assert result == {:error, :no_background_task}
+    end
+
+    test "run_and_complete/1 validates fun is arity-0" do
+      assert_raise FunctionClauseError, fn ->
+        Mob.Background.Task.run_and_complete(fn _x -> :new_data end)
+      end
+    end
+
+    test "new_data/0 returns {:error, :no_background_task} outside iOS" do
+      result =
+        try do
+          Mob.Background.Task.new_data()
+        rescue
+          ErlangError -> {:error, :no_background_task}
+          UndefinedFunctionError -> {:error, :no_background_task}
+        end
+
+      assert result == {:error, :no_background_task}
+    end
+
+    test "no_data/0 returns {:error, :no_background_task} outside iOS" do
+      result =
+        try do
+          Mob.Background.Task.no_data()
+        rescue
+          ErlangError -> {:error, :no_background_task}
+          UndefinedFunctionError -> {:error, :no_background_task}
+        end
+
+      assert result == {:error, :no_background_task}
+    end
+
+    test "failed/0 returns {:error, :no_background_task} outside iOS" do
+      result =
+        try do
+          Mob.Background.Task.failed()
+        rescue
+          ErlangError -> {:error, :no_background_task}
+          UndefinedFunctionError -> {:error, :no_background_task}
+        end
+
+      assert result == {:error, :no_background_task}
+    end
   end
 
   # ── On-device integration tests ───────────────────────────────────────────────
@@ -43,6 +97,11 @@ defmodule Mob.Background.TaskTest do
               System.get_env("MOB_TEST_NODE") |> String.to_atom()
 
   defp rpc(fun, args), do: :rpc.call(@ios_node, :mob_nif, fun, args, 5000)
+
+  @tag :on_device
+  test "background_task_current/0 returns :none when no task active" do
+    assert rpc(:background_task_current, []) == :none
+  end
 
   @tag :on_device
   test "background_task_complete/2 returns :ok for a valid task" do

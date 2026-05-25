@@ -76,6 +76,7 @@
     background_keep_alive/0,
     background_stop/0,
     background_task_complete/2,
+    background_task_current/0,
     %% Device state
     battery_level/0,
     %% Device lifecycle (Mob.Device)
@@ -182,6 +183,7 @@
     background_keep_alive/0,
     background_stop/0,
     background_task_complete/2,
+    background_task_current/0,
     battery_level/0,
     device_set_dispatcher/1,
     device_battery_state/0,
@@ -314,6 +316,7 @@ take_launch_notification() -> erlang:nif_error(not_loaded).
 background_keep_alive() -> erlang:nif_error(not_loaded).
 background_stop() -> erlang:nif_error(not_loaded).
 background_task_complete(_Id, _Result) -> erlang:nif_error(not_loaded).
+background_task_current() -> erlang:nif_error(not_loaded).
 battery_level() -> erlang:nif_error(not_loaded).
 device_set_dispatcher(_Pid) -> erlang:nif_error(not_loaded).
 device_battery_state() -> erlang:nif_error(not_loaded).

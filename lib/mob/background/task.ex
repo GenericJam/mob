@@ -24,6 +24,18 @@ defmodule Mob.Background.Task do
 
       Mob.Background.Task.complete(id, :new_data)
 
+  ## Convenience API
+
+  `run_and_complete/1` wraps the entire lifecycle:
+
+      Mob.Background.Task.run_and_complete(fn ->
+        MyApp.Sync.push_all()
+        :new_data
+      end)
+
+  The function is executed inside a supervised `Task`. When it finishes,
+  the completion handler is called automatically with the mapped result.
+
   ## Example
 
       def handle_info({:background_task, id, :silent_push, _payload, _deadline}, state) do
@@ -46,6 +58,7 @@ defmodule Mob.Background.Task do
 
   @type result :: :new_data | :no_data | :failed
   @type id :: String.t()
+  @type fun_result :: result() | {:ok, any()} | {:error, any()} | any()
 
   @doc """
   Signals that the background task identified by `id` is finished.
@@ -63,4 +76,74 @@ defmodule Mob.Background.Task do
   def complete(id, result) when result in [:new_data, :no_data, :failed] and is_binary(id) do
     :mob_nif.background_task_complete(id, result)
   end
+
+  @doc """
+  Runs `fun` inside a supervised `Task` and auto-completes the current
+  background task when `fun` returns.
+
+  Only usable inside an iOS background fetch / silent push callback.
+  On Android it always returns `{:ok, "android_bg_task"}`.
+
+  `fun` may return:
+
+    * `:new_data` | `:no_data` | `:failed` — passed directly to the OS
+    * `{:ok, _}` or any other value — treated as `:new_data`
+    * `{:error, _}` — treated as `:failed`
+
+  If `fun` raises, the completion handler is still called with `:failed`.
+
+  Returns `{:ok, id}` on success, `{:error, :no_background_task}` if
+  not inside a background task, or `{:error, reason}` if the task
+  process crashes.
+  """
+  @spec run_and_complete((-> fun_result())) :: {:ok, id()} | {:error, :no_background_task}
+  def run_and_complete(fun) when is_function(fun, 0) do
+    case :mob_nif.background_task_current() do
+      {:ok, id} ->
+        task =
+          Task.Supervisor.start_child(Mob.TaskSupervisor, fn ->
+            try do
+              result = fun.()
+              mapped = map_result(result)
+              complete(id, mapped)
+            catch
+              _kind, _reason ->
+                complete(id, :failed)
+            end
+          end)
+
+        case task do
+          {:ok, _pid} -> {:ok, id}
+          {:error, reason} -> {:error, reason}
+        end
+
+      :none ->
+        {:error, :no_background_task}
+    end
+  end
+
+  @doc "Complete the current background task with `:new_data`."
+  @spec new_data() :: :ok | {:error, :unknown_task | :no_background_task}
+  def new_data, do: complete_current(:new_data)
+
+  @doc "Complete the current background task with `:no_data`."
+  @spec no_data() :: :ok | {:error, :unknown_task | :no_background_task}
+  def no_data, do: complete_current(:no_data)
+
+  @doc "Complete the current background task with `:failed`."
+  @spec failed() :: :ok | {:error, :unknown_task | :no_background_task}
+  def failed, do: complete_current(:failed)
+
+  defp complete_current(result) do
+    case :mob_nif.background_task_current() do
+      {:ok, id} -> complete(id, result)
+      :none -> {:error, :no_background_task}
+    end
+  end
+
+  defp map_result(:new_data), do: :new_data
+  defp map_result(:no_data), do: :no_data
+  defp map_result(:failed), do: :failed
+  defp map_result({:error, _}), do: :failed
+  defp map_result(_), do: :new_data
 end

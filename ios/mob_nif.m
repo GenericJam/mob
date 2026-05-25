@@ -1434,6 +1434,20 @@ static ERL_NIF_TERM nif_background_task_complete(ErlNifEnv *env, int argc,
                             enif_make_atom(env, "unknown_task"));
 }
 
+// ── NIF: background_task_current/0 ──────────────────────────────────────
+// Returns the UUID of the most recently started background task, or :none.
+static ERL_NIF_TERM nif_background_task_current(ErlNifEnv *env, int argc,
+                                                  const ERL_NIF_TERM argv[]) {
+    enif_mutex_lock(g_bg_tasks_mutex);
+    if (g_current_bg_task_id[0] != '\0') {
+        ERL_NIF_TERM term = enif_make_string(env, g_current_bg_task_id, ERL_NIF_LATIN1);
+        enif_mutex_unlock(g_bg_tasks_mutex);
+        return enif_make_tuple2(env, enif_make_atom(env, "ok"), term);
+    }
+    enif_mutex_unlock(g_bg_tasks_mutex);
+    return enif_make_atom(env, "none");
+}
+
 // ── NIF: battery_level/0 ─────────────────────────────────────────────────────
 
 static ERL_NIF_TERM nif_battery_level(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
@@ -1475,6 +1489,7 @@ static dispatch_once_t g_device_observers_once = 0;
 // consumed by nif_background_task_complete (called from the BEAM).
 static NSMutableDictionary<NSString *, void (^)(UIBackgroundFetchResult)> *g_bg_tasks = nil;
 static ErlNifMutex *g_bg_tasks_mutex = nil;
+static char g_current_bg_task_id[64] = {0};
 
 static void mob_device_send_atom(const char *tag, const char *atom_name) {
     if (!g_device_dispatcher_set)
@@ -1513,6 +1528,7 @@ void mob_begin_background_task(const char *type, const char *payload_json,
     if (!g_bg_tasks)
         g_bg_tasks = [NSMutableDictionary dictionary];
     g_bg_tasks[uuid] = [completion copy];
+    strlcpy(g_current_bg_task_id, [uuid UTF8String], sizeof(g_current_bg_task_id));
     enif_mutex_unlock(g_bg_tasks_mutex);
 
     if (!g_device_dispatcher_set)
@@ -6822,6 +6838,7 @@ static ErlNifFunc nif_funcs[] = {
     {"background_keep_alive", 0, nif_background_keep_alive, 0},
     {"background_stop", 0, nif_background_stop, 0},
     {"background_task_complete", 2, nif_background_task_complete, 0},
+    {"background_task_current", 0, nif_background_task_current, 0},
     {"battery_level", 0, nif_battery_level, 0},
     // ── Mob.Device — lifecycle events + queries ──────────────────────────────
     {"device_set_dispatcher", 1, nif_device_set_dispatcher, 0},
