@@ -7,6 +7,7 @@ BEAM-on-device mobile framework for Elixir. OTP runs inside your iOS and Android
 [![Hex.pm](https://img.shields.io/hexpm/v/mob.svg)](https://hex.pm/packages/mob)
 [![Docs](https://img.shields.io/badge/docs-hexdocs-blue.svg)](https://hexdocs.pm/mob)
 
+> [!WARNING]
 > **Status:** Early development. Android emulator and iOS simulator confirmed working. Not yet ready for production use.
 
 ## What it is
