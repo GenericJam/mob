@@ -202,4 +202,9 @@ void mob_deliver_bt_hid_disconnected(jlong pid, int session, const char *reason_
 void mob_deliver_bt_hid_input(jlong pid, int session, int type, int code, int value);
 void mob_deliver_bt_hid_raw_report(jlong pid, int session, const char *bytes, size_t len);
 
+// Deliver {:background_task, uuid, type, payload, deadline_us} to the
+// device dispatcher. Called from MobBackgroundWorker via JNI when an FCM
+// data message triggers a background task.
+void mob_begin_background_task(const char *uuid, const char *type, const char *payload_json);
+
 #endif // MOB_BEAM_H

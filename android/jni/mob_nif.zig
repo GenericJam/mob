@@ -956,6 +956,35 @@ pub export fn mob_send_swipe_with_direction(handle: c_int, direction: [*:0]const
     _ = erts.enif_send(null, &pid, env, msg);
 }
 
+// ── Background task sender ──────────────────────────────────────────────
+// Called from MobBackgroundWorker via JNI when an FCM data message
+// triggers a background task. Delivers the same
+// {:background_task, id, type, payload, deadline_us} tuple that iOS
+// sends via performFetchWithCompletionHandler / didReceiveRemoteNotification.
+pub export fn mob_begin_background_task(
+    uuid: [*:0]const u8,
+    type: [*:0]const u8,
+    payload_json: [*:0]const u8,
+) callconv(.c) void {
+    if (!g_device_dispatcher_set) return;
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const deadline_us = erts.enif_monotonic_time(erts.ERL_NIF_USEC) + 25_000_000;
+    const payload_term = if (payload_json[0] == 0)
+        erts.atom(env, "nil")
+    else
+        erts.enif_make_string(env, payload_json, erts.ERL_NIF_LATIN1);
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, "background_task"),
+        erts.enif_make_string(env, uuid, erts.ERL_NIF_LATIN1),
+        erts.enif_make_atom(env, type),
+        payload_term,
+        erts.enif_make_uint64(env, @intCast(deadline_us)),
+    });
+    var pid = g_device_dispatcher_pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
 // ── Throttle infrastructure (Batch 5 Tier 1) ────────────────────────────
 // Per-handle throttle + delta-threshold gating, mirroring iOS. Phase
 // boundaries (began/ended) bypass the throttle so the BEAM always sees

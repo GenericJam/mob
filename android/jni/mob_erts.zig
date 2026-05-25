@@ -44,6 +44,13 @@ pub const ErlNifCharEncoding = c_int;
 pub const ERL_NIF_LATIN1: ErlNifCharEncoding = 1;
 pub const ERL_NIF_UTF8: ErlNifCharEncoding = 2;
 
+/// Time-unit for enif_monotonic_time.
+pub const ErlNifTimeUnit = c_int;
+pub const ERL_NIF_SEC: ErlNifTimeUnit = 1;
+pub const ERL_NIF_MSEC: ErlNifTimeUnit = 2;
+pub const ERL_NIF_USEC: ErlNifTimeUnit = 3;
+pub const ERL_NIF_NSEC: ErlNifTimeUnit = 4;
+
 /// Binary view. `data` points at heap-owned bytes; `size` is the length;
 /// the trailing internal pointers (ref_bin, __spare__) are opaque to NIF
 /// authors. Layout matches C exactly so `enif_inspect_binary(env, term, &bin)`
