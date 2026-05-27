@@ -125,6 +125,7 @@ and orthogonal — composition over a fat component library.
 | Photo library picker | ✅ | ✓ | ✓ | `Mob.Photos.pick/2` |
 | Audio recording | ✅ | ✓ | ✓ | `Mob.Audio.start_recording/2` |
 | Audio playback | ✅ | ✓ | ✓ | `Mob.Audio.play/3`, stop, volume |
+| Text-to-speech | ✅ | ✓ | ✓ | `Mob.Speech.speak/3` + `stop_speaking/1` (AVSpeechSynthesizer / TextToSpeech) |
 | Speech recognition | ❌ | — | — | Plugin candidate (SFSpeechRecognizer / SpeechRecognizer) |
 | Voice activity detection | ❌ | — | — | Plugin candidate |
 | Audio effects (reverb, EQ) | ❌ | — | — | Plugin candidate |
