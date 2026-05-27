@@ -5,6 +5,28 @@
 > compile orchestration) → Xcode/Gradle (platform packaging). Touches all three
 > repos. Sequenced to ship value at every checkpoint.
 
+**Status: Historical record (closed 2026-05-26).** The Mix → Igniter → Zig
+migration shipped: apps build via `build.zig` / `build_device.zig`, `mix
+mob.new` generates Zig build templates, and the OTP release scripts run as
+tested Elixir (`MobDev.Release.*`). This document is retained for context, not
+as a live tracker.
+
+Two caveats for future readers:
+
+- The per-phase status notes below were **last updated 2026-05-11** and were
+  **not** maintained as later phases landed — several still say "in progress"
+  but the work shipped. Treat the per-phase notes as historical, not current.
+- One robustness follow-up the migration left open: the build orchestration
+  **hardcodes the mob Swift-source list** instead of globbing `ios/*.swift`.
+  When a new mob Swift file lands (as `MobGpuView.swift` did), any build that
+  doesn't list it fails with `cannot find '<Type>' in scope` (+ cascading
+  errors in `MobRootView.swift`). `mob_dev`'s release path now globs
+  (`mob_dev` PR #13); `mob_new`'s `ios/build.zig.eex` + `ios/build_device.zig.eex`
+  templates still list the three files by name and should be globbed to close
+  this class of break for good.
+
+_Original plan below, preserved as written._
+
 **Status:** Greenlit 2026-05-09. Begin after the in-flight `pythonx-support`
 work merges to master in `mob_dev` and `mob_new`.
 
