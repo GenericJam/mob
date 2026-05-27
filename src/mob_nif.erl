@@ -45,6 +45,9 @@
     audio_play_at/3,
     audio_stop_playback/0,
     audio_set_volume/1,
+    %% Text-to-speech (no permission required)
+    tts_speak/2,
+    tts_stop/0,
     %% Motion sensors
     motion_start/2,
     motion_stop/0,
@@ -165,6 +168,8 @@
     audio_play_at/3,
     audio_stop_playback/0,
     audio_set_volume/1,
+    tts_speak/2,
+    tts_stop/0,
     motion_start/2,
     motion_stop/0,
     scanner_scan/1,
@@ -290,6 +295,8 @@ audio_play(_Path, _OptsJson) -> erlang:nif_error(not_loaded).
 audio_play_at(_Path, _OptsJson, _AtWallMs) -> erlang:nif_error(not_loaded).
 audio_stop_playback() -> erlang:nif_error(not_loaded).
 audio_set_volume(_Volume) -> erlang:nif_error(not_loaded).
+tts_speak(_Text, _OptsJson) -> erlang:nif_error(not_loaded).
+tts_stop() -> erlang:nif_error(not_loaded).
 motion_start(_Sensors, _Interval) -> erlang:nif_error(not_loaded).
 motion_stop() -> erlang:nif_error(not_loaded).
 scanner_scan(_FormatsJson) -> erlang:nif_error(not_loaded).
