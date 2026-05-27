@@ -730,6 +730,93 @@ A few choices to flag:
   plugin NIFs into the host's `libpigeon.so`. Restrictive vs. React
   Native; necessary for App Store shipping.
 
+## Requirements raised by third-party UI-kit evaluation
+
+Evaluating whether an established web component library (Mishka
+Chelekom — shadcn-style Phoenix/Tailwind generator) could be brought
+to Mob surfaced two gaps in the current spec. Both are now resolved
+(2026-05-27) — see `decisions/2026-05-27-pure-elixir-composite-tier.md`
+and `decisions/2026-05-27-ui-kit-distribution-model.md`. The resolution
+for each is noted inline below.
+
+### 1. Pure-Elixir composite components have no tier
+
+`:ui_components` (tier 2) assumes **native backing** — every entry
+maps `tag`/`atom` → a SwiftUI `view_module` and an Android
+`composable`. There is currently no slot for a **pure-Elixir
+composite**: a tag that expands to a *built-in widget tree* with no
+native code (e.g. `<MishkaCombobox/>` → `Column` + `TextField` +
+`List`). This is the headline ask from any UI-kit author who doesn't
+write Swift/Kotlin.
+
+What exists today:
+
+- **Tier 0** already gives function-call composites —
+  `def combobox(opts), do: ~MOB"..."` invoked via the sigil's
+  `{combobox(...)}` child slot. Pure Elixir, hot-pushable, ships as a
+  plain Hex package with no manifest. A UI kit can ship its
+  presentational + simple-interactive components this way **now**.
+- What's missing is **tag syntax** (`<MishkaCombobox/>`) and a
+  manifest declaration for it.
+
+Reserved shape — a third form alongside the native one:
+
+```elixir
+ui_components: [
+  %{tag: "MishkaCombobox", atom: :mishka_combobox,
+    expand: {Mishka.Combobox, :expand}}   # pure-Elixir, no :ios/:android — RESERVED, not yet honored
+]
+```
+
+This implies a **third expansion pass in core**, run before
+`Mob.List.expand` / `Mob.Component.expand` in `Mob.Screen.do_render/3`
+(so a composite can itself emit `<List>` / `native_view` for the later
+passes), recursing to a fixpoint with a depth guard. Because the pass
+runs in the screen process and is handed the screen pid (like
+`Mob.List.expand` is), it can **auto-inject event targets** — the
+author writes `on_select="combo_select"` and the pass wires
+`{screen_pid, :combo_select}`, removing the need to thread `self()`
+through every component. Hot-pushable (pure Elixir; same rule as
+tier 0).
+
+**Resolution:** the `expand:` field is **reserved in the spec but not
+yet honored** — declaring it later is not a breaking change.
+Tier-0 function composites (`{combobox(...)}`) are the **v1 answer**
+for pure-Elixir UI kits; authors ship today. The third expansion pass
+(and the auto-inject-event-targets ergonomics) is a renderer feature
+that benefits all components, so it's carved into a **separate
+core-runtime track** — out of scope for the plugin epic, whose Phase 1
+is explicitly "no core churn." It should be designed against a concrete
+consumer.
+
+### 2. Generator vs. dependency — distribution model
+
+Mishka-class kits are **shadcn-style generators**: a dev-only tool
+(`mix mishka.ui.gen.component`, built on Igniter) that emits component
+**source the user owns and edits** into their project; components are
+free, the paid tier is templates + support, not components. The plugin
+system here is **dependency-shaped** (Hex dep + two-step activation).
+
+These are different products. A faithful UI kit for Mob may be a
+**generator** (`mix mob.gen.component`) rather than a plugin at all —
+or the two coexist (a generator scaffolds owned source *from* a plugin
+package). Decide which model a UI kit targets before committing a
+vendor to it; it determines whether a kit is a plugin in the first
+place, and it's the vendor's entire identity as a tool author.
+(Igniter is shared ground — Mishka is built on it and Mob's build
+migration is heading there — so the generator path is not foreign
+territory.)
+
+**Resolution:** two lanes, kept separate. The **plugin (dependency)
+lane** — Hex dep + two-step activation — is what this spec covers and
+is in scope for the plugin epic; it's for native-backed,
+capability-bearing, or centrally-maintained components. The
+**generator lane** — `mix mob.gen.component`, Igniter-based, emitting
+owned-source presentational components — is a separate tool tracked
+with the Igniter build-migration work, **not** part of the plugin
+epic. The two can coexist. For Mishka specifically, the faithful port
+is the generator lane.
+
 ## Future: full-language plugins
 
 This section parks an idea that's coherent but explicitly out of
