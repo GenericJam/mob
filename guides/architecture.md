@@ -4,26 +4,18 @@ Mob takes an unusual position in the mobile framework landscape. To understand w
 
 ## The core idea
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  Your Elixir App                                        │
-│  (GenServers, Phoenix, Ecto, whatever you normally use) │
-└────────────────────────────┬────────────────────────────┘
-                             │  OTP supervision tree
-                   ┌─────────▼─────────┐
-                   │    Mob.Screen      │  GenServer
-                   │  (your UI module)  │
-                   └─────────┬─────────┘
-                             │  render/1 → component tree
-                   ┌─────────▼─────────┐
-                   │   Mob.Renderer     │  serialise + token resolution
-                   └─────────┬─────────┘
-                             │  JSON (set_root NIF call)
-              ┌──────────────┴──────────────┐
-     ┌────────▼───────┐           ┌─────────▼───────┐
-     │  Compose (JVM) │           │  SwiftUI (Swift) │
-     │  Android       │           │  iOS             │
-     └────────────────┘           └─────────────────┘
+```mermaid
+flowchart TD
+    A["Your Elixir App<br/>(GenServers, Phoenix, Ecto, whatever you normally use)"]
+    B["Mob.Screen<br/>(your UI module) — GenServer"]
+    C["Mob.Renderer<br/>serialise + token resolution"]
+    D1["Compose (JVM)<br/>Android"]
+    D2["SwiftUI (Swift)<br/>iOS"]
+
+    A -->|OTP supervision tree| B
+    B -->|"render/1 → component tree"| C
+    C -->|"set_root NIF (JSON)"| D1
+    C -->|"set_root NIF (JSON)"| D2
 ```
 
 BEAM and OTP run **on the device** — embedded inside the APK and the iOS app bundle. There is no server. Your screen logic, navigation state, and business logic all execute locally in the same BEAM node that the user has installed.

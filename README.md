@@ -1,6 +1,6 @@
 # Mob
 
-<img src="logo.svg" width="15%" alt="Mob Logo">
+<img src="https://raw.githubusercontent.com/GenericJam/mob/master/logo.svg" width="15%" alt="Mob Logo">
 
 BEAM-on-device mobile framework for Elixir. OTP runs inside your iOS and Android apps — embedded directly in the app bundle, no server required. Screens are GenServers; the UI is rendered by Compose and SwiftUI via a thin NIF.
 
