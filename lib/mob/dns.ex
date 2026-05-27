@@ -27,44 +27,50 @@ defmodule Mob.DNS do
 
   ## How to use it
 
-  ### Recommended (set-and-forget): `configure_pure_beam/1`
+  ### Robust everywhere, incl. cellular: `resolve/1` · `preresolve/1`
 
-  At app startup, flip BEAM's lookup chain from the broken `:native`
-  path to `[:file, :dns]` and seed fallback nameservers. After this,
-  every `:inet.getaddr/2` resolves via raw DNS queries from inside
-  BEAM (no port program, no `execve`), and the usual HTTP libraries
-  just work:
+  `resolve/1` calls Darwin's `getaddrinfo` via a NIF — iOS's *own*
+  resolver — then seeds `:inet_db`'s `:file` table, so subsequent
+  `:inet.getaddr/2` lookups (Req / Finch / Mint) find the result.
+  Because it uses the OS resolver, it works wherever the OS does —
+  **including cellular** (it resolves via the carrier's DNS). This is
+  the recommended path and is device-verified on cellular.
+
+  Preresolve your known hosts at startup — that's all most apps need:
 
       def on_start do
-        Mob.DNS.configure_pure_beam()
+        Mob.DNS.preresolve(["api.example.com", "cdn.example.com"])
         # …rest of startup…
       end
 
-  Defaults to Google + Cloudflare DNS. Override via opt if your
-  network requires it. See `configure_pure_beam/1` for details and
-  trade-offs vs the Apple-resolver-via-NIF path below.
+  For a host not known until request time, call `resolve/1` just
+  before the request. Idempotent and cheap.
 
-  ### Per-host (when Apple-resolver semantics matter): `resolve/1`
+  ### General fallback (WiFi-friendly): `configure_pure_beam/1`
 
-  For hostnames that need iOS's resolver — VPN-pushed DNS, `.local`
-  / mDNS, search-domain expansion, captive portals — call
-  `resolve/1` for each one. Idempotent and cheap; safe to call
-  alongside `configure_pure_beam/0` (the `:file` lookup runs first,
-  so manually-resolved entries win over the `:dns` fallback).
+  Flips the lookup chain to `[:file, :dns]` and seeds nameservers so
+  *any* hostname resolves via raw DNS from inside BEAM — useful when
+  you can't enumerate hosts up front:
 
-      {:ok, _ip} = Mob.DNS.resolve("internal.corp.local")
+      def on_start do
+        if :mob_nif.platform() == :ios, do: Mob.DNS.configure_pure_beam()
+      end
 
-  For a small fixed set, `preresolve/1` does the whole list at
-  once:
+  Two caveats that make this the *fallback*, not the default:
 
-      Mob.DNS.preresolve([
-        "internal.corp.local",
-        "service.local"
-      ])
+    * **Gate it to iOS.** On Android `:native` works (mob ships
+      `inet_gethost` as a `.so`); forcing pure-`:dns` there *breaks*
+      lookups. (And never reset the chain to include `:native` on iOS —
+      exec'ing `inet_gethost` there is *fatal*, it crashes the BEAM.)
+    * **It can't resolve on cellular by default.** Its default
+      nameservers are public (Google / Cloudflare), which carriers
+      **commonly block** → `:nxdomain`. iOS exposes no reliable API to
+      read the carrier's resolvers, so there's nothing dependable to
+      seed instead. On cellular, **prefer `preresolve`/`resolve`**
+      above, or pass `:nameservers` you know are reachable.
 
-  Both paths compose. The recommended pattern is `configure_pure_beam`
-  at startup as the default, then `resolve/1` only for the OS-resolver
-  specials.
+  The two compose: `:file` is consulted before `:dns`, so anything you
+  `resolve/1` wins over the `configure_pure_beam` fallback.
 
   ## Scope and limitations
 
@@ -185,6 +191,16 @@ defmodule Mob.DNS do
   These all require Apple's resolver, which only the NIF path
   consults. The pure-BEAM `:dns` path queries whatever nameservers
   you seed and nothing else.
+
+  ## Cellular caveat
+
+  This won't resolve on cellular with the defaults: the seeded public
+  resolvers (8.8.8.8 / 1.1.1.1) are **commonly blocked by carriers** →
+  `:nxdomain`. iOS exposes no reliable API to read the carrier's
+  resolvers, so there's nothing dependable to seed instead. For hosts
+  you can name, prefer `preresolve/1` / `resolve/1` (they use the OS
+  resolver and work on cellular); otherwise pass `:nameservers` you
+  know are reachable.
 
   ## Opts
 
