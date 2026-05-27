@@ -1,22 +1,28 @@
 # Mob
 
+<img src="logo.svg" width="15%" alt="Mob Logo">
+
 BEAM-on-device mobile framework for Elixir. OTP runs inside your iOS and Android apps — embedded directly in the app bundle, no server required. Screens are GenServers; the UI is rendered by Compose and SwiftUI via a thin NIF.
 
 [![Hex.pm](https://img.shields.io/hexpm/v/mob.svg)](https://hex.pm/packages/mob)
 [![Docs](https://img.shields.io/badge/docs-hexdocs-blue.svg)](https://hexdocs.pm/mob)
 
+> [!WARNING]
 > **Status:** Early development. Android emulator and iOS simulator confirmed working. Not yet ready for production use.
 
 ## What it is
 
-```
-Your Elixir app (GenServers, OTP supervision, pattern matching, pipes)
-          ↓
-     Mob.Screen  (GenServer — your logic lives here)
-          ↓
-    Mob.Renderer  (component tree → JSON → NIF call)
-          ↓
-Compose (Android)   SwiftUI (iOS)   ← native rendering, native gestures
+```mermaid
+flowchart TD
+    A["Your Elixir app<br/>(GenServers, OTP supervision, pattern matching, pipes)"]
+    B["Mob.Screen<br/>(GenServer — your logic lives here)"]
+    C["Mob.Renderer<br/>(component tree → JSON → NIF call)"]
+    D1["Compose (Android)<br/>native rendering, gestures"]
+    D2["SwiftUI (iOS)<br/>native rendering, gestures"]
+
+    A --> B --> C
+    C --> D1
+    C --> D2
 ```
 
 You write Elixir. The native layer handles rendering. The BEAM node runs on the device — connect your dev machine to the running app over Erlang distribution, inspect state, and hot-push new bytecode without a restart.
