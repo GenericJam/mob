@@ -167,12 +167,6 @@ defmodule Mob.State do
   # ── Private ────────────────────────────────────────────────────────────────
 
   defp state_path do
-    data_dir =
-      System.get_env("MOB_DATA_DIR") ||
-        System.get_env("HOME") ||
-        Path.join(File.cwd!(), "priv/repo")
-
-    File.mkdir_p!(data_dir)
-    Path.join(data_dir, "mob_state.dets")
+    Path.join(Mob.data_dir(), "mob_state.dets")
   end
 end
