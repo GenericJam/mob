@@ -150,6 +150,8 @@ pub const BridgeMethods = extern struct {
     haptic: jni.JMethodID = null,
     clipboard_put: jni.JMethodID = null,
     clipboard_get: jni.JMethodID = null,
+    tts_speak: jni.JMethodID = null,
+    tts_stop: jni.JMethodID = null,
     share_text: jni.JMethodID = null,
     open_url: jni.JMethodID = null,
     request_permission: jni.JMethodID = null,
@@ -1778,6 +1780,50 @@ export fn nif_clipboard_get(
     }
     detachIfAttached(attached);
     return out;
+}
+
+// nif_tts_speak/2 — speaks Text via MobBridge.ttsSpeak(String, String). The
+// OptsJson string carries {"rate","pitch","voice"} (all optional). The Bridge
+// method is optional: apps generated before TTS existed won't have it, so we
+// return :ok without doing anything rather than failing.
+export fn nif_tts_speak(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.tts_speak == null) return erts.ok(env);
+    const text_bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const text = binToCString(text_bin) orelse return erts.atom(env, "error");
+    defer freeCString(text);
+    const opts_bin = getBinOrIolist(env, argv[1]) orelse return erts.badarg(env);
+    const opts = binToCString(opts_bin) orelse return erts.atom(env, "error");
+    defer freeCString(opts);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jtext = jni.newStringUTF(jenv, text);
+    const jopts = jni.newStringUTF(jenv, opts);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.tts_speak, jtext, jopts);
+    jni.deleteLocalRef(jenv, jtext);
+    jni.deleteLocalRef(jenv, jopts);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+// nif_tts_stop/0 — stops any in-progress speech via MobBridge.ttsStop().
+export fn nif_tts_stop(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    if (Bridge.tts_stop == null) return erts.ok(env);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.tts_stop);
+    detachIfAttached(attached);
+    return erts.ok(env);
 }
 
 // nif_set_theme/1 — push the resolved theme palette (as JSON) to Kotlin so
@@ -4650,6 +4696,9 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     if (!cacheRequired(jenv, "haptic", "(Ljava/lang/String;)V", &Bridge.haptic)) return -1;
     if (!cacheRequired(jenv, "clipboardPut", "(Ljava/lang/String;)V", &Bridge.clipboard_put)) return -1;
     if (!cacheRequired(jenv, "clipboardGet", "()Ljava/lang/String;", &Bridge.clipboard_get)) return -1;
+    // Optional: apps generated before TTS existed lack these MobBridge methods.
+    cacheOptional(jenv, "ttsSpeak", "(Ljava/lang/String;Ljava/lang/String;)V", &Bridge.tts_speak);
+    cacheOptional(jenv, "ttsStop", "()V", &Bridge.tts_stop);
     if (!cacheRequired(jenv, "shareText", "(Ljava/lang/String;)V", &Bridge.share_text)) return -1;
     if (!cacheRequired(jenv, "openUrl", "(Ljava/lang/String;)V", &Bridge.open_url)) return -1;
 
@@ -4798,6 +4847,8 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "haptic", .arity = 1, .fptr = nif_haptic, .flags = 0 },
     .{ .name = "clipboard_put", .arity = 1, .fptr = nif_clipboard_put, .flags = 0 },
     .{ .name = "clipboard_get", .arity = 0, .fptr = nif_clipboard_get, .flags = 0 },
+    .{ .name = "tts_speak", .arity = 2, .fptr = nif_tts_speak, .flags = 0 },
+    .{ .name = "tts_stop", .arity = 0, .fptr = nif_tts_stop, .flags = 0 },
     .{ .name = "share_text", .arity = 1, .fptr = nif_share_text, .flags = 0 },
     .{ .name = "open_url", .arity = 1, .fptr = nif_open_url, .flags = 0 },
     .{ .name = "request_permission", .arity = 1, .fptr = nif_request_permission, .flags = 0 },

@@ -1957,6 +1957,64 @@ static ERL_NIF_TERM nif_clipboard_get(ErlNifEnv *env, int argc, const ERL_NIF_TE
     return enif_make_atom(env, "empty");
 }
 
+// ── NIF: tts_speak/2 ──────────────────────────────────────────────────────────
+// Speaks UTF-8 text via AVSpeechSynthesizer. opts is a JSON object, all keys
+// optional: {"rate": float, "pitch": float, "voice": "en-US"}. Fire-and-forget;
+// a synthesizer is created lazily and kept alive so utterances can queue.
+
+static AVSpeechSynthesizer *g_tts_synth = nil;
+
+static ERL_NIF_TERM nif_tts_speak(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary text_bin, opts_bin;
+    if (!enif_inspect_binary(env, argv[0], &text_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &text_bin))
+        return enif_make_badarg(env);
+    if (!enif_inspect_binary(env, argv[1], &opts_bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[1], &opts_bin))
+        return enif_make_badarg(env);
+
+    NSString *text = [[NSString alloc] initWithBytes:text_bin.data
+                                              length:text_bin.size
+                                            encoding:NSUTF8StringEncoding];
+    NSData *optsData = [NSData dataWithBytes:opts_bin.data length:opts_bin.size];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (!g_tts_synth)
+          g_tts_synth = [[AVSpeechSynthesizer alloc] init];
+
+      AVSpeechUtterance *utt = [AVSpeechUtterance speechUtteranceWithString:text];
+
+      NSDictionary *opts = [NSJSONSerialization JSONObjectWithData:optsData options:0 error:nil];
+      if ([opts isKindOfClass:[NSDictionary class]]) {
+          NSNumber *rate = opts[@"rate"];
+          if ([rate isKindOfClass:[NSNumber class]])
+              utt.rate = [rate floatValue];
+          NSNumber *pitch = opts[@"pitch"];
+          if ([pitch isKindOfClass:[NSNumber class]])
+              utt.pitchMultiplier = [pitch floatValue];
+          NSString *voice = opts[@"voice"];
+          if ([voice isKindOfClass:[NSString class]]) {
+              AVSpeechSynthesisVoice *v = [AVSpeechSynthesisVoice voiceWithLanguage:voice];
+              if (v)
+                  utt.voice = v;
+          }
+      }
+
+      [g_tts_synth speakUtterance:utt];
+    });
+    return enif_make_atom(env, "ok");
+}
+
+// ── NIF: tts_stop/0 ───────────────────────────────────────────────────────────
+// Stops any in-progress speech immediately. Fire-and-forget.
+
+static ERL_NIF_TERM nif_tts_stop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [g_tts_synth stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
+    });
+    return enif_make_atom(env, "ok");
+}
+
 // ── NIF: open_url/1 ───────────────────────────────────────────────────────────
 // Hands a URL to the OS to open in the user's default browser/app.
 // Fire-and-forget; returns :ok immediately.
@@ -6602,6 +6660,8 @@ static ErlNifFunc nif_funcs[] = {
     {"audio_play_at", 3, nif_audio_play_at, 0},
     {"audio_stop_playback", 0, nif_audio_stop_playback, 0},
     {"audio_set_volume", 1, nif_audio_set_volume, 0},
+    {"tts_speak", 2, nif_tts_speak, 0},
+    {"tts_stop", 0, nif_tts_stop, 0},
     {"motion_start", 2, nif_motion_start, 0},
     {"motion_stop", 0, nif_motion_stop, 0},
     {"scanner_scan", 1, nif_scanner_scan, 0},
