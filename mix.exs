@@ -58,9 +58,36 @@ defmodule Mob.MixProject do
     ]
   end
 
+  # Render ```mermaid fenced blocks on hexdocs. GitHub renders them natively;
+  # ex_doc does not, so inject mermaid.js and convert the code blocks it emits.
+  defp before_closing_body_tag(:html) do
+    """
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+    <script>
+      document.addEventListener("DOMContentLoaded", function () {
+        mermaid.initialize({ startOnLoad: false });
+        let id = 0;
+        for (const codeEl of document.querySelectorAll("pre code.mermaid")) {
+          const preEl = codeEl.closest("pre");
+          const graphEl = document.createElement("div");
+          const graphId = "mermaid-graph-" + id++;
+          mermaid.render(graphId, codeEl.textContent).then(({ svg, bindFunctions }) => {
+            graphEl.innerHTML = svg;
+            if (bindFunctions) bindFunctions(graphEl);
+            preEl.replaceWith(graphEl);
+          });
+        }
+      });
+    </script>
+    """
+  end
+
+  defp before_closing_body_tag(_), do: ""
+
   defp docs do
     [
       main: "readme",
+      before_closing_body_tag: &before_closing_body_tag/1,
       logo: "assets/logo/logo_full_color.png",
       source_url: "https://github.com/genericjam/mob",
       source_url_pattern: "https://github.com/genericjam/mob/blob/master/%{path}#L%{line}",
