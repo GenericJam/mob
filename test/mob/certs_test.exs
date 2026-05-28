@@ -62,8 +62,12 @@ defmodule Mob.CertsTest do
     # can call :public_key.* directly.
     {:ok, _} = Application.ensure_all_started(:public_key)
 
-    path = Path.join(System.tmp_dir!(), "mob_certs_test_#{System.unique_integer([:positive])}.pem")
-    pem = @test_pem |> String.split("\n", trim: true) |> Enum.map(&String.trim/1) |> Enum.join("\n")
+    path =
+      Path.join(System.tmp_dir!(), "mob_certs_test_#{System.unique_integer([:positive])}.pem")
+
+    pem =
+      @test_pem |> String.split("\n", trim: true) |> Enum.map(&String.trim/1) |> Enum.join("\n")
+
     File.write!(path, pem <> "\n")
 
     on_exit(fn -> _ = File.rm(path) end)
