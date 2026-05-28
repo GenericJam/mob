@@ -1083,3 +1083,71 @@ end
 See the `Mob.Certs` moduledoc for the rationale, the cross-platform
 notes (iOS and the Android emulator don't need this, but calling
 unconditionally is safe), and the available functions.
+
+## Runtime `Mix.install` of a rebar3-built dep fails on Android (telemetry / jose / jiffy / …)
+
+**Symptom** — In a notebook setup cell on a real mob app (Livebook-style),
+`Mix.install/2` of anything that transitively pulls a rebar3-built
+Erlang dep — `telemetry` is the common one (Req → Mint → telemetry,
+Phoenix → telemetry, etc.) — crashes:
+
+```
+** (Mix.Error) Could not compile dependency :telemetry,
+"/data/user/0/<pkg>/files/livebook/mix_home/elixir/1-19-otp-29/rebar3 bare compile --paths …"
+command failed.
+   (mix 1.19.5) lib/mix/tasks/deps.compile.ex:276: Mix.Tasks.Deps.Compile.do_rebar3/2
+```
+
+Pure-Mix deps install fine. The rebar3 path fails because there is no
+`rebar3` binary at the expected `$MIX_HOME` location, and even if you
+copy one there, `app_data_file` SELinux context blocks `execve()` of
+files under the app's writable storage. Same wall as `inet_gethost`
+hits — and the fix is the same JNI-extracted-shared-lib trick.
+
+**Fix** — Bundle the chain ERTS needs to spawn a fresh BEAM, plus
+rebar3's escript, as `lib<name>.so` files in your app's
+`android/app/src/main/jniLibs/<abi>/`:
+
+| File in jniLibs | What it is | Source |
+|---|---|---|
+| `libescript.so`     | OTP escript runner | `$OTP_ANDROID/erts-<vsn>/bin/escript` |
+| `liberlexec.so`     | BEAM launcher (also serves as `erl`) | `$OTP_ANDROID/erts-<vsn>/bin/erlexec` |
+| `libbeam_smp.so`    | The BEAM VM itself (~32 MB unstripped) | `$OTP_ANDROID/erts-<vsn>/bin/beam.smp` |
+| `librebar3_data.so` | rebar3's escript archive | `~/.mix/elixir/<vsn>/rebar3` |
+| `librebar3.so`      | tiny `/system/bin/sh` wrapper (see below) | written at build time |
+
+`mob_beam.zig`'s optional-symlink list picks these up at boot:
+`BINDIR/escript`, `BINDIR/erl`, `BINDIR/erlexec`, and `BINDIR/beam.smp`
+all become `apk_data_file`-context-exec-able. `MOB_NATIVE_LIB_DIR`
+exposes the nativeLibDir path so the app can reach the bundled files
+at runtime.
+
+The rebar3 wrapper (`librebar3.so` content):
+
+```sh
+#!/system/bin/sh
+exec "${BINDIR}/escript" "${MOB_DATA_DIR}/rebar3" "$@"
+```
+
+…plus an app-side step at startup to symlink `librebar3_data.so` to a
+filename of `rebar3` (escript derives the module name from the
+file's basename, and rebar3's archive exports `rebar3:main/1`):
+
+```elixir
+File.cp_r!(Path.join([System.get_env("MOB_NATIVE_LIB_DIR"), "librebar3_data.so"]),
+           Path.join([System.get_env("MOB_DATA_DIR"), "rebar3"]))
+System.put_env("MIX_REBAR3", Path.join([System.get_env("MOB_NATIVE_LIB_DIR"), "librebar3.so"]))
+```
+
+`$OTP_ROOT/bin/<name>.boot` symlinks (`no_dot_erlang.boot`, `start.boot`)
+are normally created by standard OTP's `bin/Install` script — mob's
+deploy skips that. Materialize them lazily at app boot.
+
+Verified end-to-end on a Moto G Power 5G 2024 (Android 14):
+`Mix.install([{:req, "~> 0.5"}])` resolves Req's full tree, compiles
+`telemetry` via on-device rebar3, and a follow-up `Req.get!/2` returns
+real JSON over real TLS.
+
+**Trade-off** — ~33 MB APK size for the bundled `beam.smp`. Pure-Mix
+deps don't need any of this; if your app never runs rebar3 deps at
+runtime, skip the whole bundling and avoid the cost.
