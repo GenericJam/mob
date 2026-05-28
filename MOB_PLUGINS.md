@@ -69,7 +69,7 @@ like if it lived outside core:
   description: "Bluetooth Classic peripheral (HFP / SPP / HID)",
 
   # Static-linked NIFs. `:module` is the NIF's Erlang module name (a valid
-  # C token: `[a-z_][a-z0-9_]*`), NOT an Elixir module — ERL_NIF_INIT uses
+  # C token: `[a-z][a-z0-9_]*`), NOT an Elixir module — ERL_NIF_INIT uses
   # it as BOTH the registered module name AND the static-init symbol prefix
   # (`<module>_nif_init`), so an Elixir module like `MobBluetooth.Nif`
   # would yield an invalid C symbol. The plugin ships a small Erlang stub
