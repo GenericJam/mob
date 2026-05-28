@@ -68,11 +68,18 @@ like if it lived outside core:
   plugin_spec_version: 1,
   description: "Bluetooth Classic peripheral (HFP / SPP / HID)",
 
-  # Static-linked NIFs. Each entry is the Elixir module that calls
-  # `Mob.StaticNif.load/1` plus the directory of native sources.
-  # mob_dev's build appends these to the existing :static_nifs list.
+  # Static-linked NIFs. `:module` is the NIF's Erlang module name (a valid
+  # C token: `[a-z_][a-z0-9_]*`), NOT an Elixir module — ERL_NIF_INIT uses
+  # it as BOTH the registered module name AND the static-init symbol prefix
+  # (`<module>_nif_init`), so an Elixir module like `MobBluetooth.Nif`
+  # would yield an invalid C symbol. The plugin ships a small Erlang stub
+  # (e.g. `src/mob_bluetooth_nif.erl`) that calls `erlang:load_nif/2`; an
+  # Elixir wrapper can then `defdelegate` into it.
+  #
+  # `:native_dir` is the per-NIF native source directory. mob_dev's build
+  # appends these entries to the existing :static_nifs list.
   nifs: [
-    %{module: MobBluetooth.Nif, native_dir: "priv/native/jni"}
+    %{module: :mob_bluetooth_nif, native_dir: "priv/native/jni"}
   ],
 
   android: %{
