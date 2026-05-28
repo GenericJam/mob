@@ -296,6 +296,16 @@ export fn mob_start_beam(app_module: [*:0]const u8) callconv(.c) void {
     _ = jni.setenv("ERL_CRASH_DUMP", crash_dump, 1);
     _ = jni.setenv("ERL_CRASH_DUMP_SECONDS", "30", 1);
 
+    // MOB_NATIVE_LIB_DIR — the app's nativeLibraryDir (apk_data_file context,
+    // exec allowed). Apps that bundle extra binaries (escript, rebar3, etc.)
+    // as `lib<name>.so` in jniLibs/<abi>/ can find them here at runtime —
+    // their paths include the APK install hash and aren't predictable at
+    // compile time. Empty when launched from a split APK that didn't extract
+    // .so files; callers should fall back to BINDIR in that case.
+    if (s_native_lib_dir[0] != 0) {
+        _ = jni.setenv("MOB_NATIVE_LIB_DIR", jni.asCStr(&s_native_lib_dir), 1);
+    }
+
     // RUSTLER_BEAM_LIBRARY_PATH — tells rustler where the .so containing it
     // (libpigeon.so in Mob's static-link model) lives, so its
     // DlsymNifFiller can dlopen(path, RTLD_NOW | RTLD_NOLOAD) directly
@@ -540,6 +550,37 @@ export fn mob_start_beam(app_module: [*:0]const u8) callconv(.c) void {
                     loge("mob_start_beam: symlink {s} missing from both nativeLibDir and bin/", .{exes[i]});
                 }
             }
+        }
+    }
+
+    // Optional ERTS extras: symlink iff the app shipped them in jniLibs.
+    // Silently skip otherwise — these aren't required for BEAM boot, but apps
+    // that want them (e.g. Mix.install of a rebar3-built dep needs `escript`
+    // *and* a spawnable `erl` / `erlexec` for the escript runner to bootstrap
+    // a fresh VM) can drop `lib<name>.so` into android/app/src/main/jniLibs/<abi>/
+    // to get a working BINDIR/<name>. `erl` and `erlexec` both target the
+    // same library because they're the same binary — erlexec doesn't switch
+    // on argv[0].
+    if (s_native_lib_dir[0] != 0) {
+        const opt_exes = [_][*:0]const u8{ "escript", "erlexec", "erl", "beam.smp" };
+        const opt_libs = [_][*:0]const u8{ "libescript.so", "liberlexec.so", "liberlexec.so", "libbeam_smp.so" };
+        var j: usize = 0;
+        while (j < opt_exes.len) : (j += 1) {
+            var bin_path_buf: [512]u8 = undefined;
+            var lib_path_buf: [512]u8 = undefined;
+            const bin_path = formatZ(&bin_path_buf, "{s}/{s}/bin/{s}", .{ otp_root, ERTS_VSN, opt_exes[j] });
+            const lib_path = formatZ(&lib_path_buf, "{s}/{s}", .{ jni.asCStr(&s_native_lib_dir), opt_libs[j] });
+            var st: jni.Stat = undefined;
+            if (jni.stat(lib_path, &st) == 0) {
+                _ = jni.unlink(bin_path);
+                if (jni.symlink(lib_path, bin_path) == 0) {
+                    logi("mob_start_beam: symlink {s} -> {s} (optional)", .{ opt_exes[j], lib_path });
+                } else {
+                    loge("mob_start_beam: symlink {s} failed: {s}", .{ opt_exes[j], lastErrno() });
+                }
+            }
+            // No lib in nativeLibDir => app didn't ask for this extra. Skip
+            // silently — don't log; not an error.
         }
     }
 
