@@ -990,3 +990,55 @@ places, lock-step:
    test enforces equality).
 3. `mob_dev/scripts/release/openssl/_lib.sh` — `NDK_VERSION` default.
 
+
+## Android `:inet.getaddr/2` returns `:nxdomain` on physical devices (works on emulator)
+
+**Symptom** — On a deployed mob app on a physical Android device, the
+BEAM can't resolve hostnames:
+
+```elixir
+:inet.getaddr(~c"repo.hex.pm", :inet)
+#=> {:error, :nxdomain}
+```
+
+…but the SAME app can `:gen_tcp.connect/3` to a hardcoded IP fine, and
+`adb shell ping` from the device works. The Android emulator does NOT
+hit this — it works there — which is why this didn't show in early
+testing. Verified on Moto G Power 5G 2024 (Android 14).
+
+**Root cause** — BEAM's default DNS path forks `inet_gethost` (a port
+program) and reads what its `getaddrinfo` returns. On a physical
+Android device, Bionic's `getaddrinfo` *in the execve'd child* of the
+app process doesn't pick up the per-network DNS servers the way the
+app's own in-process HTTPS stack does. We suspect this is related to
+how `libnetd_client.so` routing into `netd` survives across execve,
+but we haven't pinned it down — happy to take a PR with the actual
+diagnosis.
+
+**Fix** — Resolve in-process via `Mob.DNS.resolve/1`, which calls
+Bionic's `getaddrinfo` from a NIF and seeds `:inet_db` with the
+result. Subsequent `:inet.getaddr/2` lookups hit the seeded `:file`
+entry and succeed:
+
+```elixir
+def on_start do
+  # Preresolve the hosts your app/notebook needs at startup. Idempotent;
+  # cheap; works on iOS, Android-physical, and Android-emulator alike.
+  Mob.DNS.preresolve(["repo.hex.pm", "hex.pm", "api.example.com"])
+
+  # …rest of startup. Any subsequent Req/Finch/Mint/Mix.install call for
+  # these hosts will find the seeded entry.
+end
+```
+
+For a host not known until request-time, call `Mob.DNS.resolve/1`
+just before the request. See the `Mob.DNS` moduledoc for the
+cellular caveat and the `configure_pure_beam/1` fallback.
+
+**Background-app caveat** — Android's App Standby / battery
+optimizer blocks *all* outbound network from a backgrounded mob
+app (TCP-by-IP too, not just DNS). The DNS fix above only matters
+once the app is foregrounded or running under a foreground
+service. Symptom: any socket attempt returns `:closed` / `:timeout`
+immediately. Bring the app foreground or attach a foreground
+service before triggering long-lived network work.

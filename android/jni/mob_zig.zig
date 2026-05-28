@@ -163,6 +163,66 @@ pub const RTLD_GLOBAL: c_int = 0x00100;
 pub extern fn dlopen(filename: [*:0]const u8, flags: c_int) ?*anyopaque;
 pub extern fn dlerror() ?[*:0]const u8;
 
+// ── netdb (in-process DNS) ─────────────────────────────────────────────────
+// Bindings for Bionic's getaddrinfo so a NIF can resolve hostnames inside
+// the BEAM's process. BEAM's default DNS path forks the `inet_gethost` port
+// program and that path returns NXDOMAIN on physical Android devices for
+// reasons we haven't fully pinned down (libnetd_client routing through netd
+// behaves differently for execve'd children of the app — works on emulator,
+// fails on phones we've tested). Calling getaddrinfo in-process from the
+// app's UID and address space sidesteps the issue: it's the same code path
+// the app's own HTTP stack uses when it succeeds.
+//
+// Layout mirrors Bionic's `bionic/libc/include/netdb.h` exactly. Note that
+// Bionic's `struct addrinfo` orders `ai_canonname` *before* `ai_addr`, which
+// is the historical BSD layout — glibc swaps them. Verified against AOSP
+// `bionic/libc/include/netdb.h` (NDK r25+).
+
+pub const AF_INET: c_int = 2;
+pub const SOCK_STREAM: c_int = 1;
+
+/// `getaddrinfo` EAI_* error codes. Bionic values, which happen to match
+/// Darwin BSD for the ones we care about — but we declare them here for
+/// clarity at the Zig call site.
+pub const EAI_AGAIN: c_int = 2;
+pub const EAI_NODATA: c_int = 7;
+pub const EAI_NONAME: c_int = 8;
+
+pub const AddrInfo = extern struct {
+    ai_flags: c_int,
+    ai_family: c_int,
+    ai_socktype: c_int,
+    ai_protocol: c_int,
+    ai_addrlen: u32,
+    ai_canonname: ?[*:0]u8,
+    ai_addr: ?*SockAddr,
+    ai_next: ?*AddrInfo,
+};
+
+/// Generic sockaddr used by getaddrinfo's result chain.
+pub const SockAddr = extern struct {
+    sa_family: u16,
+    _padding: [14]u8,
+};
+
+/// IPv4 sockaddr layout (sa_family=AF_INET).
+pub const SockAddrIn = extern struct {
+    sin_family: u16,
+    sin_port: u16,
+    /// IPv4 address, network byte order.
+    sin_addr: u32,
+    sin_zero: [8]u8,
+};
+
+pub extern fn getaddrinfo(
+    node: [*:0]const u8,
+    service: ?[*:0]const u8,
+    hints: ?*const AddrInfo,
+    res: *?*AddrInfo,
+) c_int;
+
+pub extern fn freeaddrinfo(res: ?*AddrInfo) void;
+
 // ── JNI ────────────────────────────────────────────────────────────────────
 // AOSP source: frameworks/native/include/jni.h. We only declare the vtable
 // entries we actually call; future iters can add more as needed.

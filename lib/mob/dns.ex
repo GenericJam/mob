@@ -1,40 +1,47 @@
 defmodule Mob.DNS do
   @moduledoc """
   Hostname → IP resolution that works around BEAM's broken DNS path
-  on iOS.
+  on iOS and physical Android devices.
 
   ## Why this exists
 
   BEAM resolves hostnames by spawning an external helper called
   `inet_gethost` (a port program). On macOS, Linux, Windows that
-  works fine. On **iOS** it doesn't — the iOS app sandbox forbids
-  `execve` of any binary the app didn't get a special pass for, and
-  there's no equivalent of Android's `lib*.so` escape hatch.
-  Result: `:inet.getaddr/2` (and therefore Req, Finch, Mint,
-  ReqLLM, and basically every Elixir HTTP library) fails on iOS
-  the moment a request hits a hostname rather than a literal IP.
+  works fine. On mobile it doesn't, for two distinct reasons:
 
-  This module side-steps the problem by calling Darwin's
-  `getaddrinfo` directly via a NIF, then seeding `:inet_db` with
-  the result so subsequent BEAM-level lookups for the same host
-  succeed from the in-process file table.
+  - **iOS** — the app sandbox forbids `execve` of any binary the app
+    didn't get a special pass for. `inet_gethost` never runs.
+  - **Physical Android** — `inet_gethost` *does* run (mob ships it as
+    `libinet_gethost.so`, allowed to `execve` by the `apk_data_file`
+    SELinux label), but Bionic's getaddrinfo from the execve'd child
+    process returns `:nxdomain` for hostnames the same app's in-process
+    HTTPS stack resolves fine. The Android emulator happens not to hit
+    this (its DNS proxy at `10.0.2.3` is reachable to anything), so
+    the fault doesn't show in the simulator. Confirmed on a Moto G
+    Power 5G 2024 (Android 14): app-uid TCP-by-IP succeeds, but BEAM's
+    `:inet.getaddr/2` fails with `:nxdomain`.
 
-  Android isn't affected — `mob_beam.zig` ships `inet_gethost` as
-  `libinet_gethost.so` in `jniLibs/`, which the SELinux policy
-  allows to `execve`. The NIF here would work on Android too but
-  isn't wired up by default; the BEAM path is already functional
-  there.
+  In either case `:inet.getaddr/2` (and therefore Req, Finch, Mint,
+  ReqLLM, and basically every Elixir HTTP library) fails the moment
+  a request hits a hostname rather than a literal IP.
+
+  This module side-steps the problem by calling the OS resolver
+  (`getaddrinfo`) **in-process via a NIF** — same address space, same
+  uid as the rest of the app — then seeding `:inet_db` with the result
+  so subsequent BEAM-level lookups for the same host succeed from the
+  in-process file table.
 
   ## How to use it
 
   ### Robust everywhere, incl. cellular: `resolve/1` · `preresolve/1`
 
-  `resolve/1` calls Darwin's `getaddrinfo` via a NIF — iOS's *own*
-  resolver — then seeds `:inet_db`'s `:file` table, so subsequent
-  `:inet.getaddr/2` lookups (Req / Finch / Mint) find the result.
-  Because it uses the OS resolver, it works wherever the OS does —
-  **including cellular** (it resolves via the carrier's DNS). This is
-  the recommended path and is device-verified on cellular.
+  `resolve/1` calls the OS's `getaddrinfo` via a NIF — Darwin's on iOS,
+  Bionic's on Android — then seeds `:inet_db`'s `:file` table, so
+  subsequent `:inet.getaddr/2` lookups (Req / Finch / Mint) find the
+  result. Because it uses the OS resolver, it works wherever the OS
+  does — **including iOS cellular** (carrier's DNS) and **physical
+  Android devices** where the forked `inet_gethost` path is broken.
+  This is the recommended path on both platforms.
 
   Preresolve your known hosts at startup — that's all most apps need:
 
@@ -58,10 +65,11 @@ defmodule Mob.DNS do
 
   Two caveats that make this the *fallback*, not the default:
 
-    * **Gate it to iOS.** On Android `:native` works (mob ships
-      `inet_gethost` as a `.so`); forcing pure-`:dns` there *breaks*
-      lookups. (And never reset the chain to include `:native` on iOS —
-      exec'ing `inet_gethost` there is *fatal*, it crashes the BEAM.)
+    * **Don't reset the chain to include `:native` on iOS** —
+      exec'ing `inet_gethost` there is *fatal*, it crashes the BEAM.
+      On physical Android `:native` is non-fatal but unreliable
+      (returns `:nxdomain` for hostnames that do resolve in-process);
+      `Mob.DNS.resolve/1` is the recommended path there too.
     * **It can't resolve on cellular by default.** Its default
       nameservers are public (Google / Cloudflare), which carriers
       **commonly block** → `:nxdomain`. iOS exposes no reliable API to
@@ -87,11 +95,17 @@ defmodule Mob.DNS do
   - **Doesn't help raw NIF networking.** If a third-party NIF calls
     libc `getaddrinfo` itself, it never goes through BEAM's DNS
     layer and doesn't need (or benefit from) this fix — it already
-    works on iOS. Only `:inet`-mediated lookups (which covers
-    almost all Elixir HTTP libraries) need our help.
-  - **iOS only effectively.** On Android and host (dev, macOS,
-    Linux) the NIF works but is unnecessary; BEAM's built-in path
-    is fine there.
+    works. Only `:inet`-mediated lookups (which covers almost all
+    Elixir HTTP libraries) need our help.
+  - **Background-app network restrictions still apply.** Android's
+    App Standby / battery optimizer can block *all* outbound network
+    from a backgrounded app, including TCP-by-IP — resolving a name
+    won't help if the OS is silently dropping the connect(). Use a
+    foreground service or keep the app foregrounded for sustained
+    DNS / connectivity.
+  - **Host dev (Mac, Linux) doesn't need this.** The NIF isn't
+    loaded off-device; callers get `{:error, :nif_not_loaded}` and
+    should fall back to BEAM's normal path (which works on dev).
 
   ## Errors
 
