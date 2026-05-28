@@ -65,18 +65,8 @@ defmodule Mob.MixProject do
     <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
     <script>
       document.addEventListener("DOMContentLoaded", function () {
-        mermaid.initialize({ startOnLoad: false });
-        let id = 0;
-        for (const codeEl of document.querySelectorAll("pre code.mermaid")) {
-          const preEl = codeEl.closest("pre");
-          const graphEl = document.createElement("div");
-          const graphId = "mermaid-graph-" + id++;
-          mermaid.render(graphId, codeEl.textContent).then(({ svg, bindFunctions }) => {
-            graphEl.innerHTML = svg;
-            if (bindFunctions) bindFunctions(graphEl);
-            preEl.replaceWith(graphEl);
-          });
-        }
+        mermaid.initialize({ startOnLoad: false, theme: "dark" });
+        window.mermaid.init(undefined, document.querySelectorAll(".mermaid"));
       });
     </script>
     """
