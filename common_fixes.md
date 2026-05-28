@@ -1042,3 +1042,44 @@ once the app is foregrounded or running under a foreground
 service. Symptom: any socket attempt returns `:closed` / `:timeout`
 immediately. Bring the app foreground or attach a foreground
 service before triggering long-lived network work.
+
+## `FunctionClauseError` in `pubkey_os_cacerts.conv_error_reason/1` (Android, missing CA bundle)
+
+**Symptom** — In a mob app on a real Android device, an HTTPS request via
+Req / Mint / Finch / anything using OTP-26+ default `:ssl` opts crashes:
+
+```
+** (FunctionClauseError) no function clause matching in
+   :pubkey_os_cacerts.conv_error_reason/1
+   (public_key 1.21) :pubkey_os_cacerts.conv_error_reason(:no_cacerts_found)
+```
+
+Hex itself doesn't hit this — it bakes its own CA bundle into
+`Hex.HTTP.SSL` — so `mix install/2` may succeed where the *first* call
+from a user dep fails. The crash also doesn't appear on iOS or on the
+Android emulator (their `:ssl` defaults pick up the OS trust store).
+
+**Root cause** — `:public_key.cacerts_load/0` (called by `:ssl`'s
+defaults at OTP 26+) probes `/etc/ssl/certs/ca-certificates.crt` and a
+handful of distro-specific paths. None of those exist on Android — the
+system trust store lives behind a Java API that BEAM's `:public_key`
+doesn't reach. `cacerts_get/0` then raises with `no_cacerts_found`, and
+in some OTP versions `pubkey_os_cacerts.conv_error_reason/1` doesn't
+have a clause for that — the surface error becomes a
+`FunctionClauseError` rather than the cleaner `no_cacerts_found`.
+
+**Fix** — Bundle a CA-bundle PEM in your app `priv/` (the conventional
+source is the `castore` hex package — copy `cacerts.pem` into your priv
+at build time) and call `Mob.Certs.load_cacerts!/1` once at startup
+*before* anything tries TLS:
+
+```elixir
+def on_start do
+  Mob.Certs.load_cacerts!(Application.app_dir(:my_app, "priv/cacerts.pem"))
+  # …rest of startup…
+end
+```
+
+See the `Mob.Certs` moduledoc for the rationale, the cross-platform
+notes (iOS and the Android emulator don't need this, but calling
+unconditionally is safe), and the available functions.
