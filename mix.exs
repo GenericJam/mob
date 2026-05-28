@@ -61,10 +61,18 @@ defmodule Mob.MixProject do
     ]
   end
 
-  # Render ```mermaid fenced blocks on hexdocs. GitHub renders them natively;
-  # ex_doc does not, so inject mermaid.js and convert the code blocks it emits.
+  # Two hexdocs-only injections: (1) classify unstyled <pre><code> blocks as
+  # Elixir so they get syntax-highlighted, and (2) render ```mermaid fenced
+  # blocks as SVG (ex_doc has no built-in mermaid support; GitHub renders
+  # them natively, so READMEs work there without this).
   defp before_closing_body_tag(:html) do
     """
+    <script>
+      // Default unstyled code blocks to Elixir highlighting.
+      document.querySelectorAll("pre code").forEach(el => {
+        if (!el.className) el.className = "language-elixir";
+      });
+    </script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
     <script>
       document.addEventListener("DOMContentLoaded", function () {
@@ -151,23 +159,9 @@ defmodule Mob.MixProject do
         "Testing & Debugging": [Mob.Test],
         Tooling: [Mob.Formatter],
         Internals: [Mob.Dist, Mob.NativeLogger, Mob.List, Mob.Sigil]
-      ],
-      before_closing_body_tag: &before_closing_body_tag/1
+      ]
     ]
   end
-
-  defp before_closing_body_tag(:html) do
-    """
-    <script>
-      // Ensure code blocks with language hints are highlighted
-      document.querySelectorAll("pre code").forEach(el => {
-        if (!el.className) el.className = "language-elixir";
-      });
-    </script>
-    """
-  end
-
-  defp before_closing_body_tag(_), do: ""
 
   defp elixirc_paths(:test), do: ["lib", "test/onboarding", "test/onboarding/support"]
   defp elixirc_paths(_), do: ["lib"]
