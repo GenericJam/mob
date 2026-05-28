@@ -54,7 +54,10 @@ defmodule Mob.MixProject do
 
   def application do
     [
-      extra_applications: [:logger]
+      # :public_key is needed by Mob.Certs at runtime; Elixir 1.19+ strips
+      # unused OTP applications from the code path, so it must be declared
+      # here even though mob doesn't *start* it directly.
+      extra_applications: [:logger, :public_key]
     ]
   end
 
