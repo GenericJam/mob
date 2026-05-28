@@ -64,9 +64,17 @@ defmodule Mob.MixProject do
     """
     <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
     <script>
+      // Activate mermaid diagrams
       document.addEventListener("DOMContentLoaded", function () {
         mermaid.initialize({ startOnLoad: false, theme: "dark" });
         window.mermaid.init(undefined, document.querySelectorAll(".mermaid"));
+      });
+    </script>
+
+    <script>
+      // Ensure code blocks with language hints are highlighted
+      document.querySelectorAll("pre code").forEach(el => {
+        if (!el.className) el.className = "language-elixir";
       });
     </script>
     """
@@ -142,19 +150,6 @@ defmodule Mob.MixProject do
       before_closing_body_tag: &before_closing_body_tag/1
     ]
   end
-
-  defp before_closing_body_tag(:html) do
-    """
-    <script>
-      // Ensure code blocks with language hints are highlighted
-      document.querySelectorAll("pre code").forEach(el => {
-        if (!el.className) el.className = "language-elixir";
-      });
-    </script>
-    """
-  end
-
-  defp before_closing_body_tag(_), do: ""
 
   defp elixirc_paths(:test), do: ["lib", "test/onboarding", "test/onboarding/support"]
   defp elixirc_paths(_), do: ["lib"]
