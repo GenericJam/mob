@@ -209,7 +209,7 @@ embedded in the host). Adds `:screens`, `:migrations`, `:assets`:
   description: "StoreKit / Play Billing IAP flow",
 
   # ── tier-1 capability bits ──
-  nifs: [%{module: MobIap.Nif, native_dir: "priv/native/jni"}],
+  nifs: [%{module: :mob_iap_nif, native_dir: "priv/native/jni"}],
   android: %{
     gradle_deps: ["com.android.billingclient:billing:6.1.0"],
     bridge_kt: "priv/native/android/MobIapBridge.kt",
