@@ -109,6 +109,7 @@
     screenshot/3,
     scroll_info/1,
     scroll_to/3,
+    element_frames/0,
     %% Peripheral.VendorUsb (Android USB host; iOS returns :unsupported)
     vendor_usb_list_devices/1,
     vendor_usb_request_permission/1,
@@ -210,6 +211,7 @@
     screenshot/3,
     scroll_info/1,
     scroll_to/3,
+    element_frames/0,
     %% Storage
     storage_dir/1,
     storage_save_to_photo_library/1,
@@ -345,6 +347,10 @@ swipe_xy(_X1, _Y1, _X2, _Y2) -> erlang:nif_error(not_loaded).
 screenshot(_Format, _Quality, _Scale) -> erlang:nif_error(not_loaded).
 scroll_info(_Id) -> erlang:nif_error(not_loaded).
 scroll_to(_Id, _X, _Y) -> erlang:nif_error(not_loaded).
+%% element_frames() -> JSON binary {"id":[x,y,w,h],...} of on-screen frames for
+%% every rendered node that carries an :id (logical points iOS / dp Android).
+%% Lets an agent locate + drive elements by id without a screenshot.
+element_frames() -> erlang:nif_error(not_loaded).
 storage_dir(_Location) -> erlang:nif_error(not_loaded).
 storage_save_to_photo_library(_Path) -> erlang:nif_error(not_loaded).
 storage_save_to_media_store(_Path, _Type) -> erlang:nif_error(not_loaded).

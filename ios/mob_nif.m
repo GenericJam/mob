@@ -1796,11 +1796,18 @@ static ERL_NIF_TERM nif_set_theme(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
     return enif_make_atom(env, "ok");
 }
 
+static NSMutableDictionary *mob_frame_registry(void); // both defined with the
+static void mob_clear_frames(void);                   // element frame registry below
+
 static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifBinary bin;
     if (!enif_inspect_binary(env, argv[0], &bin) &&
         !enif_inspect_iolist_as_binary(env, argv[0], &bin))
         return enif_make_badarg(env);
+
+    // New render tree — drop stale element frames; MobFrameTracker repopulates
+    // on the next layout pass.
+    mob_clear_frames();
 
     NSData *data = [NSData dataWithBytes:bin.data length:bin.size];
     NSError *err = nil;
@@ -5950,6 +5957,24 @@ static ERL_NIF_TERM nif_scroll_to(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
                                  enif_make_atom(env, "scroll_view_not_found"));
 }
 
+// nif_element_frames/0 — JSON {"id":[x,y,w,h],...} of tagged element frames
+// (logical points). Recorded by MobFrameTracker; see mob_register_frame.
+static ERL_NIF_TERM nif_element_frames(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    NSMutableDictionary *reg = mob_frame_registry();
+    NSData *jsonData = nil;
+    @synchronized(reg) {
+        jsonData = [NSJSONSerialization dataWithJSONObject:reg options:0 error:nil];
+    }
+    if (!jsonData)
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "encode_failed"));
+
+    ErlNifBinary bin;
+    enif_alloc_binary(jsonData.length, &bin);
+    memcpy(bin.data, jsonData.bytes, jsonData.length);
+    return enif_make_binary(env, &bin);
+}
+
 #endif // !MOB_RELEASE — end of test harness block (started near line 2780)
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -6512,6 +6537,42 @@ void mob_send_component_event(int handle, const char *event, const char *payload
     enif_free_env(env);
 }
 
+// ── Element frame registry (positions without a screenshot) ──────────────────
+//
+// mob_register_frame is called from MobFrameTracker (SwiftUI) on the main thread
+// as a tagged element lays out; the element_frames NIF reads it from a NIF
+// thread. Both use only public APIs, so this is compiled unconditionally (the
+// reading NIF is still debug-gated). @synchronized guards the shared dictionary.
+static NSMutableDictionary<NSString *, NSArray<NSNumber *> *> *g_element_frames = nil;
+static dispatch_once_t g_element_frames_once;
+
+static NSMutableDictionary *mob_frame_registry(void) {
+    dispatch_once(&g_element_frames_once, ^{
+      g_element_frames = [NSMutableDictionary dictionary];
+    });
+    return g_element_frames;
+}
+
+void mob_register_frame(const char *id, double x, double y, double w, double h) {
+    if (!id)
+        return;
+    NSString *key = [NSString stringWithUTF8String:id];
+    if (!key)
+        return;
+    NSMutableDictionary *reg = mob_frame_registry();
+    @synchronized(reg) {
+        reg[key] = @[ @(x), @(y), @(w), @(h) ];
+    }
+}
+
+// Drop stale frames when the render tree changes (called from nif_set_root).
+static void mob_clear_frames(void) {
+    NSMutableDictionary *reg = mob_frame_registry();
+    @synchronized(reg) {
+        [reg removeAllObjects];
+    }
+}
+
 // ── Mob.Peripheral.VendorUsb (iOS stubs) ──────────────────────────────────────
 //
 // iOS exposes no public USB-host API equivalent to Android's UsbManager.
@@ -6801,6 +6862,7 @@ static ErlNifFunc nif_funcs[] = {
     {"screenshot", 3, nif_screenshot, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"scroll_info", 1, nif_scroll_info, 0},
     {"scroll_to", 3, nif_scroll_to, 0},
+    {"element_frames", 0, nif_element_frames, ERL_NIF_DIRTY_JOB_CPU_BOUND},
 #endif
     // ── Core mob functions ───────────────────────────────────────────────────
     {"background_keep_alive", 0, nif_background_keep_alive, 0},

@@ -34,6 +34,11 @@ defmodule Mob.Test do
       Mob.Test.scroll_to(node, "feed", :bottom)
       Mob.Test.screenshot_tour(node, "feed")        # page top→bottom, capture each
 
+      # Element positions without a screenshot (elements need an :id)
+      Mob.Test.element_frames(node)                 # %{id => {x, y, w, h}}
+      Mob.Test.frame(node, "save")                  # {x, y, w, h}
+      Mob.Test.tap_id(node, "save")                 # drive by id at real coords
+
       # Device API simulation
       Mob.Test.send_message(node, {:permission, :camera, :granted})
       Mob.Test.send_message(node, {:camera, :photo, %{path: "/tmp/photo.jpg", width: 1920, height: 1080}})
@@ -1090,6 +1095,70 @@ defmodule Mob.Test do
   defp clamp(v, lo, hi), do: v |> max(lo) |> min(hi)
   defp clamp_int(v, lo, hi) when is_integer(v), do: v |> max(lo) |> min(hi)
   defp clamp_int(v, lo, hi), do: v |> trunc() |> max(lo) |> min(hi)
+
+  # ── Element frames (positions without a screenshot) ─────────────────────────
+
+  @doc """
+  Return the on-screen frame of every rendered element that carries an `:id`,
+  as `%{id => {x, y, w, h}}` in logical units (points on iOS, dp on Android).
+
+  This is the screenshot-free way for an agent to know *where* things are: give
+  the elements you want to inspect or drive an `:id`, and their live positions
+  come back as a small structured map — no image bytes, no accessibility
+  activation. The renderer also sets the `:id` as the element's accessibility
+  identifier, so the same tags are visible to external tools (XCUITest, etc.).
+
+  Pairs with `tap_id/2` to drive by id at real coordinates.
+
+      Mob.Test.element_frames(node)
+      #=> %{"save" => {24.0, 720.0, 327.0, 48.0}, "row_3" => {0.0, 300.0, 393.0, 56.0}}
+  """
+  @spec element_frames(node()) ::
+          %{optional(String.t()) => {float(), float(), float(), float()}} | {:error, term()}
+  def element_frames(node) do
+    case :rpc.call(node, :mob_nif, :element_frames, []) do
+      json when is_binary(json) -> decode_frames(json)
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  end
+
+  defp decode_frames(json) do
+    json
+    |> :json.decode()
+    |> Map.new(fn {id, [x, y, w, h]} -> {id, {f(x), f(y), f(w), f(h)}} end)
+  end
+
+  @doc """
+  Frame `{x, y, w, h}` of the element with `id`, or `nil` if it has no tracked
+  position. See `element_frames/1`.
+
+      Mob.Test.frame(node, "save")   #=> {24.0, 720.0, 327.0, 48.0}
+  """
+  @spec frame(node(), String.t() | atom()) ::
+          {float(), float(), float(), float()} | nil | {:error, term()}
+  def frame(node, id) do
+    case element_frames(node) do
+      %{} = frames -> frames[to_string(id)]
+      {:error, _} = err -> err
+    end
+  end
+
+  @doc """
+  Tap the element with `id` at the center of its tracked frame — driving by id
+  without a screenshot or coordinate guess. The element must carry an `:id`
+  (see `element_frames/1`).
+
+      Mob.Test.tap_id(node, "save")
+  """
+  @spec tap_id(node(), String.t() | atom()) :: :ok | {:error, term()}
+  def tap_id(node, id) do
+    case frame(node, id) do
+      {x, y, w, h} -> tap_xy(node, x + w / 2, y + h / 2)
+      nil -> {:error, :not_found}
+      {:error, _} = err -> err
+    end
+  end
 
   # ── Native UI (requires MCP tools) ───────────────────────────────────────────
 

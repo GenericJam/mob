@@ -474,6 +474,36 @@ struct MobNodeView: View {
         // (0, 0) which is a no-op. Used by SquareTriangle's hexagonal
         // snowflake to position rings absolutely within a center-aligned box.
         .offset(x: CGFloat(node.offsetX), y: CGFloat(node.offsetY))
+        // Record on-screen frame + set accessibilityIdentifier for any node
+        // carrying an :id, so the agent can read positions via the
+        // element_frames NIF without a screenshot.
+        .modifier(MobFrameTracker(node: node))
+    }
+}
+
+// MobFrameTracker — for any node with an :id, set it as the accessibility
+// identifier and report the element's global frame (logical points) to the C
+// registry as it lays out / moves. Untagged nodes pass through untouched, so
+// there's no cost unless a dev opts an element in by giving it an :id.
+private struct MobFrameTracker: ViewModifier {
+    let node: MobNode
+
+    func body(content: Content) -> some View {
+        if let id = node.nativeViewId {
+            content
+                .accessibilityIdentifier(id)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.onChange(of: geo.frame(in: .global), initial: true) { _, frame in
+                            mob_register_frame(
+                                id, Double(frame.minX), Double(frame.minY),
+                                Double(frame.width), Double(frame.height))
+                        }
+                    }
+                )
+        } else {
+            content
+        }
     }
 }
 

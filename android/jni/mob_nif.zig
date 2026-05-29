@@ -298,6 +298,7 @@ pub const BridgeMethods = extern struct {
     screenshot: jni.JMethodID = null,
     scroll_info: jni.JMethodID = null,
     scroll_to: jni.JMethodID = null,
+    element_frames: jni.JMethodID = null,
     // ── Mob.Peripheral.VendorUsb ─────────────────────────────────────────
     // Each takes a pid as jlong (so Kotlin can echo it back when calling
     // mob_deliver_vendor_usb_*) plus the operation's typed payload.
@@ -699,6 +700,23 @@ export fn nif_scroll_to(
     const ok = jenv.*.CallStaticBooleanMethod.?(jenv, Bridge.cls, Bridge.scroll_to, jid, @as(f64, x), @as(f64, y));
     jni.deleteLocalRef(jenv, jid);
     return if (ok != 0) erts.ok(env) else errorAtom(env, "scroll_view_not_found");
+}
+
+// nif_element_frames/0 — JSON {id:[x,y,w,h],...} of tagged element frames (dp).
+export fn nif_element_frames(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    if (Bridge.element_frames == null) return notLoaded(env);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jresult = jenv.*.CallStaticObjectMethod.?(jenv, Bridge.cls, Bridge.element_frames);
+    const result = jstringToBin(env, jenv, jresult);
+    detachIfAttached(attached);
+    return result;
 }
 
 // nif_ax_action/2 + nif_ax_action_at_xy/3 — Android stubs.
@@ -5000,6 +5018,7 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     cacheOptional(jenv, "screenshot", "(Ljava/lang/String;ID)[B", &Bridge.screenshot);
     cacheOptional(jenv, "scrollInfo", "(Ljava/lang/String;)Ljava/lang/String;", &Bridge.scroll_info);
     cacheOptional(jenv, "scrollTo", "(Ljava/lang/String;DD)Z", &Bridge.scroll_to);
+    cacheOptional(jenv, "elementFrames", "()Ljava/lang/String;", &Bridge.element_frames);
     cacheOptional(jenv, "tapXy", "(FF)Z", &Bridge.tap_xy);
     cacheOptional(jenv, "tapByLabel", "(Ljava/lang/String;)Z", &Bridge.tap_by_label);
     cacheOptional(jenv, "typeText", "(Ljava/lang/String;)Z", &Bridge.type_text);
@@ -5038,6 +5057,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "screenshot", .arity = 3, .fptr = nif_screenshot, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
     .{ .name = "scroll_info", .arity = 1, .fptr = nif_scroll_info, .flags = 0 },
     .{ .name = "scroll_to", .arity = 3, .fptr = nif_scroll_to, .flags = 0 },
+    .{ .name = "element_frames", .arity = 0, .fptr = nif_element_frames, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
     // Core mob functions.
     .{ .name = "platform", .arity = 0, .fptr = nif_platform, .flags = 0 },
     .{ .name = "color_scheme", .arity = 0, .fptr = nif_color_scheme, .flags = 0 },
