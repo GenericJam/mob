@@ -8,6 +8,11 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Changed
+- **`Mob.Bt` extracted to standalone `mob_bluetooth` plugin.** See `plugin_extraction_plan.md` Wave 1. Session A moved the Elixir wrappers (`Mob.Bt`, `Mob.Bt.Hfp`, `Mob.Bt.Hid`, `Mob.Bt.Spp`) out of core into a separate repo as `MobBluetooth.*`; the Zig NIF (`android/jni/mob_nif.zig`) and the iOS stubs (`ios/mob_nif.m`) stay here until Session B promotes the plugin to tier-1. Apps that used `Mob.Bt.*` should add `{:mob_bluetooth, path: "..."}` and rename their references to `MobBluetooth.*` — there is intentionally no compatibility shim.
+
 ## [0.6.22]
 
 ### Added

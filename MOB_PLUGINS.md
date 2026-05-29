@@ -58,8 +58,8 @@ optional.
 ## Tier 1 — functional plugin
 
 A NIF + Elixir wrapper + per-platform helper code that doesn't touch
-the render tree. The canonical example is what `Mob.Bt` would look
-like if it lived outside core:
+the render tree. The canonical example is the `mob_bluetooth` plugin
+(extracted from core in Wave 1):
 
 ```elixir
 %{
