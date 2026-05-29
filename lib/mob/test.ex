@@ -28,6 +28,17 @@ defmodule Mob.Test do
       # Lists
       Mob.Test.select(node, :my_list, 0)  # select first row
 
+      # Visual capture + scroll (in-process, over dist — no adb/xcrun)
+      {:ok, png} = Mob.Test.screenshot(node)
+      Mob.Test.scroll_info(node, "feed")            # offset/content/viewport
+      Mob.Test.scroll_to(node, "feed", :bottom)
+      Mob.Test.screenshot_tour(node, "feed")        # page top→bottom, capture each
+
+      # Element positions without a screenshot (elements need an :id)
+      Mob.Test.element_frames(node)                 # %{id => {x, y, w, h}}
+      Mob.Test.frame(node, "save")                  # {x, y, w, h}
+      Mob.Test.tap_id(node, "save")                 # drive by id at real coords
+
       # Device API simulation
       Mob.Test.send_message(node, {:permission, :camera, :granted})
       Mob.Test.send_message(node, {:camera, :photo, %{path: "/tmp/photo.jpg", width: 1920, height: 1080}})
@@ -844,6 +855,308 @@ defmodule Mob.Test do
         Process.sleep(min(interval_ms, remaining))
         do_wait_for(node, predicate, deadline, interval_ms)
       end
+    end
+  end
+
+  # ── In-process visual capture + scroll control ───────────────────────────────
+  #
+  # Remote-driving primitives: a connected agent gets pixels and deterministic
+  # scroll over Erlang distribution, with no adb / xcrun / idb. These call
+  # mob_nif directly via RPC. screenshot returns the raw image bytes, which
+  # cross the dist boundary fine (the same path camera frames already take).
+
+  @doc """
+  Capture the running app's own window in-process and return the image bytes.
+
+  Returns `{:ok, binary}` (PNG or JPEG) or `{:error, reason}`. The bytes come
+  back over Erlang distribution — no `adb screencap` / `xcrun simctl io`, so it
+  works against a remote device an agent can only reach over dist.
+
+  Options:
+
+    * `:format` — `:png` (default) or `:jpeg`
+    * `:quality` — `0..100`, JPEG only (default `90`)
+    * `:scale` — output scale factor (default `1.0`); `0.5` halves resolution
+
+  Captures only the app's own surface, not system layers or other processes.
+  Secure text fields (iOS) and `FLAG_SECURE` windows (Android) render blank by
+  OS policy. A backgrounded app has no live window, so this fails when the app
+  is not foregrounded.
+
+      {:ok, png} = Mob.Test.screenshot(node)
+      File.write!("/tmp/shot.png", png)
+
+      {:ok, jpg} = Mob.Test.screenshot(node, format: :jpeg, quality: 60, scale: 0.5)
+  """
+  @spec screenshot(node(), keyword()) :: {:ok, binary()} | {:error, term()}
+  def screenshot(node, opts \\ []) do
+    %{format: format, quality: quality, scale: scale} = normalize_screenshot_opts(opts)
+
+    case :rpc.call(node, :mob_nif, :screenshot, [format, quality, scale]) do
+      bin when is_binary(bin) -> {:ok, bin}
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  end
+
+  @doc false
+  # Pure: keyword opts -> the {format, quality, scale} args the NIF expects.
+  @spec normalize_screenshot_opts(keyword()) ::
+          %{format: :png | :jpeg, quality: 0..100, scale: float()}
+  def normalize_screenshot_opts(opts) do
+    format =
+      case Keyword.get(opts, :format, :png) do
+        f when f in [:png, :jpeg] ->
+          f
+
+        other ->
+          raise ArgumentError,
+                "screenshot format must be :png or :jpeg, got: #{Kernel.inspect(other)}"
+      end
+
+    quality = opts |> Keyword.get(:quality, 90) |> clamp_int(0, 100)
+    scale = opts |> Keyword.get(:scale, 1.0) |> Kernel.*(1.0)
+    %{format: format, quality: quality, scale: scale}
+  end
+
+  @doc """
+  Read a scroll view's current offset and extent, addressed by its `:id` prop
+  (the same `:id` you set on a `type: :scroll` or `type: :list` node).
+
+  Returns a map, or `{:error, reason}`:
+
+      %{
+        offset:     {x, y},   # current scroll position
+        content:    {w, h},   # full scrollable content size
+        viewport:   {w, h},   # visible area
+        max_offset: {x, y},   # offset at the bottom/right edge
+        kind:       :pixel | :index
+      }
+
+  `:kind` is `:pixel` for pixel-precise scroll views (iOS `UIScrollView`,
+  Android `verticalScroll`). It is `:index` for item-indexed lists (Android
+  `LazyColumn`), where the y components count items, not pixels, and `viewport`
+  height is the number of visible items. `scroll_to/4` and `screenshot_tour/3`
+  work in whichever unit `:kind` reports, so paging stays coherent either way.
+
+      Mob.Test.scroll_info(node, "feed")
+      #=> %{offset: {0.0, 0.0}, content: {393.0, 2400.0}, viewport: {393.0, 756.0},
+      #     max_offset: {0.0, 1644.0}, kind: :pixel}
+  """
+  @spec scroll_info(node(), String.t() | atom()) :: map() | {:error, term()}
+  def scroll_info(node, id) do
+    case :rpc.call(node, :mob_nif, :scroll_info, [to_string(id)]) do
+      json when is_binary(json) -> decode_scroll_info(json)
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  end
+
+  # The NIF returns a flat JSON object on both platforms (iOS builds it via
+  # NSJSONSerialization, Android via the Kotlin bridge). Decode to the
+  # tuple-shaped public map.
+  defp decode_scroll_info(json) do
+    m = :json.decode(json)
+
+    %{
+      offset: {f(m["offset_x"]), f(m["offset_y"])},
+      content: {f(m["content_w"]), f(m["content_h"])},
+      viewport: {f(m["viewport_w"]), f(m["viewport_h"])},
+      max_offset: {f(m["max_x"]), f(m["max_y"])},
+      kind: if(m["kind"] == "index", do: :index, else: :pixel)
+    }
+  end
+
+  defp f(n) when is_number(n), do: n * 1.0
+  defp f(_), do: 0.0
+
+  @doc """
+  Scroll a view (by `:id`) to a target position. Reads `scroll_info/2` first to
+  resolve and clamp the absolute offset, then drives the native scroll view.
+
+  `target`:
+
+    * `{x, y}` — absolute offset (pixels, or item index on an `:index` list)
+    * `:top` / `:bottom` — the extremes
+    * `{:page, n}` — `n` viewport-heights down from the top (works on both
+      `:pixel` and `:index` views)
+
+  Returns `:ok` or `{:error, reason}`.
+
+      Mob.Test.scroll_to(node, "feed", :bottom)
+      Mob.Test.scroll_to(node, "feed", {:page, 2})
+      Mob.Test.scroll_to(node, "feed", {0.0, 500.0})
+  """
+  @spec scroll_to(node(), String.t() | atom(), tuple() | atom(), keyword()) ::
+          :ok | {:error, term()}
+  def scroll_to(node, id, target, _opts \\ []) do
+    with %{} = info <- scroll_info(node, id),
+         {x, y} <- resolve_scroll_target(target, info) do
+      raw_scroll_to(node, id, x, y)
+    end
+  end
+
+  defp raw_scroll_to(node, id, x, y) do
+    case :rpc.call(node, :mob_nif, :scroll_to, [to_string(id), x * 1.0, y * 1.0]) do
+      :ok -> :ok
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  end
+
+  @doc false
+  # Pure: turn a target (:top | :bottom | {:page, n} | {x, y}) into an absolute
+  # {x, y} offset clamped to the scroll view's extent. A "page" is one viewport
+  # height in whatever unit `:kind` uses (pixels or item count).
+  @spec resolve_scroll_target(tuple() | atom(), map()) :: {float(), float()}
+  def resolve_scroll_target(target, %{max_offset: {mx, my}, viewport: {_vw, vh}} = info) do
+    {ox, _oy} = Map.get(info, :offset, {0.0, 0.0})
+
+    {x, y} =
+      case target do
+        :top -> {0.0, 0.0}
+        :bottom -> {mx, my}
+        {:page, n} when is_number(n) -> {ox, n * vh}
+        {x, y} when is_number(x) and is_number(y) -> {x, y}
+      end
+
+    {clamp(x * 1.0, 0.0, mx), clamp(y * 1.0, 0.0, my)}
+  end
+
+  @doc """
+  Walk a scroll view top→bottom, capturing a screenshot at each page. Returns a
+  list of `{offset, image_binary}` pairs — the agent's "see the whole long
+  screen" path, entirely over dist.
+
+  Options:
+
+    * `:format` / `:quality` / `:scale` — passed through to `screenshot/2`
+    * `:overlap` — `0.0..0.9`, fraction of a viewport to overlap between pages
+      (default `0.0`)
+    * `:settle_ms` — pause after each scroll before capturing (default `150`)
+
+      pages = Mob.Test.screenshot_tour(node, "feed", format: :jpeg, quality: 60)
+      for {{_x, y}, bin} <- pages, do: File.write!("/tmp/page_\#{trunc(y)}.jpg", bin)
+  """
+  @spec screenshot_tour(node(), String.t() | atom(), keyword()) ::
+          [{{float(), float()}, binary()}] | {:error, term()}
+  def screenshot_tour(node, id, opts \\ []) do
+    settle_ms = Keyword.get(opts, :settle_ms, 150)
+    shot_opts = Keyword.take(opts, [:format, :quality, :scale])
+
+    with %{} = info <- scroll_info(node, id) do
+      info
+      |> tour_offsets(opts)
+      |> Enum.reduce_while([], fn {x, y} = off, acc ->
+        case raw_scroll_to(node, id, x, y) do
+          :ok ->
+            Process.sleep(settle_ms)
+
+            case screenshot(node, shot_opts) do
+              {:ok, bin} -> {:cont, [{off, bin} | acc]}
+              {:error, _} = err -> {:halt, err}
+            end
+
+          {:error, _} = err ->
+            {:halt, err}
+        end
+      end)
+      |> case do
+        {:error, _} = err -> err
+        list when is_list(list) -> Enum.reverse(list)
+      end
+    end
+  end
+
+  @doc false
+  # Pure: the list of {x, y} offsets a top→bottom tour should visit. Steps by
+  # one viewport (minus `:overlap`) and always pins a final page to the bottom.
+  @spec tour_offsets(map(), keyword()) :: [{float(), float()}]
+  def tour_offsets(%{max_offset: {_mx, my}, viewport: {_vw, vh}} = info, opts) do
+    {ox, _oy} = Map.get(info, :offset, {0.0, 0.0})
+    overlap = opts |> Keyword.get(:overlap, 0.0) |> clamp(0.0, 0.9)
+    step = max(vh * (1.0 - overlap), 1.0)
+
+    my
+    |> tour_ys(step)
+    |> Enum.map(fn y -> {ox, y} end)
+  end
+
+  defp tour_ys(my, _step) when my <= 0.0, do: [0.0]
+
+  defp tour_ys(my, step) do
+    count = ceil(my / step)
+
+    0..count
+    |> Enum.map(fn i -> min(i * step * 1.0, my * 1.0) end)
+    |> Enum.uniq()
+  end
+
+  defp clamp(v, lo, hi), do: v |> max(lo) |> min(hi)
+  defp clamp_int(v, lo, hi) when is_integer(v), do: v |> max(lo) |> min(hi)
+  defp clamp_int(v, lo, hi), do: v |> trunc() |> max(lo) |> min(hi)
+
+  # ── Element frames (positions without a screenshot) ─────────────────────────
+
+  @doc """
+  Return the on-screen frame of every rendered element that carries an `:id`,
+  as `%{id => {x, y, w, h}}` in logical units (points on iOS, dp on Android).
+
+  This is the screenshot-free way for an agent to know *where* things are: give
+  the elements you want to inspect or drive an `:id`, and their live positions
+  come back as a small structured map — no image bytes, no accessibility
+  activation. The renderer also sets the `:id` as the element's accessibility
+  identifier, so the same tags are visible to external tools (XCUITest, etc.).
+
+  Pairs with `tap_id/2` to drive by id at real coordinates.
+
+      Mob.Test.element_frames(node)
+      #=> %{"save" => {24.0, 720.0, 327.0, 48.0}, "row_3" => {0.0, 300.0, 393.0, 56.0}}
+  """
+  @spec element_frames(node()) ::
+          %{optional(String.t()) => {float(), float(), float(), float()}} | {:error, term()}
+  def element_frames(node) do
+    case :rpc.call(node, :mob_nif, :element_frames, []) do
+      json when is_binary(json) -> decode_frames(json)
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  end
+
+  defp decode_frames(json) do
+    json
+    |> :json.decode()
+    |> Map.new(fn {id, [x, y, w, h]} -> {id, {f(x), f(y), f(w), f(h)}} end)
+  end
+
+  @doc """
+  Frame `{x, y, w, h}` of the element with `id`, or `nil` if it has no tracked
+  position. See `element_frames/1`.
+
+      Mob.Test.frame(node, "save")   #=> {24.0, 720.0, 327.0, 48.0}
+  """
+  @spec frame(node(), String.t() | atom()) ::
+          {float(), float(), float(), float()} | nil | {:error, term()}
+  def frame(node, id) do
+    case element_frames(node) do
+      %{} = frames -> frames[to_string(id)]
+      {:error, _} = err -> err
+    end
+  end
+
+  @doc """
+  Tap the element with `id` at the center of its tracked frame — driving by id
+  without a screenshot or coordinate guess. The element must carry an `:id`
+  (see `element_frames/1`).
+
+      Mob.Test.tap_id(node, "save")
+  """
+  @spec tap_id(node(), String.t() | atom()) :: :ok | {:error, term()}
+  def tap_id(node, id) do
+    case frame(node, id) do
+      {x, y, w, h} -> tap_xy(node, x + w / 2, y + h / 2)
+      nil -> {:error, :not_found}
+      {:error, _} = err -> err
     end
   end
 

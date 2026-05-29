@@ -103,6 +103,13 @@
     clear_text/0,
     long_press_xy/3,
     swipe_xy/4,
+    %% Test harness — in-process visual capture and scroll control
+    %% (remote-driving: agent gets pixels + deterministic scroll over dist,
+    %% no adb/xcrun). See Mob.Test.screenshot/2, scroll_info/2, scroll_to/3.
+    screenshot/3,
+    scroll_info/1,
+    scroll_to/3,
+    element_frames/0,
     %% Peripheral.VendorUsb (Android USB host; iOS returns :unsupported)
     vendor_usb_list_devices/1,
     vendor_usb_request_permission/1,
@@ -201,6 +208,10 @@
     clear_text/0,
     long_press_xy/3,
     swipe_xy/4,
+    screenshot/3,
+    scroll_info/1,
+    scroll_to/3,
+    element_frames/0,
     %% Storage
     storage_dir/1,
     storage_save_to_photo_library/1,
@@ -328,6 +339,18 @@ key_press(_Key) -> erlang:nif_error(not_loaded).
 clear_text() -> erlang:nif_error(not_loaded).
 long_press_xy(_X, _Y, _Ms) -> erlang:nif_error(not_loaded).
 swipe_xy(_X1, _Y1, _X2, _Y2) -> erlang:nif_error(not_loaded).
+%% In-process visual capture + scroll control (see Mob.Test).
+%% screenshot(Format, Quality, Scale) -> Binary (PNG/JPEG bytes) | {error, Reason}
+%%   Format :: png | jpeg, Quality :: 0..100 (jpeg), Scale :: float
+%% scroll_info(Id) -> #{offset, content, viewport, max_offset, kind} | {error, Reason}
+%% scroll_to(Id, X, Y) -> ok | {error, Reason}
+screenshot(_Format, _Quality, _Scale) -> erlang:nif_error(not_loaded).
+scroll_info(_Id) -> erlang:nif_error(not_loaded).
+scroll_to(_Id, _X, _Y) -> erlang:nif_error(not_loaded).
+%% element_frames() -> JSON binary {"id":[x,y,w,h],...} of on-screen frames for
+%% every rendered node that carries an :id (logical points iOS / dp Android).
+%% Lets an agent locate + drive elements by id without a screenshot.
+element_frames() -> erlang:nif_error(not_loaded).
 storage_dir(_Location) -> erlang:nif_error(not_loaded).
 storage_save_to_photo_library(_Path) -> erlang:nif_error(not_loaded).
 storage_save_to_media_store(_Path, _Type) -> erlang:nif_error(not_loaded).
