@@ -21,3 +21,9 @@ void mob_send_component_event(int handle, const char *event, const char *payload
 // the OS appearance toggles (light/dark). Dispatches to Mob.Device subscribers.
 // `scheme` is "light" or "dark".
 void mob_notify_color_scheme(const char *scheme);
+
+// Called from MobFrameTracker (SwiftUI) as a tagged element lays out, recording
+// its on-screen frame (logical points) keyed by the element's :id. Read back via
+// the element_frames NIF so an agent can locate/drive elements without a
+// screenshot. Implemented in mob_nif.m.
+void mob_register_frame(const char *id, double x, double y, double w, double h);

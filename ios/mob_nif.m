@@ -1796,11 +1796,18 @@ static ERL_NIF_TERM nif_set_theme(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
     return enif_make_atom(env, "ok");
 }
 
+static NSMutableDictionary *mob_frame_registry(void); // both defined with the
+static void mob_clear_frames(void);                   // element frame registry below
+
 static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifBinary bin;
     if (!enif_inspect_binary(env, argv[0], &bin) &&
         !enif_inspect_iolist_as_binary(env, argv[0], &bin))
         return enif_make_badarg(env);
+
+    // New render tree — drop stale element frames; MobFrameTracker repopulates
+    // on the next layout pass.
+    mob_clear_frames();
 
     NSData *data = [NSData dataWithBytes:bin.data length:bin.size];
     NSError *err = nil;
@@ -5764,6 +5771,210 @@ static ERL_NIF_TERM nif_swipe_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
 #endif
 }
 
+// ── In-process screenshot + scroll control (agent driving over dist) ─────────
+//
+// screenshot/3, scroll_info/1, scroll_to/3 give a remotely-connected agent
+// pixels and deterministic scroll without adb/xcrun. They use only public
+// UIKit APIs (UIGraphicsImageRenderer, UIScrollView.contentOffset) but live in
+// the debug-only harness block alongside the other driving NIFs.
+
+// Recursively collect every UIScrollView under `view` into `acc`.
+static void mob_collect_scroll_views(UIView *view, NSMutableArray<UIScrollView *> *acc) {
+    if ([view isKindOfClass:[UIScrollView class]])
+        [acc addObject:(UIScrollView *)view];
+    for (UIView *sub in view.subviews)
+        mob_collect_scroll_views(sub, acc);
+}
+
+// Find the scroll view addressed by `identifier` (the node's :id, which the
+// SwiftUI renderer applies as accessibilityIdentifier). If `identifier` is
+// empty, fall back to the largest scroll view — the main content scroller.
+// Returns nil if none match. Main-thread only.
+static UIScrollView *mob_find_scroll_view(NSString *identifier) {
+    NSMutableArray<UIScrollView *> *all = [NSMutableArray array];
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]])
+            continue;
+        for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+            if (!win.isHidden)
+                mob_collect_scroll_views(win, all);
+        }
+    }
+    if (all.count == 0)
+        return nil;
+
+    if (identifier.length > 0) {
+        for (UIScrollView *sv in all) {
+            if ([sv.accessibilityIdentifier isEqualToString:identifier])
+                return sv;
+        }
+        // SwiftUI does not reliably propagate `.accessibilityIdentifier` onto the
+        // backing UIScrollView, so an explicit id may not match even when set on
+        // the Mob node. Fall through to the largest scroll view (the main content
+        // scroller) rather than failing — correct for the common one-scroll screen.
+    }
+
+    UIScrollView *best = nil;
+    CGFloat bestArea = -1.0;
+    for (UIScrollView *sv in all) {
+        CGFloat area = sv.bounds.size.width * sv.bounds.size.height;
+        if (area > bestArea) {
+            bestArea = area;
+            best = sv;
+        }
+    }
+    return best;
+}
+
+static ERL_NIF_TERM nif_screenshot(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    char fmt[8] = {0};
+    int quality = 90;
+    double scale = 1.0;
+    if (!enif_get_atom(env, argv[0], fmt, sizeof(fmt), ERL_NIF_LATIN1) ||
+        !enif_get_int(env, argv[1], &quality) || !enif_get_double(env, argv[2], &scale))
+        return enif_make_badarg(env);
+
+    BOOL jpeg = (strcmp(fmt, "jpeg") == 0);
+    if (scale <= 0.0)
+        scale = 1.0;
+
+    __block NSData *imageData = nil;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+      UIWindow *window = nil;
+      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+          if (![scene isKindOfClass:[UIWindowScene class]])
+              continue;
+          for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+              if (win.isHidden)
+                  continue;
+              if (win.isKeyWindow) {
+                  window = win;
+                  break;
+              }
+              if (!window)
+                  window = win; // first visible window as fallback
+          }
+          if (window.isKeyWindow)
+              break;
+      }
+      if (!window)
+          return;
+
+      // `scale` is a multiplier of the native screen scale: 1.0 = crisp native
+      // resolution, 0.5 = half (smaller payload over dist).
+      UIGraphicsImageRendererFormat *rf = [UIGraphicsImageRendererFormat preferredFormat];
+      rf.scale = [UIScreen mainScreen].scale * (CGFloat)scale;
+      rf.opaque = YES;
+      UIGraphicsImageRenderer *renderer =
+          [[UIGraphicsImageRenderer alloc] initWithSize:window.bounds.size format:rf];
+      UIImage *img = [renderer imageWithActions:^(UIGraphicsImageRendererContext *_Nonnull ctx) {
+        (void)ctx;
+        [window drawViewHierarchyInRect:window.bounds afterScreenUpdates:YES];
+      }];
+      imageData = jpeg ? UIImageJPEGRepresentation(img, (CGFloat)quality / 100.0)
+                       : UIImagePNGRepresentation(img);
+    });
+
+    if (!imageData)
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "no_window"));
+
+    ErlNifBinary bin;
+    enif_alloc_binary(imageData.length, &bin);
+    memcpy(bin.data, imageData.bytes, imageData.length);
+    return enif_make_binary(env, &bin);
+}
+
+static ERL_NIF_TERM nif_scroll_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary idb;
+    if (!enif_inspect_binary(env, argv[0], &idb))
+        return enif_make_badarg(env);
+    NSString *identifier = [[NSString alloc] initWithBytes:idb.data
+                                                    length:idb.size
+                                                  encoding:NSUTF8StringEncoding]
+                               ?: @"";
+
+    __block NSData *jsonData = nil;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+      UIScrollView *sv = mob_find_scroll_view(identifier);
+      if (!sv)
+          return;
+
+      // Normalize so offset 0 == content top, regardless of inset.
+      UIEdgeInsets in = sv.adjustedContentInset;
+      CGFloat vw = sv.bounds.size.width - in.left - in.right;
+      CGFloat vh = sv.bounds.size.height - in.top - in.bottom;
+      CGFloat cw = sv.contentSize.width;
+      CGFloat ch = sv.contentSize.height;
+      NSDictionary *d = @{
+          @"offset_x" : @(sv.contentOffset.x + in.left),
+          @"offset_y" : @(sv.contentOffset.y + in.top),
+          @"content_w" : @(cw),
+          @"content_h" : @(ch),
+          @"viewport_w" : @(vw),
+          @"viewport_h" : @(vh),
+          @"max_x" : @(MAX(0.0, cw - vw)),
+          @"max_y" : @(MAX(0.0, ch - vh)),
+          @"kind" : @"pixel"
+      };
+      jsonData = [NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
+    });
+
+    if (!jsonData)
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "scroll_view_not_found"));
+
+    ErlNifBinary bin;
+    enif_alloc_binary(jsonData.length, &bin);
+    memcpy(bin.data, jsonData.bytes, jsonData.length);
+    return enif_make_binary(env, &bin);
+}
+
+static ERL_NIF_TERM nif_scroll_to(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary idb;
+    double x, y;
+    if (!enif_inspect_binary(env, argv[0], &idb) || !enif_get_double(env, argv[1], &x) ||
+        !enif_get_double(env, argv[2], &y))
+        return enif_make_badarg(env);
+    NSString *identifier = [[NSString alloc] initWithBytes:idb.data
+                                                    length:idb.size
+                                                  encoding:NSUTF8StringEncoding]
+                               ?: @"";
+
+    __block BOOL ok = NO;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+      UIScrollView *sv = mob_find_scroll_view(identifier);
+      if (!sv)
+          return;
+      // Caller works in normalized coords (0 == top); convert to offset space.
+      UIEdgeInsets in = sv.adjustedContentInset;
+      [sv setContentOffset:CGPointMake((CGFloat)x - in.left, (CGFloat)y - in.top) animated:NO];
+      ok = YES;
+    });
+
+    return ok ? enif_make_atom(env, "ok")
+              : enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                 enif_make_atom(env, "scroll_view_not_found"));
+}
+
+// nif_element_frames/0 — JSON {"id":[x,y,w,h],...} of tagged element frames
+// (logical points). Recorded by MobFrameTracker; see mob_register_frame.
+static ERL_NIF_TERM nif_element_frames(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    NSMutableDictionary *reg = mob_frame_registry();
+    NSData *jsonData = nil;
+    @synchronized(reg) {
+        jsonData = [NSJSONSerialization dataWithJSONObject:reg options:0 error:nil];
+    }
+    if (!jsonData)
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "encode_failed"));
+
+    ErlNifBinary bin;
+    enif_alloc_binary(jsonData.length, &bin);
+    memcpy(bin.data, jsonData.bytes, jsonData.length);
+    return enif_make_binary(env, &bin);
+}
+
 #endif // !MOB_RELEASE — end of test harness block (started near line 2780)
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -6326,6 +6537,42 @@ void mob_send_component_event(int handle, const char *event, const char *payload
     enif_free_env(env);
 }
 
+// ── Element frame registry (positions without a screenshot) ──────────────────
+//
+// mob_register_frame is called from MobFrameTracker (SwiftUI) on the main thread
+// as a tagged element lays out; the element_frames NIF reads it from a NIF
+// thread. Both use only public APIs, so this is compiled unconditionally (the
+// reading NIF is still debug-gated). @synchronized guards the shared dictionary.
+static NSMutableDictionary<NSString *, NSArray<NSNumber *> *> *g_element_frames = nil;
+static dispatch_once_t g_element_frames_once;
+
+static NSMutableDictionary *mob_frame_registry(void) {
+    dispatch_once(&g_element_frames_once, ^{
+      g_element_frames = [NSMutableDictionary dictionary];
+    });
+    return g_element_frames;
+}
+
+void mob_register_frame(const char *id, double x, double y, double w, double h) {
+    if (!id)
+        return;
+    NSString *key = [NSString stringWithUTF8String:id];
+    if (!key)
+        return;
+    NSMutableDictionary *reg = mob_frame_registry();
+    @synchronized(reg) {
+        reg[key] = @[ @(x), @(y), @(w), @(h) ];
+    }
+}
+
+// Drop stale frames when the render tree changes (called from nif_set_root).
+static void mob_clear_frames(void) {
+    NSMutableDictionary *reg = mob_frame_registry();
+    @synchronized(reg) {
+        [reg removeAllObjects];
+    }
+}
+
 // ── Mob.Peripheral.VendorUsb (iOS stubs) ──────────────────────────────────────
 //
 // iOS exposes no public USB-host API equivalent to Android's UsbManager.
@@ -6612,6 +6859,10 @@ static ErlNifFunc nif_funcs[] = {
     {"clear_text", 0, nif_clear_text, 0},
     {"long_press_xy", 3, nif_long_press_xy, 0},
     {"swipe_xy", 4, nif_swipe_xy, 0},
+    {"screenshot", 3, nif_screenshot, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"scroll_info", 1, nif_scroll_info, 0},
+    {"scroll_to", 3, nif_scroll_to, 0},
+    {"element_frames", 0, nif_element_frames, ERL_NIF_DIRTY_JOB_CPU_BOUND},
 #endif
     // ── Core mob functions ───────────────────────────────────────────────────
     {"background_keep_alive", 0, nif_background_keep_alive, 0},

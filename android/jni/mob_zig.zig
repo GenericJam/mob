@@ -511,7 +511,8 @@ pub const JNINativeInterface = extern struct {
     ReleaseFloatArrayElements: ?*anyopaque,
     ReleaseDoubleArrayElements: ?*anyopaque,
     GetBooleanArrayRegion: ?*anyopaque,
-    GetByteArrayRegion: ?*anyopaque,
+    // Typed (used by nif_screenshot to read a Kotlin byte[] into a binary).
+    GetByteArrayRegion: ?*const fn (env: *JNIEnv, arr: JByteArray, start: JInt, len: JInt, buf: [*]JByte) callconv(.c) void,
     GetCharArrayRegion: ?*anyopaque,
     GetShortArrayRegion: ?*anyopaque,
     GetIntArrayRegion: ?*anyopaque,
@@ -616,6 +617,10 @@ pub inline fn getArrayLength(env: *JNIEnv, arr: JObject) JInt {
 
 pub inline fn getFloatArrayRegion(env: *JNIEnv, arr: JObject, start: JInt, len: JInt, buf: [*]f32) void {
     env.*.GetFloatArrayRegion.?(env, arr, start, len, buf);
+}
+
+pub inline fn getByteArrayRegion(env: *JNIEnv, arr: JByteArray, start: JInt, len: JInt, buf: [*]JByte) void {
+    env.*.GetByteArrayRegion.?(env, arr, start, len, buf);
 }
 
 pub inline fn newByteArray(env: *JNIEnv, len: JSize) JByteArray {
