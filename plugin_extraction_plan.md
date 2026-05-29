@@ -322,9 +322,23 @@ Each wave produces multiple plugins. Run in parallel within a wave.
 
 Just one plugin, the heaviest non-essential dep:
 
-- [ ] `mob_bluetooth` ← extracts `lib/mob/bt.ex` + `lib/mob/bt/{hfp,hid,spp}.ex` (548 LoC + native)
+- [~] `mob_bluetooth` ← extracts `lib/mob/bt.ex` + `lib/mob/bt/{hfp,hid,spp}.ex` (548 LoC + native)
   - Already documented as the canonical tier-1 example in `MOB_PLUGINS.md`.
   - Permissions: `BLUETOOTH_CONNECT`, `BLUETOOTH_SCAN`, `NSBluetoothAlwaysUsageDescription`.
+  - **In progress (2026-05-28).** Session A (Elixir only, NIF stayed in core) shipped. The
+    full extraction turned out to be a THREE-layer native move — zig (`nif_bt_*` +
+    `mob_deliver_bt_*`), C JNI thunks (`beam_jni.c`), and ~450 lines of real Kotlin
+    (`MobBridge.kt` `bt_*`) — needing two net-new plugin-system capabilities first. See the
+    decision trail (in mob_dev `decisions/`, the plugin infra repo):
+    - `2026-05-28-bt-full-three-layer-extraction.md` — scope decision + alternatives weighed.
+    - `2026-05-28-zig-plugin-nifs.md` — zig plugin NIF compile path. **Built + live-verified
+      on device** (trivial `mob_demo_zig_extras` NIF: `answer/0 => 42`).
+    - `2026-05-28-android-plugin-bridge-classes.md` — plugin-owned Kotlin bridge class +
+      `nativeRegister` jclass caching + `MobPluginBootstrap` startup hook. Foundation built
+      (Merge accessors + `-Dplugin_jni_sources` compile); bridge_kt copy + bootstrap codegen
+      in progress; trivial-bridge device proof pending before the bt move.
+  - Branches (uncommitted): infra on mob_dev `plugin-host-config`; core strip will land on
+    mob `bt-nif-session-b` worktree; Elixir lives in the `mob_bluetooth` repo (`session-b-nif`).
 
 ### Wave 2 — privacy-heavy capabilities
 
