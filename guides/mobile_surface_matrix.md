@@ -135,7 +135,7 @@ and orthogonal — composition over a fat component library.
 
 | Capability | Status | iOS | Android | Notes |
 |--|--|--|--|--|
-| Bluetooth Classic | ✅ | n/a | ✓ | `Mob.Bt` + Hfp / Spp / Hid sub-modules |
+| Bluetooth Classic | ✅ | n/a | ✓ | `MobBluetooth` plugin (extracted; Hfp / Spp / Hid sub-modules) |
 | Bluetooth Low Energy (BLE) | ❌ | — | — | Plugin candidate — common request |
 | NFC | ❌ | — | — | Plugin candidate (Core NFC / Android NFC) |
 | WiFi info / scanning | ❌ | — | — | Plugin candidate; OS restrictions apply |
