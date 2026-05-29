@@ -357,8 +357,13 @@ Devices are assigned dist ports by index to avoid conflicts:
 - Device 1 (iOS sim): port 9101
 
 iOS dist port is passed via `SIMCTL_CHILD_MOB_DIST_PORT` env var; `mob_beam.m` reads
-`MOB_DIST_PORT` at startup. Android dist port is passed as an intent extra (`mob_dist_port`);
-**`MainActivity.java` does NOT yet read this — multi-Android support is pending.**
+`MOB_DIST_PORT` at startup. Android dist port is passed as the `mob_dist_port` intent
+extra (set by `MobDev.Discovery.Android.restart_app/4`); the generated app's
+`MainActivity.kt` reads it (`intent.extras.getInt("mob_dist_port")`) and exports it as
+the `MOB_DIST_PORT` env var, which `mob_beam` consumes at startup — so each Android
+device honors its per-device port and multi-Android no longer collides. Override with
+`mix mob.deploy --dist-port <N>` (e.g. to dodge a port another app is squatting in the
+shared Mac EPMD); pair it with `adb forward tcp:<N> tcp:<N>`.
 
 Both iOS and Android end up registered in the same Mac EPMD. `mix mob.connect` sets
 up all tunnels automatically.

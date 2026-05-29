@@ -77,9 +77,22 @@ the render tree. The canonical example is the `mob_bluetooth` plugin
   # Elixir wrapper can then `defdelegate` into it.
   #
   # `:native_dir` is the per-NIF native source directory. mob_dev's build
-  # appends these entries to the existing :static_nifs list.
+  # appends these entries to the existing :static_nifs list (the generated
+  # driver table references `<module>_nif_init` over C ABI regardless of
+  # source language).
+  #
+  # `:lang` selects the compile path (default `:c`):
+  #   - `:c`   → `<native_dir>/<module>.c`, compiled with
+  #              `-DSTATIC_ERLANG_NIF_LIBNAME=<module>` (the ERL_NIF_INIT macro
+  #              emits the init symbol). Fed to build.zig via `-Dplugin_c_nifs`.
+  #   - `:zig` → `<native_dir>/<module>.zig`, compiled via `addZigObject` and
+  #              fed via `-Dplugin_zig_nifs`. The source names its own
+  #              `export fn <module>_nif_init()` (no libname flag) and reaches
+  #              mob-core bindings through the named imports `@import("erts")`
+  #              / `@import("jni")` that build.zig wires for plugin zig objects.
+  #              See mob_dev `decisions/2026-05-28-zig-plugin-nifs.md`.
   nifs: [
-    %{module: :mob_bluetooth_nif, native_dir: "priv/native/jni"}
+    %{module: :mob_bluetooth_nif, native_dir: "priv/native/jni", lang: :zig}
   ],
 
   android: %{
@@ -94,14 +107,24 @@ the render tree. The canonical example is the `mob_bluetooth` plugin
       "android.permission.BLUETOOTH_SCAN"
     ],
 
-    # Kotlin file injected into MobBridge.kt's plugin extension slot.
-    # The plugin's Kotlin code declares its own BroadcastReceivers,
-    # external function bindings, etc.
+    # The plugin's own Kotlin bridge class, in its OWN package (NOT the app's
+    # MobBridge). mob_dev copies it into the app source tree before
+    # `gradle assembleDebug` so the app's Kotlin sourceSet compiles it.
     bridge_kt: "priv/native/android/MobBluetoothBridge.kt",
 
-    # C/Zig source compiled alongside beam_jni.c. Provides the JNI
-    # thunks that route into the plugin's NIFs.
-    jni_source: "priv/native/android/jni/bluetooth.c"
+    # Fully-qualified name of that Kotlin class. mob_dev generates a
+    # `MobPluginBootstrap.registerAll/0` (called from MainActivity.onCreate)
+    # that invokes `<bridge_class>.register()` at startup; the plugin's
+    # `nativeRegister(env, cls)` JNI thunk caches its own jclass + method IDs
+    # from the `cls` arg (no FindClass / classloader problem). This is how a
+    # plugin-owned Kotlin class becomes callable from its NIF.
+    bridge_class: "io.mob.bluetooth.MobBluetoothBridge",
+
+    # Plain JNI-thunk C (Java_<pkg>_<Class>_*) compiled alongside beam_jni.c
+    # via `-Dplugin_jni_sources` (no NIF-init libname — these aren't NIFs).
+    # Holds nativeRegister + the nativeDeliver* thunks that call the plugin
+    # NIF's `mob_deliver_*` exports.
+    jni_source: "priv/native/jni/mob_bluetooth_jni.c"
   },
 
   ios: %{
