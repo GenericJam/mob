@@ -343,6 +343,9 @@ struct MobNodeView: View {
                 .scrollDismissesKeyboard(.interactively)
                 .padding(node.paddingEdgeInsets)
                 .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
+                // Expose the node :id on the backing UIScrollView so the test
+                // harness (Mob.Test.scroll_info/scroll_to) can address it by id.
+                .ifLet(node.nativeViewId) { view, id in view.accessibilityIdentifier(id) }
                 // ── Batch 5 Tier 1: scroll position observation ──
                 // SwiftUI's onScrollGeometryChange is iOS 18+. On older iOS
                 // there's no clean SwiftUI API for raw offset; UIKit-backed
@@ -405,6 +408,7 @@ struct MobNodeView: View {
                 .frame(maxHeight: .infinity)
                 .padding(node.paddingEdgeInsets)
                 .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
+                .ifLet(node.nativeViewId) { view, id in view.accessibilityIdentifier(id) }
 
             case .progress:
                 let trackColor = node.color.map { Color($0) } ?? Color.accentColor

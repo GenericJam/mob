@@ -295,6 +295,9 @@ pub const BridgeMethods = extern struct {
     clear_text: jni.JMethodID = null,
     long_press_xy: jni.JMethodID = null,
     swipe_xy: jni.JMethodID = null,
+    screenshot: jni.JMethodID = null,
+    scroll_info: jni.JMethodID = null,
+    scroll_to: jni.JMethodID = null,
     // ── Mob.Peripheral.VendorUsb ─────────────────────────────────────────
     // Each takes a pid as jlong (so Kotlin can echo it back when calling
     // mob_deliver_vendor_usb_*) plus the operation's typed payload.
@@ -588,6 +591,114 @@ export fn nif_screen_info(
         safe_area,
     };
     return erts.makeMap(env, &keys, &vvals) orelse erts.atom(env, "error");
+}
+
+// ── In-process screenshot + scroll control (agent driving over dist) ─────────
+//
+// Mirrors the iOS NIFs. These delegate to MobBridge (PixelCopy for capture,
+// Compose scroll state for scroll) so a remotely-connected agent gets pixels +
+// deterministic scroll with no adb/xcrun. Bridge methods are optional: apps
+// generated before these existed return {:error, :not_loaded}.
+
+// Copy an id binary into a NUL-terminated buffer; returns the C string and an
+// optional heap pointer the caller must free. Mirrors the nif_tap/type_text idiom.
+const IdBuf = struct { cstr: [*:0]const u8, heap: ?*anyopaque };
+
+fn idCString(bin: erts.ErlNifBinary, stack_buf: []u8) ?IdBuf {
+    const use_heap = bin.size + 1 > stack_buf.len;
+    const heap_buf: ?*anyopaque = if (use_heap) jni.malloc(bin.size + 1) else null;
+    if (use_heap and heap_buf == null) return null;
+    const buf_ptr: [*]u8 = if (use_heap) @ptrCast(heap_buf) else stack_buf.ptr;
+    @memcpy(buf_ptr[0..bin.size], bin.data[0..bin.size]);
+    buf_ptr[bin.size] = 0;
+    return .{ .cstr = @ptrCast(buf_ptr), .heap = heap_buf };
+}
+
+// nif_screenshot/3 — capture the activity window; returns PNG/JPEG bytes.
+export fn nif_screenshot(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.screenshot == null) return notLoaded(env);
+
+    var fmt: [8]u8 = @splat(0);
+    if (erts.enif_get_atom(env, argv[0], &fmt, fmt.len, erts.ERL_NIF_LATIN1) == 0)
+        return erts.badarg(env);
+    var quality: c_int = 90;
+    _ = erts.enif_get_int(env, argv[1], &quality);
+    const scale = erts.getNumber(env, argv[2]) orelse 1.0;
+    const fmt_cstr: [*:0]const u8 = @ptrCast(&fmt);
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    defer detachIfAttached(attached);
+
+    const jfmt = jni.newStringUTF(jenv, fmt_cstr);
+    const jbytes = jenv.*.CallStaticObjectMethod.?(jenv, Bridge.cls, Bridge.screenshot, jfmt, @as(jni.JInt, @intCast(quality)), @as(f64, scale));
+    jni.deleteLocalRef(jenv, jfmt);
+    if (jbytes == null) return errorAtom(env, "no_window");
+
+    const len = jni.getArrayLength(jenv, jbytes);
+    var bin: erts.ErlNifBinary = undefined;
+    _ = erts.enif_alloc_binary(@intCast(len), &bin);
+    if (len > 0) jni.getByteArrayRegion(jenv, jbytes, 0, len, @ptrCast(bin.data));
+    jni.deleteLocalRef(jenv, jbytes);
+    return erts.enif_make_binary(env, &bin);
+}
+
+// nif_scroll_info/1 — read a scroll view's offset/extent (JSON string by :id).
+export fn nif_scroll_info(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.scroll_info == null) return notLoaded(env);
+    var bin: erts.ErlNifBinary = undefined;
+    if (erts.enif_inspect_binary(env, argv[0], &bin) == 0) return erts.badarg(env);
+
+    var stack_buf: [256]u8 = undefined;
+    const id = idCString(bin, &stack_buf) orelse return erts.atom(env, "error");
+    defer if (id.heap) |h| jni.free(h);
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    defer detachIfAttached(attached);
+
+    const jid = jni.newStringUTF(jenv, id.cstr);
+    const jresult = jenv.*.CallStaticObjectMethod.?(jenv, Bridge.cls, Bridge.scroll_info, jid);
+    jni.deleteLocalRef(jenv, jid);
+    if (jresult == null) return errorAtom(env, "scroll_view_not_found");
+    return jstringToBin(env, jenv, jresult); // releases jresult
+}
+
+// nif_scroll_to/3 — scroll a view (by :id) to absolute (x, y).
+export fn nif_scroll_to(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.scroll_to == null) return notLoaded(env);
+    var bin: erts.ErlNifBinary = undefined;
+    if (erts.enif_inspect_binary(env, argv[0], &bin) == 0) return erts.badarg(env);
+    const x = erts.getNumber(env, argv[1]) orelse return erts.badarg(env);
+    const y = erts.getNumber(env, argv[2]) orelse return erts.badarg(env);
+
+    var stack_buf: [256]u8 = undefined;
+    const id = idCString(bin, &stack_buf) orelse return erts.atom(env, "error");
+    defer if (id.heap) |h| jni.free(h);
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    defer detachIfAttached(attached);
+
+    const jid = jni.newStringUTF(jenv, id.cstr);
+    const ok = jenv.*.CallStaticBooleanMethod.?(jenv, Bridge.cls, Bridge.scroll_to, jid, @as(f64, x), @as(f64, y));
+    jni.deleteLocalRef(jenv, jid);
+    return if (ok != 0) erts.ok(env) else errorAtom(env, "scroll_view_not_found");
 }
 
 // nif_ax_action/2 + nif_ax_action_at_xy/3 — Android stubs.
@@ -4886,6 +4997,9 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     cacheOptional(jenv, "uiTree", "()Ljava/lang/String;", &Bridge.ui_tree);
     cacheOptional(jenv, "uiViewTree", "()Ljava/lang/String;", &Bridge.ui_view_tree);
     cacheOptional(jenv, "screenInfo", "()[F", &Bridge.screen_info);
+    cacheOptional(jenv, "screenshot", "(Ljava/lang/String;ID)[B", &Bridge.screenshot);
+    cacheOptional(jenv, "scrollInfo", "(Ljava/lang/String;)Ljava/lang/String;", &Bridge.scroll_info);
+    cacheOptional(jenv, "scrollTo", "(Ljava/lang/String;DD)Z", &Bridge.scroll_to);
     cacheOptional(jenv, "tapXy", "(FF)Z", &Bridge.tap_xy);
     cacheOptional(jenv, "tapByLabel", "(Ljava/lang/String;)Z", &Bridge.tap_by_label);
     cacheOptional(jenv, "typeText", "(Ljava/lang/String;)Z", &Bridge.type_text);
@@ -4921,6 +5035,9 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "clear_text", .arity = 0, .fptr = nif_clear_text, .flags = 0 },
     .{ .name = "long_press_xy", .arity = 3, .fptr = nif_long_press_xy, .flags = 0 },
     .{ .name = "swipe_xy", .arity = 4, .fptr = nif_swipe_xy, .flags = 0 },
+    .{ .name = "screenshot", .arity = 3, .fptr = nif_screenshot, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
+    .{ .name = "scroll_info", .arity = 1, .fptr = nif_scroll_info, .flags = 0 },
+    .{ .name = "scroll_to", .arity = 3, .fptr = nif_scroll_to, .flags = 0 },
     // Core mob functions.
     .{ .name = "platform", .arity = 0, .fptr = nif_platform, .flags = 0 },
     .{ .name = "color_scheme", .arity = 0, .fptr = nif_color_scheme, .flags = 0 },
