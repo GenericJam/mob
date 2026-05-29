@@ -8,7 +8,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.6.23]
 
 ### Added
 - **Element positions without a screenshot.** `element_frames/0` NIF surfaced as `Mob.Test.element_frames/1` (`%{id => {x,y,w,h}}`), `frame/2`, and `tap_id/2` (drive by id at real coordinates). Any rendered node given an `:id` reports its live on-screen frame (logical points iOS / dp Android) to a registry the agent reads over dist — a compact structured map instead of image bytes, with no accessibility activation. The renderer also sets the `:id` as the element's accessibility identifier (iOS `accessibilityIdentifier`, Android Compose `testTag`), so the same tags are visible to XCUITest/Espresso. Opt-in per element: untagged nodes cost nothing (the tracking modifier only attaches when an `:id` is present). iOS records the full element frame via a `GeometryReader` background; Android via `Modifier.onGloballyPositioned`. Verified on iOS sim, Android device, and a physical iPhone. The Android Kotlin side lives in the `mob_new` `MobBridge.kt.eex` template.
