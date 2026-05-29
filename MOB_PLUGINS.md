@@ -58,8 +58,8 @@ optional.
 ## Tier 1 — functional plugin
 
 A NIF + Elixir wrapper + per-platform helper code that doesn't touch
-the render tree. The canonical example is what `Mob.Bt` would look
-like if it lived outside core:
+the render tree. The canonical example is the `mob_bluetooth` plugin
+(extracted from core in Wave 1):
 
 ```elixir
 %{
@@ -69,7 +69,7 @@ like if it lived outside core:
   description: "Bluetooth Classic peripheral (HFP / SPP / HID)",
 
   # Static-linked NIFs. `:module` is the NIF's Erlang module name (a valid
-  # C token: `[a-z_][a-z0-9_]*`), NOT an Elixir module — ERL_NIF_INIT uses
+  # C token: `[a-z][a-z0-9_]*`), NOT an Elixir module — ERL_NIF_INIT uses
   # it as BOTH the registered module name AND the static-init symbol prefix
   # (`<module>_nif_init`), so an Elixir module like `MobBluetooth.Nif`
   # would yield an invalid C symbol. The plugin ships a small Erlang stub
@@ -209,7 +209,7 @@ embedded in the host). Adds `:screens`, `:migrations`, `:assets`:
   description: "StoreKit / Play Billing IAP flow",
 
   # ── tier-1 capability bits ──
-  nifs: [%{module: MobIap.Nif, native_dir: "priv/native/jni"}],
+  nifs: [%{module: :mob_iap_nif, native_dir: "priv/native/jni"}],
   android: %{
     gradle_deps: ["com.android.billingclient:billing:6.1.0"],
     bridge_kt: "priv/native/android/MobIapBridge.kt",

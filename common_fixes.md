@@ -990,3 +990,164 @@ places, lock-step:
    test enforces equality).
 3. `mob_dev/scripts/release/openssl/_lib.sh` — `NDK_VERSION` default.
 
+
+## Android `:inet.getaddr/2` returns `:nxdomain` on physical devices (works on emulator)
+
+**Symptom** — On a deployed mob app on a physical Android device, the
+BEAM can't resolve hostnames:
+
+```elixir
+:inet.getaddr(~c"repo.hex.pm", :inet)
+#=> {:error, :nxdomain}
+```
+
+…but the SAME app can `:gen_tcp.connect/3` to a hardcoded IP fine, and
+`adb shell ping` from the device works. The Android emulator does NOT
+hit this — it works there — which is why this didn't show in early
+testing. Verified on Moto G Power 5G 2024 (Android 14).
+
+**Root cause** — BEAM's default DNS path forks `inet_gethost` (a port
+program) and reads what its `getaddrinfo` returns. On a physical
+Android device, Bionic's `getaddrinfo` *in the execve'd child* of the
+app process doesn't pick up the per-network DNS servers the way the
+app's own in-process HTTPS stack does. We suspect this is related to
+how `libnetd_client.so` routing into `netd` survives across execve,
+but we haven't pinned it down — happy to take a PR with the actual
+diagnosis.
+
+**Fix** — Resolve in-process via `Mob.DNS.resolve/1`, which calls
+Bionic's `getaddrinfo` from a NIF and seeds `:inet_db` with the
+result. Subsequent `:inet.getaddr/2` lookups hit the seeded `:file`
+entry and succeed:
+
+```elixir
+def on_start do
+  # Preresolve the hosts your app/notebook needs at startup. Idempotent;
+  # cheap; works on iOS, Android-physical, and Android-emulator alike.
+  Mob.DNS.preresolve(["repo.hex.pm", "hex.pm", "api.example.com"])
+
+  # …rest of startup. Any subsequent Req/Finch/Mint/Mix.install call for
+  # these hosts will find the seeded entry.
+end
+```
+
+For a host not known until request-time, call `Mob.DNS.resolve/1`
+just before the request. See the `Mob.DNS` moduledoc for the
+cellular caveat and the `configure_pure_beam/1` fallback.
+
+**Background-app caveat** — Android's App Standby / battery
+optimizer blocks *all* outbound network from a backgrounded mob
+app (TCP-by-IP too, not just DNS). The DNS fix above only matters
+once the app is foregrounded or running under a foreground
+service. Symptom: any socket attempt returns `:closed` / `:timeout`
+immediately. Bring the app foreground or attach a foreground
+service before triggering long-lived network work.
+
+## `FunctionClauseError` in `pubkey_os_cacerts.conv_error_reason/1` (Android, missing CA bundle)
+
+**Symptom** — In a mob app on a real Android device, an HTTPS request via
+Req / Mint / Finch / anything using OTP-26+ default `:ssl` opts crashes:
+
+```
+** (FunctionClauseError) no function clause matching in
+   :pubkey_os_cacerts.conv_error_reason/1
+   (public_key 1.21) :pubkey_os_cacerts.conv_error_reason(:no_cacerts_found)
+```
+
+Hex itself doesn't hit this — it bakes its own CA bundle into
+`Hex.HTTP.SSL` — so `mix install/2` may succeed where the *first* call
+from a user dep fails. The crash also doesn't appear on iOS or on the
+Android emulator (their `:ssl` defaults pick up the OS trust store).
+
+**Root cause** — `:public_key.cacerts_load/0` (called by `:ssl`'s
+defaults at OTP 26+) probes `/etc/ssl/certs/ca-certificates.crt` and a
+handful of distro-specific paths. None of those exist on Android — the
+system trust store lives behind a Java API that BEAM's `:public_key`
+doesn't reach. `cacerts_get/0` then raises with `no_cacerts_found`, and
+in some OTP versions `pubkey_os_cacerts.conv_error_reason/1` doesn't
+have a clause for that — the surface error becomes a
+`FunctionClauseError` rather than the cleaner `no_cacerts_found`.
+
+**Fix** — Bundle a CA-bundle PEM in your app `priv/` (the conventional
+source is the `castore` hex package — copy `cacerts.pem` into your priv
+at build time) and call `Mob.Certs.load_cacerts!/1` once at startup
+*before* anything tries TLS:
+
+```elixir
+def on_start do
+  Mob.Certs.load_cacerts!(Application.app_dir(:my_app, "priv/cacerts.pem"))
+  # …rest of startup…
+end
+```
+
+See the `Mob.Certs` moduledoc for the rationale, the cross-platform
+notes (iOS and the Android emulator don't need this, but calling
+unconditionally is safe), and the available functions.
+
+## Runtime `Mix.install` of a rebar3-built dep fails on Android (telemetry / jose / jiffy / …)
+
+**Symptom** — In a notebook setup cell on a real mob app (Livebook-style),
+`Mix.install/2` of anything that transitively pulls a rebar3-built
+Erlang dep — `telemetry` is the common one (Req → Mint → telemetry,
+Phoenix → telemetry, etc.) — crashes:
+
+```
+** (Mix.Error) Could not compile dependency :telemetry,
+"/data/user/0/<pkg>/files/livebook/mix_home/elixir/1-19-otp-29/rebar3 bare compile --paths …"
+command failed.
+   (mix 1.19.5) lib/mix/tasks/deps.compile.ex:276: Mix.Tasks.Deps.Compile.do_rebar3/2
+```
+
+Pure-Mix deps install fine. The rebar3 path fails because there is no
+`rebar3` binary at the expected `$MIX_HOME` location, and even if you
+copy one there, `app_data_file` SELinux context blocks `execve()` of
+files under the app's writable storage. Same wall as `inet_gethost`
+hits — and the fix is the same JNI-extracted-shared-lib trick.
+
+**Fix** — Bundle the chain ERTS needs to spawn a fresh BEAM, plus
+rebar3's escript, as `lib<name>.so` files in your app's
+`android/app/src/main/jniLibs/<abi>/`:
+
+| File in jniLibs | What it is | Source |
+|---|---|---|
+| `libescript.so`     | OTP escript runner | `$OTP_ANDROID/erts-<vsn>/bin/escript` |
+| `liberlexec.so`     | BEAM launcher (also serves as `erl`) | `$OTP_ANDROID/erts-<vsn>/bin/erlexec` |
+| `libbeam_smp.so`    | The BEAM VM itself (~32 MB unstripped) | `$OTP_ANDROID/erts-<vsn>/bin/beam.smp` |
+| `librebar3_data.so` | rebar3's escript archive | `~/.mix/elixir/<vsn>/rebar3` |
+| `librebar3.so`      | tiny `/system/bin/sh` wrapper (see below) | written at build time |
+
+`mob_beam.zig`'s optional-symlink list picks these up at boot:
+`BINDIR/escript`, `BINDIR/erl`, `BINDIR/erlexec`, and `BINDIR/beam.smp`
+all become `apk_data_file`-context-exec-able. `MOB_NATIVE_LIB_DIR`
+exposes the nativeLibDir path so the app can reach the bundled files
+at runtime.
+
+The rebar3 wrapper (`librebar3.so` content):
+
+```sh
+#!/system/bin/sh
+exec "${BINDIR}/escript" "${MOB_DATA_DIR}/rebar3" "$@"
+```
+
+…plus an app-side step at startup to symlink `librebar3_data.so` to a
+filename of `rebar3` (escript derives the module name from the
+file's basename, and rebar3's archive exports `rebar3:main/1`):
+
+```elixir
+File.cp_r!(Path.join([System.get_env("MOB_NATIVE_LIB_DIR"), "librebar3_data.so"]),
+           Path.join([System.get_env("MOB_DATA_DIR"), "rebar3"]))
+System.put_env("MIX_REBAR3", Path.join([System.get_env("MOB_NATIVE_LIB_DIR"), "librebar3.so"]))
+```
+
+`$OTP_ROOT/bin/<name>.boot` symlinks (`no_dot_erlang.boot`, `start.boot`)
+are normally created by standard OTP's `bin/Install` script — mob's
+deploy skips that. Materialize them lazily at app boot.
+
+Verified end-to-end on a Moto G Power 5G 2024 (Android 14):
+`Mix.install([{:req, "~> 0.5"}])` resolves Req's full tree, compiles
+`telemetry` via on-device rebar3, and a follow-up `Req.get!/2` returns
+real JSON over real TLS.
+
+**Trade-off** — ~33 MB APK size for the bundled `beam.smp`. Pure-Mix
+deps don't need any of this; if your app never runs rebar3 deps at
+runtime, skip the whole bundling and avoid the cost.

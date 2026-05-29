@@ -99,6 +99,95 @@ export fn nif_log2(
     return erts.ok(env);
 }
 
+// ── NIF: resolve_ipv4/1 ──────────────────────────────────────────────────
+//
+// In-process IPv4 DNS via Bionic's getaddrinfo. Exists because BEAM's
+// default DNS path — forking `inet_gethost` (a port program) — returns
+// `:nxdomain` on physical Android devices we've tested, even though the
+// app's own HTTP stack resolves the same hostnames fine. Suspected cause:
+// Bionic's netd-routed resolver doesn't carry across to execve'd children
+// of the app process the way it does to in-process calls. The emulator
+// happens not to hit this, which is why it wasn't caught earlier.
+//
+// This NIF runs getaddrinfo in-process (same address space, same uid as
+// the app), so it follows whatever DNS path the JVM and the app's libraries
+// use. Mirrors iOS's `nif_resolve_ipv4` in `ios/mob_nif.m` and uses the
+// same atom/error vocabulary so `Mob.DNS.resolve/1` is platform-agnostic.
+//
+// Dirty-scheduled because getaddrinfo can block on the resolver for the
+// full timeout (seconds). Keep it off the regular schedulers.
+//
+// Returns:
+//   {:ok, {a, b, c, d}}
+//   {:error, :badarg}        — host arg wasn't a string/charlist
+//   {:error, :nxdomain}      — no such hostname
+//   {:error, :timeout}       — TRY_AGAIN
+//   {:error, :no_address}    — got a result but no IPv4 in the chain
+//   {:error, {:gai, code}}   — anything else; raw EAI_* int
+export fn nif_resolve_ipv4(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var host: [256]u8 = undefined;
+    const got = erts.enif_get_string(env, argv[0], &host, host.len, erts.ERL_NIF_LATIN1);
+    if (got <= 0) return erts.errorTuple(env, erts.atom(env, "badarg"));
+
+    const hints: jni.AddrInfo = .{
+        .ai_flags = 0,
+        .ai_family = jni.AF_INET,
+        .ai_socktype = jni.SOCK_STREAM,
+        .ai_protocol = 0,
+        .ai_addrlen = 0,
+        .ai_canonname = null,
+        .ai_addr = null,
+        .ai_next = null,
+    };
+
+    var result: ?*jni.AddrInfo = null;
+    const err = jni.getaddrinfo(@ptrCast(&host), null, &hints, &result);
+    if (err != 0) {
+        // `erts.atom` requires a comptime-known name, so each EAI_* maps to a
+        // literal string in its own switch arm rather than a runtime-selected
+        // pointer.
+        return switch (err) {
+            jni.EAI_NONAME, jni.EAI_NODATA => erts.errorTuple(env, erts.atom(env, "nxdomain")),
+            jni.EAI_AGAIN => erts.errorTuple(env, erts.atom(env, "timeout")),
+            else => blk: {
+                // Surface raw EAI_* so callers can log/branch on it.
+                const gai = erts.makeTuple(env, .{ erts.atom(env, "gai"), erts.enif_make_int(env, err) });
+                break :blk erts.errorTuple(env, gai);
+            },
+        };
+    }
+
+    // Walk the chain for the first AF_INET sockaddr. getaddrinfo with
+    // ai_family=AF_INET shouldn't return anything else, but be defensive.
+    var ai: ?*jni.AddrInfo = result;
+    var found: ?u32 = null;
+    while (ai) |entry| : (ai = entry.ai_next) {
+        if (entry.ai_family != jni.AF_INET) continue;
+        const sin: *jni.SockAddrIn = @ptrCast(@alignCast(entry.ai_addr));
+        // sin_addr is network byte order; bigToNative is the ntohl-equivalent
+        // on little-endian Android.
+        found = std.mem.bigToNative(u32, sin.sin_addr);
+        break;
+    }
+    jni.freeaddrinfo(result);
+
+    if (found) |addr| {
+        const ip_tuple = erts.makeTuple(env, .{
+            erts.enif_make_int(env, @intCast((addr >> 24) & 0xFF)),
+            erts.enif_make_int(env, @intCast((addr >> 16) & 0xFF)),
+            erts.enif_make_int(env, @intCast((addr >> 8) & 0xFF)),
+            erts.enif_make_int(env, @intCast(addr & 0xFF)),
+        });
+        return erts.makeTuple(env, .{ erts.ok(env), ip_tuple });
+    }
+    return erts.errorTuple(env, erts.atom(env, "no_address"));
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 /// Pull a binary or charlist into a NUL-terminated buffer. Returns false if
@@ -4925,6 +5014,8 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "bt_spp_write", .arity = 2, .fptr = nif_bt_spp_write, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
     .{ .name = "bt_hid_connect", .arity = 1, .fptr = nif_bt_hid_connect, .flags = 0 },
     .{ .name = "bt_hid_subscribe_raw", .arity = 1, .fptr = nif_bt_hid_subscribe_raw, .flags = 0 },
+    // ── Mob.DNS (in-process IPv4 resolver via Bionic getaddrinfo) ────────
+    .{ .name = "resolve_ipv4", .arity = 1, .fptr = nif_resolve_ipv4, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
 };
 
 var mob_nif_entry: erts.ErlNifEntry = .{

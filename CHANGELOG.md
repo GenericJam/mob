@@ -8,6 +8,38 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Changed
+- **`Mob.Bt` extracted to standalone `mob_bluetooth` plugin.** See `plugin_extraction_plan.md` Wave 1. Session A moved the Elixir wrappers (`Mob.Bt`, `Mob.Bt.Hfp`, `Mob.Bt.Hid`, `Mob.Bt.Spp`) out of core into a separate repo as `MobBluetooth.*`; the Zig NIF (`android/jni/mob_nif.zig`) and the iOS stubs (`ios/mob_nif.m`) stay here until Session B promotes the plugin to tier-1. Apps that used `Mob.Bt.*` should add `{:mob_bluetooth, path: "..."}` and rename their references to `MobBluetooth.*` — there is intentionally no compatibility shim.
+
+## [0.6.22]
+
+### Added
+- **`Mob.Certs`** — load CA certificates from a PEM bundle into Erlang's `:public_key` cacert store. Android's system trust store lives behind a Java API that `:public_key.cacerts_load/0` (no-arg) can't reach, so the first TLS call from Req / Mint / Finch crashes with `no_cacerts_found` (or `FunctionClauseError` in some OTP versions). Apps bundle a PEM (conventional source: copy `castore`'s `cacerts.pem` into `priv/` at build time) and call `Mob.Certs.load_cacerts!(Application.app_dir(:my_app, "priv/cacerts.pem"))` once at boot. iOS and the Android emulator aren't affected; calling unconditionally is harmless there. Verified end-to-end on a Moto G Power 5G 2024 (Android 14): `Mix.install([{:req, "~> 0.5"}])` then `Req.get!("https://geocoding-api.open-meteo.com/v1/search?name=Vancouver")` returns `200`.
+- **`mob_beam.zig` exports `MOB_NATIVE_LIB_DIR`** before BEAM start — the absolute path of the app's nativeLibraryDir, which the APK install hash makes unpredictable at compile time. Apps that bundle runtime binaries (escript, rebar3, etc.) as `lib*.so` need this to set `MIX_REBAR3` and locate the bundled escripts.
+- **Optional ERTS-extras symlinks (`escript` / `erlexec` / `erl` / `beam.smp`)** in `mob_beam.zig`. Silent-skips when the lib isn't in nativeLibDir, so non-opting-in apps see no behaviour change. Apps that drop `lib<name>.so` into `android/app/src/main/jniLibs/<abi>/` get a working `BINDIR/<name>` — enough for runtime `Mix.install` of rebar3-built deps (telemetry, jose, jiffy, …) to bootstrap a fresh VM. `erl` and `erlexec` both target the same `liberlexec.so` because they are the same binary (erlexec doesn't switch on `argv[0]`).
+
+### Changed
+- **`extra_applications: [:logger, :public_key]`** — Elixir 1.19+ strips unused OTP applications from the code path; `Mob.Certs` calls `:public_key.cacerts_load/1` at runtime, so its `.beam` must be in the path even though mob doesn't *start* `:public_key` itself.
+
+### Fixed
+- **`mix.exs`** — collapsed duplicate `before_closing_body_tag/1` clauses introduced in 0.6.20. The mermaid clause's `_` catchall shadowed an older language-elixir highlighter clause, leaving it as dead code (and emitting compile warnings). The unified clause emits both scripts; the duplicate `docs/0` keyword entry was removed.
+
+### Docs
+- `common_fixes.md` — new section documenting the Android cacerts symptom (`no_cacerts_found` / `FunctionClauseError`) and the load-PEM-at-boot fix; also the bundled-OTP-extras pattern (wrapper script, rebar3 module-name derivation, `$ROOTDIR/bin/*.boot` materialization) for apps that opt into runtime rebar3.
+
+## [0.6.21]
+
+### Added
+- **`Mob.DNS.resolve/1` now works on Android.** `nif_resolve_ipv4` (`android/jni/mob_nif.zig`) calls Bionic's `getaddrinfo` in-process and seeds `:inet_db`'s `:file` table, mirroring the iOS NIF added in #32. Physical Android devices return `:nxdomain` from BEAM's default DNS path (forking `inet_gethost` as a port program) even when the same app's in-process HTTPS stack resolves the hostname fine — the emulator masks this. Verified end-to-end on a Moto G Power 5G 2024 (Android 14): `Mob.DNS.resolve("repo.hex.pm")` returns the right IP, `:inet.getaddr/2` then succeeds via the seeded entry, and `Mix.install([{:dep, "~> ..."}])` from a notebook setup cell resolves, fetches, and compiles on-device. Bionic `addrinfo` / `sockaddr_in` / `getaddrinfo` / `freeaddrinfo` / `EAI_*` bindings added to `android/jni/mob_zig.zig`. Suspected root cause is `libnetd_client.so`'s netd routing not surviving execve; the NIF sidesteps it by running in the app's own process.
+
+### Changed
+- **`Mob.DNS` moduledoc** — dropped the "Android isn't affected" claim. Added a background-app caveat: Android App Standby blocks *all* outbound network from a backgrounded mob app (TCP-by-IP, not just DNS — surfaces as `:closed` / `:timeout` on any socket attempt). Fix is a foreground service or keep the app foregrounded; not a mob bug.
+
+### Docs
+- `common_fixes.md` — new section documenting the `:nxdomain` symptom on physical Android, the foreground-app caveat, and the fix.
+
 ## [0.6.18]
 
 ### Changed
