@@ -2228,9 +2228,7 @@ void mob_handle_opened_url(const char *url_cstr) {
     NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:name];
     [[NSFileManager defaultManager] removeItemAtPath:tmp error:nil];
     NSError *err = nil;
-    [[NSFileManager defaultManager] copyItemAtURL:url
-                                            toURL:[NSURL fileURLWithPath:tmp]
-                                            error:&err];
+    [[NSFileManager defaultManager] copyItemAtURL:url toURL:[NSURL fileURLWithPath:tmp] error:&err];
     if (scoped)
         [url stopAccessingSecurityScopedResource];
     if (err) {
@@ -2238,8 +2236,8 @@ void mob_handle_opened_url(const char *url_cstr) {
         return;
     }
     long long sz =
-        [[[NSFileManager defaultManager] attributesOfItemAtPath:tmp error:nil][NSFileSize]
-            longLongValue];
+        [[[NSFileManager defaultManager] attributesOfItemAtPath:tmp
+                                                          error:nil][NSFileSize] longLongValue];
     NSString *mime = @"application/octet-stream";
     UTType *ut = [UTType typeWithFilenameExtension:url.pathExtension];
     if (ut.preferredMIMEType)
@@ -2276,8 +2274,7 @@ void mob_handle_opened_url(const char *url_cstr) {
 // take_opened_document/0 — returns the pending opened-document item JSON binary
 // (or :none), AND registers the caller as the warm-delivery pid for any file
 // opened later while the app is running. Call once from the root screen mount.
-static ERL_NIF_TERM nif_take_opened_document(ErlNifEnv *env, int argc,
-                                             const ERL_NIF_TERM argv[]) {
+static ERL_NIF_TERM nif_take_opened_document(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     enif_self(env, &g_opened_doc_pid);
     g_opened_doc_pid_set = YES;
     if (!g_opened_doc_mutex)
