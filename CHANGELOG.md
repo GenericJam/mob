@@ -8,6 +8,11 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.6.24]
+
+### Fixed
+- **iOS: enlarge the BEAM literal super-carrier to 128 MB (`-MIscs 128` default flag).** iOS can't reserve the OTP default 1 GB literal virtual area and falls back to ~10 MB. A large app such as an embedded Livebook plus a notebook's `Mix.install` fills that 10 MB and the VM aborts with `literal_alloc: Cannot allocate N bytes (of type "literal")`. The iOS native launcher's default flags now request a 128 MB literal carrier — a virtual `MAP_NORESERVE` reservation (commits physical only on use) that iOS accepts where 1 GB fails. Apps no longer need a per-app `beam_flags:` override for this. iOS-only; Android keeps its normal large carrier. A runtime `mob_beam_flags` override still wins. Verified on a physical iPhone: embedded Livebook serves and `Mix.install([{:short_uuid, "~> 0.1"}])` returns `:ok`.
+
 ## [0.6.23]
 
 ### Added
