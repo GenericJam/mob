@@ -107,6 +107,10 @@ void mob_deliver_camera_frame(jlong pid, const unsigned char *bytes, size_t nbyt
 void mob_deliver_push_token(jlong pid, const char *token);
 void mob_deliver_notification(jlong pid, const char *json);
 void mob_set_launch_notification(const char *json);
+// Store a document ("open with") item JSON ({path,name,mime,size}) handed to us
+// by MainActivity from an ACTION_VIEW / ACTION_SEND intent. Consumed via
+// Mob.Files.take_opened_document/0.
+void mob_set_opened_document(const char *json);
 
 // Deliver WebView events from Java/Kotlin to the registered owner pid.
 // `mob_deliver_webview_message` for postMessage payloads from JS,

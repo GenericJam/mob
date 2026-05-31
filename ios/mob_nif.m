@@ -2172,6 +2172,130 @@ static ERL_NIF_TERM nif_take_launch_notification(ErlNifEnv *env, int argc,
     return enif_make_binary(env, &bin);
 }
 
+// ── Opened-document ("open with") ──────────────────────────────────────────
+//
+// When another app hands us a file to open — e.g. a `.livemd` emailed to the
+// user and tapped, routed to us because Info.plist declares the document type —
+// iOS calls `application:openURL:options:`, which forwards the URL here.
+//
+// Two delivery paths, because the file can arrive either before or after the
+// root screen has mounted:
+//   * Cold launch: store the item JSON; `nif_take_opened_document` hands it to
+//     the screen at mount (same store-and-take shape as the launch notification).
+//   * Warm (app already running): if the screen registered a pid (it does so by
+//     calling take_opened_document/0 at mount), also `enif_send` it immediately
+//     as `{:files, :opened, %{path,name,mime,size}}` — parallel to files_pick's
+//     `{:files, :picked, …}`.
+static char *g_opened_document_json = NULL;
+static ErlNifMutex *g_opened_doc_mutex = NULL;
+static ErlNifPid g_opened_doc_pid;
+static BOOL g_opened_doc_pid_set = NO;
+
+// Build the `{:files, :opened, %{...}}` map term in `e` from an item NSDictionary.
+static ERL_NIF_TERM mob_opened_doc_term(ErlNifEnv *e, NSString *path, NSString *name,
+                                        NSString *mime, long long size) {
+    const char *cpath = path.UTF8String, *cname = name.UTF8String, *cmime = mime.UTF8String;
+    ErlNifBinary pb, nb, mb;
+    enif_alloc_binary(strlen(cpath), &pb);
+    memcpy(pb.data, cpath, strlen(cpath));
+    enif_alloc_binary(strlen(cname), &nb);
+    memcpy(nb.data, cname, strlen(cname));
+    enif_alloc_binary(strlen(cmime), &mb);
+    memcpy(mb.data, cmime, strlen(cmime));
+    ERL_NIF_TERM keys[4] = {enif_make_atom(e, "path"), enif_make_atom(e, "name"),
+                            enif_make_atom(e, "mime"), enif_make_atom(e, "size")};
+    ERL_NIF_TERM vals[4] = {enif_make_binary(e, &pb), enif_make_binary(e, &nb),
+                            enif_make_binary(e, &mb), enif_make_int64(e, size)};
+    ERL_NIF_TERM map;
+    enif_make_map_from_arrays(e, keys, vals, 4, &map);
+    return map;
+}
+
+// Called from AppDelegate application:openURL:options:. Copies the (possibly
+// security-scoped) file into the app's tmp dir so the BEAM can read it after the
+// originating app's grant goes away, then stores it for take + warm-sends it.
+void mob_handle_opened_url(const char *url_cstr) {
+    if (!url_cstr)
+        return;
+    NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:url_cstr]];
+    if (!url.isFileURL) {
+        url = [NSURL URLWithString:[NSString stringWithUTF8String:url_cstr]];
+        if (!url.isFileURL)
+            return;
+    }
+    BOOL scoped = [url startAccessingSecurityScopedResource];
+    NSString *name = url.lastPathComponent.length ? url.lastPathComponent : @"document";
+    NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:name];
+    [[NSFileManager defaultManager] removeItemAtPath:tmp error:nil];
+    NSError *err = nil;
+    [[NSFileManager defaultManager] copyItemAtURL:url
+                                            toURL:[NSURL fileURLWithPath:tmp]
+                                            error:&err];
+    if (scoped)
+        [url stopAccessingSecurityScopedResource];
+    if (err) {
+        NSLog(@"[Mob] open: copy failed for %@: %@", url, err);
+        return;
+    }
+    long long sz =
+        [[[NSFileManager defaultManager] attributesOfItemAtPath:tmp error:nil][NSFileSize]
+            longLongValue];
+    NSString *mime = @"application/octet-stream";
+    UTType *ut = [UTType typeWithFilenameExtension:url.pathExtension];
+    if (ut.preferredMIMEType)
+        mime = ut.preferredMIMEType;
+
+    NSDictionary *item = @{@"path" : tmp, @"name" : name, @"mime" : mime, @"size" : @(sz)};
+    NSData *jd = [NSJSONSerialization dataWithJSONObject:item options:0 error:nil];
+    NSString *json = [[NSString alloc] initWithData:jd encoding:NSUTF8StringEncoding];
+
+    if (json) {
+        // Store even if the mutex isn't up yet: at a cold launch openURL can
+        // fire before the BEAM has loaded the NIF (nif_load creates the mutex),
+        // and nothing reads the global until take_opened_document, so there's no
+        // concurrent access to guard against in that window.
+        if (g_opened_doc_mutex)
+            enif_mutex_lock(g_opened_doc_mutex);
+        free(g_opened_document_json);
+        g_opened_document_json = strdup(json.UTF8String);
+        if (g_opened_doc_mutex)
+            enif_mutex_unlock(g_opened_doc_mutex);
+    }
+
+    if (g_opened_doc_pid_set) {
+        ErlNifPid p = g_opened_doc_pid;
+        ErlNifEnv *e = enif_alloc_env();
+        ERL_NIF_TERM map = mob_opened_doc_term(e, tmp, name, mime, sz);
+        ERL_NIF_TERM msg =
+            enif_make_tuple3(e, enif_make_atom(e, "files"), enif_make_atom(e, "opened"), map);
+        enif_send(NULL, &p, e, msg);
+        enif_free_env(e);
+    }
+}
+
+// take_opened_document/0 — returns the pending opened-document item JSON binary
+// (or :none), AND registers the caller as the warm-delivery pid for any file
+// opened later while the app is running. Call once from the root screen mount.
+static ERL_NIF_TERM nif_take_opened_document(ErlNifEnv *env, int argc,
+                                             const ERL_NIF_TERM argv[]) {
+    enif_self(env, &g_opened_doc_pid);
+    g_opened_doc_pid_set = YES;
+    if (!g_opened_doc_mutex)
+        return enif_make_atom(env, "none");
+    enif_mutex_lock(g_opened_doc_mutex);
+    char *json = g_opened_document_json;
+    g_opened_document_json = NULL;
+    enif_mutex_unlock(g_opened_doc_mutex);
+    if (!json)
+        return enif_make_atom(env, "none");
+    ErlNifBinary bin;
+    size_t len = strlen(json);
+    enif_alloc_binary(len, &bin);
+    memcpy(bin.data, json, len);
+    free(json);
+    return enif_make_binary(env, &bin);
+}
+
 // ── Permission request ────────────────────────────────────────────────────
 
 // Forward declaration — definition lives below the
@@ -6920,6 +7044,7 @@ static ErlNifFunc nif_funcs[] = {
     {"notify_cancel", 1, nif_notify_cancel, 0},
     {"notify_register_push", 0, nif_notify_register_push, 0},
     {"take_launch_notification", 0, nif_take_launch_notification, 0},
+    {"take_opened_document", 0, nif_take_opened_document, 0},
     {"storage_dir", 1, nif_storage_dir, 0},
     {"storage_save_to_photo_library", 1, nif_storage_save_to_photo_library, 0},
     {"storage_save_to_media_store", 2, nif_storage_save_to_media_store, 0},
@@ -6977,6 +7102,7 @@ static int nif_load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info) {
         return -1;
     }
     g_launch_notif_mutex = enif_mutex_create("mob_launch_notif_mutex");
+    g_opened_doc_mutex = enif_mutex_create("mob_opened_doc_mutex");
     if (!g_launch_notif_mutex) {
         LOGE(@"nif_load: failed to create launch notif mutex");
         return -1;

@@ -58,6 +58,7 @@
     notify_cancel/1,
     notify_register_push/0,
     take_launch_notification/0,
+    take_opened_document/0,
     %% Storage
     storage_dir/1,
     storage_save_to_photo_library/1,
@@ -184,6 +185,7 @@
     notify_cancel/1,
     notify_register_push/0,
     take_launch_notification/0,
+    take_opened_document/0,
     background_keep_alive/0,
     background_stop/0,
     battery_level/0,
@@ -315,6 +317,7 @@ notify_schedule(_OptsJson) -> erlang:nif_error(not_loaded).
 notify_cancel(_Id) -> erlang:nif_error(not_loaded).
 notify_register_push() -> erlang:nif_error(not_loaded).
 take_launch_notification() -> erlang:nif_error(not_loaded).
+take_opened_document() -> erlang:nif_error(not_loaded).
 background_keep_alive() -> erlang:nif_error(not_loaded).
 background_stop() -> erlang:nif_error(not_loaded).
 battery_level() -> erlang:nif_error(not_loaded).

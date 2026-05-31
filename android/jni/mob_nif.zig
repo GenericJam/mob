@@ -2143,6 +2143,47 @@ export fn nif_take_launch_notification(
     return erts.enif_make_binary(env, &bin);
 }
 
+// ── Opened document ("open with"): a file handed to us by another app ────
+// MainActivity reads the ACTION_VIEW / ACTION_SEND intent, copies the content
+// into the app's storage, builds an item JSON ({path,name,mime,size}), and calls
+// MobBridge.setOpenedDocument(json) → mob_set_opened_document(json). Apps consume
+// it via Mob.Files.take_opened_document/0 → nif_take_opened_document. Same
+// store/take shape as the launch notification; cold-launch oriented, since the
+// Activity stores it before the BEAM is up.
+var g_opened_doc_json: ?[*:0]u8 = null;
+var g_opened_doc_mutex: ?*erts.ErlNifMutex = null;
+
+pub export fn mob_set_opened_document(json: ?[*:0]const u8) callconv(.c) void {
+    // Store even before nif_load created the mutex: at a cold launch the Activity
+    // calls this before the BEAM thread starts, and nothing reads the global
+    // until take_opened_document, so there's no concurrent access in that window.
+    if (g_opened_doc_mutex) |mutex| erts.enif_mutex_lock(mutex);
+    if (g_opened_doc_json) |old| jni.free(@as(?*anyopaque, @ptrCast(old)));
+    g_opened_doc_json = if (json) |j| jni.strdup(j) else null;
+    if (g_opened_doc_mutex) |mutex| erts.enif_mutex_unlock(mutex);
+}
+
+export fn nif_take_opened_document(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    const mutex = g_opened_doc_mutex orelse return erts.atom(env, "none");
+    erts.enif_mutex_lock(mutex);
+    const taken = g_opened_doc_json;
+    g_opened_doc_json = null;
+    erts.enif_mutex_unlock(mutex);
+    const json = taken orelse return erts.atom(env, "none");
+    const len = jni.strlen(json);
+    var bin: erts.ErlNifBinary = undefined;
+    _ = erts.enif_alloc_binary(len, &bin);
+    @memcpy(bin.data[0..len], json[0..len]);
+    jni.free(@as(?*anyopaque, @ptrCast(json)));
+    return erts.enif_make_binary(env, &bin);
+}
+
 // ── Async result delivery (called from Kotlin via JNI) ───────────────────
 // Each `mob_deliver_*` is invoked by the Kotlin side (after an async
 // operation like locationGetOnce or cameraCapturePhoto completes) with
@@ -5009,6 +5050,12 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
         return -1;
     }
 
+    g_opened_doc_mutex = erts.enif_mutex_create("mob_opened_doc_mutex");
+    if (g_opened_doc_mutex == null) {
+        loge_nif("nif_load: failed to create opened doc mutex", .{});
+        return -1;
+    }
+
     // Test harness method IDs — optional. Apps without the harness build
     // (release variants, downstream consumers that don't link it) won't
     // have these and that's fine; the test NIFs return :not_loaded.
@@ -5103,6 +5150,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "notify_cancel", .arity = 1, .fptr = nif_notify_cancel, .flags = 0 },
     .{ .name = "notify_register_push", .arity = 0, .fptr = nif_notify_register_push, .flags = 0 },
     .{ .name = "take_launch_notification", .arity = 0, .fptr = nif_take_launch_notification, .flags = 0 },
+    .{ .name = "take_opened_document", .arity = 0, .fptr = nif_take_opened_document, .flags = 0 },
     .{ .name = "storage_dir", .arity = 1, .fptr = nif_storage_dir, .flags = 0 },
     .{ .name = "storage_save_to_media_store", .arity = 2, .fptr = nif_storage_save_to_media_store, .flags = 0 },
     .{ .name = "storage_external_files_dir", .arity = 1, .fptr = nif_storage_external_files_dir, .flags = 0 },
