@@ -335,8 +335,18 @@ void mob_start_beam(const char *app_module) {
     // Compile-time default BEAM tuning flags.
     // Overridden at runtime if beams_dir/mob_beam_flags exists
     // (written by `mix mob.deploy --schedulers N` or `--beam-flags "..."`).
-    static const char *s_default_flags[] = {"-S", "1:1", "-SDcpu", "1:1",  "-SDio", "1",
-                                            "-A", "1",   "-sbwt",  "none", NULL};
+    //
+    // `-MIscs 128` sets the literal super-carrier to 128 MB. On iOS the runtime
+    // can't reserve the OTP default 1 GB literal area (ERTS_LITERAL_VIRTUAL_AREA_SIZE)
+    // and falls back to ~10 MB. A large app — e.g. an embedded Livebook — plus a
+    // notebook's Mix.install fills that and the VM aborts with
+    // "literal_alloc: Cannot allocate N bytes (of type \"literal\")". 128 MB is a
+    // virtual (MAP_NORESERVE) reservation, so it costs ~nothing until used and iOS
+    // accepts it where 1 GB fails. iOS-only: Android keeps the normal large
+    // carrier (don't shrink it here).
+    static const char *s_default_flags[] = {"-S",     "1:1", "-SDcpu", "1:1", "-SDio", "1",
+                                            "-A",     "1",   "-sbwt",  "none",
+                                            "-MIscs", "128", NULL};
 
     // Runtime override: read whitespace-separated flags from beams_dir/mob_beam_flags.
     static char s_flags_buf[512] = {0};
