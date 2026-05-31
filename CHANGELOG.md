@@ -8,6 +8,11 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.6.25]
+
+### Added
+- **"Open with" — receive a file another app opens into yours.** New `Mob.Files.take_opened_document/0` returns `%{path, name, mime, size}` (or `:none`) for a file handed to the app (e.g. a notebook emailed and tapped), parallel to `Mob.Files.pick/2`'s `{:files, :picked, …}`. Call it from your root screen's `mount/3`; a file opened while already running arrives as `{:files, :opened, item}` (iOS). New NIF `take_opened_document` plus C-export `mob_set_opened_document` on both platforms (iOS `application:openURL:options:` → `mob_handle_opened_url`; Android `MainActivity` reads the ACTION_VIEW/SEND intent → `MobBridge.setOpenedDocument`). The app declares the document type (iOS `CFBundleDocumentTypes`, Android `<intent-filter>`) and forwards the open. Verified end-to-end: a `.livemd` opened into the embedded-Livebook app opens as a notebook on a physical iPhone and a physical Android (Moto G).
+
 ## [0.6.24]
 
 ### Fixed

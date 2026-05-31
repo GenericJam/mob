@@ -29,4 +29,13 @@ void mob_send_push_token(const char *hex_token);
 // it via handle_info({:notification, ...}) after the root screen is mounted.
 void mob_set_launch_notification_json(const char *json);
 
+// Call from AppDelegate application:openURL:options: (or scene equivalent) when
+// another app hands us a file to open — e.g. a `.livemd` emailed to the user and
+// tapped, routed here because Info.plist declares the document type. Pass the
+// NSURL's `path` (or absoluteString). Mob copies the file into tmp and delivers
+// it to the BEAM: at the root screen's mount via Mob.Files.take_opened_document/0
+// (cold launch), and as {:files, :opened, item} to that screen if the app was
+// already running (warm).
+void mob_handle_opened_url(const char *url_cstr);
+
 #endif // MOB_BEAM_H
