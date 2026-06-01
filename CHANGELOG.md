@@ -8,6 +8,11 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.6.26]
+
+### Fixed
+- **iOS: stop capping the literal super-carrier at 10 MB.** `mob_beam.m` appended a hardcoded `-MIscs 10` after the configured flags; since allocator flags are last-wins, it silently overrode the 0.6.24 `-MIscs 128` default (and any `mob_beam_flags` override), so the literal area was always 10 MB. A large app (e.g. embedded Livebook) plus a notebook's `Mix.install` filled it and the VM aborted with `literal_alloc: Cannot allocate ...`. Removed the hardcoded cap; the `-MIscs 128` default now takes effect (iOS accepts a 128 MB reservation). Verified on a physical iPhone: `emu_args` shows a single `-MIscs 128` and `Mix.install` returns `:ok`.
+
 ## [0.6.25]
 
 ### Added
