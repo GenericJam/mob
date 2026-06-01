@@ -11,7 +11,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 ## [Unreleased]
 
 ### Changed
-- **`Mob.Bt` extracted to standalone `mob_bluetooth` plugin.** See `plugin_extraction_plan.md` Wave 1. Session A moved the Elixir wrappers (`Mob.Bt`, `Mob.Bt.Hfp`, `Mob.Bt.Hid`, `Mob.Bt.Spp`) out of core into a separate repo as `MobBluetooth.*`; the Zig NIF (`android/jni/mob_nif.zig`) and the iOS stubs (`ios/mob_nif.m`) stay here until Session B promotes the plugin to tier-1. Apps that used `Mob.Bt.*` should add `{:mob_bluetooth, path: "..."}` and rename their references to `MobBluetooth.*` — there is intentionally no compatibility shim.
+- **`Mob.Bt` fully extracted to the standalone `mob_bluetooth` plugin (Wave 1 complete).** See `plugin_extraction_plan.md`. Session A moved the Elixir wrappers (`Mob.Bt`, `Mob.Bt.Hfp`, `Mob.Bt.Hid`, `Mob.Bt.Spp`) out of core; Session B now removes the native side too — the Bluetooth Zig NIF from `android/jni/mob_nif.zig` and the iOS unsupported-stubs from `ios/mob_nif.m`. `mob_bluetooth` is now a tier-1 plugin: it ships its own Zig NIF, JNI thunks, and `MobBluetoothBridge` Kotlin, and declares its Android permissions + iOS plist keys in its manifest (mob_dev merges these into the host app at build time). **Breaking:** core no longer provides any Bluetooth surface and there is intentionally no compatibility shim. Apps that used `Mob.Bt.*` should add `{:mob_bluetooth, "~> 0.1"}` (or `path:`/`github:`) and rename references to `MobBluetooth.*`. HID input and SCO PCM streaming were never implemented and are not part of the plugin (HID is platform-blocked on Android; see the plugin's docs).
 
 ## [0.6.22]
 
