@@ -344,9 +344,8 @@ void mob_start_beam(const char *app_module) {
     // virtual (MAP_NORESERVE) reservation, so it costs ~nothing until used and iOS
     // accepts it where 1 GB fails. iOS-only: Android keeps the normal large
     // carrier (don't shrink it here).
-    static const char *s_default_flags[] = {"-S",     "1:1", "-SDcpu", "1:1", "-SDio", "1",
-                                            "-A",     "1",   "-sbwt",  "none",
-                                            "-MIscs", "128", NULL};
+    static const char *s_default_flags[] = {"-S", "1:1",   "-SDcpu", "1:1",    "-SDio", "1", "-A",
+                                            "1",  "-sbwt", "none",   "-MIscs", "128",   NULL};
 
     // Runtime override: read whitespace-separated flags from beams_dir/mob_beam_flags.
     static char s_flags_buf[512] = {0};
@@ -385,14 +384,12 @@ void mob_start_beam(const char *app_module) {
     args[ac++] = "beam";
     for (int i = 0; selected_flags[i]; i++)
         args[ac++] = selected_flags[i];
-    // Cap the BEAM's memory super carrier to 10MB on physical iOS devices.
-    // The default 1GB virtual reservation is rejected by iOS on real hardware
-    // (not on simulator where the Mac's VM handles it). Without this the BEAM
-    // crashes immediately during startup on any physical iOS device.
-#ifdef MOB_BUNDLE_OTP
-    args[ac++] = "-MIscs";
-    args[ac++] = "10";
-#endif
+    // NOTE: the literal super-carrier size is set via -MIscs in selected_flags
+    // above (128 MB default; see s_default_flags). iOS rejects the OTP default
+    // 1 GB reservation but accepts 128 MB. (A hardcoded "-MIscs 10" used to be
+    // appended HERE and silently overrode the 128 above — allocator flags are
+    // last-wins — capping the literal area at 10 MB, which crashed Mix.install of
+    // any sizable dep once an embedded Livebook had filled it.)
     args[ac++] = "--";
     args[ac++] = "-root";
     args[ac++] = otp_root;
