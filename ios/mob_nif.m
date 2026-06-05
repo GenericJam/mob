@@ -2300,6 +2300,59 @@ static ERL_NIF_TERM nif_take_opened_document(ErlNifEnv *env, int argc, const ERL
 // instance methods. C99 forbids implicit function declarations.
 static void request_location_permission(ErlNifPid pid);
 
+// ── Plugin permission registry ────────────────────────────────────────────
+// A plugin that owns a runtime permission capability (e.g. mob_location) ships
+// its own C/ObjC permission handler and registers it from its NIF's load
+// callback via mob_register_permission_handler. nif_request_permission falls
+// through to this table for any capability core does not handle directly, so a
+// capability can leave core without losing the unified
+// Mob.Permissions.request/2 API. The handler drives the native permission API
+// and delivers {:permission, cap, :granted|:denied} to `pid` itself (the plugin
+// links erl_nif). Registration happens once at NIF load (BEAM boot); lookup
+// happens later on a scheduler thread — single-write-then-read, no lock (same
+// pattern as core's other boot-time globals).
+
+typedef void (*MobPermissionHandler)(ErlNifPid pid);
+
+#define MOB_MAX_PERMISSION_HANDLERS 16
+static struct {
+    char cap[32];
+    MobPermissionHandler fn;
+} g_permission_handlers[MOB_MAX_PERMISSION_HANDLERS];
+static int g_permission_handler_count = 0;
+
+// Exported (non-static) so a plugin object linked into the same static binary
+// can call it. A plugin declares:
+//   extern void mob_register_permission_handler(const char *cap,
+//                                               void (*fn)(ErlNifPid));
+void mob_register_permission_handler(const char *cap, MobPermissionHandler fn) {
+    if (!cap || !fn)
+        return;
+    for (int i = 0; i < g_permission_handler_count; i++) {
+        if (strcmp(g_permission_handlers[i].cap, cap) == 0) {
+            g_permission_handlers[i].fn = fn; // last registration wins
+            return;
+        }
+    }
+    if (g_permission_handler_count >= MOB_MAX_PERMISSION_HANDLERS)
+        return;
+    strncpy(g_permission_handlers[g_permission_handler_count].cap, cap, 31);
+    g_permission_handlers[g_permission_handler_count].cap[31] = '\0';
+    g_permission_handlers[g_permission_handler_count].fn = fn;
+    g_permission_handler_count++;
+}
+
+// Invokes a plugin-registered handler for `cap`. Returns YES if one ran.
+static BOOL mob_dispatch_plugin_permission(const char *cap, ErlNifPid pid) {
+    for (int i = 0; i < g_permission_handler_count; i++) {
+        if (strcmp(g_permission_handlers[i].cap, cap) == 0) {
+            g_permission_handlers[i].fn(pid);
+            return YES;
+        }
+    }
+    return NO;
+}
+
 static ERL_NIF_TERM nif_request_permission(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     char cap[32];
     if (!enif_get_atom(env, argv[0], cap, sizeof(cap), ERL_NIF_LATIN1))
@@ -2343,7 +2396,10 @@ static ERL_NIF_TERM nif_request_permission(ErlNifEnv *env, int argc, const ERL_N
                                       granted ? "granted" : "denied");
                           }];
     } else {
-        return enif_make_badarg(env);
+        // Fall through to a plugin-registered capability (e.g. mob_location
+        // once :location leaves core). Unknown → badarg.
+        if (!mob_dispatch_plugin_permission(cap, pid))
+            return enif_make_badarg(env);
     }
     return enif_make_atom(env, "ok");
 }
