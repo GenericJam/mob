@@ -22,10 +22,6 @@
     request_permission/1,
     %% Biometric
     biometric_authenticate/1,
-    %% Location
-    location_get_once/0,
-    location_start/1,
-    location_stop/0,
     %% Camera
     camera_capture_photo/1,
     camera_capture_video/1,
@@ -159,9 +155,6 @@
     open_url/1,
     request_permission/1,
     biometric_authenticate/1,
-    location_get_once/0,
-    location_start/1,
-    location_stop/0,
     camera_capture_photo/1,
     camera_capture_video/1,
     camera_start_preview/1,
@@ -291,9 +284,6 @@ share_text(_Text) -> erlang:nif_error(not_loaded).
 open_url(_Url) -> erlang:nif_error(not_loaded).
 request_permission(_Cap) -> erlang:nif_error(not_loaded).
 biometric_authenticate(_Reason) -> erlang:nif_error(not_loaded).
-location_get_once() -> erlang:nif_error(not_loaded).
-location_start(_Accuracy) -> erlang:nif_error(not_loaded).
-location_stop() -> erlang:nif_error(not_loaded).
 camera_capture_photo(_Quality) -> erlang:nif_error(not_loaded).
 camera_capture_video(_MaxDuration) -> erlang:nif_error(not_loaded).
 camera_start_preview(_OptsJson) -> erlang:nif_error(not_loaded).

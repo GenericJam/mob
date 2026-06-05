@@ -32,7 +32,6 @@ extern char *dlerror(void) __attribute__((weak));
 #include "erl_nif.h"
 #import <AVFoundation/AVFoundation.h>
 #import <Accelerate/Accelerate.h>
-#import <CoreLocation/CoreLocation.h>
 #import <CoreMotion/CoreMotion.h>
 #import <LocalAuthentication/LocalAuthentication.h>
 #import <Photos/Photos.h>
@@ -2295,11 +2294,6 @@ static ERL_NIF_TERM nif_take_opened_document(ErlNifEnv *env, int argc, const ERL
 
 // ── Permission request ────────────────────────────────────────────────────
 
-// Forward declaration — definition lives below the
-// `MobLocationPermissionDelegate` class so it can reference its
-// instance methods. C99 forbids implicit function declarations.
-static void request_location_permission(ErlNifPid pid);
-
 // ── Plugin permission registry ────────────────────────────────────────────
 // A plugin that owns a runtime permission capability (e.g. mob_location) ships
 // its own C/ObjC permission handler and registers it from its NIF's load
@@ -2377,15 +2371,6 @@ static ERL_NIF_TERM nif_request_permission(ErlNifEnv *env, int argc, const ERL_N
                                          mob_send3(&pid, "permission", "photo_library",
                                                    ok ? "granted" : "denied");
                                        }];
-    } else if (strcmp(cap, "location") == 0) {
-        // Honest location-permission flow: drive CLLocationManager
-        // directly and let its delegate report the user's actual
-        // choice. See request_location_permission/1 below for the
-        // delegate setup. Previously this branch synthesised
-        // `:granted` unconditionally — that lied about denials, hid
-        // the "not determined → no plist key" failure mode, and made
-        // Mob.Permissions behave differently on iOS vs Android.
-        request_location_permission(pid);
     } else if (strcmp(cap, "notifications") == 0) {
         UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
         [center
@@ -2430,181 +2415,6 @@ static ERL_NIF_TERM nif_biometric_authenticate(ErlNifEnv *env, int argc,
       } else {
           mob_send2(&pid, "biometric", "not_available");
       }
-    });
-    return enif_make_atom(env, "ok");
-}
-
-// ── Location permission ───────────────────────────────────────────────────
-//
-// Separated from the location-updates delegate below so a screen can
-// request authorization without also starting (and paying for) GPS
-// updates. The delegate fires once per real-user choice; we map
-// AuthorizedWhenInUse / AuthorizedAlways → :granted, Denied /
-// Restricted → :denied. NotDetermined is the transient state before
-// the dialog has been answered — we keep the delegate alive (static
-// strong refs) so iOS can call back into it when the answer arrives.
-
-@interface MobLocationPermissionDelegate : NSObject <CLLocationManagerDelegate>
-@property(nonatomic) ErlNifPid pid;
-@property(nonatomic) BOOL resolved;
-@end
-
-static MobLocationPermissionDelegate *g_permission_delegate = nil;
-static CLLocationManager *g_permission_manager = nil;
-
-@implementation MobLocationPermissionDelegate
-// `locationManagerDidChangeAuthorization:` is the iOS 14+ replacement
-// for `locationManager:didChangeAuthorizationStatus:`. Mob targets
-// iOS 17+ (see ios/build_device.zig minimum-deployment) so the older
-// callback is omitted.
-- (void)locationManagerDidChangeAuthorization:(CLLocationManager *)manager {
-    CLAuthorizationStatus status = manager.authorizationStatus;
-    if (status == kCLAuthorizationStatusNotDetermined) {
-        // Dialog is still on screen / the OS hasn't picked an initial
-        // state. We'll be called again with the user's choice.
-        return;
-    }
-    if (self.resolved) {
-        // Subsequent authorization changes (user revokes/grants via
-        // Settings) — fire the event again so the screen can react.
-        // Marked here for symmetry, no early return.
-    }
-    self.resolved = YES;
-
-    ErlNifPid p = self.pid;
-    BOOL granted = (status == kCLAuthorizationStatusAuthorizedWhenInUse ||
-                    status == kCLAuthorizationStatusAuthorizedAlways);
-    mob_send3(&p, "permission", "location", granted ? "granted" : "denied");
-}
-@end
-
-static void request_location_permission(ErlNifPid pid) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-      if (!g_permission_manager) {
-          g_permission_manager = [[CLLocationManager alloc] init];
-      }
-      g_permission_delegate = [[MobLocationPermissionDelegate alloc] init];
-      g_permission_delegate.pid = pid;
-      g_permission_manager.delegate = g_permission_delegate;
-      // Reading `authorizationStatus` here would tell us if we should
-      // skip the request entirely, but doing so synchronously can
-      // momentarily return NotDetermined on first launch. Calling
-      // `requestWhenInUseAuthorization` is idempotent — already-granted
-      // permissions short-circuit and the delegate fires immediately.
-      [g_permission_manager requestWhenInUseAuthorization];
-    });
-}
-
-// ── Location ──────────────────────────────────────────────────────────────
-
-@interface MobLocationDelegate : NSObject <CLLocationManagerDelegate>
-@property(nonatomic) ErlNifPid pid;
-@property(nonatomic) BOOL oneShot;
-@end
-
-static MobLocationDelegate *g_location_delegate = nil;
-static CLLocationManager *g_location_manager = nil;
-
-@implementation MobLocationDelegate
-- (void)locationManager:(CLLocationManager *)mgr didUpdateLocations:(NSArray<CLLocation *> *)locs {
-    CLLocation *loc = locs.lastObject;
-    if (!loc)
-        return;
-    ErlNifPid p = self.pid;
-    double lat = loc.coordinate.latitude;
-    double lon = loc.coordinate.longitude;
-    double acc = loc.horizontalAccuracy;
-    double alt = loc.altitude;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-      ErlNifEnv *e = enif_alloc_env();
-      ERL_NIF_TERM keys[4] = {enif_make_atom(e, "lat"), enif_make_atom(e, "lon"),
-                              enif_make_atom(e, "accuracy"), enif_make_atom(e, "altitude")};
-      ERL_NIF_TERM vals[4] = {enif_make_double(e, lat), enif_make_double(e, lon),
-                              enif_make_double(e, acc), enif_make_double(e, alt)};
-      ERL_NIF_TERM map;
-      enif_make_map_from_arrays(e, keys, vals, 4, &map);
-      ERL_NIF_TERM msg = enif_make_tuple2(e, enif_make_atom(e, "location"), map);
-      enif_send(NULL, &p, e, msg);
-      enif_free_env(e);
-    });
-    if (self.oneShot)
-        [mgr stopUpdatingLocation];
-}
-- (void)locationManager:(CLLocationManager *)mgr didFailWithError:(NSError *)err {
-    ErlNifPid p = self.pid;
-    ErlNifEnv *e = enif_alloc_env();
-    ERL_NIF_TERM msg =
-        enif_make_tuple3(e, enif_make_atom(e, "location"), enif_make_atom(e, "error"),
-                         enif_make_atom(e, "unavailable"));
-    enif_send(NULL, &p, e, msg);
-    enif_free_env(e);
-}
-// Surface authorization-state changes through the same delegate so a
-// screen that called `Mob.Location.get_once/1` without first going
-// through `Mob.Permissions.request/2` still hears about denial —
-// without this, `didFailWithError` doesn't fire on denial and the
-// screen sits at "waiting for fix…" forever. The permission-only
-// delegate above sends `{:permission, :location, ...}`; here we send
-// `{:location, :error, :permission_denied}` so the screen's
-// `handle_info({:location, :error, _}, _)` path catches it.
-- (void)locationManagerDidChangeAuthorization:(CLLocationManager *)mgr {
-    CLAuthorizationStatus status = mgr.authorizationStatus;
-    if (status == kCLAuthorizationStatusNotDetermined)
-        return;
-    if (status == kCLAuthorizationStatusAuthorizedWhenInUse ||
-        status == kCLAuthorizationStatusAuthorizedAlways) {
-        return;
-    }
-    ErlNifPid p = self.pid;
-    ErlNifEnv *e = enif_alloc_env();
-    ERL_NIF_TERM msg =
-        enif_make_tuple3(e, enif_make_atom(e, "location"), enif_make_atom(e, "error"),
-                         enif_make_atom(e, "permission_denied"));
-    enif_send(NULL, &p, e, msg);
-    enif_free_env(e);
-}
-@end
-
-static void setup_location_manager(ErlNifPid pid, BOOL oneShot, NSString *accuracy) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-      if (!g_location_manager) {
-          g_location_manager = [[CLLocationManager alloc] init];
-      }
-      g_location_delegate = [[MobLocationDelegate alloc] init];
-      g_location_delegate.pid = pid;
-      g_location_delegate.oneShot = oneShot;
-      g_location_manager.delegate = g_location_delegate;
-      if ([accuracy isEqualToString:@"high"]) {
-          g_location_manager.desiredAccuracy = kCLLocationAccuracyBest;
-      } else if ([accuracy isEqualToString:@"low"]) {
-          g_location_manager.desiredAccuracy = kCLLocationAccuracyKilometer;
-      } else {
-          g_location_manager.desiredAccuracy = kCLLocationAccuracyHundredMeters;
-      }
-      [g_location_manager requestWhenInUseAuthorization];
-      [g_location_manager startUpdatingLocation];
-    });
-}
-
-static ERL_NIF_TERM nif_location_get_once(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    ErlNifPid pid;
-    enif_self(env, &pid);
-    setup_location_manager(pid, YES, @"balanced");
-    return enif_make_atom(env, "ok");
-}
-
-static ERL_NIF_TERM nif_location_start(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    char acc[16] = "balanced";
-    enif_get_atom(env, argv[0], acc, sizeof(acc), ERL_NIF_LATIN1);
-    ErlNifPid pid;
-    enif_self(env, &pid);
-    setup_location_manager(pid, NO, [NSString stringWithUTF8String:acc]);
-    return enif_make_atom(env, "ok");
-}
-
-static ERL_NIF_TERM nif_location_stop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-      [g_location_manager stopUpdatingLocation];
     });
     return enif_make_atom(env, "ok");
 }
@@ -6903,9 +6713,6 @@ static ErlNifFunc nif_funcs[] = {
     {"open_url", 1, nif_open_url, 0},
     {"request_permission", 1, nif_request_permission, 0},
     {"biometric_authenticate", 1, nif_biometric_authenticate, 0},
-    {"location_get_once", 0, nif_location_get_once, 0},
-    {"location_start", 1, nif_location_start, 0},
-    {"location_stop", 0, nif_location_stop, 0},
     {"camera_capture_photo", 1, nif_camera_capture_photo, 0},
     {"camera_capture_video", 1, nif_camera_capture_video, 0},
     {"camera_start_preview", 1, nif_camera_start_preview, 0},

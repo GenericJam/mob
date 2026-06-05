@@ -10,7 +10,6 @@ defmodule Mob.Permissions do
     - `:camera`
     - `:microphone`
     - `:photo_library`
-    - `:location`
     - `:notifications`
 
   Plugins can add their own capabilities (e.g. a `mob_location` plugin owns
@@ -34,7 +33,7 @@ defmodule Mob.Permissions do
   plugins may register additional capabilities at runtime, so any atom is
   accepted by `request/2` and validated natively.
   """
-  @type capability :: :camera | :microphone | :photo_library | :location | :notifications | atom()
+  @type capability :: :camera | :microphone | :photo_library | :notifications | atom()
 
   @doc """
   Request an OS permission from the user.
