@@ -78,6 +78,23 @@ defmodule Mob.PluginsTest do
     end
   end
 
+  describe "resolve_image/1" do
+    test "maps a plugin:// reference to its bundle path" do
+      assert Mob.Plugins.resolve_image("plugin://kv/icon.png") ==
+               {:ok, "assets/plugin/kv/icon.png"}
+    end
+
+    test "passes through a non-plugin URL" do
+      assert Mob.Plugins.resolve_image("https://x/y.png") == :passthrough
+      assert Mob.Plugins.resolve_image("local.png") == :passthrough
+    end
+
+    test "errors on a malformed plugin:// reference" do
+      assert Mob.Plugins.resolve_image("plugin://kv") == :error
+      assert Mob.Plugins.resolve_image("plugin:///icon.png") == :error
+    end
+  end
+
   defp write_manifest(contents) do
     dir = Path.join(System.tmp_dir!(), "mob_plugins_test_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
