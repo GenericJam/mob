@@ -49,6 +49,35 @@ defmodule Mob.PluginsTest do
     end
   end
 
+  describe "register_screens/0" do
+    setup do
+      # Nav.Registry seeds from an App module's navigation/1; a bare stub is enough.
+      start_supervised!({Mob.Nav.Registry, __MODULE__.StubApp})
+      :ok
+    end
+
+    defmodule StubApp do
+      def navigation(_), do: %{type: :stack, name: :root, root: Root}
+    end
+
+    test "registers each plugin screen under its route, resolvable via the registry" do
+      Mob.Plugins.install(%{
+        screens: [
+          %{plugin: :kv, module: Kv.ListScreen, default_route: "/kv/list"},
+          %{plugin: :kv, module: Kv.DetailScreen, default_route: "/kv/detail"}
+        ]
+      })
+
+      assert :ok = Mob.Plugins.register_screens()
+      assert Mob.Nav.Registry.lookup(:"/kv/list") == {:ok, Kv.ListScreen}
+      assert Mob.Nav.Registry.lookup(:"/kv/detail") == {:ok, Kv.DetailScreen}
+    end
+
+    test "boot/1 with nil host app is a no-op" do
+      assert :ok = Mob.Plugins.boot(nil)
+    end
+  end
+
   defp write_manifest(contents) do
     dir = Path.join(System.tmp_dir!(), "mob_plugins_test_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
