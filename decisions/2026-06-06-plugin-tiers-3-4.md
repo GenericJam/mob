@@ -56,9 +56,14 @@ distinct from the `{M,F,args}` MFAs that generators/lifecycle use.
 - New generated artifact `priv/generated/mob_plugins.exs`, regenerated when
   `config :mob, :plugins` changes (`mix mob.regen_plugin_manifest`).
 - Device-verified on iPhone + Moto G: tier-3 static screens, tier-3 spec-v2
-  generated screens, tier-3 migrations (table created on device), and tier-4
-  on_start / supervised worker / settings / notification routing.
-- Remaining native frontier (planners + resolver already built/tested): font
-  bundling (iOS `UIAppFonts` + platform bundle resources, Android assets), the
-  renderer `plugin://` image hookup, and notification central delivery (a native
-  reroute so real OS notifications reach `dispatch_notification`).
+  generated screens, tier-3 migrations (table created on device), `plugin://`
+  images (build-copied, resolved to the absolute bundle path, present on
+  device), notification central delivery (a `{:notification, _}` routed to a
+  plugin handler through `Mob.Screen`), and tier-4 on_start / supervised worker
+  / settings.
+- Notification central delivery needed no native change: `Mob.Screen`
+  intercepts `{:notification, _}` at its GenServer and consults
+  `dispatch_notification/1` before the host screen's own `handle_info`.
+- One remaining asset piece: **font bundling** (copy the font into the platform
+  bundle + iOS `UIAppFonts`). The `Assets.merge_ui_app_fonts/2` planner is built
+  and tested; the per-platform bundle-resource wiring is the follow-up.

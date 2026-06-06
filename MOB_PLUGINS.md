@@ -349,9 +349,12 @@ supervisor (no independent OTP app), it's still a plugin.
 > **Status (2026-06-06):** tiers 3 and 4 are **built and device-verified**
 > (iPhone + Android). The wiring is pure-Elixir off a generated runtime
 > manifest read by `Mob.Plugins` at boot; see
-> `decisions/2026-06-06-plugin-tiers-3-4.md`. Remaining native asset work:
-> font bundling + the renderer `plugin://` image hookup + notification central
-> delivery.
+> `decisions/2026-06-06-plugin-tiers-3-4.md`. Device-verified: static +
+> generated screens, migrations (table created on device), `plugin://` images,
+> notification routing, and tier-4 lifecycle/settings/supervised workers. The
+> one remaining asset piece is **font bundling** (copy into the platform bundle
+> + iOS `UIAppFonts`); the `Mob.Plugins.Assets.merge_ui_app_fonts/2` planner is
+> built and tested, the per-platform bundle-resource wiring is not.
 
 ## Code-generated plugins (spec version 2+)
 
