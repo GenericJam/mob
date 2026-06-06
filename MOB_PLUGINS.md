@@ -314,7 +314,7 @@ supervisor (no independent OTP app), it's still a plugin.
 
   settings: %{
     # User-facing settings the plugin exposes. Persisted via
-    # Mob.Storage in the namespace `:mob_chat_kit`. Defaults are
+    # Mob.State, namespaced per plugin. Defaults are
     # used until the user opens the editor_screen and saves.
     schema: [
       %{key: :sound_on_message, type: :boolean, default: true},
@@ -343,8 +343,15 @@ supervisor (no independent OTP app), it's still a plugin.
 ```
 
 `:settings.schema` typed entries get free runtime validation via
-Mob.Storage. The plugin reads its own settings with
-`Mob.Plugin.get_setting(:mob_chat_kit, :default_channel)`.
+`Mob.State`. The plugin reads its own settings with
+`Mob.Plugins.get_setting(:mob_chat_kit, :default_channel)`.
+
+> **Status (2026-06-06):** tiers 3 and 4 are **built and device-verified**
+> (iPhone + Android). The wiring is pure-Elixir off a generated runtime
+> manifest read by `Mob.Plugins` at boot; see
+> `decisions/2026-06-06-plugin-tiers-3-4.md`. Remaining native asset work:
+> font bundling + the renderer `plugin://` image hookup + notification central
+> delivery.
 
 ## Code-generated plugins (spec version 2+)
 
