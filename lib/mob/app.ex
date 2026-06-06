@@ -144,14 +144,16 @@ defmodule Mob.App do
           {:error, {:already_started, _}} -> :ok
         end
 
-        result = __MODULE__.on_start()
-
         # Start the tier-4 plugins' lifecycle (on_start MFAs, supervised
-        # children, fore/background dispatcher) after the host's own on_start.
-        # No-op when no plugin declares a :lifecycle.
+        # children, fore/background dispatcher) BEFORE the host's own on_start.
+        # The framework services a plugin's on_start depends on (State, Device,
+        # ComponentRegistry, …) are already up; running here means a host
+        # on_start that never returns (e.g. one that blocks on a run loop —
+        # observed on iOS via Mob.Dist.ensure_started) can't starve plugin
+        # startup. No-op when no plugin declares a :lifecycle.
         Mob.Plugins.start_lifecycle()
 
-        result
+        __MODULE__.on_start()
       end
 
       def on_start, do: :ok
