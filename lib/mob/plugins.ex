@@ -67,6 +67,123 @@ defmodule Mob.Plugins do
     :ok
   end
 
+  @doc """
+  Starts the tier-4 plugin supervisor (runs each plugin's `lifecycle.on_start`,
+  starts its `supervised` children, and the lifecycle event dispatcher). Called
+  from `Mob.App.start/0` after the host's own `on_start/0`. No-op when no plugin
+  declares a `:lifecycle`.
+  """
+  @spec start_lifecycle() :: :ok
+  def start_lifecycle do
+    if lifecycle() == [] do
+      :ok
+    else
+      case Mob.Plugins.Supervisor.start_link([]) do
+        {:ok, _} -> :ok
+        {:error, {:already_started, _}} -> :ok
+      end
+    end
+  end
+
+  # ── Settings (tier 4) ─────────────────────────────────────────────────────
+
+  @doc """
+  Reads a plugin setting, falling back to the schema default when unset.
+
+  Backed by `Mob.State` (the persistent K/V store) under a per-plugin namespaced
+  key. Returns `nil` for an unknown plugin/key.
+  """
+  @spec get_setting(atom(), atom()) :: term()
+  def get_setting(plugin, key) when is_atom(plugin) and is_atom(key) do
+    case setting_spec(plugin, key) do
+      {:ok, %{default: default}} -> Mob.State.get(setting_key(plugin, key), default)
+      :error -> nil
+    end
+  end
+
+  @doc """
+  Writes a plugin setting after validating its value against the schema `type`.
+
+  Returns `:ok`, `{:error, {:invalid_type, type}}`, or `{:error, :unknown_setting}`.
+  """
+  @spec put_setting(atom(), atom(), term()) :: :ok | {:error, term()}
+  def put_setting(plugin, key, value) when is_atom(plugin) and is_atom(key) do
+    case setting_spec(plugin, key) do
+      {:ok, %{type: type}} ->
+        if valid_setting?(type, value) do
+          Mob.State.put(setting_key(plugin, key), value)
+          :ok
+        else
+          {:error, {:invalid_type, type}}
+        end
+
+      :error ->
+        {:error, :unknown_setting}
+    end
+  end
+
+  @doc """
+  Resolves the screen a host pushes to let users edit a plugin's settings.
+
+  A tier-4 plugin owns its settings UX; the host only needs the entry point, so
+  it calls this to get the module to `push_screen/2`. Returns `:error` when the
+  plugin declared no `editor_screen`.
+  """
+  @spec settings_editor(atom()) :: {:ok, module()} | :error
+  def settings_editor(plugin) when is_atom(plugin) do
+    case Enum.find(settings(), &(&1.plugin == plugin)) do
+      %{editor_screen: mod} when is_atom(mod) -> {:ok, mod}
+      _ -> :error
+    end
+  end
+
+  defp setting_key(plugin, key), do: {:plugin_setting, plugin, key}
+
+  defp setting_spec(plugin, key) do
+    with %{schema: schema} <- Enum.find(settings(), &(&1.plugin == plugin)),
+         %{} = entry <- Enum.find(schema, &(&1.key == key)) do
+      {:ok, entry}
+    else
+      _ -> :error
+    end
+  end
+
+  defp valid_setting?(:boolean, v), do: is_boolean(v)
+  defp valid_setting?(:string, v), do: is_binary(v)
+  defp valid_setting?(:integer, v), do: is_integer(v)
+  defp valid_setting?(_other, _v), do: false
+
+  # ── Notifications (tier 4) ────────────────────────────────────────────────
+
+  @doc """
+  Routes a notification payload to the first matching plugin handler.
+
+  Walks `notification_handlers/0` in order; the first handler whose `:match`
+  (a map prefix-matched against the payload, or a `{M,F,arity}` predicate) wins,
+  and its `{M,F,arity}` handler is invoked with the payload. Returns `:handled`
+  or `:unhandled` (the host's own `handle_info` takes the unhandled case).
+
+  This is the pure routing core; the central notification delivery that feeds it
+  is wired natively (Phase 3).
+  """
+  @spec dispatch_notification(map()) :: :handled | :unhandled
+  def dispatch_notification(payload) when is_map(payload) do
+    Enum.find_value(notification_handlers(), :unhandled, fn handler ->
+      if notification_match?(handler[:match], payload) do
+        {m, f, _arity} = handler.handler
+        apply(m, f, [payload])
+        :handled
+      end
+    end)
+  end
+
+  defp notification_match?(match, payload) when is_map(match) do
+    Enum.all?(match, fn {k, v} -> Map.get(payload, k) == v end)
+  end
+
+  defp notification_match?({m, f, _arity}, payload), do: apply(m, f, [payload]) == true
+  defp notification_match?(_other, _payload), do: false
+
   @doc "Caches an already-built manifest (used by `load/1` and tests)."
   @spec install(map()) :: :ok
   def install(manifest) when is_map(manifest) do
