@@ -18,6 +18,7 @@ defmodule Mob.Plugins do
 
   @empty %{screens: [], lifecycle: [], settings: [], notification_handlers: []}
   @pt_key {__MODULE__, :manifest}
+  @pt_asset_root {__MODULE__, :asset_root}
   @rel_path ["generated", "mob_plugins.exs"]
 
   @doc """
@@ -31,7 +32,21 @@ defmodule Mob.Plugins do
   def load(otp_app) when is_atom(otp_app) do
     manifest = read(otp_app)
     install(manifest)
+    cache_asset_root(otp_app)
     manifest
+  end
+
+  # The host bundle dir plugin images are copied to at build (native_build's
+  # apply_plugin_images!), cached so resolve_image/1 can return absolute paths
+  # the native Image loader can read.
+  defp cache_asset_root(otp_app) do
+    root =
+      case :code.priv_dir(otp_app) do
+        {:error, _} -> ""
+        dir -> Path.join(to_string(dir), "generated/plugin_assets")
+      end
+
+    :persistent_term.put(@pt_asset_root, root)
   end
 
   @doc """
@@ -221,7 +236,8 @@ defmodule Mob.Plugins do
   def resolve_image("plugin://" <> rest) do
     case String.split(rest, "/", parts: 2) do
       [plugin, file] when plugin != "" and file != "" ->
-        {:ok, Path.join(["assets", "plugin", plugin, file])}
+        root = :persistent_term.get(@pt_asset_root, "")
+        {:ok, Path.join([root, "assets", "plugin", plugin, file])}
 
       _ ->
         :error

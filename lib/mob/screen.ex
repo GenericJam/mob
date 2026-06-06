@@ -471,7 +471,21 @@ defmodule Mob.Screen do
     {:noreply, {module, socket, nav_history, render_mode}}
   end
 
-  def handle_info(message, {module, socket, nav_history, render_mode}) do
+  # Plugin notification routing: the activated plugins' handlers get first crack
+  # at every `{:notification, payload}`. A plugin whose `:match` matches handles
+  # it and the host screen does not also see it; an unmatched notification falls
+  # through to the screen's own `handle_info` like any other message.
+  def handle_info({:notification, payload} = message, {_module, _socket, _nh, _rm} = state)
+      when is_map(payload) do
+    case Mob.Plugins.dispatch_notification(payload) do
+      :handled -> {:noreply, state}
+      :unhandled -> forward_to_screen(message, state)
+    end
+  end
+
+  def handle_info(message, state), do: forward_to_screen(message, state)
+
+  defp forward_to_screen(message, {module, socket, nav_history, render_mode}) do
     {:noreply, new_socket} = module.handle_info(message, socket)
 
     {module, new_socket, nav_history, transition} =
