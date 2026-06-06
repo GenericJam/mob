@@ -314,7 +314,7 @@ supervisor (no independent OTP app), it's still a plugin.
 
   settings: %{
     # User-facing settings the plugin exposes. Persisted via
-    # Mob.Storage in the namespace `:mob_chat_kit`. Defaults are
+    # Mob.State, namespaced per plugin. Defaults are
     # used until the user opens the editor_screen and saves.
     schema: [
       %{key: :sound_on_message, type: :boolean, default: true},
@@ -343,8 +343,21 @@ supervisor (no independent OTP app), it's still a plugin.
 ```
 
 `:settings.schema` typed entries get free runtime validation via
-Mob.Storage. The plugin reads its own settings with
-`Mob.Plugin.get_setting(:mob_chat_kit, :default_channel)`.
+`Mob.State`. The plugin reads its own settings with
+`Mob.Plugins.get_setting(:mob_chat_kit, :default_channel)`.
+
+> **Status (2026-06-06):** tiers 3 and 4 are **built and device-verified**
+> (iPhone + Android). The wiring is pure-Elixir off a generated runtime
+> manifest read by `Mob.Plugins` at boot; see
+> `decisions/2026-06-06-plugin-tiers-3-4.md`. Device-verified: static +
+> generated screens, migrations (table created on device), `plugin://` images,
+> notification routing, tier-4 lifecycle/settings/supervised workers, and
+> **custom fonts** — `assets.fonts` are build-bundled (iOS `.app` + `UIAppFonts`,
+> Android `res/font` uncompressed) and used via the `font:` prop, visually
+> confirmed on Android (a plugin-shipped serif font rendered distinct from the
+> system font). This also makes app-level `priv/fonts/` custom fonts (documented
+> above) actually work for the first time. The only landing step left is the
+> coordinated merge to masters.
 
 ## Code-generated plugins (spec version 2+)
 
