@@ -506,6 +506,17 @@ defmodule Mob.Renderer do
     Map.get(ctx.radii, value, value)
   end
 
+  # A `src` of the form `plugin://<plugin>/<file>` (e.g. an Image shipped by a
+  # tier-3 plugin) resolves to the absolute on-device bundle path the native
+  # Image loader reads. A non-plugin src (URL, file path, theme atom) is left
+  # untouched.
+  defp resolve_token(:src, "plugin://" <> _ = value, _ctx) do
+    case Mob.Plugins.resolve_image(value) do
+      {:ok, path} -> path
+      _ -> value
+    end
+  end
+
   defp resolve_token(_key, value, _ctx), do: value
 
   # Two-step color resolution:
