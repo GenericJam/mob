@@ -94,6 +94,26 @@ defmodule Mob.Plugins do
   def notification_handlers, do: manifest().notification_handlers
 
   @doc """
+  Resolves a `plugin://<plugin>/<file>` image reference to its on-device bundle
+  path (`assets/plugin/<plugin>/<file>`), the convention `native_build` copies
+  plugin images to. The renderer calls this when an image `src` uses the
+  `plugin://` scheme; a non-plugin URL returns `:passthrough` so normal image
+  handling continues. Returns `:error` for a malformed `plugin://` reference.
+  """
+  @spec resolve_image(String.t()) :: {:ok, String.t()} | :passthrough | :error
+  def resolve_image("plugin://" <> rest) do
+    case String.split(rest, "/", parts: 2) do
+      [plugin, file] when plugin != "" and file != "" ->
+        {:ok, Path.join(["assets", "plugin", plugin, file])}
+
+      _ ->
+        :error
+    end
+  end
+
+  def resolve_image(_other), do: :passthrough
+
+  @doc """
   Reads + evaluates the manifest for `otp_app` without caching. Returns the
   empty set when the priv dir or file is absent, or the file is malformed (a
   missing manifest must never crash boot).
