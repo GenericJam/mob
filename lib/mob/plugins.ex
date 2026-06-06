@@ -16,6 +16,8 @@ defmodule Mob.Plugins do
   unaffected.
   """
 
+  require Logger
+
   @empty %{screens: [], lifecycle: [], settings: [], notification_handlers: []}
   @pt_key {__MODULE__, :manifest}
   @pt_asset_root {__MODULE__, :asset_root}
@@ -75,7 +77,11 @@ defmodule Mob.Plugins do
   """
   @spec register_screens() :: :ok
   def register_screens do
-    for %{module: mod, default_route: route} <- screens(), is_atom(mod), is_binary(route) do
+    for %{module: mod, default_route: route} <- screens(),
+        is_atom(mod),
+        not is_nil(mod),
+        is_binary(route),
+        route != "" do
       Mob.Nav.Registry.register(String.to_atom(route), mod)
     end
 
@@ -112,6 +118,10 @@ defmodule Mob.Plugins do
   def get_setting(plugin, key) when is_atom(plugin) and is_atom(key) do
     case setting_spec(plugin, key) do
       {:ok, %{default: default}} -> Mob.State.get(setting_key(plugin, key), default)
+      # A schema entry without a :default is malformed; fall back to nil rather
+      # than crashing the reader (the manifest is build-time generated, but a
+      # hand-edited or partial entry must not take down a settings read).
+      {:ok, _entry} -> Mob.State.get(setting_key(plugin, key), nil)
       :error -> nil
     end
   end
@@ -131,6 +141,11 @@ defmodule Mob.Plugins do
         else
           {:error, {:invalid_type, type}}
         end
+
+      # A schema entry without a :type can't be validated; treat as malformed
+      # rather than crashing the writer.
+      {:ok, _entry} ->
+        {:error, :unknown_setting}
 
       :error ->
         {:error, :unknown_setting}
@@ -155,8 +170,8 @@ defmodule Mob.Plugins do
   defp setting_key(plugin, key), do: {:plugin_setting, plugin, key}
 
   defp setting_spec(plugin, key) do
-    with %{schema: schema} <- Enum.find(settings(), &(&1.plugin == plugin)),
-         %{} = entry <- Enum.find(schema, &(&1.key == key)) do
+    with %{schema: schema} when is_list(schema) <- Enum.find(settings(), &(&1.plugin == plugin)),
+         %{} = entry <- Enum.find(schema, &(is_map(&1) and Map.get(&1, :key) == key)) do
       {:ok, entry}
     else
       _ -> :error

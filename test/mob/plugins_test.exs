@@ -76,6 +76,23 @@ defmodule Mob.PluginsTest do
     test "boot/1 with nil host app is a no-op" do
       assert :ok = Mob.Plugins.boot(nil)
     end
+
+    test "skips a screen entry whose module is nil (would resolve to nil at nav)" do
+      Mob.Plugins.install(%{screens: [%{plugin: :p, module: nil, default_route: "/p"}]})
+      assert :ok = Mob.Plugins.register_screens()
+      assert Mob.Nav.Registry.lookup(:"/p") == {:error, :not_found}
+    end
+
+    test "skips a screen entry with a nil or empty default_route" do
+      Mob.Plugins.install(%{
+        screens: [
+          %{plugin: :p, module: P.Home, default_route: nil},
+          %{plugin: :q, module: Q.Home, default_route: ""}
+        ]
+      })
+
+      assert :ok = Mob.Plugins.register_screens()
+    end
   end
 
   describe "resolve_image/1" do
