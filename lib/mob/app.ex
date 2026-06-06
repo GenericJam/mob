@@ -129,7 +129,14 @@ defmodule Mob.App do
           {:error, {:already_started, _}} -> :ok
         end
 
-        __MODULE__.on_start()
+        result = __MODULE__.on_start()
+
+        # Start the tier-4 plugins' lifecycle (on_start MFAs, supervised
+        # children, fore/background dispatcher) after the host's own on_start.
+        # No-op when no plugin declares a :lifecycle.
+        Mob.Plugins.start_lifecycle()
+
+        result
       end
 
       def on_start, do: :ok
