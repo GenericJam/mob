@@ -98,7 +98,6 @@ extern jobject g_activity;
 
 void mob_deliver_atom2(jlong pid, const char *a1, const char *a2);
 void mob_deliver_atom3(jlong pid, const char *a1, const char *a2, const char *a3);
-void mob_deliver_location(jlong pid, double lat, double lon, double acc, double alt);
 void mob_deliver_motion(jlong pid, double ax, double ay, double az, double gx, double gy, double gz,
                         long long ts);
 void mob_deliver_file_result(jlong pid, const char *event, const char *sub, const char *json_items);

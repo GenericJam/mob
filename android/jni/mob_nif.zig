@@ -26,7 +26,7 @@
 //!   * iter 3d (this iter): the finale. Remaining feature NIFs (color
 //!     scheme, exit_app, safe_area, haptic, clipboard, open_url,
 //!     share_text, launch notification, request_permission,
-//!     biometric, location ×3, camera ×4, photos_pick, files_pick,
+//!     biometric, camera ×4, photos_pick, files_pick,
 //!     audio ×5, motion ×2, scanner, notifications ×3, storage ×4,
 //!     alert/action_sheet/toast, webview ×4, background ×2,
 //!     Mob.Device ×7), the bridge bootstrap helpers
@@ -245,9 +245,6 @@ pub const BridgeMethods = extern struct {
     open_url: jni.JMethodID = null,
     request_permission: jni.JMethodID = null,
     biometric_authenticate: jni.JMethodID = null,
-    location_get_once: jni.JMethodID = null,
-    location_start: jni.JMethodID = null,
-    location_stop: jni.JMethodID = null,
     camera_capture_photo: jni.JMethodID = null,
     camera_capture_video: jni.JMethodID = null,
     camera_start_preview: jni.JMethodID = null,
@@ -1800,7 +1797,7 @@ inline fn pidFromLong(jpid: jni.JLong) erts.ErlNifPid {
 }
 
 /// Call `MobBridge.<method>(pid_long, arg)` — the standard shape for
-/// async device-capability NIFs (location, camera, audio_play, etc.).
+/// async device-capability NIFs (camera, audio_play, etc.).
 /// Returns the `:ok` atom unconditionally; results land later via one of
 /// the mob_deliver_* JNI hooks. `arg` may be null for void-of-pid methods.
 fn callBridgePidStr(env: ?*erts.ErlNifEnv, method: jni.JMethodID, pid: erts.ErlNifPid, arg: ?[*:0]const u8) erts.ERL_NIF_TERM {
@@ -2171,7 +2168,7 @@ export fn nif_take_opened_document(
 
 // ── Async result delivery (called from Kotlin via JNI) ───────────────────
 // Each `mob_deliver_*` is invoked by the Kotlin side (after an async
-// operation like locationGetOnce or cameraCapturePhoto completes) with
+// operation like cameraCapturePhoto completes) with
 // the pid encoded as a jlong + the typed result. We rebuild an ErlNifPid
 // and ship the appropriate {:tag, payload} message.
 
@@ -2202,27 +2199,6 @@ pub export fn mob_deliver_atom3(jpid: jni.JLong, a1: [*:0]const u8, a2: [*:0]con
         erts.enif_make_atom(env, a2),
         erts.enif_make_atom(env, a3),
     });
-    _ = erts.enif_send(null, &pid, env, msg);
-}
-
-pub export fn mob_deliver_location(jpid: jni.JLong, lat: f64, lon: f64, acc: f64, alt: f64) callconv(.c) void {
-    var pid = pidFromLong(jpid);
-    const env = erts.enif_alloc_env() orelse return;
-    defer erts.enif_free_env(env);
-    const keys = [_]erts.ERL_NIF_TERM{
-        erts.atom(env, "lat"),
-        erts.atom(env, "lon"),
-        erts.atom(env, "accuracy"),
-        erts.atom(env, "altitude"),
-    };
-    const vals = [_]erts.ERL_NIF_TERM{
-        erts.enif_make_double(env, lat),
-        erts.enif_make_double(env, lon),
-        erts.enif_make_double(env, acc),
-        erts.enif_make_double(env, alt),
-    };
-    const map = erts.makeMap(env, &keys, &vals) orelse return;
-    const msg = erts.makeTuple(env, .{ erts.atom(env, "location"), map });
     _ = erts.enif_send(null, &pid, env, msg);
 }
 
@@ -2626,46 +2602,6 @@ export fn nif_biometric_authenticate(
     var pid: erts.ErlNifPid = undefined;
     _ = erts.enif_self(env, &pid);
     return callBridgePidStr(env, Bridge.biometric_authenticate, pid, jni.asCStr(&reason));
-}
-
-export fn nif_location_get_once(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    _ = argv;
-    var pid: erts.ErlNifPid = undefined;
-    _ = erts.enif_self(env, &pid);
-    return callBridgePidStr(env, Bridge.location_get_once, pid, "balanced");
-}
-
-export fn nif_location_start(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    var acc_buf: [16]u8 = @splat(0);
-    jni.copyZ(&acc_buf, "balanced");
-    _ = erts.enif_get_atom(env, argv[0], &acc_buf, acc_buf.len, erts.ERL_NIF_LATIN1);
-    var pid: erts.ErlNifPid = undefined;
-    _ = erts.enif_self(env, &pid);
-    return callBridgePidStr(env, Bridge.location_start, pid, jni.asCStr(&acc_buf));
-}
-
-export fn nif_location_stop(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    _ = argv;
-    var attached: c_int = 0;
-    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
-    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.location_stop);
-    detachIfAttached(attached);
-    return erts.ok(env);
 }
 
 export fn nif_camera_capture_photo(
@@ -3609,9 +3545,6 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     // the pid as a long.
     if (!cacheRequired(jenv, "request_permission", "(JLjava/lang/String;)V", &Bridge.request_permission)) return -1;
     if (!cacheRequired(jenv, "biometric_authenticate", "(JLjava/lang/String;)V", &Bridge.biometric_authenticate)) return -1;
-    if (!cacheRequired(jenv, "location_get_once", "(JLjava/lang/String;)V", &Bridge.location_get_once)) return -1;
-    if (!cacheRequired(jenv, "location_start", "(JLjava/lang/String;)V", &Bridge.location_start)) return -1;
-    if (!cacheRequired(jenv, "location_stop", "()V", &Bridge.location_stop)) return -1;
     if (!cacheRequired(jenv, "camera_capture_photo", "(JLjava/lang/String;)V", &Bridge.camera_capture_photo)) return -1;
     if (!cacheRequired(jenv, "camera_capture_video", "(JLjava/lang/String;)V", &Bridge.camera_capture_video)) return -1;
     if (!cacheRequired(jenv, "camera_start_preview", "(JLjava/lang/String;)V", &Bridge.camera_start_preview)) return -1;
@@ -3747,9 +3680,6 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "open_url", .arity = 1, .fptr = nif_open_url, .flags = 0 },
     .{ .name = "request_permission", .arity = 1, .fptr = nif_request_permission, .flags = 0 },
     .{ .name = "biometric_authenticate", .arity = 1, .fptr = nif_biometric_authenticate, .flags = 0 },
-    .{ .name = "location_get_once", .arity = 0, .fptr = nif_location_get_once, .flags = 0 },
-    .{ .name = "location_start", .arity = 1, .fptr = nif_location_start, .flags = 0 },
-    .{ .name = "location_stop", .arity = 0, .fptr = nif_location_stop, .flags = 0 },
     .{ .name = "camera_capture_photo", .arity = 1, .fptr = nif_camera_capture_photo, .flags = 0 },
     .{ .name = "camera_capture_video", .arity = 1, .fptr = nif_camera_capture_video, .flags = 0 },
     .{ .name = "camera_start_preview", .arity = 1, .fptr = nif_camera_start_preview, .flags = 0 },

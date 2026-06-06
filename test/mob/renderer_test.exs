@@ -109,6 +109,22 @@ defmodule Mob.RendererTest do
       assert Enum.at(decoded["children"], 1)["props"]["text"] == "B"
     end
 
+    test "a plugin:// image src resolves to its bundle path" do
+      tree = %{type: :image, props: %{src: "plugin://kv/icon.png"}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert String.ends_with?(decoded["props"]["src"], "assets/plugin/kv/icon.png")
+    end
+
+    test "a non-plugin image src is left untouched" do
+      tree = %{type: :image, props: %{src: "https://x/y.png"}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["src"] == "https://x/y.png"
+    end
+
     test "on_tap pid is replaced by integer handle" do
       pid = self()
       tree = %{type: :button, props: %{text: "Tap", on_tap: pid}, children: []}

@@ -6,12 +6,17 @@ defmodule Mob.Permissions do
 
       handle_info({:permission, capability, :granted | :denied}, socket)
 
-  Capabilities that require this:
+  Capabilities that core handles directly:
     - `:camera`
     - `:microphone`
     - `:photo_library`
-    - `:location`
     - `:notifications`
+
+  Plugins can add their own capabilities (e.g. a `mob_location` plugin owns
+  `:location`): the plugin registers a native handler that the platform
+  permission registry dispatches to. `request/2` therefore accepts any atom and
+  lets the native layer decide whether it is a known capability — an unrecognized
+  one returns `badarg` from the NIF (surfacing as an `ArgumentError`).
 
   Capabilities that need *no* permission: haptics, clipboard, share sheet, file picker.
 
@@ -23,7 +28,12 @@ defmodule Mob.Permissions do
   > to check when "the dialog never appears".
   """
 
-  @type capability :: :camera | :microphone | :photo_library | :location | :notifications
+  @typedoc """
+  A permission capability. The atoms core handles directly are listed below;
+  plugins may register additional capabilities at runtime, so any atom is
+  accepted by `request/2` and validated natively.
+  """
+  @type capability :: :camera | :microphone | :photo_library | :notifications | atom()
 
   @doc """
   Request an OS permission from the user.
@@ -37,12 +47,13 @@ defmodule Mob.Permissions do
   Safe to call if the permission is already granted — the result still arrives
   via `handle_info` with the current status.
 
-  Capabilities that do not require permission (haptics, clipboard, share sheet,
-  file picker) will raise `FunctionClauseError` — do not call `request/2` for them.
+  The capability must be one core handles or one a plugin has registered. A
+  capability that needs no permission (haptics, clipboard, share sheet, file
+  picker) — or any other unrecognized atom — returns `badarg` from the NIF,
+  surfacing as an `ArgumentError`; do not call `request/2` for those.
   """
   @spec request(Mob.Socket.t(), capability()) :: Mob.Socket.t()
-  def request(socket, capability)
-      when capability in [:camera, :microphone, :photo_library, :location, :notifications] do
+  def request(socket, capability) when is_atom(capability) do
     :mob_nif.request_permission(capability)
     socket
   end
