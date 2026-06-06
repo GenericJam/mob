@@ -50,9 +50,24 @@ defmodule Mob.App do
   defmacro __using__(opts) do
     theme_opts = Keyword.get(opts, :theme, [])
 
+    # The host OTP app name, captured at compile time. A mob app boots via a
+    # custom BEAM entry (not `Application.start`), so `Application.get_application/1`
+    # returns nil at runtime — but the host module compiles inside its own Mix
+    # project, so `Mix.Project.config[:app]` is the reliable source. Used to find
+    # the host's `priv/generated/mob_plugins.exs` (the tier-3/4 runtime manifest).
+    otp_app =
+      Keyword.get(opts, :otp_app) ||
+        try do
+          Mix.Project.config()[:app]
+        rescue
+          _ -> nil
+        end
+
     quote do
       @behaviour Mob.App
       import Mob.App
+
+      @mob_otp_app unquote(otp_app)
 
       @doc """
       Framework entry point — called from the BEAM entry module (e.g.
@@ -91,7 +106,7 @@ defmodule Mob.App do
 
         # Load the activated plugins' tier-3/4 runtime manifest and register
         # their screens into the nav registry (no-op when none are active).
-        Mob.Plugins.boot(Application.get_application(__MODULE__))
+        Mob.Plugins.boot(@mob_otp_app)
 
         case Mob.State.start_link() do
           {:ok, _} -> :ok
