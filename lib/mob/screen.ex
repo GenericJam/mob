@@ -118,7 +118,43 @@ defmodule Mob.Screen do
                 "Add a handle_event/3 clause to handle it."
       end
 
+      @before_compile Mob.Screen
       defoverridable dump_state: 1, load_state: 2, handle_info: 2, terminate: 2, handle_event: 3
+    end
+  end
+
+  defmacro __before_compile__(env) do
+    template = Path.rootname(env.file) <> ".mob.heex"
+
+    cond do
+      Module.defines?(env.module, {:render, 1}) ->
+        quote(do: :ok)
+
+      File.exists?(template) ->
+        source =
+          template
+          |> File.read!()
+          |> String.split("\n")
+          |> Enum.map_join("\n", &("    " <> &1))
+
+        render_ast =
+          Code.string_to_quoted!("""
+          def render(assigns) do
+            import Mob.Sigil
+
+            ~MOB\"\"\"
+          #{source}
+            \"\"\"
+          end
+          """)
+
+        quote do
+          @external_resource unquote(template)
+          unquote(render_ast)
+        end
+
+      true ->
+        quote(do: :ok)
     end
   end
 
