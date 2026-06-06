@@ -66,6 +66,22 @@ defmodule Mob.PluginsTier4Test do
       assert Mob.Plugins.settings_editor(:chat) == {:ok, Chat.SettingsScreen}
       assert Mob.Plugins.settings_editor(:nope) == :error
     end
+
+    test "a schema entry missing :default does not crash get_setting" do
+      Mob.Plugins.install(%{settings: [%{plugin: :p, schema: [%{key: :x, type: :boolean}]}]})
+      assert Mob.Plugins.get_setting(:p, :x) == nil
+    end
+
+    test "a schema entry missing :type does not crash put_setting" do
+      Mob.Plugins.install(%{settings: [%{plugin: :p, schema: [%{key: :x, default: true}]}]})
+      assert {:error, :unknown_setting} = Mob.Plugins.put_setting(:p, :x, false)
+    end
+
+    test "a non-list schema does not crash setting reads/writes" do
+      Mob.Plugins.install(%{settings: [%{plugin: :p, schema: %{key: :x}}]})
+      assert Mob.Plugins.get_setting(:p, :x) == nil
+      assert {:error, :unknown_setting} = Mob.Plugins.put_setting(:p, :x, 1)
+    end
   end
 
   describe "dispatch_notification/1" do
