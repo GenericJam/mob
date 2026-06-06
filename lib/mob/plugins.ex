@@ -34,6 +34,39 @@ defmodule Mob.Plugins do
     manifest
   end
 
+  @doc """
+  Boot-time entry point: load the host's manifest and register the activated
+  plugins' screens so they're navigable. Called from `Mob.App.start/0`.
+
+  `nil` (no resolvable host app — e.g. on host BEAM / tests) is a no-op. Safe
+  to call when no tier-3/4 plugin is active: the manifest is empty and nothing
+  is registered.
+  """
+  @spec boot(atom() | nil) :: :ok
+  def boot(nil), do: :ok
+
+  def boot(otp_app) when is_atom(otp_app) do
+    load(otp_app)
+    register_screens()
+    :ok
+  end
+
+  @doc """
+  Registers each manifest screen into `Mob.Nav.Registry` under an atom derived
+  from its `default_route`, so the host (or the plugin's own screens) can
+  navigate to it by route. The module is also directly navigable. The host
+  still chooses *where* to surface a plugin screen in its `navigation/1`
+  structure — registration only makes the destination resolvable.
+  """
+  @spec register_screens() :: :ok
+  def register_screens do
+    for %{module: mod, default_route: route} <- screens(), is_atom(mod), is_binary(route) do
+      Mob.Nav.Registry.register(String.to_atom(route), mod)
+    end
+
+    :ok
+  end
+
   @doc "Caches an already-built manifest (used by `load/1` and tests)."
   @spec install(map()) :: :ok
   def install(manifest) when is_map(manifest) do

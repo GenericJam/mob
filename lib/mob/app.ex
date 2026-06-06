@@ -89,6 +89,10 @@ defmodule Mob.App do
           {:error, {:already_started, _}} -> :ok
         end
 
+        # Load the activated plugins' tier-3/4 runtime manifest and register
+        # their screens into the nav registry (no-op when none are active).
+        Mob.Plugins.boot(Application.get_application(__MODULE__))
+
         case Mob.State.start_link() do
           {:ok, _} -> :ok
           {:error, {:already_started, _}} -> :ok
