@@ -351,10 +351,13 @@ supervisor (no independent OTP app), it's still a plugin.
 > manifest read by `Mob.Plugins` at boot; see
 > `decisions/2026-06-06-plugin-tiers-3-4.md`. Device-verified: static +
 > generated screens, migrations (table created on device), `plugin://` images,
-> notification routing, and tier-4 lifecycle/settings/supervised workers. The
-> one remaining asset piece is **font bundling** (copy into the platform bundle
-> + iOS `UIAppFonts`); the `Mob.Plugins.Assets.merge_ui_app_fonts/2` planner is
-> built and tested, the per-platform bundle-resource wiring is not.
+> notification routing, tier-4 lifecycle/settings/supervised workers, and
+> **custom fonts** — `assets.fonts` are build-bundled (iOS `.app` + `UIAppFonts`,
+> Android `res/font` uncompressed) and used via the `font:` prop, visually
+> confirmed on Android (a plugin-shipped serif font rendered distinct from the
+> system font). This also makes app-level `priv/fonts/` custom fonts (documented
+> above) actually work for the first time. The only landing step left is the
+> coordinated merge to masters.
 
 ## Code-generated plugins (spec version 2+)
 
