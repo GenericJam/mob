@@ -121,8 +121,15 @@ defmodule Mob.Plugins do
       # A schema entry without a :default is malformed; fall back to nil rather
       # than crashing the reader (the manifest is build-time generated, but a
       # hand-edited or partial entry must not take down a settings read).
-      {:ok, _entry} -> Mob.State.get(setting_key(plugin, key), nil)
-      :error -> nil
+      {:ok, _entry} ->
+        Logger.warning(
+          "[Mob.Plugins] settings schema for #{inspect(plugin)}.#{key} has no :default; reading nil"
+        )
+
+        Mob.State.get(setting_key(plugin, key), nil)
+
+      :error ->
+        nil
     end
   end
 
@@ -145,6 +152,10 @@ defmodule Mob.Plugins do
       # A schema entry without a :type can't be validated; treat as malformed
       # rather than crashing the writer.
       {:ok, _entry} ->
+        Logger.warning(
+          "[Mob.Plugins] settings schema for #{inspect(plugin)}.#{key} has no :type; rejecting write"
+        )
+
         {:error, :unknown_setting}
 
       :error ->
