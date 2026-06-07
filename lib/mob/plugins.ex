@@ -117,7 +117,9 @@ defmodule Mob.Plugins do
   @spec get_setting(atom(), atom()) :: term()
   def get_setting(plugin, key) when is_atom(plugin) and is_atom(key) do
     case setting_spec(plugin, key) do
-      {:ok, %{default: default}} -> Mob.State.get(setting_key(plugin, key), default)
+      {:ok, %{default: default}} ->
+        Mob.State.get(setting_key(plugin, key), default)
+
       # A schema entry without a :default is malformed; fall back to nil rather
       # than crashing the reader (the manifest is build-time generated, but a
       # hand-edited or partial entry must not take down a settings read).
@@ -210,20 +212,43 @@ defmodule Mob.Plugins do
   @spec dispatch_notification(map()) :: :handled | :unhandled
   def dispatch_notification(payload) when is_map(payload) do
     Enum.find_value(notification_handlers(), :unhandled, fn handler ->
-      if notification_match?(handler[:match], payload) do
-        {m, f, _arity} = handler.handler
-        apply(m, f, [payload])
+      if notification_match?(handler[:match], handler[:plugin], payload) do
+        invoke_handler(handler.handler, handler[:plugin], payload)
         :handled
       end
     end)
   end
 
-  defp notification_match?(match, payload) when is_map(match) do
+  # A misbehaving handler or predicate must not crash the host screen GenServer
+  # (dispatch runs synchronously inside it) — log and continue, mirroring the
+  # lifecycle dispatcher's crash isolation.
+  defp invoke_handler({m, f, _arity}, plugin, payload) do
+    apply(m, f, [payload])
+  rescue
+    e ->
+      Logger.error(
+        "[mob_plugins] #{inspect(plugin)} notification handler crashed: " <>
+          Exception.format(:error, e, __STACKTRACE__)
+      )
+  end
+
+  defp notification_match?(match, _plugin, payload) when is_map(match) do
     Enum.all?(match, fn {k, v} -> Map.get(payload, k) == v end)
   end
 
-  defp notification_match?({m, f, _arity}, payload), do: apply(m, f, [payload]) == true
-  defp notification_match?(_other, _payload), do: false
+  defp notification_match?({m, f, _arity}, plugin, payload) do
+    apply(m, f, [payload]) == true
+  rescue
+    e ->
+      Logger.error(
+        "[mob_plugins] #{inspect(plugin)} notification predicate crashed: " <>
+          Exception.format(:error, e, __STACKTRACE__)
+      )
+
+      false
+  end
+
+  defp notification_match?(_other, _plugin, _payload), do: false
 
   @doc "Caches an already-built manifest (used by `load/1` and tests)."
   @spec install(map()) :: :ok
