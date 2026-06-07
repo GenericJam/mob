@@ -10,6 +10,8 @@ defmodule Mob.PluginsTier4Test do
     def backgrounded, do: send_test(:backgrounded)
     def started, do: send_test(:on_start) && :ok
     def started_error, do: {:error, :boom}
+    def crash(_payload), do: raise("boom in handler")
+    def crash_pred(_payload), do: raise("boom in predicate")
     def send_test(msg), do: send(Process.whereis(:tier4_test), msg)
   end
 
@@ -106,6 +108,37 @@ defmodule Mob.PluginsTier4Test do
 
     test "no match is unhandled" do
       assert :unhandled = Mob.Plugins.dispatch_notification(%{type: "other"})
+      refute_received {:notified, _}
+    end
+
+    test "a handler that raises is isolated (logs, does not propagate)" do
+      Mob.Plugins.install(%{
+        notification_handlers: [
+          %{plugin: :boom, match: %{type: "x"}, handler: {Hooks, :crash, 1}}
+        ]
+      })
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :handled = Mob.Plugins.dispatch_notification(%{type: "x"})
+        end)
+
+      assert log =~ "notification handler crashed"
+    end
+
+    test "a predicate that raises is isolated (treated as no-match, does not propagate)" do
+      Mob.Plugins.install(%{
+        notification_handlers: [
+          %{plugin: :boom, match: {Hooks, :crash_pred, 1}, handler: {Hooks, :notify, 1}}
+        ]
+      })
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :unhandled = Mob.Plugins.dispatch_notification(%{type: "x"})
+        end)
+
+      assert log =~ "notification predicate crashed"
       refute_received {:notified, _}
     end
   end
