@@ -356,8 +356,11 @@ supervisor (no independent OTP app), it's still a plugin.
 > Android `res/font` uncompressed) and used via the `font:` prop, visually
 > confirmed on Android (a plugin-shipped serif font rendered distinct from the
 > system font). This also makes app-level `priv/fonts/` custom fonts (documented
-> above) actually work for the first time. The only landing step left is the
-> coordinated merge to masters.
+> above) actually work for the first time. Merged to masters; `mix mob.new_plugin`
+> scaffolds all five tiers (0–4), cross-plugin conflict detection + a runtime-
+> manifest auto-regen guard the multi-plugin case (see "Cross-plugin conflict
+> detection" below), and a second plugin migration is device-verified composing
+> alongside the first.
 
 ## Code-generated plugins (spec version 2+)
 
@@ -715,12 +718,66 @@ Setup section (tier 3+):
 Compile-time validation (run by mob_dev when activating plugins):
 
 - Plugin's `mob_version` requirement satisfied by the installed mob
-- No two activated plugins declare the same `ui_components.atom`
-- No two activated plugins claim the same `screens.default_route`
-- Migration `repo_namespace` doesn't collide with host or other plugins
 - All plugins in `config :mob, :plugins` are present in `deps`
+- **Cross-plugin conflict detection** (see below)
 
 Both stages fail loud — never silent.
+
+### Cross-plugin conflict detection
+
+Anyone can ship a plugin, and a host can activate any combination — so when two
+plugins both contribute into the same shared namespace, mob_dev must catch it at
+build time rather than let one silently win on device. `cross_validate` (in
+`MobDev.Plugin.Validator`) runs over the activated set and **fails the build**
+when two plugins clash on any of:
+
+| Shared resource | Manifest field |
+|--|--|
+| Screen route | `screens.default_route` |
+| Component atom | `ui_components.atom` |
+| iOS native view key | `ui_components.ios.view_module` |
+| Android native view key | `ui_components.android.composable` |
+| Migration namespace | `migrations.repo_namespace` |
+| NIF module | `nifs.module` |
+| iOS Swift source basename | `ios.swift_files` |
+| Android JNI source basename | `android.jni_source` |
+| Android bridge class | `android.bridge_class` |
+| iOS Info.plist key | `ios.plist_keys` |
+| Supervised worker | `lifecycle.supervised` |
+| Notification match | `notifications.handlers[].match` |
+
+A clash on any of these is a build error naming the resource, the value, and how
+many plugins declared it. Resources that are *inherently* safe — settings (keyed
+per-plugin), `plugin://` images (namespaced per-plugin), Android permissions /
+iOS frameworks (set-unioned) — compose without a check.
+
+A note on what counts as a clash: the check is **cross-plugin**, so a single
+plugin legitimately declaring the same value twice is fine — e.g. a
+cross-platform NIF that ships one iOS (`lang: :objc`) and one Android
+(`lang: :zig`) entry for the same `:module` is *not* a collision; two *different*
+plugins claiming that module is. Detection only flags identical values, not
+semantic overlap (two notification predicates that could both match the same
+payload aren't comparable in general — keep matches disjoint).
+
+**Completeness guarantee.** Every field that lands in a shared namespace is
+classified in `Validator.conflict_surface/0`, and a test (`conflict_surface_test`)
+asserts that classification covers *every* merge gatherer. Adding a new
+shared-resource field to the schema without classifying its conflict behavior
+fails CI — so the guarantee that multiples compose can't silently rot as the
+schema grows. A property-based fuzzer (`merge_fuzz_test`) additionally checks the
+detection is sound and complete across random N-plugin combinations.
+
+### Runtime plugin manifest
+
+Tiers 3 and 4 are pure-Elixir and **runtime-wired**: the host needs to know,
+while running, which screens / lifecycle hooks / settings / notification handlers
+the activated plugins declared. mob_dev bakes that into a generated terms file,
+`priv/generated/mob_plugins.exs`, which the core `Mob.Plugins` module reads once
+at boot. It is **derived state, not hand-maintained** — `mix mob.deploy --native`
+regenerates it from the activated plugins' current manifests on every build (you
+can also run `mix mob.regen_plugin_manifest` directly, or `--check` it in CI).
+Because it regenerates unconditionally, changing a plugin's tier-3/4 sections
+can't ship a stale manifest. Tier-0/1/2 plugins contribute nothing to it.
 
 ## Versioning and forward compatibility
 
