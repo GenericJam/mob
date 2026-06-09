@@ -82,8 +82,8 @@ defmodule Mob.UI do
   @doc """
   Returns a `:camera_preview` component node. Renders a live camera feed inline.
 
-  Call `Mob.Camera.start_preview/2` before mounting this component, and
-  `Mob.Camera.stop_preview/1` when done.
+  Call `MobCamera.start_preview/2` (the `mob_camera` plugin) before mounting this
+  component, and `MobCamera.stop_preview/1` when done.
 
   Props:
     * `:facing` — `:back` (default) or `:front`
