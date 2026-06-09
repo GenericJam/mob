@@ -105,6 +105,8 @@ defmodule Mob.MixProject do
       extras: [
         "README.md": [title: "Mob"],
         "CHANGELOG.md": [title: "Changelog"],
+        "MOB_PLUGINS.md": [title: "Plugins — Manifest Reference"],
+        "MOB_PLUGIN_SECURITY.md": [title: "Plugins — Security & Trust"],
         "guides/why_beam.md": [title: "Why the BEAM?"],
         "guides/getting_started.md": [title: "Getting Started"],
         "guides/architecture.md": [title: "Architecture & Prior Art"],
@@ -117,6 +119,7 @@ defmodule Mob.MixProject do
         "guides/mobile_surface_matrix.md": [title: "Mobile Surface Matrix"],
         "guides/permissions.md": [title: "Permissions"],
         "guides/native_extensions.md": [title: "Native Extensions (NIFs, features)"],
+        "guides/plugins.md": [title: "Writing a Plugin"],
         "guides/dns_on_ios.md": [title: "DNS on iOS"],
         "guides/push_notifications.md": [title: "Push Notifications"],
         "guides/data.md": [title: "Data & Persistence"],
@@ -127,7 +130,8 @@ defmodule Mob.MixProject do
         "guides/agentic_coding.md": [title: "Agentic Coding"]
       ],
       groups_for_extras: [
-        Guides: ~r/guides\/.*/
+        Guides: ~r/guides\/.*/,
+        Plugins: ["MOB_PLUGINS.md", "MOB_PLUGIN_SECURITY.md"]
       ],
       groups_for_modules: [
         Core: [Mob, Mob.App, Mob.Screen, Mob.ScreenState, Mob.Socket, Mob.State],
@@ -141,6 +145,7 @@ defmodule Mob.MixProject do
           Mob.Theme.Birch
         ],
         Navigation: [Mob.Nav.Registry],
+        Plugins: [Mob.Plugins, Mob.Plugins.Supervisor, Mob.Plugins.Lifecycle],
         "Device APIs": [
           Mob.Haptic,
           Mob.Clipboard,
