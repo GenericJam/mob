@@ -1,0 +1,74 @@
+- application [ref=e2]:
+  - generic:
+    - generic:
+      - heading [level=2]: Native is already in the room
+      - paragraph:
+        - text: The BEAM runs
+        - emphasis: inside
+        - text: the app — so every native framework is already loaded in-process. You don't bridge to it. You just call it.
+      - generic:
+        - generic: EMLX · on-device ML
+        - generic: TF Lite
+        - generic: iOS / Android TTS · STT
+        - generic: Apple Intelligence
+      - paragraph: All already demoed. No abstraction layer waiting to not support the thing you need.
+    - generic:
+      - heading [level=2]: Go lower, or go community
+      - generic:
+        - code: "mix mob.add_nif crunch --type rustler # Rust (Cargo crate) mix mob.add_nif crunch --type zigler # Zig (inline ~Z) mix mob.add_nif crunch --type c # C (skeleton)"
+      - list:
+        - listitem:
+          - text: Statically linked, App-Store-safe, wired in
+          - strong: one command
+          - text: — plus embedded Python via Pythonx.
+        - listitem:
+          - text: A
+          - strong: plugin system
+          - text: (mapped, in build) makes it community-driven — write once, anyone adds it.
+        - listitem:
+          - text: Plugins are
+          - emphasis: opt-in, not opt-out
+          - text: — nothing ships unless you reach for it.
+      - paragraph: Almost anything you can do on a phone — you'll be able to do.
+    - generic [ref=e3]:
+      - heading "I need more BEAM!" [level=2] [ref=e4]
+      - paragraph [ref=e5]:
+        - text: A distributed BEAM cluster — across phones.
+        - emphasis [ref=e6]: It works.
+      - list [ref=e7]:
+        - listitem [ref=e8]:
+          - strong [ref=e9]: "Catch:"
+          - text: dist is trust-all — the cookie is the only gate.
+        - listitem [ref=e10]:
+          - text: Real permissions = a major rewrite. Across a trust boundary,
+          - emphasis [ref=e11]: that's why the good Lord gave you HTTPS.
+        - listitem [ref=e12]:
+          - strong [ref=e13]: EPMD control
+          - text: is yours — cluster at will. Just don't cluster with strangers.
+        - listitem [ref=e14]: "Phone↔phone: server + client each + track IPs, or a tunnel (Cloudflare / Tailscale)."
+    - generic:
+      - heading [level=2]: Demo
+      - paragraph: Vibe-coding a screen · and a few things already built
+    - generic:
+      - heading [level=2]: Elixir, all the way to the phone
+      - paragraph: Same patterns. Same language. Server to screen.
+      - generic:
+        - generic:
+          - img
+          - paragraph:
+            - link:
+              - /url: https://hexdocs.pm/mob
+              - text: hexdocs.pm/mob
+          - paragraph: go build one
+      - paragraph:
+        - text: "Part I (the why):"
+        - link:
+          - /url: https://genericjam.com/blog/mob-intro
+          - text: genericjam.com/blog/mob-intro
+  - link "23 / 25" [ref=e19] [cursor=pointer]:
+    - /url: "#/22"
+  - complementary:
+    - button "previous slide" [ref=e20] [cursor=pointer]
+    - button "next slide" [ref=e22] [cursor=pointer]
+  - text: Speaker notes
+  - generic [ref=e25]: "I need more BEAM! A distributed BEAM cluster — across phones. It works. Catch: dist is trust-all — the cookie is the only gate. Real permissions = a major rewrite. Across a trust boundary, that's why the good Lord gave you HTTPS. EPMD control is yours — cluster at will. Just don't cluster with strangers. Phone↔phone: server + client each + track IPs, or a tunnel (Cloudflare / Tailscale)."

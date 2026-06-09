@@ -9,8 +9,11 @@
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
 
-// Shared camera preview session — set by nif_camera_start/stop_preview, read by MobRootView.
-extern AVCaptureSession *_Nullable g_preview_session;
+// Shared camera preview session. Now OWNED by the mob_camera plugin (its NIF
+// defines g_preview_session and drives start/stop_preview); core's MobRootView
+// camera-preview view only reads it. Weak so core still links when mob_camera
+// isn't activated — the symbol resolves to NULL and the preview shows black.
+extern AVCaptureSession *_Nullable g_preview_session __attribute__((weak));
 
 // Shared WebView — set by MobWebView when created, read by webview NIFs.
 extern WKWebView *_Nullable g_webview;
