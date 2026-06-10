@@ -18,7 +18,7 @@ defmodule Mob.Plugins do
 
   require Logger
 
-  @empty %{screens: [], lifecycle: [], settings: [], notification_handlers: []}
+  @empty %{screens: [], lifecycle: [], settings: [], notification_handlers: [], nifs: []}
   @pt_key {__MODULE__, :manifest}
   @pt_asset_root {__MODULE__, :asset_root}
   @rel_path ["generated", "mob_plugins.exs"]
@@ -64,8 +64,24 @@ defmodule Mob.Plugins do
 
   def boot(otp_app) when is_atom(otp_app) do
     load(otp_app)
+    ensure_nif_modules_loaded()
     register_screens()
     :ok
+  end
+
+  @doc false
+  # Force each activated plugin's NIF module to load. On iOS a plugin's
+  # permission handler self-registers in its NIF `load` callback, which only
+  # fires when the Erlang NIF module is first loaded; a screen requesting that
+  # permission in `mount/3` runs before any plugin NIF call, so without this the
+  # handler is absent and `Mob.Permissions.request/2` hits `:badarg`. Loading
+  # eagerly at boot mirrors Android's boot-time `MobPluginBootstrap`. `load_nif`
+  # failure is tolerated by each NIF module's `on_load`, so a host build with no
+  # native linked is a no-op. Returns the per-module load results (public + with
+  # a return value for testing; `boot/1` ignores it).
+  @spec ensure_nif_modules_loaded() :: [{atom(), {:module, module()} | {:error, term()}}]
+  def ensure_nif_modules_loaded do
+    for mod <- nifs(), is_atom(mod), do: {mod, Code.ensure_loaded(mod)}
   end
 
   @doc """
@@ -275,6 +291,14 @@ defmodule Mob.Plugins do
   @doc "Activated plugins' notification handlers, in dispatch order."
   @spec notification_handlers() :: [map()]
   def notification_handlers, do: manifest().notification_handlers
+
+  @doc """
+  Activated plugins' NIF module atoms. `boot/1` loads each at startup so an iOS
+  plugin NIF's `load` callback fires eagerly (registering any permission handler
+  it owns) before a screen can request that permission.
+  """
+  @spec nifs() :: [atom()]
+  def nifs, do: Map.get(manifest(), :nifs, [])
 
   @doc """
   Resolves a `plugin://<plugin>/<file>` image reference to its on-device bundle
