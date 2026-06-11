@@ -260,7 +260,6 @@ pub const BridgeMethods = extern struct {
     audio_set_volume: jni.JMethodID = null,
     motion_start: jni.JMethodID = null,
     motion_stop: jni.JMethodID = null,
-    scanner_scan: jni.JMethodID = null,
     take_launch_notification: jni.JMethodID = null,
     storage_dir: jni.JMethodID = null,
     storage_save_to_media_store: jni.JMethodID = null,
@@ -2668,20 +2667,6 @@ export fn nif_motion_stop(
     return erts.ok(env);
 }
 
-export fn nif_scanner_scan(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
-    const json = binToCString(bin) orelse return erts.atom(env, "error");
-    defer freeCString(json);
-    var pid: erts.ErlNifPid = undefined;
-    _ = erts.enif_self(env, &pid);
-    return callBridgePidStr(env, Bridge.scanner_scan, pid, json);
-}
-
 export fn nif_storage_dir(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -3330,7 +3315,6 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     if (!cacheRequired(jenv, "webview_go_back", "()V", &Bridge.webview_go_back)) return -1;
     if (!cacheRequired(jenv, "motion_start", "(JLjava/lang/String;)V", &Bridge.motion_start)) return -1;
     if (!cacheRequired(jenv, "motion_stop", "()V", &Bridge.motion_stop)) return -1;
-    if (!cacheRequired(jenv, "scanner_scan", "(JLjava/lang/String;)V", &Bridge.scanner_scan)) return -1;
     if (!cacheRequired(jenv, "background_keep_alive", "()V", &Bridge.background_keep_alive)) return -1;
     if (!cacheRequired(jenv, "background_stop", "()V", &Bridge.background_stop)) return -1;
 
@@ -3444,7 +3428,6 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "audio_set_volume", .arity = 1, .fptr = nif_audio_set_volume, .flags = 0 },
     .{ .name = "motion_start", .arity = 2, .fptr = nif_motion_start, .flags = 0 },
     .{ .name = "motion_stop", .arity = 0, .fptr = nif_motion_stop, .flags = 0 },
-    .{ .name = "scanner_scan", .arity = 1, .fptr = nif_scanner_scan, .flags = 0 },
     .{ .name = "take_launch_notification", .arity = 0, .fptr = nif_take_launch_notification, .flags = 0 },
     .{ .name = "take_opened_document", .arity = 0, .fptr = nif_take_opened_document, .flags = 0 },
     .{ .name = "storage_dir", .arity = 1, .fptr = nif_storage_dir, .flags = 0 },
