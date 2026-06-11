@@ -659,6 +659,13 @@ Top-level required:
 Top-level optional:
 
 - `:description` — short string for `mix mob.plugins` output.
+- `:host_requirements` — list of strings: manual host-app steps the build
+  can't automate (e.g. an AndroidManifest fragment like mob_screencast's
+  `<service android:foregroundServiceType="mediaProjection">` or a capture
+  `FileProvider`). Every `mix mob.deploy --native` of the host prints them
+  as a warning block, so a missing manual step can't fail silently at first
+  feature use. Declare one entry per step, with the exact XML/snippet the
+  host author must add.
 
 Capability sections (any combination):
 
