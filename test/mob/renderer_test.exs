@@ -110,11 +110,27 @@ defmodule Mob.RendererTest do
     end
 
     test "a plugin:// image src resolves to its bundle path" do
+      Mob.Plugins.install_asset_root("/bundle/priv/generated/plugin_assets")
+      on_exit(fn -> Mob.Plugins.install_asset_root("") end)
       tree = %{type: :image, props: %{src: "plugin://kv/icon.png"}, children: []}
       Renderer.render(tree, :android, MockNIF)
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
       decoded = :json.decode(json)
-      assert String.ends_with?(decoded["props"]["src"], "assets/plugin/kv/icon.png")
+
+      assert decoded["props"]["src"] ==
+               "/bundle/priv/generated/plugin_assets/assets/plugin/kv/icon.png"
+    end
+
+    test "an unresolvable plugin:// image src passes through unchanged (asset root not cached)" do
+      tree = %{type: :image, props: %{src: "plugin://kv/icon.png"}, children: []}
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        Renderer.render(tree, :android, MockNIF)
+      end)
+
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["src"] == "plugin://kv/icon.png"
     end
 
     test "a non-plugin image src is left untouched" do

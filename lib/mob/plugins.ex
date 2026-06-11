@@ -18,7 +18,7 @@ defmodule Mob.Plugins do
 
   require Logger
 
-  @empty %{screens: [], lifecycle: [], settings: [], notification_handlers: []}
+  @empty %{screens: [], lifecycle: [], settings: [], notification_handlers: [], nifs: []}
   @pt_key {__MODULE__, :manifest}
   @pt_asset_root {__MODULE__, :asset_root}
   @rel_path ["generated", "mob_plugins.exs"]
@@ -40,14 +40,19 @@ defmodule Mob.Plugins do
 
   # The host bundle dir plugin images are copied to at build (native_build's
   # apply_plugin_images!), cached so resolve_image/1 can return absolute paths
-  # the native Image loader can read.
+  # the native Image loader can read. An unresolvable priv dir caches nothing —
+  # resolve_image then errors rather than fabricating a relative path.
   defp cache_asset_root(otp_app) do
-    root =
-      case :code.priv_dir(otp_app) do
-        {:error, _} -> ""
-        dir -> Path.join(to_string(dir), "generated/plugin_assets")
-      end
+    case :code.priv_dir(otp_app) do
+      {:error, _} -> :ok
+      dir -> install_asset_root(Path.join(to_string(dir), "generated/plugin_assets"))
+    end
+  end
 
+  @doc false
+  # `load/1` plumbing + test seam. The empty string means "not cached".
+  @spec install_asset_root(String.t()) :: :ok
+  def install_asset_root(root) when is_binary(root) do
     :persistent_term.put(@pt_asset_root, root)
   end
 
@@ -64,8 +69,24 @@ defmodule Mob.Plugins do
 
   def boot(otp_app) when is_atom(otp_app) do
     load(otp_app)
+    ensure_nif_modules_loaded()
     register_screens()
     :ok
+  end
+
+  @doc false
+  # Force each activated plugin's NIF module to load. On iOS a plugin's
+  # permission handler self-registers in its NIF `load` callback, which only
+  # fires when the Erlang NIF module is first loaded; a screen requesting that
+  # permission in `mount/3` runs before any plugin NIF call, so without this the
+  # handler is absent and `Mob.Permissions.request/2` hits `:badarg`. Loading
+  # eagerly at boot mirrors Android's boot-time `MobPluginBootstrap`. `load_nif`
+  # failure is tolerated by each NIF module's `on_load`, so a host build with no
+  # native linked is a no-op. Returns the per-module load results (public + with
+  # a return value for testing; `boot/1` ignores it).
+  @spec ensure_nif_modules_loaded() :: [{atom(), {:module, module()} | {:error, term()}}]
+  def ensure_nif_modules_loaded do
+    for mod <- nifs(), is_atom(mod), do: {mod, Code.ensure_loaded(mod)}
   end
 
   @doc """
@@ -212,9 +233,13 @@ defmodule Mob.Plugins do
   @spec dispatch_notification(map()) :: :handled | :unhandled
   def dispatch_notification(payload) when is_map(payload) do
     Enum.find_value(notification_handlers(), :unhandled, fn handler ->
-      if notification_match?(handler[:match], handler[:plugin], payload) do
-        invoke_handler(handler.handler, handler[:plugin], payload)
-        :handled
+      if is_map(handler) and notification_match?(handler[:match], handler[:plugin], payload) do
+        case invoke_handler(handler[:handler], handler[:plugin], payload) do
+          # A matched-but-malformed entry must not swallow the notification:
+          # keep scanning so a later handler (or the host screen) still gets it.
+          :malformed -> nil
+          :ok -> :handled
+        end
       end
     end)
   end
@@ -222,14 +247,26 @@ defmodule Mob.Plugins do
   # A misbehaving handler or predicate must not crash the host screen GenServer
   # (dispatch runs synchronously inside it) — log and continue, mirroring the
   # lifecycle dispatcher's crash isolation.
-  defp invoke_handler({m, f, _arity}, plugin, payload) do
+  defp invoke_handler({m, f, _arity}, plugin, payload) when is_atom(m) and is_atom(f) do
     apply(m, f, [payload])
+    :ok
   rescue
     e ->
       Logger.error(
         "[mob_plugins] #{inspect(plugin)} notification handler crashed: " <>
           Exception.format(:error, e, __STACKTRACE__)
       )
+
+      :ok
+  end
+
+  defp invoke_handler(other, plugin, _payload) do
+    Logger.error(
+      "[mob_plugins] #{inspect(plugin)} notification handler is malformed " <>
+        "(expected {module, function, arity}): #{inspect(other)}"
+    )
+
+    :malformed
   end
 
   defp notification_match?(match, _plugin, payload) when is_map(match) do
@@ -277,6 +314,14 @@ defmodule Mob.Plugins do
   def notification_handlers, do: manifest().notification_handlers
 
   @doc """
+  Activated plugins' NIF module atoms. `boot/1` loads each at startup so an iOS
+  plugin NIF's `load` callback fires eagerly (registering any permission handler
+  it owns) before a screen can request that permission.
+  """
+  @spec nifs() :: [atom()]
+  def nifs, do: Map.get(manifest(), :nifs, [])
+
+  @doc """
   Resolves a `plugin://<plugin>/<file>` image reference to its on-device bundle
   path (`assets/plugin/<plugin>/<file>`), the convention `native_build` copies
   plugin images to. The renderer calls this when an image `src` uses the
@@ -284,11 +329,21 @@ defmodule Mob.Plugins do
   handling continues. Returns `:error` for a malformed `plugin://` reference.
   """
   @spec resolve_image(String.t()) :: {:ok, String.t()} | :passthrough | :error
-  def resolve_image("plugin://" <> rest) do
+  def resolve_image("plugin://" <> rest = ref) do
     case String.split(rest, "/", parts: 2) do
       [plugin, file] when plugin != "" and file != "" ->
-        root = :persistent_term.get(@pt_asset_root, "")
-        {:ok, Path.join([root, "assets", "plugin", plugin, file])}
+        case :persistent_term.get(@pt_asset_root, "") do
+          "" ->
+            Logger.warning(
+              "[mob_plugins] #{ref} requested before the plugin asset root was " <>
+                "cached (boot incomplete?) — cannot resolve"
+            )
+
+            :error
+
+          root ->
+            {:ok, Path.join([root, "assets", "plugin", plugin, file])}
+        end
 
       _ ->
         :error

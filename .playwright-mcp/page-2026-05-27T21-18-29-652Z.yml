@@ -1,0 +1,99 @@
+- application [ref=e2]:
+  - generic:
+    - generic:
+      - heading [level=2]: While we're on the topic…
+      - paragraph: Catch-events fits native. Callbacks don't.
+      - generic:
+        - generic:
+          - heading [level=4]: BEAM — catch events
+          - list:
+            - listitem:
+              - text: Native is
+              - emphasis: synchronous
+              - text: — it emits and receives events.
+            - listitem:
+              - text: The BEAM
+              - emphasis: lives
+              - text: on messages and mailboxes.
+            - listitem:
+              - text: Same shape on both sides — they just
+              - strong: fit
+              - text: .
+        - generic:
+          - heading [level=4]: React Native — callbacks
+          - list:
+            - listitem: JS was sync, then bolted on async to chase performance.
+            - listitem:
+              - text: Callbacks are the
+              - emphasis: kludge
+              - text: a sync language reinvents itself with.
+            - listitem: A model grafted onto native's — not matched to it.
+      - paragraph: The two models just don't fit well together — IMO.
+    - generic:
+      - heading [level=2]: Navigation is a layout, too
+      - paragraph:
+        - text: A
+        - emphasis: screen
+        - text: lays out components — the
+        - emphasis: app
+        - text: lays out navigation.
+      - generic:
+        - code:
+          - text: "use Mob.App # each platform gets its native shell"
+          - generic: def navigation
+          - text: "(:ios), do: tab_bar([stack(:home, root: HomeScreen), stack(:browse, root: BrowseScreen)])"
+          - generic: def navigation
+          - text: "(:android), do: drawer([stack(:home, root: HomeScreen), stack(:browse, root: BrowseScreen)])"
+          - generic: def navigation
+          - text: "(_), do: stack(:main, root: HomeScreen)"
+      - list:
+        - listitem:
+          - code: tab_bar
+          - text: → iOS tab bar · Android bottom nav
+        - listitem:
+          - code: drawer
+          - text: → native Android side drawer
+        - listitem:
+          - text: Per-platform — and all just
+          - emphasis: maps
+          - text: . Navigation is data too.
+    - generic [ref=e3]:
+      - 'heading "Moving within it: push & pop" [level=2] [ref=e4]'
+      - code [ref=e6]:
+        - text: "# go deeper"
+        - generic [ref=e7]: def handle_info
+        - text: "({:tap, :open_dice}, socket) do {:noreply, Mob.Socket.push_screen(socket, Mobdemo.DiceScreen)} end # go back"
+        - generic [ref=e8]: def handle_info
+        - text: "({:tap, :back}, socket) do {:noreply, Mob.Socket.pop_screen(socket)} end"
+      - list [ref=e9]:
+        - listitem [ref=e10]:
+          - text: Web is a
+          - emphasis [ref=e11]: tree of URLs
+          - text: . Mobile is a
+          - emphasis [ref=e12]: stack of screens
+          - text: .
+        - listitem [ref=e13]:
+          - text: So you
+          - code [ref=e14]: push
+          - text: /
+          - code [ref=e15]: pop
+          - text: the stack — held in a GenServer, driven by a message.
+        - listitem [ref=e16]:
+          - text: Hardware back / back-swipe pops it
+          - strong [ref=e17]: for free
+          - text: .
+    - generic:
+      - heading [level=2]: "\"I'll never do apps…\""
+      - paragraph:
+        - text: "\"…I just like"
+        - emphasis: Ecto
+        - text: too much to give it up."
+    - generic:
+      - heading [level=2]: "\"No way that works on a phone\""
+  - link "15 / 22" [ref=e22] [cursor=pointer]:
+    - /url: "#/14"
+  - complementary:
+    - button "previous slide" [ref=e23] [cursor=pointer]
+    - button "next slide" [ref=e25] [cursor=pointer]
+  - text: Speaker notes
+  - generic [ref=e29]: "Moving within it: push & pop. # go deeper def handle_info ({ :tap , :open_dice }, socket) do { :noreply , Mob . Socket .push_screen(socket, Mobdemo . DiceScreen )} end # go back def handle_info ({ :tap , :back }, socket) do { :noreply , Mob . Socket .pop_screen(socket)} end Web is a tree of URLs . Mobile is a stack of screens . So you push / pop the stack — held in a GenServer, driven by a message. Hardware back / back-swipe pops it for free ."

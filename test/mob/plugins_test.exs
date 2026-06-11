@@ -5,7 +5,8 @@ defmodule Mob.PluginsTest do
     screens: [%{plugin: :p, module: P.Home, default_route: "/p"}],
     lifecycle: [%{plugin: :p, on_start: {P, :start, []}}],
     settings: [%{plugin: :p, schema: [%{key: :x, type: :boolean, default: true}]}],
-    notification_handlers: [%{plugin: :p, match: %{type: "t"}, handler: {P, :h, 1}}]
+    notification_handlers: [%{plugin: :p, match: %{type: "t"}, handler: {P, :h, 1}}],
+    nifs: [:p_nif]
   }
 
   describe "read_path/1" do
@@ -16,7 +17,7 @@ defmodule Mob.PluginsTest do
 
     test "returns the empty set when the file is absent" do
       assert Mob.Plugins.read_path("/no/such/mob_plugins.exs") ==
-               %{screens: [], lifecycle: [], settings: [], notification_handlers: []}
+               %{screens: [], lifecycle: [], settings: [], notification_handlers: [], nifs: []}
     end
 
     test "returns the empty set (never crashes) on a malformed file" do
@@ -40,12 +41,33 @@ defmodule Mob.PluginsTest do
       assert Mob.Plugins.lifecycle() == @sample.lifecycle
       assert Mob.Plugins.settings() == @sample.settings
       assert Mob.Plugins.notification_handlers() == @sample.notification_handlers
+      assert Mob.Plugins.nifs() == @sample.nifs
     end
 
     test "merges partial manifests against the empty set" do
       Mob.Plugins.install(%{screens: [%{plugin: :q, module: Q, default_route: "/q"}]})
       assert [%{plugin: :q}] = Mob.Plugins.screens()
       assert Mob.Plugins.notification_handlers() == []
+      assert Mob.Plugins.nifs() == []
+    end
+  end
+
+  describe "ensure_nif_modules_loaded/0" do
+    test "calls Code.ensure_loaded on each declared NIF module" do
+      # A loadable module (already on disk) + a bogus one mirroring a host build
+      # where a plugin NIF's native lib isn't linked (load tolerated, not fatal).
+      Mob.Plugins.install(%{nifs: [Mob.Socket, :no_such_nif_module_zzz]})
+
+      results = Mob.Plugins.ensure_nif_modules_loaded()
+
+      assert {Mob.Socket, {:module, Mob.Socket}} in results
+      assert {:no_such_nif_module_zzz, {:error, :nofile}} in results
+    end
+
+    test "is a no-op when no plugin declares a NIF" do
+      Mob.Plugins.install(%{})
+      assert Mob.Plugins.nifs() == []
+      assert Mob.Plugins.ensure_nif_modules_loaded() == []
     end
   end
 
@@ -96,9 +118,24 @@ defmodule Mob.PluginsTest do
   end
 
   describe "resolve_image/1" do
-    test "maps a plugin:// reference to its bundle path" do
+    setup do
+      on_exit(fn -> Mob.Plugins.install_asset_root("") end)
+    end
+
+    test "maps a plugin:// reference to an absolute path under the cached asset root" do
+      Mob.Plugins.install_asset_root("/bundle/priv/generated/plugin_assets")
+
       assert Mob.Plugins.resolve_image("plugin://kv/icon.png") ==
-               {:ok, "assets/plugin/kv/icon.png"}
+               {:ok, "/bundle/priv/generated/plugin_assets/assets/plugin/kv/icon.png"}
+    end
+
+    test "errors (never a relative path) when the asset root has not been cached" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert Mob.Plugins.resolve_image("plugin://kv/icon.png") == :error
+        end)
+
+      assert log =~ "asset root"
     end
 
     test "passes through a non-plugin URL" do
@@ -107,6 +144,7 @@ defmodule Mob.PluginsTest do
     end
 
     test "errors on a malformed plugin:// reference" do
+      Mob.Plugins.install_asset_root("/bundle")
       assert Mob.Plugins.resolve_image("plugin://kv") == :error
       assert Mob.Plugins.resolve_image("plugin:///icon.png") == :error
     end

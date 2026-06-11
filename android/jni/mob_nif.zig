@@ -245,12 +245,6 @@ pub const BridgeMethods = extern struct {
     open_url: jni.JMethodID = null,
     request_permission: jni.JMethodID = null,
     biometric_authenticate: jni.JMethodID = null,
-    camera_capture_photo: jni.JMethodID = null,
-    camera_capture_video: jni.JMethodID = null,
-    camera_start_preview: jni.JMethodID = null,
-    camera_stop_preview: jni.JMethodID = null,
-    camera_start_frame_stream: jni.JMethodID = null,
-    camera_stop_frame_stream: jni.JMethodID = null,
     alert_show: jni.JMethodID = null,
     action_sheet_show: jni.JMethodID = null,
     toast_show: jni.JMethodID = null,
@@ -2318,55 +2312,6 @@ pub export fn mob_deliver_file_result(
     _ = erts.enif_send(null, &pid, env, msg);
 }
 
-/// `mob_deliver_camera_frame` — called from beam_jni.c after a
-/// CameraX ImageAnalysis frame has been converted to the requested
-/// pixel format. Posts the iOS-equivalent
-/// `{:camera, :frame, %{bytes, width, height, format, timestamp_ms, dropped}}`
-/// message to the BEAM caller pid. The `bytes` payload is copied into
-/// a fresh BEAM binary so the caller can release the underlying Kotlin
-/// ByteArray as soon as this function returns.
-pub export fn mob_deliver_camera_frame(
-    jpid: jni.JLong,
-    bytes: [*]const u8,
-    nbytes: usize,
-    width: c_int,
-    height: c_int,
-    format: [*:0]const u8,
-    timestamp_ms: jni.JLong,
-    dropped: jni.JLong,
-) callconv(.c) void {
-    var pid = pidFromLong(jpid);
-    const env = erts.enif_alloc_env() orelse return;
-    defer erts.enif_free_env(env);
-
-    var pix: erts.ErlNifBinary = undefined;
-    if (erts.enif_alloc_binary(nbytes, &pix) == 0) return;
-    @memcpy(pix.data[0..nbytes], bytes[0..nbytes]);
-
-    const keys = [_]erts.ERL_NIF_TERM{
-        erts.enif_make_atom(env, "bytes"),
-        erts.enif_make_atom(env, "width"),
-        erts.enif_make_atom(env, "height"),
-        erts.enif_make_atom(env, "format"),
-        erts.enif_make_atom(env, "timestamp_ms"),
-        erts.enif_make_atom(env, "dropped"),
-    };
-    const vals = [_]erts.ERL_NIF_TERM{
-        erts.enif_make_binary(env, &pix),
-        erts.enif_make_int(env, width),
-        erts.enif_make_int(env, height),
-        erts.enif_make_atom(env, format),
-        erts.enif_make_int64(env, timestamp_ms),
-        erts.enif_make_int64(env, dropped),
-    };
-    const payload = erts.makeMap(env, &keys, &vals) orelse return;
-    const msg = erts.makeTuple(env, .{
-        erts.atom(env, "camera"),
-        erts.atom(env, "frame"),
-        payload,
-    });
-    _ = erts.enif_send(null, &pid, env, msg);
-}
 
 pub export fn mob_deliver_push_token(jpid: jni.JLong, token: [*:0]const u8) callconv(.c) void {
     var pid = pidFromLong(jpid);
@@ -2604,94 +2549,6 @@ export fn nif_biometric_authenticate(
     return callBridgePidStr(env, Bridge.biometric_authenticate, pid, jni.asCStr(&reason));
 }
 
-export fn nif_camera_capture_photo(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    var qual: [16]u8 = @splat(0);
-    jni.copyZ(&qual, "high");
-    _ = erts.enif_get_atom(env, argv[0], &qual, qual.len, erts.ERL_NIF_LATIN1);
-    var pid: erts.ErlNifPid = undefined;
-    _ = erts.enif_self(env, &pid);
-    return callBridgePidStr(env, Bridge.camera_capture_photo, pid, jni.asCStr(&qual));
-}
-
-export fn nif_camera_capture_video(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    var max_dur: c_int = 60;
-    _ = erts.enif_get_int(env, argv[0], &max_dur);
-    var pid: erts.ErlNifPid = undefined;
-    _ = erts.enif_self(env, &pid);
-    var dur_buf: [16]u8 = @splat(0);
-    _ = std.fmt.bufPrint(&dur_buf, "{d}", .{max_dur}) catch {};
-    return callBridgePidStr(env, Bridge.camera_capture_video, pid, jni.asCStr(&dur_buf));
-}
-
-export fn nif_camera_start_preview(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
-    const json = binToCString(bin) orelse return erts.atom(env, "error");
-    defer freeCString(json);
-    var pid: erts.ErlNifPid = undefined;
-    _ = erts.enif_self(env, &pid);
-    return callBridgePidStr(env, Bridge.camera_start_preview, pid, json);
-}
-
-export fn nif_camera_stop_preview(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    _ = argv;
-    var attached: c_int = 0;
-    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
-    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.camera_stop_preview);
-    detachIfAttached(attached);
-    return erts.ok(env);
-}
-
-// Live camera frame stream. CameraX ImageAnalysis on the Kotlin side
-// converts YUV → RGB f32, then calls back via
-// `nativeDeliverCameraFrame` → `mob_deliver_camera_frame` to post a
-// `{:camera, :frame, %{...}}` message to the caller pid.
-export fn nif_camera_start_frame_stream(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
-    const json = binToCString(bin) orelse return erts.atom(env, "error");
-    defer freeCString(json);
-    var pid: erts.ErlNifPid = undefined;
-    _ = erts.enif_self(env, &pid);
-    return callBridgePidStr(env, Bridge.camera_start_frame_stream, pid, json);
-}
-
-export fn nif_camera_stop_frame_stream(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    _ = argv;
-    var attached: c_int = 0;
-    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
-    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.camera_stop_frame_stream);
-    detachIfAttached(attached);
-    return erts.ok(env);
-}
 
 export fn nif_photos_pick(
     env: ?*erts.ErlNifEnv,
@@ -3545,12 +3402,6 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     // the pid as a long.
     if (!cacheRequired(jenv, "request_permission", "(JLjava/lang/String;)V", &Bridge.request_permission)) return -1;
     if (!cacheRequired(jenv, "biometric_authenticate", "(JLjava/lang/String;)V", &Bridge.biometric_authenticate)) return -1;
-    if (!cacheRequired(jenv, "camera_capture_photo", "(JLjava/lang/String;)V", &Bridge.camera_capture_photo)) return -1;
-    if (!cacheRequired(jenv, "camera_capture_video", "(JLjava/lang/String;)V", &Bridge.camera_capture_video)) return -1;
-    if (!cacheRequired(jenv, "camera_start_preview", "(JLjava/lang/String;)V", &Bridge.camera_start_preview)) return -1;
-    if (!cacheRequired(jenv, "camera_stop_preview", "()V", &Bridge.camera_stop_preview)) return -1;
-    if (!cacheRequired(jenv, "camera_start_frame_stream", "(JLjava/lang/String;)V", &Bridge.camera_start_frame_stream)) return -1;
-    if (!cacheRequired(jenv, "camera_stop_frame_stream", "()V", &Bridge.camera_stop_frame_stream)) return -1;
     if (!cacheRequired(jenv, "photos_pick", "(JLjava/lang/String;)V", &Bridge.photos_pick)) return -1;
     if (!cacheRequired(jenv, "files_pick", "(JLjava/lang/String;)V", &Bridge.files_pick)) return -1;
     if (!cacheRequired(jenv, "audio_start_recording", "(JLjava/lang/String;)V", &Bridge.audio_start_recording)) return -1;
@@ -3680,12 +3531,6 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "open_url", .arity = 1, .fptr = nif_open_url, .flags = 0 },
     .{ .name = "request_permission", .arity = 1, .fptr = nif_request_permission, .flags = 0 },
     .{ .name = "biometric_authenticate", .arity = 1, .fptr = nif_biometric_authenticate, .flags = 0 },
-    .{ .name = "camera_capture_photo", .arity = 1, .fptr = nif_camera_capture_photo, .flags = 0 },
-    .{ .name = "camera_capture_video", .arity = 1, .fptr = nif_camera_capture_video, .flags = 0 },
-    .{ .name = "camera_start_preview", .arity = 1, .fptr = nif_camera_start_preview, .flags = 0 },
-    .{ .name = "camera_stop_preview", .arity = 0, .fptr = nif_camera_stop_preview, .flags = 0 },
-    .{ .name = "camera_start_frame_stream", .arity = 1, .fptr = nif_camera_start_frame_stream, .flags = 0 },
-    .{ .name = "camera_stop_frame_stream", .arity = 0, .fptr = nif_camera_stop_frame_stream, .flags = 0 },
     .{ .name = "photos_pick", .arity = 2, .fptr = nif_photos_pick, .flags = 0 },
     .{ .name = "files_pick", .arity = 1, .fptr = nif_files_pick, .flags = 0 },
     .{ .name = "audio_start_recording", .arity = 1, .fptr = nif_audio_start_recording, .flags = 0 },

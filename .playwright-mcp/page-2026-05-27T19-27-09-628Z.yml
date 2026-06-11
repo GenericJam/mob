@@ -1,0 +1,85 @@
+- application [ref=e2]:
+  - generic:
+    - generic:
+      - heading [level=2]: You already know the API
+      - table:
+        - rowgroup:
+          - row:
+            - columnheader: LiveView / GenServer
+            - columnheader
+            - columnheader: Mob
+          - row:
+            - cell:
+              - code: mount/3
+            - cell: →
+            - cell:
+              - code: mount/3
+          - row:
+            - cell:
+              - code: render(assigns)
+            - cell: →
+            - cell:
+              - code: render(assigns)
+          - row:
+            - cell:
+              - code: assign(socket, …)
+            - cell: →
+            - cell:
+              - code: Mob.Socket.assign(socket, …)
+          - row:
+            - cell:
+              - code: handle_event/3
+            - cell: →
+            - cell:
+              - code: handle_info/2
+          - row:
+            - cell:
+              - code: push_navigate
+            - cell: →
+            - cell:
+              - code: push_screen / pop_screen
+      - paragraph:
+        - text: One row is different —
+        - generic:
+          - code: handle_event
+          - text: →
+          - code: handle_info
+        - text: . We'll get to why.
+    - generic:
+      - heading [level=2]: Two ways to say the same thing
+      - paragraph: A screen is just a tree of components.
+      - paragraph: "Write that tree however you like:"
+      - generic:
+        - generic: ~MOB sigil
+        - generic: plain maps
+      - paragraph: Same tree. Pick the one that fits your hands — or your robot's.
+    - generic [ref=e17]:
+      - heading "Sigil vs map" [level=2] [ref=e18]
+      - generic [ref=e19]:
+        - generic [ref=e20]:
+          - generic [ref=e21]: ~MOB — humans like this
+          - code [ref=e23]: "~MOB\"\"\" <Scroll background={:background}> <Column padding={:space_lg}> <Text text=\"Roll!\" text_size={:xl} /> <Button text=\"Roll Dice\" on_tap={{self(), :roll}} /> </Column> </Scroll> \"\"\""
+        - generic [ref=e24]:
+          - generic [ref=e25]: maps — Claude reaches for this
+          - code [ref=e27]: "%{ type: :scroll, props: %{background: :background}, children: [ %{type: :column, props: %{padding: :space_lg}, children: [ %{type: :text, props: %{text: \"Roll!\", text_size: :xl}}, %{type: :button, props: %{text: \"Roll Dice\", on_tap: {self(), :roll}}} ]} ] }"
+    - generic:
+      - heading [level=2]: "Real screen: the home screen"
+      - generic:
+        - code:
+          - generic: def render
+          - text: "(assigns) do ~MOB\"\"\" <Scroll background={:background}> <Column padding={:space_lg}> <Image src={logo_src(assigns.theme)} width={120} height={120} /> <Text text=\"Mobdemo\" text_size={:xl} text_color={:on_surface} /> <Text text=\"BEAM running on device\" text_color={:primary} /> <Spacer size={40} /> {nav_button(\"Roll Dice\", :open_dice)} {nav_button(\"Text Input\", :open_text)} </Column> </Scroll> \"\"\" end"
+    - generic:
+      - heading [level=2]: "The state loop: tap → message → re-render"
+      - generic:
+        - code:
+          - text: "# in render: the button announces who to message, and with what tag %{type: :button, props: %{text: \"Roll again\", background: :primary, on_tap: {self(), :roll}}} # the tap arrives as a plain message"
+          - generic: def handle_info
+          - text: "({:tap, :roll}, socket) do value = :rand.uniform(6) {:noreply, Mob.Socket.assign(socket, :value, value)} end"
+      - list
+  - link "9 / 19" [ref=e28] [cursor=pointer]:
+    - /url: "#/8"
+  - complementary:
+    - button "previous slide" [ref=e29] [cursor=pointer]
+    - button "next slide" [ref=e13] [cursor=pointer]
+  - text: Speaker notes
+  - generic [ref=e16]: "BEAM on Mobile · Part II. Mob: the syntax. LiveView muscle memory, on a phone. Kevin Edey · Elixir meetup · 2026. Part I was why . This one is how — the syntax, and the reasoning behind every decision."

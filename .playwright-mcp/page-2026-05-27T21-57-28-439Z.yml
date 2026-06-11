@@ -1,0 +1,146 @@
+- application [ref=e2]:
+  - generic:
+    - generic:
+      - heading [level=2]: Did I mention mix tasks?
+      - paragraph:
+        - emphasis: You
+        - text: get a mix task — and
+        - emphasis: you
+        - text: get a mix task — and you get a mix task!
+      - paragraph:
+        - text: ~35 of them. The whole lifecycle — scaffold, run, inspect, ship — is
+        - generic:
+          - text: just
+          - code: mix
+          - text: .
+    - generic:
+      - heading [level=2]: "Mix tasks: build & run"
+      - generic:
+        - generic:
+          - heading [level=4]: Scaffold & set up
+          - list:
+            - listitem:
+              - code: mob.new
+              - text: create a new app
+            - listitem:
+              - code: mob.install
+              - text: first-run setup
+            - listitem:
+              - code: mob.doctor
+              - text: check your environment
+            - listitem:
+              - code: mob.enable
+              - text: turn on optional features
+            - listitem:
+              - code: mob.add_nif
+              - text: scaffold a native NIF
+            - listitem:
+              - code: mob.gen.live_screen
+              - text: LiveView + Screen pair
+            - listitem:
+              - code: mob.icon
+              - text: generate app icons
+            - listitem:
+              - code: mob.provision
+              - text: iOS app ID + profile
+        - generic:
+          - heading [level=4]: The dev loop
+          - list:
+            - listitem:
+              - code: mob.deploy
+              - text: build → all devices
+            - listitem:
+              - code: mob.connect
+              - text: IEx into running apps
+            - listitem:
+              - code: mob.push
+              - text: hot-push changed modules
+            - listitem:
+              - code: mob.watch
+              - text: auto hot-push on save
+            - listitem:
+              - code: mob.server
+              - text: dev server :4040
+            - listitem:
+              - code: mob.devices
+              - text: list connected devices
+            - listitem:
+              - code: mob.emulators
+              - text: start / stop emulators
+            - listitem:
+              - code: mob.routes
+              - text: validate navigation
+    - generic [ref=e3]:
+      - 'heading "Mix tasks: inspect & ship" [level=2] [ref=e4]'
+      - generic [ref=e5]:
+        - generic [ref=e6]:
+          - heading "Inspect · slim · secure" [level=4] [ref=e7]
+          - list [ref=e8]:
+            - listitem [ref=e9]:
+              - code [ref=e10]: mob.trace_otp
+              - text: trace touched code
+            - listitem [ref=e11]:
+              - code [ref=e12]: mob.audit_otp
+              - text: which OTP libs you use
+            - listitem [ref=e13]:
+              - code [ref=e14]: mob.snapshot_loaded
+              - text: what's loaded on device
+            - listitem [ref=e15]:
+              - code [ref=e16]: mob.verify_strip
+              - text: prove the strip is safe
+            - listitem [ref=e17]:
+              - code [ref=e18]: mob.security_scan
+              - text: scan deps + runtime
+            - listitem [ref=e19]:
+              - code [ref=e20]: mob.battery_bench_*
+              - text: battery benchmark
+            - listitem [ref=e21]:
+              - code [ref=e22]: mob.cache
+              - text: show / clear caches
+        - generic [ref=e23]:
+          - heading "Release & ship" [level=4] [ref=e24]
+          - list [ref=e25]:
+            - listitem [ref=e26]:
+              - code [ref=e27]: mob.release
+              - text: signed .ipa / .aab
+            - listitem [ref=e28]:
+              - code [ref=e29]: mob.release.otp
+              - text: cross-compile OTP
+            - listitem [ref=e30]:
+              - code [ref=e31]: mob.release.openssl
+              - text: crypto NIF archives
+            - listitem [ref=e32]:
+              - code [ref=e33]: mob.publish
+              - text: upload to the store
+            - listitem [ref=e34]:
+              - code [ref=e35]: mob.republish
+              - text: bump + build + upload
+            - listitem [ref=e36]:
+              - code [ref=e37]: mob.setup.google_play
+              - text: automate Play setup
+            - listitem [ref=e38]:
+              - code [ref=e39]: mob.uninstall
+              - text: remove from devices
+    - generic:
+      - heading [level=2]: Elixir, all the way to the phone
+      - paragraph: Same patterns. Same language. Server to screen.
+      - generic:
+        - generic:
+          - img
+          - paragraph:
+            - link:
+              - /url: https://hexdocs.pm/mob
+              - text: hexdocs.pm/mob
+          - paragraph: go build one
+      - paragraph:
+        - text: "Part I (the why):"
+        - link:
+          - /url: https://genericjam.com/blog/mob-intro
+          - text: genericjam.com/blog/mob-intro
+  - link "27 / 28" [ref=e44] [cursor=pointer]:
+    - /url: "#/26"
+  - complementary:
+    - button "previous slide" [ref=e45] [cursor=pointer]
+    - button "next slide" [ref=e47] [cursor=pointer]
+  - text: Speaker notes
+  - generic [ref=e51]: "Mix tasks: inspect & ship. Inspect · slim · secure. mob.trace_otp trace touched code. mob.audit_otp which OTP libs you use. mob.snapshot_loaded what's loaded on device. mob.verify_strip prove the strip is safe. mob.security_scan scan deps + runtime. mob.battery_bench_* battery benchmark. mob.cache show / clear caches. Release & ship. mob.release signed .ipa / .aab. mob.release.otp cross-compile OTP. mob.release.openssl crypto NIF archives. mob.publish upload to the store. mob.republish bump + build + upload. mob.setup.google_play automate Play setup. mob.uninstall remove from devices."

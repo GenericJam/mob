@@ -126,6 +126,48 @@ defmodule Mob.PluginsTier4Test do
       assert log =~ "notification handler crashed"
     end
 
+    test "a matching entry with a malformed handler is skipped; a later handler still receives it" do
+      Mob.Plugins.install(%{
+        notification_handlers: [
+          %{plugin: :bad, match: %{type: "x"}, handler: :not_an_mfa},
+          %{plugin: :good, match: %{type: "x"}, handler: {Hooks, :notify, 1}}
+        ]
+      })
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :handled = Mob.Plugins.dispatch_notification(%{type: "x"})
+        end)
+
+      assert log =~ "malformed"
+      assert_received {:notified, %{type: "x"}}
+    end
+
+    test "a matching entry missing :handler is skipped without raising" do
+      Mob.Plugins.install(%{
+        notification_handlers: [%{plugin: :bad, match: %{type: "x"}}]
+      })
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :unhandled = Mob.Plugins.dispatch_notification(%{type: "x"})
+        end)
+
+      assert log =~ "malformed"
+    end
+
+    test "a non-map handler entry is skipped without raising" do
+      Mob.Plugins.install(%{
+        notification_handlers: [
+          :garbage,
+          %{plugin: :good, match: %{type: "x"}, handler: {Hooks, :notify, 1}}
+        ]
+      })
+
+      assert :handled = Mob.Plugins.dispatch_notification(%{type: "x"})
+      assert_received {:notified, %{type: "x"}}
+    end
+
     test "a predicate that raises is isolated (treated as no-match, does not propagate)" do
       Mob.Plugins.install(%{
         notification_handlers: [

@@ -1,0 +1,82 @@
+- application [ref=e2]:
+  - generic:
+    - generic:
+      - heading [level=2]: "The state loop: tap → message → re-render"
+      - generic:
+        - code:
+          - text: "# in render: the button announces who to message, and with what tag %{type: :button, props: %{text: \"Roll again\", background: :primary, on_tap: {self(), :roll}}} # the tap arrives as a plain message"
+          - generic: def handle_info
+          - text: "({:tap, :roll}, socket) do value = :rand.uniform(6) {:noreply, Mob.Socket.assign(socket, :value, value)} end"
+      - list:
+        - listitem:
+          - text: Tap →
+          - code: "{:tap, :roll}"
+          - text: lands in
+          - code: handle_info
+        - listitem:
+          - code: assign
+          - text: the new state → Mob re-renders the native view
+        - listitem: Exactly the LiveView loop. No diffing in your code.
+    - generic:
+      - heading [level=2]:
+        - text: Why
+        - code: handle_info
+        - text: ", not"
+        - code: handle_event
+        - text: "?"
+      - generic:
+        - code: "on_tap: {self(), :roll} → handle_info({:tap, :roll}, socket) on_change: {self(), :text_changed} → handle_info({:change, :text_changed, value}, socket)"
+      - list:
+        - listitem:
+          - text: Events cross a
+          - strong: NIF
+          - text: boundary — native code can't hold an Elixir closure.
+        - listitem:
+          - text: So an event is just a
+          - strong: message
+          - text: ":"
+          - emphasis:
+            - text: "\"send"
+            - code: :roll
+            - text: to this pid."
+        - listitem:
+          - text: Which means… it's a GenServer.
+          - code: handle_info
+          - text: is exactly the right tool.
+      - paragraph: Mobile constraint met Elixir strength. The bridge, working.
+    - generic [ref=e34]:
+      - heading "Navigation is a stack, not a route table" [level=2] [ref=e35]
+      - code [ref=e37]:
+        - text: "# go deeper"
+        - generic [ref=e38]: def handle_info
+        - text: "({:tap, :open_dice}, socket) do {:noreply, Mob.Socket.push_screen(socket, Mobdemo.DiceScreen)} end # go back"
+        - generic [ref=e39]: def handle_info
+        - text: "({:tap, :back}, socket) do {:noreply, Mob.Socket.pop_screen(socket)} end"
+      - list [ref=e40]:
+        - listitem [ref=e41]:
+          - text: Web is a
+          - emphasis [ref=e42]: tree of URLs
+          - text: . Mobile is a
+          - emphasis [ref=e43]: stack of screens
+          - text: .
+        - listitem [ref=e44]:
+          - text: So nav is
+          - code [ref=e45]: push
+          - text: /
+          - code [ref=e46]: pop
+          - text: on a stack — held in a GenServer.
+        - listitem [ref=e47]:
+          - text: Here, Mob follows
+          - strong [ref=e48]: mobile's
+          - text: precedent, not the web's.
+    - generic:
+      - heading [level=2]: "\"No way that works on a phone\""
+    - generic:
+      - heading [level=2]: Busted, one at a time
+  - link "13 / 19" [ref=e52] [cursor=pointer]:
+    - /url: "#/12"
+  - complementary:
+    - button "previous slide" [ref=e29] [cursor=pointer]
+    - button "next slide" [ref=e13] [cursor=pointer]
+  - text: Speaker notes
+  - generic [ref=e16]: "Navigation is a stack, not a route table. # go deeper def handle_info ({ :tap , :open_dice }, socket) do { :noreply , Mob . Socket .push_screen(socket, Mobdemo . DiceScreen )} end # go back def handle_info ({ :tap , :back }, socket) do { :noreply , Mob . Socket .pop_screen(socket)} end Web is a tree of URLs . Mobile is a stack of screens . So nav is push / pop on a stack — held in a GenServer. Here, Mob follows mobile's precedent, not the web's."
