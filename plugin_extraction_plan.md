@@ -391,8 +391,14 @@ permission opt-in story.
 
 - [ ] `mob_vendor_usb` ← `lib/mob/vendor_usb.ex` (334 LoC). The
   air_cart_max use case. Very specialized.
-- [ ] `mob_scanner` ← `lib/mob/scanner.ex` (47 LoC). Likely depends
-  on `mob_camera`.
+- [x] `mob_scanner` ← `lib/mob/scanner.ex` (47 LoC). Extracted +
+  Moto-G-verified 2026-06-11 — the Wave-3 opener and the first
+  plugin→plugin relationship: scanner has NO :camera capability entry
+  (mob_camera's registry handler owns it; activate both). Its Activity is
+  an AndroidManifest fragment → host_requirements; both Kotlin classes
+  live in one bridge_kt file (the copy channel is one file per plugin —
+  an android.kotlin_files capability is the noted alternative). iPhone
+  pass pending.
 - [ ] `mob_webview` ← `lib/mob/webview.ex` (48 LoC + heavy native).
 - [ ] `mob_canvas` ← `lib/mob/canvas.ex` (272 LoC + draw ops).
 
