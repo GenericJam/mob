@@ -372,12 +372,12 @@ permission opt-in story.
   the wire contract (payload shape, `{:push_token, platform, token}`)
   gets vendored contract-test fixtures in BOTH repos. The FCM
   `.MobFirebaseService` host `<service>` is a `host_requirements` entry.
-- [~] `mob_photos` ← `lib/mob/photos.ex` (33 LoC + native). Extracted 2026-06-11
-  (all 4 layers + 13 tests; core + template strips merged; Android picker now
-  honors `max:` via ActivityResultRegistry). DEVICE VERIFY PENDING — first
-  native compile of the new repos hasn't run.
-- [~] `mob_biometric` ← `lib/mob/biometric.ex` (28 LoC + native). Extracted
-  2026-06-11 (all 4 layers + 12 tests; strips merged). DEVICE VERIFY PENDING.
+- [x] `mob_photos` ← `lib/mob/photos.ex` (33 LoC + native). Extracted +
+  Moto-G-verified 2026-06-11 (cancel AND picked round-trips green; Android
+  picker now honors `max:` via ActivityResultRegistry). iPhone build pending.
+- [x] `mob_biometric` ← `lib/mob/biometric.ex` (28 LoC + native). Extracted +
+  Moto-G-verified 2026-06-11 (round-trip delivers :not_available as the
+  degradation predicts). iPhone build pending.
   Extraction surfaced two latent core gaps, documented in the repo: Android
   biometric was degraded (FragmentActivity cast nulls on the ComponentActivity
   host → always :not_available) and NSFaceIDUsageDescription was missing from
