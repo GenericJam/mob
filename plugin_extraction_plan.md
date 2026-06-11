@@ -362,9 +362,13 @@ permission opt-in story.
 - [x] `mob_location` ← `lib/mob/location.ex` (65 LoC + native).
   **Merged 2026-06-06.** The Wave-2 pattern-setter: drove the extensible
   permission registry + per-platform NIF tagging + ObjC plugin-NIF path.
-- [~] `mob_notify` ← `lib/mob/notify.ex` (107 LoC + native). Stage 1a shipped
-  2026-06-11 (repo + API parity + manifest + mob_push contract fixtures both
-  sides + 16 tests); native move staged in its EXTRACTION.md. Greenlit
+- [x] `mob_notify` ← `lib/mob/notify.ex` (107 LoC + native). Extracted +
+  Moto-G-verified 2026-06-11 (all stages but live-push: scheduled notification
+  fires through the plugin-alarm → host-receiver chain, cancel works; core
+  keeps ALL delivery via the new mob_notify_set_screen_pid export + the
+  generated io.mob.plugin.MobNotifyHub seam). iPhone build + live APNs/FCM
+  push pending. Stage 1a shipped same day (contract fixtures both
+  sides + tests); see the repo's EXTRACTION.md. Greenlit
   2026-06-11. Scheduling + push REGISTRATION move; the `{:notification,
   ...}` delivery plumbing stays in core (shared with the tier-4 plugin
   dispatcher). Companion to the published server-side `mob_push` package —
