@@ -39,7 +39,6 @@
     motion_start/2,
     motion_stop/0,
     %% QR / barcode scanner
-    scanner_scan/1,
     %% Notifications
     take_launch_notification/0,
     take_opened_document/0,
@@ -153,7 +152,6 @@
     tts_stop/0,
     motion_start/2,
     motion_stop/0,
-    scanner_scan/1,
     take_launch_notification/0,
     take_opened_document/0,
     background_keep_alive/0,
@@ -271,7 +269,6 @@ tts_speak(_Text, _OptsJson) -> erlang:nif_error(not_loaded).
 tts_stop() -> erlang:nif_error(not_loaded).
 motion_start(_Sensors, _Interval) -> erlang:nif_error(not_loaded).
 motion_stop() -> erlang:nif_error(not_loaded).
-scanner_scan(_FormatsJson) -> erlang:nif_error(not_loaded).
 take_launch_notification() -> erlang:nif_error(not_loaded).
 take_opened_document() -> erlang:nif_error(not_loaded).
 background_keep_alive() -> erlang:nif_error(not_loaded).
