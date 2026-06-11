@@ -41,9 +41,6 @@
     %% QR / barcode scanner
     scanner_scan/1,
     %% Notifications
-    notify_schedule/1,
-    notify_cancel/1,
-    notify_register_push/0,
     take_launch_notification/0,
     take_opened_document/0,
     %% Storage
@@ -157,9 +154,6 @@
     motion_start/2,
     motion_stop/0,
     scanner_scan/1,
-    notify_schedule/1,
-    notify_cancel/1,
-    notify_register_push/0,
     take_launch_notification/0,
     take_opened_document/0,
     background_keep_alive/0,
@@ -278,9 +272,6 @@ tts_stop() -> erlang:nif_error(not_loaded).
 motion_start(_Sensors, _Interval) -> erlang:nif_error(not_loaded).
 motion_stop() -> erlang:nif_error(not_loaded).
 scanner_scan(_FormatsJson) -> erlang:nif_error(not_loaded).
-notify_schedule(_OptsJson) -> erlang:nif_error(not_loaded).
-notify_cancel(_Id) -> erlang:nif_error(not_loaded).
-notify_register_push() -> erlang:nif_error(not_loaded).
 take_launch_notification() -> erlang:nif_error(not_loaded).
 take_opened_document() -> erlang:nif_error(not_loaded).
 background_keep_alive() -> erlang:nif_error(not_loaded).
