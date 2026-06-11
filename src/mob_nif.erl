@@ -21,9 +21,7 @@
     %% Permissions
     request_permission/1,
     %% Biometric
-    biometric_authenticate/1,
     %% Photo library
-    photos_pick/2,
     %% File picker
     files_pick/1,
     %% Audio recording
@@ -147,8 +145,6 @@
     share_text/1,
     open_url/1,
     request_permission/1,
-    biometric_authenticate/1,
-    photos_pick/2,
     files_pick/1,
     audio_start_recording/1,
     audio_stop_recording/0,
@@ -270,8 +266,6 @@ clipboard_get() -> erlang:nif_error(not_loaded).
 share_text(_Text) -> erlang:nif_error(not_loaded).
 open_url(_Url) -> erlang:nif_error(not_loaded).
 request_permission(_Cap) -> erlang:nif_error(not_loaded).
-biometric_authenticate(_Reason) -> erlang:nif_error(not_loaded).
-photos_pick(_Max, _Types) -> erlang:nif_error(not_loaded).
 files_pick(_MimeTypes) -> erlang:nif_error(not_loaded).
 audio_start_recording(_OptsJson) -> erlang:nif_error(not_loaded).
 audio_stop_recording() -> erlang:nif_error(not_loaded).

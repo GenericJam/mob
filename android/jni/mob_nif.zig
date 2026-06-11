@@ -26,7 +26,7 @@
 //!   * iter 3d (this iter): the finale. Remaining feature NIFs (color
 //!     scheme, exit_app, safe_area, haptic, clipboard, open_url,
 //!     share_text, launch notification, request_permission,
-//!     biometric, camera ×4, photos_pick, files_pick,
+//!     files_pick,
 //!     audio ×5, motion ×2, scanner, notifications ×3, storage ×4,
 //!     alert/action_sheet/toast, webview ×4, background ×2,
 //!     Mob.Device ×7), the bridge bootstrap helpers
@@ -244,7 +244,6 @@ pub const BridgeMethods = extern struct {
     share_text: jni.JMethodID = null,
     open_url: jni.JMethodID = null,
     request_permission: jni.JMethodID = null,
-    biometric_authenticate: jni.JMethodID = null,
     alert_show: jni.JMethodID = null,
     action_sheet_show: jni.JMethodID = null,
     toast_show: jni.JMethodID = null,
@@ -252,7 +251,6 @@ pub const BridgeMethods = extern struct {
     webview_post_message: jni.JMethodID = null,
     webview_can_go_back: jni.JMethodID = null,
     webview_go_back: jni.JMethodID = null,
-    photos_pick: jni.JMethodID = null,
     files_pick: jni.JMethodID = null,
     audio_start_recording: jni.JMethodID = null,
     audio_stop_recording: jni.JMethodID = null,
@@ -2528,43 +2526,6 @@ export fn nif_request_permission(
     return callBridgePidStr(env, Bridge.request_permission, pid, jni.asCStr(&cap_buf));
 }
 
-export fn nif_biometric_authenticate(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
-    var reason: [256]u8 = @splat(0);
-    if (bin.size + 1 <= reason.len) {
-        @memcpy(reason[0..bin.size], bin.data[0..bin.size]);
-        reason[bin.size] = 0;
-    } else {
-        // Truncate. Matches the C original's defensive truncate-or-default.
-        @memcpy(reason[0 .. reason.len - 1], bin.data[0 .. reason.len - 1]);
-        reason[reason.len - 1] = 0;
-    }
-    var pid: erts.ErlNifPid = undefined;
-    _ = erts.enif_self(env, &pid);
-    return callBridgePidStr(env, Bridge.biometric_authenticate, pid, jni.asCStr(&reason));
-}
-
-
-export fn nif_photos_pick(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    var max: c_int = 1;
-    _ = erts.enif_get_int(env, argv[0], &max);
-    var pid: erts.ErlNifPid = undefined;
-    _ = erts.enif_self(env, &pid);
-    var max_buf: [16]u8 = @splat(0);
-    _ = std.fmt.bufPrint(&max_buf, "{d}", .{max}) catch {};
-    return callBridgePidStr(env, Bridge.photos_pick, pid, jni.asCStr(&max_buf));
-}
-
 export fn nif_files_pick(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -3401,8 +3362,6 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     // Async device-capability methods. Most take (J, String) where J is
     // the pid as a long.
     if (!cacheRequired(jenv, "request_permission", "(JLjava/lang/String;)V", &Bridge.request_permission)) return -1;
-    if (!cacheRequired(jenv, "biometric_authenticate", "(JLjava/lang/String;)V", &Bridge.biometric_authenticate)) return -1;
-    if (!cacheRequired(jenv, "photos_pick", "(JLjava/lang/String;)V", &Bridge.photos_pick)) return -1;
     if (!cacheRequired(jenv, "files_pick", "(JLjava/lang/String;)V", &Bridge.files_pick)) return -1;
     if (!cacheRequired(jenv, "audio_start_recording", "(JLjava/lang/String;)V", &Bridge.audio_start_recording)) return -1;
     if (!cacheRequired(jenv, "audio_stop_recording", "()V", &Bridge.audio_stop_recording)) return -1;
@@ -3530,8 +3489,6 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "share_text", .arity = 1, .fptr = nif_share_text, .flags = 0 },
     .{ .name = "open_url", .arity = 1, .fptr = nif_open_url, .flags = 0 },
     .{ .name = "request_permission", .arity = 1, .fptr = nif_request_permission, .flags = 0 },
-    .{ .name = "biometric_authenticate", .arity = 1, .fptr = nif_biometric_authenticate, .flags = 0 },
-    .{ .name = "photos_pick", .arity = 2, .fptr = nif_photos_pick, .flags = 0 },
     .{ .name = "files_pick", .arity = 1, .fptr = nif_files_pick, .flags = 0 },
     .{ .name = "audio_start_recording", .arity = 1, .fptr = nif_audio_start_recording, .flags = 0 },
     .{ .name = "audio_stop_recording", .arity = 0, .fptr = nif_audio_stop_recording, .flags = 0 },
