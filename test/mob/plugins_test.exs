@@ -118,9 +118,24 @@ defmodule Mob.PluginsTest do
   end
 
   describe "resolve_image/1" do
-    test "maps a plugin:// reference to its bundle path" do
+    setup do
+      on_exit(fn -> Mob.Plugins.install_asset_root("") end)
+    end
+
+    test "maps a plugin:// reference to an absolute path under the cached asset root" do
+      Mob.Plugins.install_asset_root("/bundle/priv/generated/plugin_assets")
+
       assert Mob.Plugins.resolve_image("plugin://kv/icon.png") ==
-               {:ok, "assets/plugin/kv/icon.png"}
+               {:ok, "/bundle/priv/generated/plugin_assets/assets/plugin/kv/icon.png"}
+    end
+
+    test "errors (never a relative path) when the asset root has not been cached" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert Mob.Plugins.resolve_image("plugin://kv/icon.png") == :error
+        end)
+
+      assert log =~ "asset root"
     end
 
     test "passes through a non-plugin URL" do
@@ -129,6 +144,7 @@ defmodule Mob.PluginsTest do
     end
 
     test "errors on a malformed plugin:// reference" do
+      Mob.Plugins.install_asset_root("/bundle")
       assert Mob.Plugins.resolve_image("plugin://kv") == :error
       assert Mob.Plugins.resolve_image("plugin:///icon.png") == :error
     end
