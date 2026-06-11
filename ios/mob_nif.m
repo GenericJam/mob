@@ -33,9 +33,7 @@ extern char *dlerror(void) __attribute__((weak));
 #import <AVFoundation/AVFoundation.h>
 #import <Accelerate/Accelerate.h>
 #import <CoreMotion/CoreMotion.h>
-#import <LocalAuthentication/LocalAuthentication.h>
 #import <Photos/Photos.h>
-#import <PhotosUI/PhotosUI.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <UserNotifications/UserNotifications.h>
 #include <string.h>
@@ -2357,11 +2355,11 @@ static ERL_NIF_TERM nif_request_permission(ErlNifEnv *env, int argc, const ERL_N
     if (strcmp(cap, "microphone") == 0) {
         // :microphone stays in core (audio recording needs it). :camera moved to
         // the mob_camera plugin — it falls through to mob_dispatch_plugin_permission.
-        [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio
-                                 completionHandler:^(BOOL granted) {
-                                   mob_send3(&pid, "permission", "microphone",
-                                             granted ? "granted" : "denied");
-                                 }];
+        [AVCaptureDevice
+            requestAccessForMediaType:AVMediaTypeAudio
+                    completionHandler:^(BOOL granted) {
+                      mob_send3(&pid, "permission", "microphone", granted ? "granted" : "denied");
+                    }];
     } else if (strcmp(cap, "photo_library") == 0) {
         [PHPhotoLibrary
             requestAuthorizationForAccessLevel:PHAccessLevelReadWrite
@@ -2386,131 +2384,6 @@ static ERL_NIF_TERM nif_request_permission(ErlNifEnv *env, int argc, const ERL_N
         if (!mob_dispatch_plugin_permission(cap, pid))
             return enif_make_badarg(env);
     }
-    return enif_make_atom(env, "ok");
-}
-
-// ── Biometric authentication ──────────────────────────────────────────────
-
-static ERL_NIF_TERM nif_biometric_authenticate(ErlNifEnv *env, int argc,
-                                               const ERL_NIF_TERM argv[]) {
-    ErlNifBinary bin;
-    if (!enif_inspect_binary(env, argv[0], &bin) &&
-        !enif_inspect_iolist_as_binary(env, argv[0], &bin))
-        return enif_make_badarg(env);
-    NSString *reason = [[NSString alloc] initWithBytes:bin.data
-                                                length:bin.size
-                                              encoding:NSUTF8StringEncoding];
-    ErlNifPid pid;
-    enif_self(env, &pid);
-
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-      LAContext *ctx = [[LAContext alloc] init];
-      NSError *err = nil;
-      if ([ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:&err]) {
-          [ctx evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics
-              localizedReason:reason
-                        reply:^(BOOL ok, NSError *e) {
-                          mob_send2(&pid, "biometric", ok ? "success" : "failure");
-                        }];
-      } else {
-          mob_send2(&pid, "biometric", "not_available");
-      }
-    });
-    return enif_make_atom(env, "ok");
-}
-
-
-// ── Photo library picker ──────────────────────────────────────────────────
-
-@interface MobPhotosDelegate : NSObject <PHPickerViewControllerDelegate>
-@property(nonatomic) ErlNifPid pid;
-@property(nonatomic) int maxItems;
-@end
-
-static MobPhotosDelegate *g_photos_delegate = nil;
-
-@implementation MobPhotosDelegate
-- (void)picker:(PHPickerViewController *)picker
-    didFinishPicking:(NSArray<PHPickerResult *> *)results {
-    [picker dismissViewControllerAnimated:YES completion:nil];
-    if (results.count == 0) {
-        mob_send2(&_pid, "photos", "cancelled");
-        g_photos_delegate = nil;
-        return;
-    }
-    ErlNifPid p = self.pid;
-    g_photos_delegate = nil;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-      dispatch_group_t grp = dispatch_group_create();
-      NSMutableArray *items = [NSMutableArray array];
-      for (PHPickerResult *result in results) {
-          dispatch_group_enter(grp);
-          BOOL isVideo = [result.itemProvider hasItemConformingToTypeIdentifier:@"public.movie"];
-          NSString *typeId = isVideo ? @"public.movie" : @"public.image";
-          [result.itemProvider
-              loadFileRepresentationForTypeIdentifier:typeId
-                                    completionHandler:^(NSURL *url, NSError *err) {
-                                      if (url) {
-                                          NSString *ext = isVideo ? @"mp4" : @"jpg";
-                                          NSString *tmp = [NSTemporaryDirectory()
-                                              stringByAppendingPathComponent:
-                                                  [NSString
-                                                      stringWithFormat:@"mob_pick_%@.%@",
-                                                                       [NSUUID UUID].UUIDString,
-                                                                       ext]];
-                                          [[NSFileManager defaultManager]
-                                              copyItemAtURL:url
-                                                      toURL:[NSURL fileURLWithPath:tmp]
-                                                      error:nil];
-                                          @synchronized(items) {
-                                              [items addObject:@{
-                                                  @"path" : tmp,
-                                                  @"type" : isVideo ? @"video" : @"image"
-                                              }];
-                                          }
-                                      }
-                                      dispatch_group_leave(grp);
-                                    }];
-      }
-      dispatch_group_notify(grp, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        ErlNifEnv *e = enif_alloc_env();
-        ERL_NIF_TERM list = enif_make_list(e, 0);
-        for (NSDictionary *item in items.reverseObjectEnumerator) {
-            const char *path = [item[@"path"] UTF8String];
-            const char *type = [item[@"type"] UTF8String];
-            ErlNifBinary pbin;
-            enif_alloc_binary(strlen(path), &pbin);
-            memcpy(pbin.data, path, strlen(path));
-            ERL_NIF_TERM keys[2] = {enif_make_atom(e, "path"), enif_make_atom(e, "type")};
-            ERL_NIF_TERM vals[2] = {enif_make_binary(e, &pbin), enif_make_atom(e, type)};
-            ERL_NIF_TERM map;
-            enif_make_map_from_arrays(e, keys, vals, 2, &map);
-            list = enif_make_list_cell(e, map, list);
-        }
-        ERL_NIF_TERM msg =
-            enif_make_tuple3(e, enif_make_atom(e, "photos"), enif_make_atom(e, "picked"), list);
-        enif_send(NULL, &p, e, msg);
-        enif_free_env(e);
-      });
-    });
-}
-@end
-
-static ERL_NIF_TERM nif_photos_pick(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    int max = 1;
-    enif_get_int(env, argv[0], &max);
-    ErlNifPid pid;
-    enif_self(env, &pid);
-    dispatch_async(dispatch_get_main_queue(), ^{
-      PHPickerConfiguration *cfg = [[PHPickerConfiguration alloc] init];
-      cfg.selectionLimit = max;
-      PHPickerViewController *vc = [[PHPickerViewController alloc] initWithConfiguration:cfg];
-      g_photos_delegate = [[MobPhotosDelegate alloc] init];
-      g_photos_delegate.pid = pid;
-      g_photos_delegate.maxItems = max;
-      vc.delegate = g_photos_delegate;
-      [mob_root_vc() presentViewController:vc animated:YES completion:nil];
-    });
     return enif_make_atom(env, "ok");
 }
 
@@ -6194,8 +6067,6 @@ static ErlNifFunc nif_funcs[] = {
     {"share_text", 1, nif_share_text, 0},
     {"open_url", 1, nif_open_url, 0},
     {"request_permission", 1, nif_request_permission, 0},
-    {"biometric_authenticate", 1, nif_biometric_authenticate, 0},
-    {"photos_pick", 2, nif_photos_pick, 0},
     {"files_pick", 1, nif_files_pick, 0},
     {"audio_start_recording", 1, nif_audio_start_recording, 0},
     {"audio_stop_recording", 0, nif_audio_stop_recording, 0},
