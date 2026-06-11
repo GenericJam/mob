@@ -5585,6 +5585,15 @@ void mob_deliver_webview_blocked(const char *url_utf8) {
 
 WKWebView *g_webview = nil;
 
+// Camera preview session — OWNED by the mob_camera plugin (its NIF supplies the
+// strong definition and drives start/stop_preview). Defined weak here so core
+// still links when mob_camera isn't activated: the symbol resolves to nil and the
+// preview shows black. The weak *declaration* in MobNode.h is not enough on its
+// own — swiftc compiles MobRootView's reference into a *strong* undefined symbol
+// (the weak attribute doesn't cross the C→Swift interop boundary), so a definition
+// must exist in core. The plugin's non-weak definition overrides this one when linked.
+AVCaptureSession *g_preview_session __attribute__((weak)) = nil;
+
 // ── Alert delivery (called from UIAlertAction blocks) ────────────────────────
 
 static void mob_deliver_alert_action(const char *action) {
