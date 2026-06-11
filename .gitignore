@@ -30,4 +30,4 @@ ios/*.o
 user_issues.md
 /docs
 
-*.DS_Store*
+*.DS_Store*.playwright-mcp/
