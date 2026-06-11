@@ -261,9 +261,6 @@ pub const BridgeMethods = extern struct {
     motion_start: jni.JMethodID = null,
     motion_stop: jni.JMethodID = null,
     scanner_scan: jni.JMethodID = null,
-    notify_schedule: jni.JMethodID = null,
-    notify_cancel: jni.JMethodID = null,
-    notify_register_push: jni.JMethodID = null,
     take_launch_notification: jni.JMethodID = null,
     storage_dir: jni.JMethodID = null,
     storage_save_to_media_store: jni.JMethodID = null,
@@ -2685,54 +2682,6 @@ export fn nif_scanner_scan(
     return callBridgePidStr(env, Bridge.scanner_scan, pid, json);
 }
 
-export fn nif_notify_schedule(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
-    const json = binToCString(bin) orelse return erts.atom(env, "error");
-    defer freeCString(json);
-    var pid: erts.ErlNifPid = undefined;
-    _ = erts.enif_self(env, &pid);
-    return callBridgePidStr(env, Bridge.notify_schedule, pid, json);
-}
-
-export fn nif_notify_cancel(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
-    var nid: [256]u8 = @splat(0);
-    const copy = @min(bin.size, nid.len - 1);
-    @memcpy(nid[0..copy], bin.data[0..copy]);
-    nid[copy] = 0;
-    var attached: c_int = 0;
-    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
-    const js = jni.newStringUTF(jenv, jni.asCStr(&nid));
-    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.notify_cancel, js);
-    jni.deleteLocalRef(jenv, js);
-    detachIfAttached(attached);
-    return erts.ok(env);
-}
-
-export fn nif_notify_register_push(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    _ = argv;
-    var pid: erts.ErlNifPid = undefined;
-    _ = erts.enif_self(env, &pid);
-    return callBridgePidStr(env, Bridge.notify_register_push, pid, null);
-}
-
-// ── Storage ──────────────────────────────────────────────────────────────
-
 export fn nif_storage_dir(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -3382,9 +3331,6 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     if (!cacheRequired(jenv, "motion_start", "(JLjava/lang/String;)V", &Bridge.motion_start)) return -1;
     if (!cacheRequired(jenv, "motion_stop", "()V", &Bridge.motion_stop)) return -1;
     if (!cacheRequired(jenv, "scanner_scan", "(JLjava/lang/String;)V", &Bridge.scanner_scan)) return -1;
-    if (!cacheRequired(jenv, "notify_schedule", "(JLjava/lang/String;)V", &Bridge.notify_schedule)) return -1;
-    if (!cacheRequired(jenv, "notify_cancel", "(Ljava/lang/String;)V", &Bridge.notify_cancel)) return -1;
-    if (!cacheRequired(jenv, "notify_register_push", "(JLjava/lang/String;)V", &Bridge.notify_register_push)) return -1;
     if (!cacheRequired(jenv, "background_keep_alive", "()V", &Bridge.background_keep_alive)) return -1;
     if (!cacheRequired(jenv, "background_stop", "()V", &Bridge.background_stop)) return -1;
 
@@ -3499,9 +3445,6 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "motion_start", .arity = 2, .fptr = nif_motion_start, .flags = 0 },
     .{ .name = "motion_stop", .arity = 0, .fptr = nif_motion_stop, .flags = 0 },
     .{ .name = "scanner_scan", .arity = 1, .fptr = nif_scanner_scan, .flags = 0 },
-    .{ .name = "notify_schedule", .arity = 1, .fptr = nif_notify_schedule, .flags = 0 },
-    .{ .name = "notify_cancel", .arity = 1, .fptr = nif_notify_cancel, .flags = 0 },
-    .{ .name = "notify_register_push", .arity = 0, .fptr = nif_notify_register_push, .flags = 0 },
     .{ .name = "take_launch_notification", .arity = 0, .fptr = nif_take_launch_notification, .flags = 0 },
     .{ .name = "take_opened_document", .arity = 0, .fptr = nif_take_opened_document, .flags = 0 },
     .{ .name = "storage_dir", .arity = 1, .fptr = nif_storage_dir, .flags = 0 },
