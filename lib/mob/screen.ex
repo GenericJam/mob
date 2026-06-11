@@ -521,14 +521,14 @@ defmodule Mob.Screen do
         {module, socket, nav_history, :none}
 
       {:push, dest, params} ->
-        new_module = resolve_module(dest)
+        {new_module, route_params} = resolve_destination(dest)
         platform = socket.__mob__.platform
 
         new_base =
           Mob.Socket.new(new_module, platform: platform)
           |> Mob.Socket.assign(:safe_area, socket.assigns.safe_area)
 
-        {:ok, mounted} = new_module.mount(params, %{}, new_base)
+        {:ok, mounted} = new_module.mount(Map.merge(route_params, params), %{}, new_base)
         saved = {module, clear_nav_action(socket)}
         {new_module, mounted, [saved | nav_history], :push}
 
@@ -562,14 +562,14 @@ defmodule Mob.Screen do
         end
 
       {:reset, dest, params} ->
-        new_module = resolve_module(dest)
+        {new_module, route_params} = resolve_destination(dest)
         platform = socket.__mob__.platform
 
         new_base =
           Mob.Socket.new(new_module, platform: platform)
           |> Mob.Socket.assign(:safe_area, socket.assigns.safe_area)
 
-        {:ok, mounted} = new_module.mount(params, %{}, new_base)
+        {:ok, mounted} = new_module.mount(Map.merge(route_params, params), %{}, new_base)
         {new_module, mounted, [], :reset}
 
       {:switch_tab, _tab} ->
@@ -579,16 +579,25 @@ defmodule Mob.Screen do
   end
 
   defp resolve_module(dest) when is_atom(dest) do
+    {module, _route_params} = resolve_destination(dest)
+    module
+  end
+
+  # Resolves a navigation destination to {module, route_params}. A loaded
+  # module navigates directly (no route-bound params); a registered route atom
+  # may carry params (Mob.Nav.Registry.register/3 — the data-driven-plugin
+  # pattern), merged UNDER the caller's push params at the mount call site.
+  defp resolve_destination(dest) when is_atom(dest) do
     case Code.ensure_loaded(dest) do
       {:module, ^dest} ->
         # dest is a loaded module — use it directly
-        dest
+        {dest, %{}}
 
       _ ->
         # dest is a registered screen name atom — look up in registry
-        case Mob.Nav.Registry.lookup(dest) do
-          {:ok, module} ->
-            module
+        case Mob.Nav.Registry.lookup_route(dest) do
+          {:ok, module, route_params} ->
+            {module, route_params}
 
           {:error, :not_found} ->
             raise ArgumentError,
