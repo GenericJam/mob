@@ -32,20 +32,43 @@ defmodule Mob.Nav.Registry do
   """
   @spec lookup(atom()) :: {:ok, module()} | {:error, :not_found}
   def lookup(name) when is_atom(name) do
+    case lookup_route(name) do
+      {:ok, module, _params} -> {:ok, module}
+      {:error, :not_found} -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Look up the module AND route-bound params registered under `name`.
+
+  Route-bound params let N routes share one parameterized screen module (the
+  data-driven-plugin pattern — e.g. mob_ash registers `/ash/post/list` as
+  `{MobAsh.ListScreen, %{resource: MyApp.Post}}`). Navigation merges them
+  UNDER the caller's `push_screen` params, then passes the result to `mount/3`.
+  """
+  @spec lookup_route(atom()) :: {:ok, module(), map()} | {:error, :not_found}
+  def lookup_route(name) when is_atom(name) do
     case :ets.lookup(@table, name) do
-      [{^name, module}] -> {:ok, module}
+      [{^name, module, params}] -> {:ok, module, params}
+      # Entries written by pre-params code paths (or hot-loaded old beams).
+      [{^name, module}] -> {:ok, module, %{}}
       [] -> {:error, :not_found}
     end
   end
 
   @doc """
-  Register a `name → module` mapping at runtime.
+  Register a `name → module` mapping at runtime, optionally with route-bound
+  `params` delivered to the screen's `mount/3` whenever this route is the
+  navigation destination (see `lookup_route/1`).
 
   Overwrites any existing entry for `name`.
   """
-  @spec register(atom(), module()) :: :ok
-  def register(name, module) when is_atom(name) and is_atom(module) do
-    :ets.insert(@table, {name, module})
+  @spec register(atom(), module(), map()) :: :ok
+  def register(name, module, params \\ %{})
+
+  def register(name, module, params)
+      when is_atom(name) and is_atom(module) and is_map(params) do
+    :ets.insert(@table, {name, module, params})
     :ok
   end
 
@@ -68,7 +91,7 @@ defmodule Mob.Nav.Registry do
   end
 
   defp register_nav(%{type: :stack, name: name, root: root}) do
-    :ets.insert(@table, {name, root})
+    :ets.insert(@table, {name, root, %{}})
   end
 
   defp register_nav(%{type: type, branches: branches})
