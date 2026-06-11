@@ -3108,87 +3108,20 @@ static ERL_NIF_TERM nif_scanner_scan(ErlNifEnv *env, int argc, const ERL_NIF_TER
 }
 @end
 
-static ERL_NIF_TERM nif_notify_schedule(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    ErlNifBinary bin;
-    if (!enif_inspect_binary(env, argv[0], &bin) &&
-        !enif_inspect_iolist_as_binary(env, argv[0], &bin))
-        return enif_make_badarg(env);
-    ErlNifPid pid;
-    enif_self(env, &pid);
-
-    // Copy JSON to heap-allocated buffer for use in async block
-    char *json = (char *)malloc(bin.size + 1);
-    memcpy(json, bin.data, bin.size);
-    json[bin.size] = 0;
-
-    dispatch_async(dispatch_get_main_queue(), ^{
-      // Set delegate once
-      if (!g_notif_delegate) {
-          g_notif_delegate = [[MobNotificationDelegate alloc] init];
-          g_notif_delegate.screenPid = pid;
-          [UNUserNotificationCenter currentNotificationCenter].delegate = g_notif_delegate;
-      }
-      g_notif_delegate.screenPid = pid;
-
-      NSData *data = [NSData dataWithBytes:json length:strlen(json)];
-      free(json);
-      NSDictionary *opts = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-      if (!opts)
-          return;
-
-      UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
-      content.title = opts[@"title"] ?: @"";
-      content.body = opts[@"body"] ?: @"";
-      NSDictionary *dataMap = opts[@"data"];
-      if ([dataMap isKindOfClass:[NSDictionary class]])
-          content.userInfo = dataMap;
-      content.sound = [UNNotificationSound defaultSound];
-
-      NSTimeInterval delay =
-          [opts[@"trigger_at"] doubleValue] - [[NSDate date] timeIntervalSince1970];
-      if (delay < 1)
-          delay = 1;
-      UNTimeIntervalNotificationTrigger *trigger =
-          [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:delay repeats:NO];
-      NSString *nid = opts[@"id"] ?: [[NSUUID UUID] UUIDString];
-      UNNotificationRequest *req = [UNNotificationRequest requestWithIdentifier:nid
-                                                                        content:content
-                                                                        trigger:trigger];
-      [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:req
-                                                             withCompletionHandler:nil];
-    });
-    return enif_make_atom(env, "ok");
-}
-
-static ERL_NIF_TERM nif_notify_cancel(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    ErlNifBinary bin;
-    if (!enif_inspect_binary(env, argv[0], &bin) &&
-        !enif_inspect_iolist_as_binary(env, argv[0], &bin))
-        return enif_make_badarg(env);
-    NSString *nid = [[NSString alloc] initWithBytes:bin.data
-                                             length:bin.size
-                                           encoding:NSUTF8StringEncoding];
-    dispatch_async(dispatch_get_main_queue(), ^{
-      [[UNUserNotificationCenter currentNotificationCenter]
-          removePendingNotificationRequestsWithIdentifiers:@[ nid ]];
-    });
-    return enif_make_atom(env, "ok");
-}
-
-static ERL_NIF_TERM nif_notify_register_push(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    ErlNifPid pid;
-    enif_self(env, &pid);
+// Plugin seam (mob_notify): ensure the core-owned notification-center
+// delegate exists and point deliveries (foreground present + tap) at pid.
+// The scheduling/cancel/register NIFs moved to the mob_notify plugin; the
+// DELEGATE, mob_send_push_token (host AppDelegate) and the launch-
+// notification handoff stay here. Counterpart of the generated Android
+// io.mob.plugin.MobNotifyHub.
+void mob_notify_set_screen_pid(ErlNifPid pid) {
     dispatch_async(dispatch_get_main_queue(), ^{
       if (!g_notif_delegate) {
           g_notif_delegate = [[MobNotificationDelegate alloc] init];
           [UNUserNotificationCenter currentNotificationCenter].delegate = g_notif_delegate;
       }
       g_notif_delegate.screenPid = pid;
-      [[UIApplication sharedApplication] registerForRemoteNotifications];
-      // Token is delivered via AppDelegate didRegisterForRemoteNotificationsWithDeviceToken.
-      // Add a call to mob_send_push_token(token) there — see README for setup.
     });
-    return enif_make_atom(env, "ok");
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -6079,9 +6012,6 @@ static ErlNifFunc nif_funcs[] = {
     {"motion_start", 2, nif_motion_start, 0},
     {"motion_stop", 0, nif_motion_stop, 0},
     {"scanner_scan", 1, nif_scanner_scan, 0},
-    {"notify_schedule", 1, nif_notify_schedule, 0},
-    {"notify_cancel", 1, nif_notify_cancel, 0},
-    {"notify_register_push", 0, nif_notify_register_push, 0},
     {"take_launch_notification", 0, nif_take_launch_notification, 0},
     {"take_opened_document", 0, nif_take_opened_document, 0},
     {"storage_dir", 1, nif_storage_dir, 0},
