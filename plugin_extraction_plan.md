@@ -308,13 +308,21 @@ core.
 Once Phase 1 + Phase 2's manifest signing is in place, migrate
 existing modules out of core. Each extraction:
 
-1. Creates a new Hex package mirroring the existing module's API.
-2. Includes the in-tree tests (moved over) plus a contract test
-   showing parity with the previous core behavior.
-3. Leaves a deprecation stub in core for one minor version, then
-   removes.
-4. Updates `mob_new`'s generated project to depend on the plugin
-   when the user opts in via the wizard.
+1. Creates a new package repo mirroring the existing module's API
+   (path-dep on mob while dogfooding; Hex constraint at publish).
+2. Ships a test suite: manifest validates via the real mob_dev
+   Validator, NIF-stub arity agreement, API parity with the old
+   core surface (the mob_camera suite is the template).
+3. **Strips core with NO deprecation shim** — policy decided during
+   Waves 1-2 (location, camera): nothing else consumes these core
+   modules yet, master is integration not release, and the whole
+   strip lands behind one breaking major-semver Hex release. The
+   original one-minor-shim plan is superseded.
+4. Updates `mob_new`'s generated project templates (perms/plist/
+   Kotlin strips) and, where applicable, the wizard opt-in.
+5. Declares any AndroidManifest fragments the plugin system can't
+   contribute in the manifest's `host_requirements` key (printed by
+   every native build).
 
 Each wave produces multiple plugins. Run in parallel within a wave.
 
@@ -322,7 +330,7 @@ Each wave produces multiple plugins. Run in parallel within a wave.
 
 Just one plugin, the heaviest non-essential dep:
 
-- [~] `mob_bluetooth` ← extracts `lib/mob/bt.ex` + `lib/mob/bt/{hfp,hid,spp}.ex` (548 LoC + native)
+- [x] `mob_bluetooth` ← extracts `lib/mob/bt.ex` + `lib/mob/bt/{hfp,hid,spp}.ex` (548 LoC + native)
   - Already documented as the canonical tier-1 example in `MOB_PLUGINS.md`.
   - Permissions: `BLUETOOTH_CONNECT`, `BLUETOOTH_SCAN`, `NSBluetoothAlwaysUsageDescription`.
   - **In progress (2026-05-28).** Session A (Elixir only, NIF stayed in core) shipped. The
@@ -345,11 +353,25 @@ Just one plugin, the heaviest non-essential dep:
 Each needs `Mob.Permissions` integration. Demonstrates the
 permission opt-in story.
 
-- [ ] `mob_camera` ← `lib/mob/camera.ex` (165 LoC + heavy iOS/Android)
-- [ ] `mob_location` ← `lib/mob/location.ex` (65 LoC + native)
-- [ ] `mob_notify` ← `lib/mob/notify.ex` (107 LoC + APNs/FCM routing)
-- [ ] `mob_photos` ← `lib/mob/photos.ex` (33 LoC + native)
-- [ ] `mob_biometric` ← `lib/mob/biometric.ex` (28 LoC + native)
+- [x] `mob_camera` ← `lib/mob/camera.ex` (165 LoC + heavy iOS/Android).
+  **Merged to master 2026-06-11.** Capture + frame-stream + `:camera`
+  permission moved; the `camera_preview` VIEW stays in core (weak-extern
+  `g_preview_session`) until the plugin native-view-bound-to-state
+  capability lands. `:microphone` stays in core for audio. FileProvider
+  declared via `host_requirements`.
+- [x] `mob_location` ← `lib/mob/location.ex` (65 LoC + native).
+  **Merged 2026-06-06.** The Wave-2 pattern-setter: drove the extensible
+  permission registry + per-platform NIF tagging + ObjC plugin-NIF path.
+- [ ] `mob_notify` ← `lib/mob/notify.ex` (107 LoC + native). Greenlit
+  2026-06-11. Scheduling + push REGISTRATION move; the `{:notification,
+  ...}` delivery plumbing stays in core (shared with the tier-4 plugin
+  dispatcher). Companion to the published server-side `mob_push` package —
+  deliberately a SEPARATE package (different runtime, zero shared deps);
+  the wire contract (payload shape, `{:push_token, platform, token}`)
+  gets vendored contract-test fixtures in BOTH repos. The FCM
+  `.MobFirebaseService` host `<service>` is a `host_requirements` entry.
+- [ ] `mob_photos` ← `lib/mob/photos.ex` (33 LoC + native). Greenlit 2026-06-11.
+- [ ] `mob_biometric` ← `lib/mob/biometric.ex` (28 LoC + native). Greenlit 2026-06-11.
 
 ### Wave 3 — specialty
 
@@ -576,7 +598,21 @@ order once Phase 0 lands.
 
 ## Status
 
-Phase 0: in design.
-Phase 1: not started.
-Phase 2 (design): captured in `MOB_PLUGIN_SECURITY.md`; implementation pending.
-Phase 3: blocked on Phase 1 + Phase 2's manifest signing.
+(2026-06-11)
+
+Phase 0: DONE.
+Phase 1: DONE — all five tiers built, device-verified (iPhone + Moto G),
+  prototypes live in `mob_plugin_demo/plugins/`; tiers 0-4 + custom fonts
+  merged to all masters 2026-06-06.
+Phase 2: DONE — signing/trust/acknowledge shipped; cross-plugin conflict
+  detection (registry + completeness meta-test + property fuzzer);
+  `mix mob.plugins` / `mix mob.validate_plugin` live.
+Phase 3: IN PROGRESS.
+  Wave 1 (mob_bluetooth): DONE, all masters 2026-06-01.
+  Wave 2: camera + location DONE (see wave notes); notify/photos/biometric
+    greenlit 2026-06-11, in flight.
+  Waves 3-6: not started. Note `mob_scanner` (Wave 3) is unblocked now
+    that `mob_camera` is merged.
+Publish gate: NOTHING on Hex yet — the core strips are breaking, so the
+  whole arc ships behind a major-semver release (see RELEASE.md + the
+  per-repo release.yml pipelines).
