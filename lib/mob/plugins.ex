@@ -8,7 +8,7 @@ defmodule Mob.Plugins do
   the host's `priv/generated/mob_plugins.exs` at build time (see
   `mix mob.regen_plugin_manifest`); this module reads it once at boot and feeds
   the data to the core wiring (`Mob.App` registers the screens, the lifecycle
-  dispatcher calls the hooks, `Mob.Notify` consults the handlers, and the
+  dispatcher calls the hooks, the notification dispatch consults the handlers, and the
   settings store namespaces by plugin).
 
   When no tier-3/4 plugin is active (or the manifest hasn't been regenerated) the
