@@ -22,13 +22,6 @@
     request_permission/1,
     %% Biometric
     biometric_authenticate/1,
-    %% Camera
-    camera_capture_photo/1,
-    camera_capture_video/1,
-    camera_start_preview/1,
-    camera_stop_preview/0,
-    camera_start_frame_stream/1,
-    camera_stop_frame_stream/0,
     %% Photo library
     photos_pick/2,
     %% File picker
@@ -155,12 +148,6 @@
     open_url/1,
     request_permission/1,
     biometric_authenticate/1,
-    camera_capture_photo/1,
-    camera_capture_video/1,
-    camera_start_preview/1,
-    camera_stop_preview/0,
-    camera_start_frame_stream/1,
-    camera_stop_frame_stream/0,
     photos_pick/2,
     files_pick/1,
     audio_start_recording/1,
@@ -284,12 +271,6 @@ share_text(_Text) -> erlang:nif_error(not_loaded).
 open_url(_Url) -> erlang:nif_error(not_loaded).
 request_permission(_Cap) -> erlang:nif_error(not_loaded).
 biometric_authenticate(_Reason) -> erlang:nif_error(not_loaded).
-camera_capture_photo(_Quality) -> erlang:nif_error(not_loaded).
-camera_capture_video(_MaxDuration) -> erlang:nif_error(not_loaded).
-camera_start_preview(_OptsJson) -> erlang:nif_error(not_loaded).
-camera_stop_preview() -> erlang:nif_error(not_loaded).
-camera_start_frame_stream(_OptsJson) -> erlang:nif_error(not_loaded).
-camera_stop_frame_stream() -> erlang:nif_error(not_loaded).
 photos_pick(_Max, _Types) -> erlang:nif_error(not_loaded).
 files_pick(_MimeTypes) -> erlang:nif_error(not_loaded).
 audio_start_recording(_OptsJson) -> erlang:nif_error(not_loaded).
