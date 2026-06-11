@@ -2,6 +2,10 @@
   configs: [
     %{
       name: "default",
+      # ex_slop is a credo PLUGIN (registers its whole check bundle), not a
+      # check — listing it under checks.enabled was silently ignored
+      # ("Ignoring an undefined check: ExSlop").
+      plugins: [{ExSlop, []}],
       files: %{
         included: ["lib/", "test/"],
         excluded: [~r"/_build/", ~r"/deps/"]
@@ -11,8 +15,6 @@
         enabled: [
           {Credo.Check.Readability.Specs, files: %{excluded: ["test/"]}},
           {Credo.Check.Refactor.UnlessWithElse, []},
-          # ex_slop — runs the recommended bundle of AI-slop checks.
-          {ExSlop, []},
           # jump_credo_checks
           {Jump.CredoChecks.AvoidFunctionLevelElse, []},
           {Jump.CredoChecks.AvoidLoggerConfigureInTest, []},
