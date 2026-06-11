@@ -362,7 +362,9 @@ permission opt-in story.
 - [x] `mob_location` ← `lib/mob/location.ex` (65 LoC + native).
   **Merged 2026-06-06.** The Wave-2 pattern-setter: drove the extensible
   permission registry + per-platform NIF tagging + ObjC plugin-NIF path.
-- [ ] `mob_notify` ← `lib/mob/notify.ex` (107 LoC + native). Greenlit
+- [~] `mob_notify` ← `lib/mob/notify.ex` (107 LoC + native). Stage 1a shipped
+  2026-06-11 (repo + API parity + manifest + mob_push contract fixtures both
+  sides + 16 tests); native move staged in its EXTRACTION.md. Greenlit
   2026-06-11. Scheduling + push REGISTRATION move; the `{:notification,
   ...}` delivery plumbing stays in core (shared with the tier-4 plugin
   dispatcher). Companion to the published server-side `mob_push` package —
@@ -370,8 +372,16 @@ permission opt-in story.
   the wire contract (payload shape, `{:push_token, platform, token}`)
   gets vendored contract-test fixtures in BOTH repos. The FCM
   `.MobFirebaseService` host `<service>` is a `host_requirements` entry.
-- [ ] `mob_photos` ← `lib/mob/photos.ex` (33 LoC + native). Greenlit 2026-06-11.
-- [ ] `mob_biometric` ← `lib/mob/biometric.ex` (28 LoC + native). Greenlit 2026-06-11.
+- [~] `mob_photos` ← `lib/mob/photos.ex` (33 LoC + native). Extracted 2026-06-11
+  (all 4 layers + 13 tests; core + template strips merged; Android picker now
+  honors `max:` via ActivityResultRegistry). DEVICE VERIFY PENDING — first
+  native compile of the new repos hasn't run.
+- [~] `mob_biometric` ← `lib/mob/biometric.ex` (28 LoC + native). Extracted
+  2026-06-11 (all 4 layers + 12 tests; strips merged). DEVICE VERIFY PENDING.
+  Extraction surfaced two latent core gaps, documented in the repo: Android
+  biometric was degraded (FragmentActivity cast nulls on the ComponentActivity
+  host → always :not_available) and NSFaceIDUsageDescription was missing from
+  templates (now in the plugin manifest).
 
 ### Wave 3 — specialty
 
