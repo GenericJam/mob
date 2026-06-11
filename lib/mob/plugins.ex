@@ -98,12 +98,22 @@ defmodule Mob.Plugins do
   """
   @spec register_screens() :: :ok
   def register_screens do
-    for %{module: mod, default_route: route} <- screens(),
+    for %{module: mod, default_route: route} = entry <- screens(),
         is_atom(mod),
         not is_nil(mod),
         is_binary(route),
         route != "" do
-      Mob.Nav.Registry.register(String.to_atom(route), mod)
+      # Optional :params on the entry become ROUTE-BOUND params: navigation to
+      # the route atom merges them under the push params and hands them to
+      # mount/3 — how N generated routes share one parameterized screen module
+      # (e.g. mob_ash's %{resource: ...}). Non-map values are ignored.
+      params =
+        case entry[:params] do
+          p when is_map(p) -> p
+          _ -> %{}
+        end
+
+      Mob.Nav.Registry.register(String.to_atom(route), mod, params)
     end
 
     :ok

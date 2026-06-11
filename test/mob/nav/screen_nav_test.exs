@@ -21,6 +21,12 @@ defmodule Mob.Nav.ScreenNavTest do
 
     def handle_event("reset_to_profile", _, socket),
       do: {:noreply, Mob.Socket.reset_to(socket, @profile)}
+
+    def handle_event("go_bound", _, socket),
+      do: {:noreply, Mob.Socket.push_screen(socket, :bound_settings)}
+
+    def handle_event("go_bound_override", _, socket),
+      do: {:noreply, Mob.Socket.push_screen(socket, :bound_settings, %{from: :push_wins})}
   end
 
   defmodule ProfileScreen do
@@ -125,6 +131,25 @@ defmodule Mob.Nav.ScreenNavTest do
       assert Mob.Screen.get_current_module(pid) == SettingsScreen
       socket = Mob.Screen.get_socket(pid)
       assert socket.assigns.from == :home
+      GenServer.stop(pid)
+    end
+  end
+
+  describe "route-bound params (Registry.register/3 — the data-driven-plugin pattern)" do
+    test "a bare push to a params route delivers the route-bound params to mount" do
+      :ok = Mob.Nav.Registry.register(:bound_settings, SettingsScreen, %{from: :route_bound})
+      {:ok, pid} = Mob.Screen.start_link(HomeScreen, %{})
+      Mob.Screen.dispatch(pid, "go_bound", %{})
+      assert Mob.Screen.get_current_module(pid) == SettingsScreen
+      assert Mob.Screen.get_socket(pid).assigns.from == :route_bound
+      GenServer.stop(pid)
+    end
+
+    test "explicit push params override route-bound params on key conflict" do
+      :ok = Mob.Nav.Registry.register(:bound_settings, SettingsScreen, %{from: :route_bound})
+      {:ok, pid} = Mob.Screen.start_link(HomeScreen, %{})
+      Mob.Screen.dispatch(pid, "go_bound_override", %{})
+      assert Mob.Screen.get_socket(pid).assigns.from == :push_wins
       GenServer.stop(pid)
     end
   end

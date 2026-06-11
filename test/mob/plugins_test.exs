@@ -105,6 +105,30 @@ defmodule Mob.PluginsTest do
       assert Mob.Nav.Registry.lookup(:"/p") == {:error, :not_found}
     end
 
+    test "an entry's :params map becomes route-bound params on the registered route" do
+      Mob.Plugins.install(%{
+        screens: [
+          %{plugin: :ash, module: P.Shared, default_route: "/ash/a", params: %{resource: A}},
+          %{plugin: :ash, module: P.Shared, default_route: "/ash/b", params: %{resource: B}}
+        ]
+      })
+
+      assert :ok = Mob.Plugins.register_screens()
+      assert Mob.Nav.Registry.lookup_route(:"/ash/a") == {:ok, P.Shared, %{resource: A}}
+      assert Mob.Nav.Registry.lookup_route(:"/ash/b") == {:ok, P.Shared, %{resource: B}}
+      # lookup/1 stays params-blind (back-compat)
+      assert Mob.Nav.Registry.lookup(:"/ash/a") == {:ok, P.Shared}
+    end
+
+    test "a malformed :params (non-map) registers with empty route params" do
+      Mob.Plugins.install(%{
+        screens: [%{plugin: :p, module: P.Home, default_route: "/p2", params: :oops}]
+      })
+
+      assert :ok = Mob.Plugins.register_screens()
+      assert Mob.Nav.Registry.lookup_route(:"/p2") == {:ok, P.Home, %{}}
+    end
+
     test "skips a screen entry with a nil or empty default_route" do
       Mob.Plugins.install(%{
         screens: [

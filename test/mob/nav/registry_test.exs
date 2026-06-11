@@ -94,4 +94,33 @@ defmodule Mob.Nav.RegistryTest do
       assert {:ok, ProfileScreen} = Mob.Nav.Registry.lookup(:home)
     end
   end
+
+  describe "register/3 + lookup_route/1 (route-bound params)" do
+    test "params registered with the route come back via lookup_route" do
+      {:ok, pid} = Mob.Nav.Registry.start_link(SimpleApp)
+      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+
+      :ok = Mob.Nav.Registry.register(:"/ash/post/list", ProfileScreen, %{resource: Post})
+
+      assert Mob.Nav.Registry.lookup_route(:"/ash/post/list") ==
+               {:ok, ProfileScreen, %{resource: Post}}
+
+      # lookup/1 stays params-blind for existing callers
+      assert Mob.Nav.Registry.lookup(:"/ash/post/list") == {:ok, ProfileScreen}
+    end
+
+    test "register/2 entries resolve with empty route params" do
+      {:ok, pid} = Mob.Nav.Registry.start_link(SimpleApp)
+      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+
+      :ok = Mob.Nav.Registry.register(:detail, ProfileScreen)
+      assert Mob.Nav.Registry.lookup_route(:detail) == {:ok, ProfileScreen, %{}}
+    end
+
+    test "app-navigation seeded routes resolve with empty route params" do
+      {:ok, pid} = Mob.Nav.Registry.start_link(SimpleApp)
+      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      assert {:ok, _module, %{}} = Mob.Nav.Registry.lookup_route(:home)
+    end
+  end
 end
