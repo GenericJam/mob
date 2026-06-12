@@ -8,6 +8,25 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.0] — UNRELEASED (the breaking plugin-extraction major)
+
+### Added
+- **Pure-Elixir composite components** (`Mob.Composite`): UI kits register tag-name expanders (the manifest `ui_components` `expand:` form, or `Mob.Composite.register/2`) and `<MyTag …/>` expands to built-in widget trees in a new FIRST render pass — fixpoint with a depth guard, crash-isolated. `on_*` props written as bare strings/atoms are auto-injected as `{screen_pid, tag}` (no more threading `self()`). Hot-pushable. See `decisions/2026-06-11-composite-expansion-pass.md`.
+- **Route-bound navigation params** (`Mob.Nav.Registry.register/3` + `lookup_route/1`): a registered route can carry a params map merged under push params into `mount/3` — the enabler for data-driven plugins (mob_ash registers `/ash/post` as `{MobAsh.ListScreen, %{resource: …}}`). Screen-manifest entries take an optional `:params`.
+- **Style packages, tokens-only tier** (MOB_STYLES.md implemented in part): the runtime manifest carries `styles`/`default_style`; boot applies the default style's theme (`Mob.Plugins.apply_default_style/0`). The five preset themes ship in the `mob_themes` package.
+- **Boot-time plugin NIF loading** (`mob_notify_set_screen_pid` seam, `host_requirements` printing, `composites` boot registration) — the plugin-system core wiring landed across this cycle; see MOB_PLUGINS.md.
+
+### Removed (BREAKING — each capability moves to its plugin package)
+- `Mob.Camera` → `mob_camera` (the `camera_preview` node stays in core)
+- `Mob.Location` → `mob_location`
+- `Mob.Notify` → `mob_notify` (delivery plumbing — delegate, push-token forward, launch handoff — stays in core; pairs with the server-side `mob_push`)
+- `Mob.Photos` → `mob_photos`
+- `Mob.Biometric` → `mob_biometric`
+- `Mob.Scanner` → `mob_scanner` (requires `mob_camera` for the `:camera` permission)
+- `Mob.Bt` → `mob_bluetooth` (Wave 1)
+- Themes `Obsidian`/`ObsidianGlass`/`Citrus`/`Birch`/`Material3` → `mob_themes` (light/dark/adaptive remain the neutral baseline)
+No deprecation shims (see plugin_extraction_plan.md for the policy rationale). Migration: add the package dep + activate in `mob.exs`; module names change (`Mob.Camera` → `MobCamera`, `Mob.Theme.Citrus` → `MobThemes.Citrus`, …).
+
 ## [0.6.26]
 
 ### Added
