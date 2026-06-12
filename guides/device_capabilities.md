@@ -2,6 +2,18 @@
 
 All device APIs in Mob follow a consistent pattern: call the function from a callback (returning the socket unchanged), then handle the result in `handle_info/2`. APIs never block the screen process.
 
+Since 0.7.0, several capabilities ship as first-party **plugins** rather than in core: `MobCamera` (`mob_camera`), `MobPhotos` (`mob_photos`), `MobLocation` (`mob_location`), `MobBiometric` (`mob_biometric`), `MobScanner` (`mob_scanner`), and `MobNotify` (`mob_notify`). Activating one is the same two steps for each — add the dep, list it in `mob.exs`:
+
+```elixir
+# mix.exs
+{:mob_camera, "~> 0.1"}
+
+# mob.exs
+config :mob, :plugins, [:mob_camera]
+```
+
+See the [Plugins guide](plugins.md). Everything else on this page (haptics, clipboard, share, files, audio, motion, storage, web view, alerts) is core.
+
 ## Permissions
 
 Some capabilities require an OS permission before they can be used. Request permissions via `Mob.Permissions.request/2`. The result arrives asynchronously:
@@ -85,16 +97,16 @@ Options: `:text`, `:url`, `:title`
 
 ## Camera
 
-Requires `:camera` permission (and `:microphone` for video).
+`MobCamera` ships in the `mob_camera` plugin (which also registers the `:camera` permission) — add the dep + activate in `mob.exs`. Requires `:camera` permission (and `:microphone` for video).
 
 ```elixir
 # Capture a photo
-socket = Mob.Camera.capture_photo(socket)
-socket = Mob.Camera.capture_photo(socket, quality: :medium)
+socket = MobCamera.capture_photo(socket)
+socket = MobCamera.capture_photo(socket, quality: :medium)
 
 # Record a video
-socket = Mob.Camera.capture_video(socket)
-socket = Mob.Camera.capture_video(socket, max_duration: 30)
+socket = MobCamera.capture_video(socket)
+socket = MobCamera.capture_video(socket, max_duration: 30)
 
 # Results:
 def handle_info({:camera, :photo, %{path: path, width: w, height: h}}, socket) do
@@ -114,11 +126,11 @@ end
 
 ## Photos
 
-Browse and pick from the photo library. Requires `:photo_library` permission.
+Browse and pick from the photo library. `MobPhotos` ships in the `mob_photos` plugin. Requires `:photo_library` permission.
 
 ```elixir
-socket = Mob.Photos.pick(socket)
-socket = Mob.Photos.pick(socket, max: 5)  # pick up to 5
+socket = MobPhotos.pick(socket)
+socket = MobPhotos.pick(socket, max: 5)  # pick up to 5
 
 def handle_info({:photos, :picked, photos}, socket) do
   # photos is a list of %{path: path, width: w, height: h} maps
@@ -149,11 +161,11 @@ end
 
 ## Camera preview
 
-Display a live camera feed inline (no OS permission dialog for preview):
+Display a live camera feed inline (no OS permission dialog for preview). The `<CameraPreview>` render-tree node lives in core, but the preview session API is `MobCamera` (`mob_camera` plugin):
 
 ```elixir
 def mount(_params, _session, socket) do
-  socket = Mob.Camera.start_preview(socket, facing: :back)
+  socket = MobCamera.start_preview(socket, facing: :back)
   {:ok, socket}
 end
 
@@ -167,7 +179,7 @@ def render(assigns) do
 end
 
 def terminate(_reason, socket) do
-  Mob.Camera.stop_preview(socket)
+  MobCamera.stop_preview(socket)
   :ok
 end
 ```
@@ -217,16 +229,16 @@ iOS uses `AVAudioPlayer` / `AVPlayer`. Android uses `MediaPlayer`.
 
 ## Location
 
-Requires `:location` permission.
+`MobLocation` ships in the `mob_location` plugin. Requires `:location` permission.
 
 ```elixir
 # Single fix
-socket = Mob.Location.get_once(socket)
+socket = MobLocation.get_once(socket)
 
 # Continuous updates
-socket = Mob.Location.start(socket)
-socket = Mob.Location.start(socket, accuracy: :high)  # :high | :balanced | :low
-socket = Mob.Location.stop(socket)
+socket = MobLocation.start(socket)
+socket = MobLocation.start(socket, accuracy: :high)  # :high | :balanced | :low
+socket = MobLocation.stop(socket)
 
 def handle_info({:location, %{lat: lat, lon: lon, accuracy: acc, altitude: alt}}, socket) do
   {:noreply, Mob.Socket.assign(socket, :location, %{lat: lat, lon: lon})}
@@ -253,8 +265,10 @@ end
 
 ## Biometric authentication
 
+`MobBiometric` ships in the `mob_biometric` plugin.
+
 ```elixir
-socket = Mob.Biometric.authenticate(socket, reason: "Confirm your identity")
+socket = MobBiometric.authenticate(socket, reason: "Confirm your identity")
 
 def handle_info({:biometric, :success}, socket) do
   {:noreply, Mob.Socket.assign(socket, :authenticated, true)}
@@ -269,8 +283,10 @@ iOS uses Face ID / Touch ID. Android uses `BiometricPrompt`.
 
 ## QR / barcode scanner
 
+`MobScanner` ships in the `mob_scanner` plugin. Activate `mob_camera` alongside it — `mob_camera` owns the `:camera` permission the scanner needs (`config :mob, :plugins, [:mob_camera, :mob_scanner]`).
+
 ```elixir
-socket = Mob.Scanner.scan(socket)
+socket = MobScanner.scan(socket)
 
 def handle_info({:scan, :result, %{type: type, value: value}}, socket) do
   # type: :qr | :ean | :upc | etc.
@@ -284,7 +300,7 @@ end
 
 ## Notifications
 
-See also [Mob.Notify](Mob.Notify.html) for the full API.
+`MobNotify` ships in the `mob_notify` plugin — see [its docs](https://hexdocs.pm/mob_notify) for the full API. Delivery (the `{:notification, ...}` and `{:push_token, ...}` messages below) is unchanged core behavior.
 
 Requires `:notifications` permission.
 
@@ -292,7 +308,7 @@ Requires `:notifications` permission.
 
 ```elixir
 # Schedule
-Mob.Notify.schedule(socket,
+MobNotify.schedule(socket,
   id:    "reminder_1",
   title: "Time to check in",
   body:  "Open the app to see today's updates",
@@ -301,7 +317,7 @@ Mob.Notify.schedule(socket,
 )
 
 # Cancel
-Mob.Notify.cancel(socket, "reminder_1")
+MobNotify.cancel(socket, "reminder_1")
 
 # Receive in handle_info (all app states: foreground, background, relaunched):
 def handle_info({:notification, %{id: id, data: data, source: :local}}, socket) do
@@ -317,7 +333,7 @@ Quick reference:
 
 ```elixir
 # After :notifications permission is granted:
-{:noreply, Mob.Notify.register_push(socket)}
+{:noreply, MobNotify.register_push(socket)}
 
 # Receive the device token — store it server-side with the platform:
 def handle_info({:push_token, platform, token}, socket) do

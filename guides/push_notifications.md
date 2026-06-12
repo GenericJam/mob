@@ -12,6 +12,22 @@ Mob supports both **local notifications** (scheduled on-device) and **remote pus
 | Works when killed | Yes (OS delivers on schedule) | Yes (OS wakes on arrival) |
 | Requires permission | Yes (`:notifications`) | Yes (`:notifications`) |
 
+The device-side API (`MobNotify`) ships in the `mob_notify` plugin — add the
+dep and activate it in `mob.exs` (see the [Plugins guide](plugins.md)):
+
+```elixir
+# mix.exs
+{:mob_notify, "~> 0.1"}
+
+# mob.exs
+config :mob, :plugins, [:mob_notify]
+```
+
+Delivery is unchanged core behavior: `{:notification, notif}` and
+`{:push_token, platform, token}` arrive in your screen's `handle_info/2`.
+The server side is the separate [`mob_push`](https://hexdocs.pm/mob_push)
+package, also unchanged.
+
 ---
 
 ## Local notifications
@@ -39,7 +55,7 @@ end
 
 ```elixir
 # At a specific time
-Mob.Notify.schedule(socket,
+MobNotify.schedule(socket,
   id:    "reminder_1",
   title: "Time to check in",
   body:  "Open the app to see today's updates",
@@ -48,7 +64,7 @@ Mob.Notify.schedule(socket,
 )
 
 # After a delay
-Mob.Notify.schedule(socket,
+MobNotify.schedule(socket,
   id:           "cooldown",
   title:        "Cooldown complete",
   body:         "Ready to go again",
@@ -59,7 +75,7 @@ Mob.Notify.schedule(socket,
 ### Cancelling
 
 ```elixir
-Mob.Notify.cancel(socket, "reminder_1")
+MobNotify.cancel(socket, "reminder_1")
 ```
 
 ### Receiving
@@ -125,6 +141,13 @@ walkthrough (Apple Developer portal + Firebase console).
 
 ### App-side setup
 
+Push registration needs a few host-app pieces the build can't fully automate:
+the FCM `<service>` entry in `AndroidManifest.xml` plus a `google-services.json`
+on Android, and the APNs token-forwarding hook in the `AppDelegate` on iOS.
+The `mob_notify` plugin declares these as `host_requirements`, so every
+`mix mob.deploy --native` prints exactly what's missing — follow the printed
+snippets if registration silently yields no token.
+
 #### 1. Request permission and register
 
 ```elixir
@@ -140,7 +163,7 @@ defmodule MyApp.HomeScreen do
   @impl Mob.Screen
   def handle_info({:permission, :notifications, :granted}, socket) do
     # Register with APNs / FCM — token arrives asynchronously
-    {:noreply, Mob.Notify.register_push(socket)}
+    {:noreply, MobNotify.register_push(socket)}
   end
 
   def handle_info({:permission, :notifications, :denied}, socket) do
@@ -164,7 +187,7 @@ devices). Store the platform alongside the token — you need it when calling
 `MobPush.send/3`.
 
 Tokens can change: the OS may issue a new token after an app reinstall or backup
-restore. Re-registering on each launch with `Mob.Notify.register_push/1` keeps
+restore. Re-registering on each launch with `MobNotify.register_push/1` keeps
 your stored token current.
 
 #### 3. Handle received notifications
@@ -284,5 +307,5 @@ environment returns `{:error, {:apns_error, "BadDeviceToken"}}`.
 ## Further reading
 
 - [`mob_push` on HexDocs](https://hexdocs.pm/mob_push) — full server-side documentation: credential setup, all payload options, notification appearance, token lifecycle
-- [`Mob.Notify`](Mob.Notify.html) — schedule/cancel local notifications, register for push
+- [`MobNotify`](https://hexdocs.pm/mob_notify) — schedule/cancel local notifications, register for push (ships in the `mob_notify` plugin)
 - [`Mob.Permissions`](Mob.Permissions.html) — request OS permission

@@ -18,18 +18,28 @@ nothing happened", this is the first place to look.
 
 | `Mob.Permissions` cap   | iOS `Info.plist` key                                            | Android `uses-permission`                                                                | Notes |
 |-------------------------|-----------------------------------------------------------------|-------------------------------------------------------------------------------------------|-------|
-| `:camera`               | `NSCameraUsageDescription`                                       | `android.permission.CAMERA`                                                              | Required by `Mob.Camera`. `CameraPreview` *also* needs the plist key but does not call `Mob.Permissions.request/2` — request explicitly before mounting it. |
-| `:microphone`           | `NSMicrophoneUsageDescription`                                   | `android.permission.RECORD_AUDIO`                                                        | Required by `Mob.Audio.start_recording/2` and by `Mob.Camera.capture_video/2`. |
-| `:photo_library`        | `NSPhotoLibraryUsageDescription`                                 | API 33+: `READ_MEDIA_IMAGES` + `READ_MEDIA_VIDEO`. API ≤32: `READ_EXTERNAL_STORAGE`.       | Required by `Mob.Photos.pick/2`. |
+| `:camera`               | `NSCameraUsageDescription`                                       | `android.permission.CAMERA`                                                              | Registered by the `mob_camera` plugin (see below). Required by `MobCamera`. `CameraPreview` *also* needs the plist key but does not call `Mob.Permissions.request/2` — request explicitly before mounting it. |
+| `:microphone`           | `NSMicrophoneUsageDescription`                                   | `android.permission.RECORD_AUDIO`                                                        | Required by `Mob.Audio.start_recording/2` and by `MobCamera.capture_video/2`. |
+| `:photo_library`        | `NSPhotoLibraryUsageDescription`                                 | API 33+: `READ_MEDIA_IMAGES` + `READ_MEDIA_VIDEO`. API ≤32: `READ_EXTERNAL_STORAGE`.       | Required by `MobPhotos.pick/2` (`mob_photos` plugin). |
 | `:location`             | `NSLocationWhenInUseUsageDescription`                            | `ACCESS_FINE_LOCATION` (high accuracy) and/or `ACCESS_COARSE_LOCATION` (low accuracy).    | See [iOS notes below](#ios-location-extras) — the dialog timing is unusual. |
 | `:notifications`        | (none — handled by `UNUserNotificationCenter`)                   | API 33+: `android.permission.POST_NOTIFICATIONS`                                          | iOS shows the dialog the first time `request/2` runs. Android API ≤32 doesn't need a permission at all (notifications are user-controllable in Settings). |
+
+The permission registry is **extensible**: plugins can register the
+capabilities they own. As of 0.7.0, `:camera` is registered by the
+`mob_camera` plugin — activate it (`{:mob_camera, "~> 0.1"}` in deps +
+`config :mob, :plugins, [:mob_camera]` in `mob.exs`) before requesting
+`:camera`. The other rows above (`:microphone`, `:photo_library`,
+`:location`, `:notifications`) are registered by core. The
+`Mob.Permissions.request/2` API itself is unchanged regardless of who
+registered the capability.
 
 Capabilities that need **no runtime permission** on either platform and
 do not appear in the table:
 
 * `Mob.Haptic`, `Mob.Clipboard`, `Mob.Share`, `Mob.Files.pick/2`,
-  `Mob.Toast`, `Mob.Alert`, `Mob.WebView`, `Mob.Motion`, `Mob.Biometric`
-  (uses biometric prompt UI but does not require a permission grant),
+  `Mob.Toast`, `Mob.Alert`, `Mob.WebView`, `Mob.Motion`, `MobBiometric`
+  (ships in the `mob_biometric` plugin; uses biometric prompt UI but does
+  not require a permission grant),
   `Mob.Storage` (app-local paths only).
 
 Capabilities that need an `Info.plist` or manifest entry **without** going
@@ -39,7 +49,7 @@ through `Mob.Permissions.request/2`:
 |-------------------------------------------------------------------|---------------------------------|---------|
 | `Mob.Storage.save_to_photo_library/2`                             | `NSPhotoLibraryAddUsageDescription` | Same `READ_MEDIA_*` family as `:photo_library` on API 33+. |
 | `Mob.Audio.play/2` (no permission)                                | none                            | none    |
-| `Mob.Camera.start_preview/2` (no permission for the *preview*; capture still needs `:camera`) | `NSCameraUsageDescription` | `CAMERA` |
+| `MobCamera.start_preview/2` (no permission for the *preview*; capture still needs `:camera`) | `NSCameraUsageDescription` | `CAMERA` |
 
 ## What the `mob.new` template ships by default
 
@@ -84,7 +94,8 @@ tightly than the other capabilities. Mob exposes both paths:
    :granted | :denied}` once the dialog is dismissed (or immediately
    if the permission was previously decided).
 
-2. `Mob.Location.get_once/1` and `Mob.Location.start/2` *also*
+2. `MobLocation.get_once/1` and `MobLocation.start/2` (`mob_location`
+   plugin) *also*
    trigger the dialog if `request/2` wasn't called yet. The dialog
    is one-shot per app install — subsequent calls short-circuit
    with the cached authorization.
@@ -92,7 +103,7 @@ tightly than the other capabilities. Mob exposes both paths:
 3. If the user denies, two events flow:
    - `Mob.Permissions.request/2`'s caller hears `{:permission,
      :location, :denied}`.
-   - `Mob.Location.get_once/1`/`start/2`'s caller hears
+   - `MobLocation.get_once/1`/`start/2`'s caller hears
      `{:location, :error, :permission_denied}` (via the
      `locationManagerDidChangeAuthorization:` callback). This means
      a screen that skipped `request/2` and went straight to
@@ -120,7 +131,7 @@ sure the plist key is present, the dialog appears, you get a typed
 `PHPhotoLibrary.requestAuthorizationForAccessLevel:PHAccessLevelReadWrite`
 is what `:photo_library` invokes. iOS treats
 `PHAuthorizationStatusLimited` (the user picked "Selected Photos…")
-as `:granted` from your screen's perspective — the rest of `Mob.Photos`
+as `:granted` from your screen's perspective — the rest of `MobPhotos`
 deals with the limited-access set transparently.
 
 ### Notifications

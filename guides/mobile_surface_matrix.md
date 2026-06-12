@@ -25,6 +25,13 @@ This doc is hand-maintained from inspection of `lib/mob/` and
 
 Per-platform columns: `✓` = supported, `—` = not supported, `n/a` = not applicable on that platform.
 
+A ✅ capability may live in **core** or in a **first-party plugin**
+(0.7.0 extracted camera, photos, location, notifications, biometrics,
+scanning, and Bluetooth into `mob_*` capability packages). The Notes
+column names the supplying plugin; rows without one are core. Plugins
+activate with the dep + `config :mob, :plugins, [...]` in `mob.exs` —
+see the [Plugins guide](plugins.md).
+
 ---
 
 ## UI components (render tree)
@@ -118,11 +125,11 @@ and orthogonal — composition over a fat component library.
 
 | Capability | Status | iOS | Android | Notes |
 |--|--|--|--|--|
-| Capture photo | ✅ | ✓ | ✓ | `Mob.Camera.capture_photo/1` |
-| Capture video | ✅ | ✓ | ✓ | `Mob.Camera.capture_video/1` |
-| Live preview | ✅ | ✓ | ✓ | `<CameraPreview>` component |
-| Per-frame stream | ✅ | ✓ | ✓ | `Mob.Camera.start_frame_stream/2` — pushes RGBA frames to `handle_info` |
-| Photo library picker | ✅ | ✓ | ✓ | `Mob.Photos.pick/2` |
+| Capture photo | ✅ | ✓ | ✓ | `MobCamera.capture_photo/2` (`mob_camera` plugin) |
+| Capture video | ✅ | ✓ | ✓ | `MobCamera.capture_video/2` (`mob_camera` plugin) |
+| Live preview | ✅ | ✓ | ✓ | `<CameraPreview>` component (core; session API in `mob_camera`) |
+| Per-frame stream | ✅ | ✓ | ✓ | `MobCamera.start_frame_stream/2` (`mob_camera` plugin) — pushes RGBA frames to `handle_info` |
+| Photo library picker | ✅ | ✓ | ✓ | `MobPhotos.pick/2` (`mob_photos` plugin) |
 | Audio recording | ✅ | ✓ | ✓ | `Mob.Audio.start_recording/2` |
 | Audio playback | ✅ | ✓ | ✓ | `Mob.Audio.play/3`, stop, volume |
 | Text-to-speech | ✅ | ✓ | ✓ | `Mob.Speech.speak/3` + `stop_speaking/1` (AVSpeechSynthesizer / TextToSpeech) |
@@ -165,8 +172,8 @@ and orthogonal — composition over a fat component library.
 
 | Capability | Status | iOS | Android | Notes |
 |--|--|--|--|--|
-| One-shot location | ✅ | ✓ | ✓ | `Mob.Location.get_once/0` |
-| Continuous updates | ✅ | ✓ | ✓ | `Mob.Location.start/1`, stop |
+| One-shot location | ✅ | ✓ | ✓ | `MobLocation.get_once/1` (`mob_location` plugin) |
+| Continuous updates | ✅ | ✓ | ✓ | `MobLocation.start/2`, stop (`mob_location` plugin) |
 | Background location | 🟡 | 🟡 | 🟡 | Mob's foreground-service keep-alive lets updates continue while backgrounded; not a true background-location API |
 | Geofencing | ❌ | — | — | Plugin candidate (`CLCircularRegion` / `Geofencing API`) |
 | Significant-change updates | ❌ | — | — | Plugin candidate (iOS) |
@@ -177,8 +184,8 @@ and orthogonal — composition over a fat component library.
 
 | Capability | Status | iOS | Android | Notes |
 |--|--|--|--|--|
-| Local notification scheduling | ✅ | ✓ | ✓ | `Mob.Notify.schedule/2`, cancel |
-| Push notification registration | ✅ | ✓ | ✓ | `Mob.Notify.register_push/0` → token to `handle_info` |
+| Local notification scheduling | ✅ | ✓ | ✓ | `MobNotify.schedule/2`, cancel (`mob_notify` plugin) |
+| Push notification registration | ✅ | ✓ | ✓ | `MobNotify.register_push/1` (`mob_notify` plugin) → token to `handle_info` |
 | Push delivery via APNs / FCM | ✅ | ✓ | ✓ | Via `mob_push` Hex package |
 | Notification tap handling | ✅ | ✓ | ✓ | Foreground + background + cold-start (`take_launch_notification/0`) |
 | Notification actions (buttons) | ❌ | — | — | Plugin / core candidate |
@@ -200,7 +207,7 @@ and orthogonal — composition over a fat component library.
 
 | Capability | Status | iOS | Android | Notes |
 |--|--|--|--|--|
-| Biometric auth (Face ID / fingerprint) | ✅ | ✓ | ✓ | `Mob.Biometric.authenticate/2` |
+| Biometric auth (Face ID / fingerprint) | ✅ | ✓ | ✓ | `MobBiometric.authenticate/2` (`mob_biometric` plugin) |
 | Apple Sign-In | ❌ | — | n/a | Plugin candidate (common requirement for App Store) |
 | Google Sign-In | ❌ | — | — | Plugin candidate |
 | Sign in with X / Facebook / etc. | ❌ | — | — | Plugin candidate |
@@ -214,7 +221,7 @@ and orthogonal — composition over a fat component library.
 
 | Capability | Status | iOS | Android | Notes |
 |--|--|--|--|--|
-| QR / barcode scanning | ✅ | ✓ | ✓ | `Mob.Scanner.scan/1` — full-screen scanner with format filtering |
+| QR / barcode scanning | ✅ | ✓ | ✓ | `MobScanner.scan/2` (`mob_scanner` plugin; activate `mob_camera` too — it owns `:camera`) — full-screen scanner with format filtering |
 | TFLite model inference | ✅ | ✓ | ✓ | Via `mix mob.enable tflite` (mob_dev 0.5.7+) — NNAPI/MTK on Android, Core ML delegate on iOS |
 | Nx-based inference | 🟡 | 🟡 | 🟡 | Via `nx_eigen` exploration; not formalised |
 | Apple Vision framework wrappers | ❌ | — | n/a | Plugin candidate (text recognition, face detection, image classification) |

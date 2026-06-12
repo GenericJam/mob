@@ -80,11 +80,19 @@ Pass token atoms as prop values for color, spacing, radius, and text size props.
 
 ## Named themes
 
-Mob ships three built-in themes:
+Core ships three themes:
 
-- **`Mob.Theme.Obsidian`** — dark, neutral with blue accents (default dark theme)
-- **`Mob.Theme.Citrus`** — warm background with lime-green primary
-- **`Mob.Theme.Birch`** — warm neutral tones, brown accents
+- **`Mob.Theme.Light`** / **`Mob.Theme.Dark`** — neutral light and dark baselines
+- **`Mob.Theme.Adaptive`** — follows the system light/dark setting
+
+The preset themes moved to the [`mob_themes`](https://hex.pm/packages/mob_themes)
+style package in 0.7.0 (see [Style packages](#style-packages) below for activation):
+
+- **`MobThemes.Obsidian`** — dark, neutral with blue accents
+- **`MobThemes.ObsidianGlass`** — Obsidian variant with translucent surfaces
+- **`MobThemes.Citrus`** — warm background with lime-green primary
+- **`MobThemes.Birch`** — warm neutral tones, brown accents
+- **`MobThemes.Material3`** — Material 3 baseline palette
 
 There are two ways to set a theme:
 
@@ -92,7 +100,7 @@ There are two ways to set a theme:
 
 ```elixir
 defmodule MyApp do
-  use Mob.App, theme: Mob.Theme.Obsidian
+  use Mob.App, theme: Mob.Theme.Dark
   ...
 end
 ```
@@ -101,12 +109,12 @@ end
 
 ```elixir
 def mount(_params, _session, socket) do
-  Mob.Theme.set(Mob.Theme.Obsidian)
+  Mob.Theme.set(MobThemes.Obsidian)
   {:ok, Mob.Socket.assign(socket, :theme, :obsidian)}
 end
 
 def handle_info({:tap, :theme_citrus}, socket) do
-  Mob.Theme.set(Mob.Theme.Citrus)
+  Mob.Theme.set(MobThemes.Citrus)
   {:noreply, Mob.Socket.assign(socket, :theme, :citrus)}
 end
 ```
@@ -118,7 +126,7 @@ end
 Pass a `{module, overrides}` tuple to customise a named theme:
 
 ```elixir
-use Mob.App, theme: {Mob.Theme.Obsidian, primary: :rose_500, radius_md: 14}
+use Mob.App, theme: {Mob.Theme.Dark, primary: :rose_500, radius_md: 14}
 ```
 
 ## Building a theme from scratch
@@ -137,10 +145,10 @@ Call `Mob.Theme.set/1` at any point. The next render will use the new theme:
 
 ```elixir
 # Switch to a named theme
-Mob.Theme.set(Mob.Theme.Citrus)
+Mob.Theme.set(MobThemes.Citrus)
 
-# Override individual tokens on the current theme
-Mob.Theme.set({Mob.Theme.Obsidian, primary: :violet_500})
+# Override individual tokens on a named theme
+Mob.Theme.set({Mob.Theme.Dark, primary: :violet_500})
 
 # Override against the neutral base
 Mob.Theme.set(primary: :pink_500, type_scale: 1.2)
@@ -150,6 +158,34 @@ Mob.Theme.set(%Mob.Theme{primary: :teal_500, space_scale: 1.1})
 ```
 
 This is useful for accessibility features (larger type, high-contrast), user-selected themes, or A/B testing.
+
+## Style packages
+
+Theme presets are distributed as **style packages** — a separate lane from
+capability plugins. The currently-shipped tier is tokens-only: a style
+package contributes theme modules (token sets), nothing native. Activation
+in `mob.exs` uses `:styles` rather than `:plugins`:
+
+```elixir
+# mix.exs
+{:mob_themes, "~> 0.1"}
+
+# mob.exs
+config :mob, :styles, [:mob_themes]
+config :mob, :default_style, :mob_themes   # boots into MobThemes.Obsidian
+```
+
+At boot, core applies the default style's theme (`:mob_themes` defaults to
+`MobThemes.Obsidian`). The package's other themes are ordinary theme
+modules — switch with `Mob.Theme.set(MobThemes.Citrus)` as usual.
+
+`:default_style` is a *default*, not a mandate: an explicit `Mob.Theme.set/1`
+from app code (e.g. restoring a persisted user choice in `on_start/0` or
+`mount/3`) outranks it.
+
+See [`MOB_STYLES.md`](https://github.com/genericjam/mob/blob/master/MOB_STYLES.md)
+for the style-package manifest schema and the design of the richer
+(native-override) style tiers.
 
 ## Publishing a custom theme
 
