@@ -428,6 +428,21 @@ Only if a minimal core is desired. Skip otherwise.
 - [ ] `mob_haptic` ← `lib/mob/haptic.ex` (41 LoC)
 - [ ] `mob_clipboard` ← `lib/mob/clipboard.ex` (46 LoC)
 
+### Spec-v2 lane: REALIZED — mob_ash (2026-06-11)
+
+The Ash integration the v2 spec was designed around now exists as a real
+package (GenericJam/mob_ash, private) and is Moto-G-verified end to end:
+host declares Ash resources + :ash_domains, the audited generator emits
+list/detail/new routes per resource onto three shared parameterized
+screens, and the resource module rides each route as route-bound nav
+params. Three abstraction gaps were found and fixed in the process —
+route-bound params (mob Nav.Registry.register/3), generator host-app
+discovery (Mix.Project, not hardcoded), and the regen task loading host
+code before running generators (generators may touch host MODULES, not
+just config). Everything else — manifest extra-key passthrough, a
+heavyweight pure-Elixir runtime dep (ash), hot-pushable tier-3, the
+host-config audit — held without modification.
+
 ### Wave 6 — Gen AI plugins (in-lane, new packages)
 
 These are *not* extractions from core — they're new plugins that
