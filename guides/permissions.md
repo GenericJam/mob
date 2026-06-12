@@ -47,7 +47,7 @@ through `Mob.Permissions.request/2`:
 
 | Operation                                                         | iOS `Info.plist` key            | Android |
 |-------------------------------------------------------------------|---------------------------------|---------|
-| `Mob.Storage.save_to_photo_library/2`                             | `NSPhotoLibraryAddUsageDescription` | Same `READ_MEDIA_*` family as `:photo_library` on API 33+. |
+| `Mob.Storage.Apple.save_to_photo_library/2`                             | `NSPhotoLibraryAddUsageDescription` | Same `READ_MEDIA_*` family as `:photo_library` on API 33+. |
 | `Mob.Audio.play/2` (no permission)                                | none                            | none    |
 | `MobCamera.start_preview/2` (no permission for the *preview*; capture still needs `:camera`) | `NSCameraUsageDescription` | `CAMERA` |
 
@@ -163,7 +163,7 @@ permission grant — the user controls it via Settings. The
 API 33+ replaced the single `READ_EXTERNAL_STORAGE` permission with
 per-media-type permissions (`READ_MEDIA_IMAGES`, `READ_MEDIA_VIDEO`).
 The `mob.new` template declares all of them so the photo picker works
-across API levels. Saving with `Mob.Storage.save_to_photo_library/2`
+across API levels. Saving with `Mob.Storage.Apple.save_to_photo_library/2`
 uses `MediaStore`, which doesn't require a permission on API 29+ at
 all — the manifest declarations are only for the read path.
 

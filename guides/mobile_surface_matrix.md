@@ -84,7 +84,7 @@ and orthogonal — composition over a fat component library.
 | Apple Pencil / stylus events | ❌ | — | n/a | Plugin territory |
 | 3D Touch / Force Touch | ❌ | — | n/a | Deprecated by Apple; low priority |
 | Drag and drop (cross-app) | ❌ | — | — | Plugin candidate |
-| Haptic feedback | ✅ | ✓ | ✓ | `Mob.Haptic.tap/1` etc. |
+| Haptic feedback | ✅ | ✓ | ✓ | `Mob.Haptic.trigger/2` |
 
 ## Device + system info
 
@@ -342,7 +342,7 @@ disclosure, not a promise of feature parity with React Native.
 
 - [`MOB_PLUGINS.md`](../MOB_PLUGINS.md) — plugin manifest spec for
   filling missing capabilities without merging into core
-- [`RELEASE.md`](../RELEASE.md) — release process if you're shipping a
+- [`RELEASE.md`](https://github.com/GenericJam/mob/blob/master/RELEASE.md) — release process if you're shipping a
   new capability that lands in core
 - [`guides/styling.md`](styling.md) — visual styling for the
   components above (tokens, themes, dark mode)

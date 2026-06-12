@@ -183,7 +183,7 @@ modules — switch with `Mob.Theme.set(MobThemes.Citrus)` as usual.
 from app code (e.g. restoring a persisted user choice in `on_start/0` or
 `mount/3`) outranks it.
 
-See [`MOB_STYLES.md`](https://github.com/genericjam/mob/blob/master/MOB_STYLES.md)
+See [`MOB_STYLES.md`](MOB_STYLES.md)
 for the style-package manifest schema and the design of the richer
 (native-override) style tiers.
 

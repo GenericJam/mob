@@ -499,5 +499,5 @@ receive" it's a footgun.
 ## Where to find more
 
 - [`event_model.md`](event_model.md) — design contract, address shape, ID rules
-- [`event_audit.md`](event_audit.md) — current native emitters, migration plan
-- [`PLAN.md`](../PLAN.md) — roadmap; what's done, what's coming
+- [`event_audit.md`](https://github.com/GenericJam/mob/blob/master/guides/event_audit.md) — current native emitters, migration plan
+- [`PLAN.md`](https://github.com/GenericJam/mob/blob/master/PLAN.md) — roadmap; what's done, what's coming
