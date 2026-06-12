@@ -27,6 +27,25 @@ For the surrounding ecosystem (Hex packaging, mob_dev compile-step
 internals, hot-push compatibility), see `MOB_PLUGINS.md` — the
 infrastructure is shared.
 
+## Implementation status (2026-06-11)
+
+The **tokens-only tier is IMPLEMENTED and device-verified**: the
+four-field `priv/mob_style.exs` manifest (loaded + validated by
+`MobDev.Style`), activation via `config :mob, :styles` +
+`config :mob, :default_style` in `mob.exs`, the styles riding the plugin
+runtime manifest, and core applying the default style's theme at boot
+(`Mob.Plugins.apply_default_style/0`; a misconfigured style fails the
+BUILD, a broken theme module logs and renders baseline). First package:
+`mob_themes` (Obsidian/ObsidianGlass/Citrus/Birch/Material3).
+
+**NOT yet implemented** (the mob_m3 tier): the cascade, per-element
+`style:` props, the `_style` node field, and the namespaced native
+dispatch table — everything from "The cascade" onward describes design,
+not shipped behavior. Precedence note learned in practice:
+`:default_style` is a DEFAULT — app code calling `Mob.Theme.set/1`
+(e.g. restoring a persisted user choice) outranks it, so hosts should
+only override when the user explicitly chose.
+
 ## Why a separate surface from `MOB_PLUGINS.md`
 
 Plugins **add**. Styles **substitute**. The two have different
