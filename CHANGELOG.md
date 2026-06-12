@@ -8,7 +8,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [0.7.0] — UNRELEASED (the breaking plugin-extraction major)
+## [0.7.0] - 2026-06-12 — the plugin-extraction major (BREAKING)
 
 ### Added
 - **Pure-Elixir composite components** (`Mob.Composite`): UI kits register tag-name expanders (the manifest `ui_components` `expand:` form, or `Mob.Composite.register/2`) and `<MyTag …/>` expands to built-in widget trees in a new FIRST render pass — fixpoint with a depth guard, crash-isolated. `on_*` props written as bare strings/atoms are auto-injected as `{screen_pid, tag}` (no more threading `self()`). Hot-pushable. See `decisions/2026-06-11-composite-expansion-pass.md`.
