@@ -50,6 +50,10 @@ jobs:
           # string (Elixir-mix convention).
           version=$(grep -E '^\s*version:\s*"' mix.exs | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
           if [ -z "$version" ]; then
+            # `version: @version` idiom — read the module attribute instead.
+            version=$(grep -E '^\s*@version\s+"' mix.exs | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+          fi
+          if [ -z "$version" ]; then
             echo "::error::Could not extract version from mix.exs"
             exit 1
           fi
