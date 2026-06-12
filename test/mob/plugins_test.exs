@@ -6,7 +6,9 @@ defmodule Mob.PluginsTest do
     lifecycle: [%{plugin: :p, on_start: {P, :start, []}}],
     settings: [%{plugin: :p, schema: [%{key: :x, type: :boolean, default: true}]}],
     notification_handlers: [%{plugin: :p, match: %{type: "t"}, handler: {P, :h, 1}}],
-    nifs: [:p_nif]
+    nifs: [:p_nif],
+    styles: [%{name: :mob_theme_x, theme: ThemeX}],
+    default_style: nil
   }
 
   describe "read_path/1" do
@@ -17,7 +19,15 @@ defmodule Mob.PluginsTest do
 
     test "returns the empty set when the file is absent" do
       assert Mob.Plugins.read_path("/no/such/mob_plugins.exs") ==
-               %{screens: [], lifecycle: [], settings: [], notification_handlers: [], nifs: []}
+               %{
+                 screens: [],
+                 lifecycle: [],
+                 settings: [],
+                 notification_handlers: [],
+                 nifs: [],
+                 styles: [],
+                 default_style: nil
+               }
     end
 
     test "returns the empty set (never crashes) on a malformed file" do
@@ -138,6 +148,40 @@ defmodule Mob.PluginsTest do
       })
 
       assert :ok = Mob.Plugins.register_screens()
+    end
+  end
+
+  describe "apply_default_style/0" do
+    test "applies the default style's theme module at boot" do
+      Mob.Plugins.install(%{
+        styles: [%{name: :mob_theme_citrus, theme: Mob.Theme.Citrus}],
+        default_style: :mob_theme_citrus
+      })
+
+      before = Mob.Theme.current()
+      on_exit(fn -> Mob.Theme.set(before) end)
+
+      assert :ok = Mob.Plugins.apply_default_style()
+      assert Mob.Theme.current() == Mob.Theme.Citrus.theme()
+    end
+
+    test "no default style is a no-op" do
+      Mob.Plugins.install(%{styles: [], default_style: nil})
+      assert :ok = Mob.Plugins.apply_default_style()
+    end
+
+    test "a broken theme module logs instead of failing boot" do
+      Mob.Plugins.install(%{
+        styles: [%{name: :bad, theme: NoSuch.Theme}],
+        default_style: :bad
+      })
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok = Mob.Plugins.apply_default_style()
+        end)
+
+      assert log =~ "failed to apply"
     end
   end
 
