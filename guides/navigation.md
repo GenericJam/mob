@@ -191,3 +191,18 @@ stack(:home, root: MyApp.HomeScreen)
 # Later, anywhere:
 Mob.Socket.push_screen(socket, :home)  # resolves to MyApp.HomeScreen
 ```
+
+### Route-bound params
+
+`Mob.Nav.Registry.register/3` can bind a params map to a route, letting many
+routes share one parameterized screen module (the data-driven pattern — e.g.
+a plugin registering `:post_list` as `{MobAsh.ListScreen, %{resource: MyApp.Post}}`):
+
+```elixir
+Mob.Nav.Registry.register(:post_list, MobAsh.ListScreen, %{resource: MyApp.Post})
+Mob.Nav.Registry.register(:user_list, MobAsh.ListScreen, %{resource: MyApp.User})
+```
+
+When such a route is the navigation destination, the route-bound params are
+merged *under* the caller's `push_screen` params (the caller's keys win on
+conflict) and the merged map is what arrives in the destination's `mount/3`.

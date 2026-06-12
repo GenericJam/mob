@@ -74,7 +74,7 @@ end
 
 ```elixir
 defmodule MyApp do
-  use Mob.App, theme: Mob.Theme.Obsidian
+  use Mob.App, theme: Mob.Theme.Dark
 
   def navigation(_platform) do
     stack(:home, root: MyApp.CounterScreen)
@@ -107,42 +107,72 @@ tab_bar([
 
 ```elixir
 # Named theme
-use Mob.App, theme: Mob.Theme.Obsidian
+use Mob.App, theme: Mob.Theme.Dark
 
 # Override individual tokens
-use Mob.App, theme: {Mob.Theme.Obsidian, primary: :rose_500}
+use Mob.App, theme: {Mob.Theme.Dark, primary: :rose_500}
 
 # From scratch
 use Mob.App, theme: [primary: :emerald_500, background: :gray_950]
 
 # Runtime switch (accessibility, user preference)
-Mob.Theme.set(Mob.Theme.Citrus)
+Mob.Theme.set(MobThemes.Citrus)
 ```
 
-Built-in themes: `Mob.Theme.Obsidian` (dark violet), `Mob.Theme.Citrus` (warm charcoal + lime), `Mob.Theme.Birch` (warm parchment).
+Core ships `Mob.Theme.Light`, `Mob.Theme.Dark`, and `Mob.Theme.Adaptive`
+(follows the system light/dark setting). The preset themes —
+`MobThemes.Obsidian`, `MobThemes.ObsidianGlass`, `MobThemes.Citrus`,
+`MobThemes.Birch`, `MobThemes.Material3` — live in the
+[`mob_themes`](https://hex.pm/packages/mob_themes) style package:
+
+```elixir
+# mix.exs
+{:mob_themes, "~> 0.1"}
+
+# mob.exs
+config :mob, :styles, [:mob_themes]
+config :mob, :default_style, :mob_themes   # boots into MobThemes.Obsidian
+```
+
+See the [Theming guide](https://hexdocs.pm/mob/theming.html) for details.
 
 ## Device APIs
 
 All async — call the function, handle the result in `handle_info/2`:
 
 ```elixir
-# Haptic feedback (synchronous — no handle_info needed)
+# Haptic feedback (core; synchronous — no handle_info needed)
 Mob.Haptic.trigger(socket, :success)
 
-# Camera
-Mob.Camera.capture_photo(socket)
+# Camera (mob_camera plugin)
+MobCamera.capture_photo(socket)
 def handle_info({:camera, :photo, %{path: path}}, socket), do: ...
 
-# Location
-Mob.Location.start(socket, accuracy: :high)
+# Location (mob_location plugin)
+MobLocation.start(socket, accuracy: :high)
 def handle_info({:location, %{lat: lat, lon: lon}}, socket), do: ...
 
-# Push notifications
-Mob.Notify.register_push(socket)
+# Push notifications (mob_notify plugin)
+MobNotify.register_push(socket)
 def handle_info({:push_token, :ios, token}, socket), do: ...
 ```
 
-Also: `Mob.Clipboard`, `Mob.Share`, `Mob.Photos`, `Mob.Files`, `Mob.Audio`, `Mob.Motion`, `Mob.Biometric`, `Mob.Scanner`, `Mob.Permissions`.
+Some capabilities ship as first-party plugins rather than in core. Activating
+one is two lines:
+
+```elixir
+# mix.exs
+{:mob_camera, "~> 0.1"}
+
+# mob.exs
+config :mob, :plugins, [:mob_camera]
+```
+
+In core: `Mob.Clipboard`, `Mob.Share`, `Mob.Files`, `Mob.Audio`, `Mob.Motion`,
+`Mob.Permissions`. As plugins: `MobCamera` (`mob_camera`), `MobLocation`
+(`mob_location`), `MobNotify` (`mob_notify`), `MobPhotos` (`mob_photos`),
+`MobBiometric` (`mob_biometric`), `MobScanner` (`mob_scanner` — also needs
+`mob_camera`), `MobBluetooth` (`mob_bluetooth`).
 
 For a full audit of what mob covers vs. what's missing vs. what's
 out of scope (compared against React Native + Expo SDK capabilities),
@@ -163,8 +193,9 @@ you first, via APNs (iOS) or FCM (Android). The shape is:
 
 ```elixir
 # Register for a push token; your server stores it and sends through APNs/FCM.
-# See the mob_push package for the server side.
-Mob.Notify.register_push(socket)
+# MobNotify ships in the mob_notify plugin; see the mob_push package for the
+# server side.
+MobNotify.register_push(socket)
 def handle_info({:push_token, :ios, token}, socket), do: ...
 
 # React to the OS suspending / resuming the app. A push wakes the app, the BEAM
@@ -195,9 +226,10 @@ The pre-built OTP runtime that ships with each app includes:
 - **Erlang distribution** — `mix mob.connect` opens an IEx session
   on-device. Hot-push individual modules with `nl/1`.
 
-Native APIs surfaced via `Mob.*` modules (above) cover camera,
-location, audio, files, biometrics, push, clipboard, share, scanner,
-motion sensors, permissions.
+Native APIs (above) cover audio, files, clipboard, share, motion
+sensors, and permissions in core, with camera, location, push,
+photos, biometrics, and scanning available as first-party capability
+plugins.
 
 The OTP runtime tarball is ~80 MB compressed; sliced per-arch by
 App Thinning (iOS) and App Bundle (Android) so each user only

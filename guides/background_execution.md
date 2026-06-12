@@ -9,7 +9,11 @@ platform-approved background mechanisms.
 
 For most server-driven work, use push notifications:
 
-1. The app registers with APNs or FCM via `Mob.Notify.register_push/1`.
+1. The app registers with APNs or FCM via `MobNotify.register_push/1`.
+   (`MobNotify` ships in the `mob_notify` plugin — add the dep + activate in
+   `mob.exs`; see the [Plugins guide](plugins.md). Delivery of
+   `{:notification, notif}` and `{:push_token, ...}` messages is core
+   behavior.)
 2. The device token is sent to your server.
 3. Your server sends a notification through `mob_push`.
 4. The OS delivers or stores the notification.

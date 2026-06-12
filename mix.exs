@@ -139,10 +139,11 @@ defmodule Mob.MixProject do
           Mob.UI,
           Mob.Style,
           Mob.Renderer,
+          Mob.Composite,
           Mob.Theme,
-          Mob.Theme.Obsidian,
-          Mob.Theme.Citrus,
-          Mob.Theme.Birch
+          Mob.Theme.Light,
+          Mob.Theme.Dark,
+          Mob.Theme.Adaptive
         ],
         Navigation: [Mob.Nav.Registry],
         Plugins: [Mob.Plugins, Mob.Plugins.Supervisor, Mob.Plugins.Lifecycle],
@@ -151,15 +152,9 @@ defmodule Mob.MixProject do
           Mob.Clipboard,
           Mob.Share,
           Mob.Permissions,
-          Mob.Biometric,
-          Mob.Location,
-          Mob.Camera,
-          Mob.Photos,
           Mob.Files,
           Mob.Audio,
-          Mob.Motion,
-          Mob.Scanner,
-          Mob.Notify
+          Mob.Motion
         ],
         "Testing & Debugging": [Mob.Test],
         Tooling: [Mob.Formatter],

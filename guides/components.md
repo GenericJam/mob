@@ -350,7 +350,7 @@ Embeds a native web view. Communicates bidirectionally with JS via the `window.m
 
 ### `:camera_preview`
 
-Displays a live camera feed inline. Requires an active preview session — call `Mob.Camera.start_preview/2` before rendering and `Mob.Camera.stop_preview/1` in `terminate/2`. No OS permission dialog is shown for preview alone.
+Displays a live camera feed inline. The `<CameraPreview>` node itself ships in core, but the preview session is driven by `MobCamera` (the `mob_camera` plugin — add the dep + activate in `mob.exs`; see the [Plugins guide](plugins.md)). Call `MobCamera.start_preview/2` before rendering and `MobCamera.stop_preview/1` in `terminate/2`. No OS permission dialog is shown for preview alone.
 
 | Prop | Type | Description |
 |------|------|-------------|
@@ -361,7 +361,7 @@ Displays a live camera feed inline. Requires an active preview session — call 
 
 ```elixir
 def mount(_params, _session, socket) do
-  socket = Mob.Camera.start_preview(socket, facing: :back)
+  socket = MobCamera.start_preview(socket, facing: :back)
   {:ok, socket}
 end
 
@@ -376,10 +376,67 @@ def render(assigns) do
 end
 
 def terminate(_reason, socket) do
-  Mob.Camera.stop_preview(socket)
+  MobCamera.stop_preview(socket)
   :ok
 end
 ```
+
+## Pure-Elixir composite components
+
+You can build reusable components out of the built-in widgets with no native
+code, in two forms.
+
+**Function composites** — a plain function returning a render tree, invoked
+through `{...}` interpolation in the sigil:
+
+```elixir
+def card(title, children) do
+  ~MOB"""
+  <Column background={:surface_raised} corner_radius={12} padding={:space_md}>
+    <Text text={title} text_size={:lg} text_color={:on_surface} />
+    {children}
+  </Column>
+  """
+end
+
+def render(assigns) do
+  ~MOB"""
+  <Column>
+    {card("Settings", settings_rows(assigns))}
+  </Column>
+  """
+end
+```
+
+**Tag composites** — the same idea with tag syntax (`<DemoCard title="...">`).
+Register an *expander* for the tag atom, either through a plugin manifest's
+`ui_components` `expand:` entry:
+
+```elixir
+ui_components: [
+  %{tag: "DemoCard", atom: :demo_card, expand: {MobDemoKit.Card, :expand}}
+]
+```
+
+…or at runtime (plain Hex UI kits with no manifest — call from the host's
+`on_start/0`) via `Mob.Composite.register/2`:
+
+```elixir
+Mob.Composite.register(:demo_card, {MobDemoKit.Card, :expand})
+```
+
+The expander contract is `expand(props, children, ctx)` — it returns a node
+map or list of nodes (the `~MOB` sigil output), which is re-expanded to a
+fixpoint so composites can build on composites. Event ergonomics: any `on_*`
+prop written as a bare string or atom (`on_select="combo_select"`) arrives in
+`props` already shaped as `{screen_pid, tag}` — no `self()` threading in
+either the kit or the screen that uses it.
+
+Composites are stateless and pure Elixir, so they're hot-pushable. See
+`Mob.Composite` and the "Pure-Elixir composite components" section of
+[`MOB_PLUGINS.md`](../MOB_PLUGINS.md) for the full design; the `mob_demo_kit`
+plugin in `mob_plugin_demo` (`<DemoCard>`/`<DemoCombobox>`) is the worked,
+device-verified example.
 
 ## Using `Mob.Style` for reusable styles
 
