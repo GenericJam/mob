@@ -871,7 +871,7 @@ Reserved shape — a third form alongside the native one:
 ```elixir
 ui_components: [
   %{tag: "MishkaCombobox", atom: :mishka_combobox,
-    expand: {Mishka.Combobox, :expand}}   # pure-Elixir, no :ios/:android — RESERVED, not yet honored
+    expand: {Mishka.Combobox, :expand}}   # pure-Elixir, no :ios/:android — HONORED since 2026-06-11
 ]
 ```
 
@@ -886,15 +886,25 @@ author writes `on_select="combo_select"` and the pass wires
 through every component. Hot-pushable (pure Elixir; same rule as
 tier 0).
 
-**Resolution:** the `expand:` field is **reserved in the spec but not
-yet honored** — declaring it later is not a breaking change.
-Tier-0 function composites (`{combobox(...)}`) are the **v1 answer**
-for pure-Elixir UI kits; authors ship today. The third expansion pass
-(and the auto-inject-event-targets ergonomics) is a renderer feature
-that benefits all components, so it's carved into a **separate
-core-runtime track** — out of scope for the plugin epic, whose Phase 1
-is explicitly "no core churn." It should be designed against a concrete
-consumer.
+**Resolution (updated 2026-06-11):** the `expand:` field is **honored**.
+`Mob.Composite` runs as the FIRST expansion pass in `Mob.Screen`'s
+render pipeline (before `Mob.List.expand` / `Mob.Component.expand`, so a
+composite may itself emit `<List>` or `Mob.UI.native_view`), recursing
+to a fixpoint with a depth guard. The expander contract is
+`expand(props, children, ctx)`; `on_*` props written as bare
+strings/atoms are AUTO-INJECTED as `{screen_pid, tag}` — no `self()`
+threading. Registration is the manifest `expand:` form (validated:
+native backing XOR expand; expand-only plugins are hot-pushable) or
+`Mob.Composite.register/2` at runtime for plain Hex kits with no
+manifest. Tier-0 function composites (`{combobox(...)}`) remain fully
+supported — the tag form is ergonomics on top. Worked example:
+`mob_plugin_demo/plugins/mob_demo_kit` (<DemoCard>/<DemoCombobox>,
+device-verified). The original deferral ("no core churn in Phase 1,
+design against a concrete consumer") resolved when both conditions
+flipped — see decisions/2026-06-11-composite-expansion-pass.md.
+Known wart: the `~MOB` sigil warns once per call site for tags outside
+its compile-time whitelist; composite tags compile fine through the
+PascalCase→snake_case fallback. Follow-up: app-extendable tag list.
 
 ### 2. Generator vs. dependency — distribution model
 
