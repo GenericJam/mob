@@ -35,7 +35,7 @@ shows up in `MobDev.SupportMatrix.feature_requirements/1`.
 | iOS | `arm64` (device + sim) | iOS 13 | [BeeWare's `Python-Apple-support`](https://github.com/beeware/Python-Apple-support) framework targets iOS 13+. Older iPads / iPhones can't load it. |
 
 Bundle size adds ~70 MB on iOS, ~30 MB on Android. See
-[`mob_dev/guides/python_embedding.md`](../../mob_dev/guides/python_embedding.md)
+[`mob_dev/guides/python_embedding.md`](https://github.com/GenericJam/mob_dev/blob/master/guides/python_embedding.md)
 for the full pipeline.
 
 ---
