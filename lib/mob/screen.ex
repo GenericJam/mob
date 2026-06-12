@@ -690,6 +690,9 @@ defmodule Mob.Screen do
 
     {tree, active_component_keys} =
       module.render(socket.assigns)
+      # Third expansion pass FIRST: pure-Elixir composites may themselves emit
+      # <List> nodes / native_view components for the later passes.
+      |> Mob.Composite.expand(self())
       |> Mob.List.expand(list_renderers, self())
       |> Mob.Component.expand(self(), platform)
 
