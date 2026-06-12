@@ -418,9 +418,12 @@ in parallel with Wave 1.
   runtime manifest; core applies the default style's theme at boot.
   Cascade / per-element style props / native overrides (the mob_m3 tier)
   remain unbuilt by design.
-- [ ] `mob_theme_obsidian` ← `lib/mob/theme/obsidian.ex` (token-only)
-- [ ] `mob_theme_citrus` ← `lib/mob/theme/citrus.ex` (token-only)
-- [ ] `mob_theme_birch` ← `lib/mob/theme/birch.ex` (token-only)
+- [x] ALL remaining presets consolidated into ONE package — `mob_themes`
+  (Kevin 2026-06-11: themes are decent defaults, not sacred; they don't
+  each need their own plugin). Obsidian (package default) + ObsidianGlass +
+  Citrus + Birch + Material3, Moto-G-verified (boot default + all five
+  flip live). The per-theme rows below are superseded; material3's
+  pixel-perfect native primitives still await the native style tier.
 
 **Stays in core (baseline):** `theme/light.ex`, `theme/dark.ex`,
 `theme/adaptive.ex`, `theme/adaptive_watcher.ex`. These are the
