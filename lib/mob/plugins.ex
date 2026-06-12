@@ -24,6 +24,7 @@ defmodule Mob.Plugins do
     settings: [],
     notification_handlers: [],
     nifs: [],
+    composites: [],
     styles: [],
     default_style: nil
   }
@@ -79,6 +80,7 @@ defmodule Mob.Plugins do
     load(otp_app)
     ensure_nif_modules_loaded()
     register_screens()
+    register_composites()
     apply_default_style()
     :ok
   end
@@ -339,6 +341,28 @@ defmodule Mob.Plugins do
   """
   @spec nifs() :: [atom()]
   def nifs, do: Map.get(manifest(), :nifs, [])
+
+  @doc """
+  Activated plugins' pure-Elixir composite components
+  (`%{atom, expand: {M, F}}`) — the manifest `expand:` ui_components form.
+  """
+  @spec composites() :: [map()]
+  def composites, do: Map.get(manifest(), :composites, [])
+
+  @doc """
+  Registers each manifest-declared composite expander into `Mob.Composite`.
+  Malformed entries are skipped (the build validator is where shape errors
+  surface; a stale hand-edited manifest must not crash boot).
+  """
+  @spec register_composites() :: :ok
+  def register_composites do
+    for %{atom: atom, expand: {mod, fun}} <- composites(),
+        is_atom(atom) and is_atom(mod) and is_atom(fun) do
+      Mob.Composite.register(atom, {mod, fun})
+    end
+
+    :ok
+  end
 
   @doc "Activated token-only style packages (`%{name, theme}`), from MOB_STYLES.md's lane."
   @spec styles() :: [map()]
