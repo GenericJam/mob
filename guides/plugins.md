@@ -46,7 +46,10 @@ What you get per tier:
   `:notifications` manifest.
 
 The generated manifest validates and the generated modules compile as-is — they
-are stubs to fill in, not pseudocode.
+are stubs to fill in, not pseudocode. Every tier also ships a starter test
+suite (`test/<name>_test.exs`): stdlib-only structural checks of the manifest
+and stubs that run with plain `mix test` — grow it alongside your plugin's
+pure logic.
 
 ## 2. Implement
 
@@ -64,6 +67,19 @@ comments also remind you of:
 - **Settings** are typed and per-plugin-namespaced; read/write them with
   `Mob.Plugins.get_setting/2` and `Mob.Plugins.put_setting/3` (values are
   validated against the declared `:type`).
+- **Pure-Elixir composite components** (UI kits, no Swift/Kotlin): a
+  `ui_components` entry may declare `expand: {Module, :function}` instead of
+  native backing — your expander turns `<MyTag …/>` into a built-in widget
+  tree at render time, with `on_*` event props auto-wired to the screen
+  process. See the [Components guide](components.md) and `Mob.Composite`;
+  the worked example is `mob_demo_kit`.
+- **`host_requirements`**: if your plugin needs something the build can't
+  automate — typically an `AndroidManifest.xml` fragment like a `<service>`,
+  `<activity>`, or `<provider>` — declare each step as a string in the
+  manifest's `host_requirements` list. Every `mix mob.deploy --native` of the
+  host prints them, so a missing manual step can't fail silently at first
+  feature use. (Examples: `mob_screencast`'s mediaProjection service,
+  `mob_scanner`'s scanner activity, `mob_notify`'s FCM wiring.)
 
 Validate as you go, from the plugin directory:
 
@@ -137,6 +153,17 @@ See [`MOB_PLUGINS.md` → Cross-plugin conflict detection](MOB_PLUGINS.md) for t
 full list and the completeness guarantee. Keep your routes/namespaces/worker
 names specific to your plugin (the scaffold's `"<name>_"` defaults do this).
 
+## Style packages (a sibling lane)
+
+A package that ships a *look* rather than a capability uses the styles lane:
+a four-field `priv/mob_style.exs` (`name`, `mob_version`,
+`style_spec_version`, `theme:` — a module exporting `theme/0`) instead of a
+plugin manifest, activated via `config :mob, :styles` +
+`config :mob, :default_style`. Core applies the default style's theme at
+boot. See [`MOB_STYLES.md`](MOB_STYLES.md) for the schema and current
+implementation status; `mob_themes` is the worked example. A single package
+may ship both manifests.
+
 ## Worked examples
 
 The `mob_plugin_demo` project carries a device-verified plugin per tier — read
@@ -152,6 +179,15 @@ them as canonical patterns:
 | `mob_demo_kv_browser` | 3 | Two screens + a migration + a bundled font + a `plugin://` image |
 | `mob_demo_gen_screens` | 3+4 | Spec-v2 `screens_generator` *and* tier-4 lifecycle/settings/notifications in one plugin |
 | `mob_demo_subapp` | 4 | Lifecycle hooks, supervised worker, settings, notification handler |
+| `mob_demo_kit` | 2 (expand) | Pure-Elixir composite components (`<DemoCard>`, `<DemoCombobox>`) — no native code |
+
+Beyond the demo, the shipped first-party packages are full-size references:
+`mob_camera` (the heaviest extraction — ObjC + Zig + Kotlin + permission
+registry), `mob_scanner` (depends on `mob_camera`; an Activity
+host-requirement), `mob_notify` (delivery-stays-in-core seam +
+`host_requirements`), `mob_ash` (spec-v2 `screens_generator` against host
+config), and `mob_themes` (a style package). See the
+[First-Party Packages catalog](packages.md).
 
 `mob_demo_gen_screens` is the clearest example of a single plugin spanning
 multiple tiers, and (with `mob_demo_kv_browser` + `mob_demo_subapp`) of multiple
