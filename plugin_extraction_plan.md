@@ -410,6 +410,14 @@ in parallel with Wave 1.
 - [ ] `mob_theme_material3` ← `lib/mob/theme/material3.ex` (191 LoC)
   + custom native primitives for Toggle/TextField/Button to match
   M3 spec pixel-perfectly.
+- [x] `mob_theme_citrus` ← `lib/mob/theme/citrus.ex`. Extracted +
+  Moto-G-verified 2026-06-11 — the FIRST style package, and the styles
+  lane's tokens-only slice now EXISTS (it was design-only): MobDev.Style
+  (priv/mob_style.exs loader + 4-field validator + config :mob, :styles /
+  :default_style activation, misconfig fails the BUILD) riding the plugin
+  runtime manifest; core applies the default style's theme at boot.
+  Cascade / per-element style props / native overrides (the mob_m3 tier)
+  remain unbuilt by design.
 - [ ] `mob_theme_obsidian` ← `lib/mob/theme/obsidian.ex` (token-only)
 - [ ] `mob_theme_citrus` ← `lib/mob/theme/citrus.ex` (token-only)
 - [ ] `mob_theme_birch` ← `lib/mob/theme/birch.ex` (token-only)
