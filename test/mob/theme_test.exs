@@ -1,6 +1,11 @@
 defmodule Mob.ThemeTest do
   use ExUnit.Case, async: true
 
+  defmodule PresetFixture do
+    @moduledoc false
+    def theme, do: Mob.Theme.build(primary: :violet_600, background: 0xFF17151F)
+  end
+
   alias Mob.Theme
 
   describe "build/1" do
@@ -26,24 +31,24 @@ defmodule Mob.ThemeTest do
     end
 
     test "module theme returns a Theme struct" do
-      t = Mob.Theme.Obsidian.theme()
+      t = PresetFixture.theme()
       assert %Theme{} = t
       assert t.primary == :violet_600
     end
 
     test "set/1 accepts a theme module" do
       on_exit(fn -> Application.delete_env(:mob, :theme) end)
-      Theme.set(Mob.Theme.Obsidian)
+      Theme.set(PresetFixture)
       assert Theme.current().primary == :violet_600
     end
 
     test "set/1 accepts {module, overrides}" do
       on_exit(fn -> Application.delete_env(:mob, :theme) end)
-      Theme.set({Mob.Theme.Obsidian, primary: :rose_500})
+      Theme.set({PresetFixture, primary: :rose_500})
       t = Theme.current()
       assert t.primary == :rose_500
-      # still Obsidian background
-      assert t.background == 0xFF0D0D1A
+      # the preset's other tokens survive the override
+      assert t.background == 0xFF17151F
     end
   end
 
@@ -128,7 +133,7 @@ defmodule Mob.ThemeTest do
     # else would break apps that call Mob.Theme.set/1 in unit tests.
     test "does not crash on host BEAM (NIF stub absent)" do
       assert :ok = Mob.Theme.set(Mob.Theme.build(primary: :emerald_500))
-      assert :ok = Mob.Theme.set(Mob.Theme.Obsidian)
+      assert :ok = Mob.Theme.set(PresetFixture)
     end
   end
 
@@ -142,17 +147,9 @@ defmodule Mob.ThemeTest do
     end
   end
 
-  describe "Mob.Theme.ObsidianGlass" do
-    test "is Obsidian with glass: true" do
-      t = Mob.Theme.ObsidianGlass.theme()
-      obsidian = Mob.Theme.Obsidian.theme()
-
-      assert t.glass == true
-      assert t.primary == obsidian.primary
-      assert t.surface == obsidian.surface
-      assert t.background == obsidian.background
-    end
-  end
+  # ObsidianGlass (and the glass-preset identity test) moved to the
+  # mob_themes style package with the theme itself; the renderer's glass-flag
+  # contract is covered in renderer_test.exs with an inline glass theme.
 
   describe "color_map/1" do
     test "maps semantic names to their values" do
