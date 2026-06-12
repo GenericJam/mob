@@ -18,7 +18,15 @@ defmodule Mob.Plugins do
 
   require Logger
 
-  @empty %{screens: [], lifecycle: [], settings: [], notification_handlers: [], nifs: []}
+  @empty %{
+    screens: [],
+    lifecycle: [],
+    settings: [],
+    notification_handlers: [],
+    nifs: [],
+    styles: [],
+    default_style: nil
+  }
   @pt_key {__MODULE__, :manifest}
   @pt_asset_root {__MODULE__, :asset_root}
   @rel_path ["generated", "mob_plugins.exs"]
@@ -71,6 +79,7 @@ defmodule Mob.Plugins do
     load(otp_app)
     ensure_nif_modules_loaded()
     register_screens()
+    apply_default_style()
     :ok
   end
 
@@ -330,6 +339,38 @@ defmodule Mob.Plugins do
   """
   @spec nifs() :: [atom()]
   def nifs, do: Map.get(manifest(), :nifs, [])
+
+  @doc "Activated token-only style packages (`%{name, theme}`), from MOB_STYLES.md's lane."
+  @spec styles() :: [map()]
+  def styles, do: Map.get(manifest(), :styles, [])
+
+  @doc "The configured `:default_style` name (or nil — neutral baseline)."
+  @spec default_style() :: atom() | nil
+  def default_style, do: Map.get(manifest(), :default_style, nil)
+
+  @doc """
+  Applies the default style's theme at boot (`Mob.Theme.set/1` with the style
+  package's theme module). No default → no-op (neutral baseline / the host's
+  own `use Mob.App, theme:`). A broken theme module logs instead of failing
+  boot — the app renders baseline rather than not at all.
+  """
+  @spec apply_default_style() :: :ok
+  def apply_default_style do
+    with name when not is_nil(name) <- default_style(),
+         %{theme: theme_mod} <- Enum.find(styles(), &(&1[:name] == name)) do
+      try do
+        Mob.Theme.set(theme_mod)
+      rescue
+        e ->
+          Logger.error(
+            "[mob_plugins] default style #{inspect(name)} theme #{inspect(theme_mod)} " <>
+              "failed to apply: " <> Exception.format(:error, e, __STACKTRACE__)
+          )
+      end
+    end
+
+    :ok
+  end
 
   @doc """
   Resolves a `plugin://<plugin>/<file>` image reference to its on-device bundle
