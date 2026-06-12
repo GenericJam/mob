@@ -33,7 +33,7 @@ Add to `mix.exs`:
 
 ```elixir
 def deps do
-  [{:mob, "~> 0.5"}]
+  [{:mob, "~> 0.7"}]
 end
 ```
 
