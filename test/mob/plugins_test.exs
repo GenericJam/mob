@@ -151,18 +151,23 @@ defmodule Mob.PluginsTest do
     end
   end
 
+  defmodule FixtureTheme do
+    @moduledoc false
+    def theme, do: Mob.Theme.build(primary: :lime_400, background: 0xFF111209)
+  end
+
   describe "apply_default_style/0" do
     test "applies the default style's theme module at boot" do
       Mob.Plugins.install(%{
-        styles: [%{name: :mob_theme_citrus, theme: Mob.Theme.Citrus}],
-        default_style: :mob_theme_citrus
+        styles: [%{name: :fixture_style, theme: FixtureTheme}],
+        default_style: :fixture_style
       })
 
       before = Mob.Theme.current()
       on_exit(fn -> Mob.Theme.set(before) end)
 
       assert :ok = Mob.Plugins.apply_default_style()
-      assert Mob.Theme.current() == Mob.Theme.Citrus.theme()
+      assert Mob.Theme.current() == FixtureTheme.theme()
     end
 
     test "no default style is a no-op" do
