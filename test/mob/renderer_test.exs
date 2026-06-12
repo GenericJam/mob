@@ -1074,8 +1074,11 @@ defmodule Mob.RendererTest do
       refute Map.has_key?(tree["props"], "glass")
     end
 
-    test "Mob.Theme.ObsidianGlass triggers the flag at the boundary" do
-      Mob.Theme.set(Mob.Theme.ObsidianGlass)
+    test "a glass: true theme triggers the flag at the boundary" do
+      # (MobThemes.ObsidianGlass — now in the mob_themes style package — is
+      # the shipped example of a glass theme; the renderer contract is the
+      # flag itself.)
+      Mob.Theme.set(%Mob.Theme{glass: true})
       Renderer.render(box_with_background(), :ios, MockNIF)
 
       tree = set_root_json()

@@ -12,11 +12,11 @@ defmodule Mob.Theme do
   Named themes are plain modules that export `theme/0`. Pass the module to
   `use Mob.App`:
 
-      use Mob.App, theme: Mob.Theme.Obsidian
+      use Mob.App, theme: MobThemes.Obsidian   # (the mob_themes style package)
 
   Override individual tokens without leaving the theme:
 
-      use Mob.App, theme: {Mob.Theme.Obsidian, primary: :rose_500}
+      use Mob.App, theme: {MobThemes.Obsidian, primary: :rose_500}
 
   Anyone can publish a theme as a Hex package — any module with `theme/0`
   returning a `Mob.Theme.t()` works:
@@ -31,8 +31,8 @@ defmodule Mob.Theme do
 
   Or change the theme at runtime (e.g. for accessibility or user preference):
 
-      Mob.Theme.set(Mob.Theme.Obsidian)
-      Mob.Theme.set({Mob.Theme.Obsidian, type_scale: 1.2})
+      Mob.Theme.set(MobThemes.Obsidian)
+      Mob.Theme.set({MobThemes.Obsidian, type_scale: 1.2})
       Mob.Theme.set(primary: :pink_500)
 
   ## Base theme
@@ -117,7 +117,7 @@ defmodule Mob.Theme do
     #   * Android: no-op (the flag is plumbed but Material 3's glassy-surface
     #     story isn't first-class yet — left as a follow-up)
     #
-    # Off by default; opt in via a preset (`Mob.Theme.ObsidianGlass`) or by
+    # Off by default; opt in via a preset (`MobThemes.ObsidianGlass`, the mob_themes package) or by
     # passing `glass: true` to `Mob.Theme.build/1`.
     glass: false
   ]
@@ -148,7 +148,7 @@ defmodule Mob.Theme do
   Set the active theme. Accepts:
 
   - A compiled `%Mob.Theme{}` struct
-  - A theme module (`Mob.Theme.Obsidian`)
+  - A theme module (any module exporting `theme/0`, e.g. `MobThemes.Obsidian`)
   - A `{module, overrides}` tuple
   - A keyword list of overrides against the neutral base
   """
