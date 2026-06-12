@@ -107,10 +107,14 @@ defmodule Mob.MixProject do
         "CHANGELOG.md": [title: "Changelog"],
         "MOB_PLUGINS.md": [title: "Plugins — Manifest Reference"],
         "MOB_PLUGIN_SECURITY.md": [title: "Plugins — Security & Trust"],
+        "MOB_STYLES.md": [title: "Styles — Manifest Reference"],
         "guides/why_beam.md": [title: "Why the BEAM?"],
         "guides/getting_started.md": [title: "Getting Started"],
         "guides/architecture.md": [title: "Architecture & Prior Art"],
         "guides/screen_lifecycle.md": [title: "Screen Lifecycle"],
+        "guides/events.md": [title: "Events"],
+        "guides/event_model.md": [title: "Event Model"],
+        "guides/background_execution.md": [title: "Background Execution"],
         "guides/components.md": [title: "Components"],
         "guides/styling.md": [title: "Styling & Native Rendering"],
         "guides/theming.md": [title: "Theming"],
@@ -127,11 +131,14 @@ defmodule Mob.MixProject do
         "guides/tooling.md": [title: "Tooling & Formatting"],
         "guides/publishing.md": [title: "Publishing to App Store / TestFlight"],
         "guides/troubleshooting.md": [title: "Troubleshooting"],
+        "guides/support_matrix.md": [title: "Device Support Matrix"],
+        "guides/liveview.md": [title: "LiveView Mode"],
+        "guides/ios_physical_device.md": [title: "iOS Physical Devices"],
         "guides/agentic_coding.md": [title: "Agentic Coding"]
       ],
       groups_for_extras: [
         Guides: ~r/guides\/.*/,
-        Plugins: ["MOB_PLUGINS.md", "MOB_PLUGIN_SECURITY.md"]
+        Plugins: ["MOB_PLUGINS.md", "MOB_PLUGIN_SECURITY.md", "MOB_STYLES.md"]
       ],
       groups_for_modules: [
         Core: [Mob, Mob.App, Mob.Screen, Mob.ScreenState, Mob.Socket, Mob.State],
