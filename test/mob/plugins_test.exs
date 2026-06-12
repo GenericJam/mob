@@ -7,6 +7,7 @@ defmodule Mob.PluginsTest do
     settings: [%{plugin: :p, schema: [%{key: :x, type: :boolean, default: true}]}],
     notification_handlers: [%{plugin: :p, match: %{type: "t"}, handler: {P, :h, 1}}],
     nifs: [:p_nif],
+    composites: [],
     styles: [%{name: :mob_theme_x, theme: ThemeX}],
     default_style: nil
   }
@@ -25,6 +26,7 @@ defmodule Mob.PluginsTest do
                  settings: [],
                  notification_handlers: [],
                  nifs: [],
+                 composites: [],
                  styles: [],
                  default_style: nil
                }
