@@ -157,7 +157,8 @@ MobNotify.register_push(socket)
 def handle_info({:push_token, :ios, token}, socket), do: ...
 ```
 
-Some capabilities ship as first-party plugins rather than in core. Activating
+Some capabilities ship as first-party plugins rather than in core — see the
+[First-Party Packages catalog](guides/packages.md) for the full set. Activating
 one is two lines:
 
 ```elixir

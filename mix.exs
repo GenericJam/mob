@@ -110,6 +110,7 @@ defmodule Mob.MixProject do
         "MOB_STYLES.md": [title: "Styles — Manifest Reference"],
         "guides/why_beam.md": [title: "Why the BEAM?"],
         "guides/getting_started.md": [title: "Getting Started"],
+        "guides/packages.md": [title: "First-Party Packages"],
         "guides/architecture.md": [title: "Architecture & Prior Art"],
         "guides/screen_lifecycle.md": [title: "Screen Lifecycle"],
         "guides/events.md": [title: "Events"],
