@@ -280,6 +280,18 @@ Full documentation at [hexdocs.pm/mob](https://hexdocs.pm/mob), including:
 - [DNS on iOS](https://hexdocs.pm/mob/dns_on_ios.html) — required reading if your app makes HTTPS calls; one-line fix for a non-obvious iOS-only failure mode
 - [Testing](https://hexdocs.pm/mob/testing.html)
 
+## Development
+
+Clone, then run once:
+
+```bash
+mix setup
+```
+
+That fetches deps and activates the repo's git hooks (`.githooks/pre-push`):
+`mix format --check`, `mix credo --strict` (incl. ExSlop), and `mix compile --warnings-as-errors` run on every push, plus the full test
+suite when `mix.exs` changes — the same gate CI enforces before publishing.
+
 ## License
 
 MIT
