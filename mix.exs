@@ -10,6 +10,7 @@ defmodule Mob.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       compilers: compilers(Mix.env()) ++ Mix.compilers(),
       deps: deps(),
+      aliases: aliases(),
       unused: [
         ignore: [
           # GenServer / behaviour callbacks (mix_unused can't see them).
@@ -185,6 +186,13 @@ defmodule Mob.MixProject do
         README.md CHANGELOG.md LICENSE
       )
     ]
+  end
+
+  defp aliases do
+    # `mix setup` after cloning installs deps and activates the shared git
+    # hooks (.githooks): format / Credo --strict / compile run on every push
+    # and the full suite when mix.exs changes — the same gate CI enforces.
+    [setup: ["deps.get", "cmd git config core.hooksPath .githooks"]]
   end
 
   defp deps do
