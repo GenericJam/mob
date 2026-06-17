@@ -8,6 +8,16 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Collocated screen templates**: a `Mob.Screen` with a sibling `<name>.mob.heex`
+  and no inline `render/1` gets `render/1` compiled from that template
+  (`@external_resource`, so editing the template recompiles the screen). An
+  inline `render/1` still wins. Opt-in and additive. (#22)
+
+---
+
 ## [0.7.0] - 2026-06-12 — the plugin-extraction major (BREAKING)
 
 ### Added
