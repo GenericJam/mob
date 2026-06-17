@@ -2447,12 +2447,75 @@ static MobFilesDelegate *g_files_delegate = nil;
 }
 @end
 
+// Map a semantic group name (from Mob.Files' normalized envelope) to a UTType.
+static UTType *mob_semantic_uttype(NSString *group) {
+    if ([group isEqualToString:@"images"])
+        return UTTypeImage;
+    if ([group isEqualToString:@"video"])
+        return UTTypeMovie;
+    if ([group isEqualToString:@"audio"])
+        return UTTypeAudio;
+    if ([group isEqualToString:@"pdf"])
+        return UTTypePDF;
+    if ([group isEqualToString:@"text"])
+        return UTTypePlainText;
+    return nil;
+}
+
+// Turn Mob.Files' JSON type envelope into the content types the picker offers.
+// The envelope is a list of {"kind","value"} maps; an empty list (the :any
+// default) means no filter, which we represent as UTTypeData (every file).
+static NSArray<UTType *> *mob_uttypes_from_json(NSString *json) {
+    NSData *data = [json dataUsingEncoding:NSUTF8StringEncoding];
+    id parsed = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    if (![parsed isKindOfClass:[NSArray class]])
+        return @[ UTTypeData ];
+
+    NSMutableArray<UTType *> *types = [NSMutableArray array];
+    for (id entry in (NSArray *)parsed) {
+        if (![entry isKindOfClass:[NSDictionary class]])
+            continue;
+        NSString *kind = entry[@"kind"];
+        NSString *value = entry[@"value"];
+        if (![value isKindOfClass:[NSString class]])
+            continue;
+
+        UTType *t = nil;
+        if ([kind isEqualToString:@"extension"]) {
+            t = [UTType typeWithFilenameExtension:value];
+        } else if ([kind isEqualToString:@"mime"]) {
+            t = [UTType typeWithMIMEType:value];
+        } else if ([kind isEqualToString:@"uti"]) {
+            t = [UTType typeWithIdentifier:value];
+        } else if ([kind isEqualToString:@"semantic"]) {
+            t = mob_semantic_uttype(value);
+        }
+        if (t)
+            [types addObject:t];
+    }
+
+    // Every spec failed to resolve (e.g. an unknown MIME) — fall back to "any"
+    // rather than presenting a picker that can offer nothing.
+    return types.count > 0 ? types : @[ UTTypeData ];
+}
+
 static ERL_NIF_TERM nif_files_pick(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifPid pid;
     enif_self(env, &pid);
+
+    NSArray<UTType *> *contentTypes = @[ UTTypeData ];
+    ErlNifBinary jbin;
+    if (argc >= 1 && enif_inspect_iolist_as_binary(env, argv[0], &jbin)) {
+        NSString *json = [[NSString alloc] initWithBytes:jbin.data
+                                                  length:jbin.size
+                                                encoding:NSUTF8StringEncoding];
+        if (json)
+            contentTypes = mob_uttypes_from_json(json);
+    }
+
     dispatch_async(dispatch_get_main_queue(), ^{
       UIDocumentPickerViewController *vc =
-          [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[ UTTypeData ]
+          [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:contentTypes
                                                                       asCopy:YES];
       vc.allowsMultipleSelection = YES;
       g_files_delegate = [[MobFilesDelegate alloc] init];
