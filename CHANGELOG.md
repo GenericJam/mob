@@ -10,11 +10,24 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+---
+
+## [0.7.1] - 2026-06-16
+
 ### Added
 - **Collocated screen templates**: a `Mob.Screen` with a sibling `<name>.mob.heex`
   and no inline `render/1` gets `render/1` compiled from that template
   (`@external_resource`, so editing the template recompiles the screen). An
   inline `render/1` still wins. Opt-in and additive. (#22)
+- **`Mob.Files.pick/2` type filtering**: `:types` now limits what the document
+  picker offers — extension strings (`"livemd"`), MIME strings (`"application/pdf"`,
+  `"text/*"`), semantic atoms (`:images`, `:video`, `:audio`, `:pdf`, `:text`),
+  explicit `{:extension|:mime|:uti, value}` tuples, or `:any` (default).
+  iOS filters strictly via `UTType` (extensions resolve even for unregistered
+  custom types); Android SAF filters by MIME only, so `Mob.Files.accept/2` +
+  `matches?/2` enforce the filter on results for consistent cross-platform
+  semantics. Backward-compatible — the default `:any` preserves the previous
+  "offer everything" behavior. See `decisions/2026-06-16-files-pick-type-filter.md`.
 
 ---
 
