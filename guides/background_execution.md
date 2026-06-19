@@ -40,15 +40,17 @@ audio, and other entitlement-backed modes. These wakeups are constrained by the
 OS and usually provide a short execution window rather than an always-on
 process.
 
-Mob also exposes `Mob.Background.keep_alive/0` for apps that legitimately use
-audio. It keeps iOS execution alive through the audio background mode. Do not
+The opt-in `mob_background` plugin (`{:mob_background, "~> 0.1"}` + `config :mob,
+:plugins, [:mob_background]`) exposes `MobBackground.keep_alive/0` for apps that
+legitimately use audio. It keeps iOS execution alive through the audio
+background mode. Do not
 use this just to hide a server listener in the background; Apple expects the
 declared background mode to match a user-visible app capability.
 
 ## Android
 
 Android permits true long-running background work through a foreground service.
-Mob maps `Mob.Background.keep_alive/0` to a foreground service on Android.
+Mob maps `MobBackground.keep_alive/0` to a foreground service on Android.
 Foreground services must show a persistent notification; Android intentionally
 makes always-running background work visible to the user.
 
@@ -63,7 +65,7 @@ patterns for deferred work.
 | Show or route a server event to a screen | Push notification via APNs / FCM |
 | Refresh local state after a user taps a notification | Handle `{:notification, notif}` and fetch from your server |
 | Run continuously while visible | Normal Mob screen / supervision tree |
-| Run continuously in Android background | `Mob.Background.keep_alive/0` foreground service |
+| Run continuously in Android background | `MobBackground.keep_alive/0` foreground service |
 | Run continuously in iOS background | Only for legitimate background modes such as audio, location, or Bluetooth |
 | Hold a hidden always-on iOS socket | Not a supported mobile OS model |
 
@@ -77,8 +79,8 @@ Design background flows as resumable work:
   or receives a notification.
 - Make notification handlers idempotent, because a user may tap an old
   notification after the app has already synced.
-- Use `Mob.Background.keep_alive/0` only when your app has a real foreground
+- Use `MobBackground.keep_alive/0` only when your app has a real foreground
   service or background audio/location/Bluetooth reason.
 
-For the platform API details, see `Mob.Background` and
+For the platform API details, see the `mob_background` plugin and
 [Device Capabilities](device_capabilities.md).

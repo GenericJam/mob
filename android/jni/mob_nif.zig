@@ -264,8 +264,6 @@ pub const BridgeMethods = extern struct {
     storage_dir: jni.JMethodID = null,
     storage_save_to_media_store: jni.JMethodID = null,
     storage_external_files_dir: jni.JMethodID = null,
-    background_keep_alive: jni.JMethodID = null,
-    background_stop: jni.JMethodID = null,
     // Cached before nif_load (used during BEAM startup before NIFs are loaded)
     set_startup_phase: jni.JMethodID = null,
     set_startup_error: jni.JMethodID = null,
@@ -2877,36 +2875,6 @@ export fn nif_webview_go_back(
     return erts.ok(env);
 }
 
-// ── Background (foreground service) ──────────────────────────────────────
-
-export fn nif_background_keep_alive(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    _ = argv;
-    var attached: c_int = 0;
-    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
-    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.background_keep_alive);
-    detachIfAttached(attached);
-    return erts.ok(env);
-}
-
-export fn nif_background_stop(
-    env: ?*erts.ErlNifEnv,
-    argc: c_int,
-    argv: [*]const erts.ERL_NIF_TERM,
-) callconv(.c) erts.ERL_NIF_TERM {
-    _ = argc;
-    _ = argv;
-    var attached: c_int = 0;
-    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
-    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.background_stop);
-    detachIfAttached(attached);
-    return erts.ok(env);
-}
-
 // ── Mob.Device — lifecycle events + queries ──────────────────────────────
 // Android implementation is partial — only `:appearance` (color scheme
 // changes from MainActivity.onConfigurationChanged) is wired today. The
@@ -3315,8 +3283,6 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     if (!cacheRequired(jenv, "webview_go_back", "()V", &Bridge.webview_go_back)) return -1;
     if (!cacheRequired(jenv, "motion_start", "(JLjava/lang/String;)V", &Bridge.motion_start)) return -1;
     if (!cacheRequired(jenv, "motion_stop", "()V", &Bridge.motion_stop)) return -1;
-    if (!cacheRequired(jenv, "background_keep_alive", "()V", &Bridge.background_keep_alive)) return -1;
-    if (!cacheRequired(jenv, "background_stop", "()V", &Bridge.background_stop)) return -1;
 
     // Mob.Peripheral.VendorUsb. Optional rather than required so apps
     // generated from an older `mob_new` template (without the matching
@@ -3443,8 +3409,6 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "webview_go_back", .arity = 0, .fptr = nif_webview_go_back, .flags = 0 },
     .{ .name = "register_component", .arity = 1, .fptr = nif_register_component, .flags = 0 },
     .{ .name = "deregister_component", .arity = 1, .fptr = nif_deregister_component, .flags = 0 },
-    .{ .name = "background_keep_alive", .arity = 0, .fptr = nif_background_keep_alive, .flags = 0 },
-    .{ .name = "background_stop", .arity = 0, .fptr = nif_background_stop, .flags = 0 },
     // Mob.Device — lifecycle events + queries (Android stubs except dispatcher set).
     .{ .name = "device_set_dispatcher", .arity = 1, .fptr = nif_device_set_dispatcher, .flags = 0 },
     .{ .name = "device_battery_state", .arity = 0, .fptr = nif_device_battery_state, .flags = 0 },

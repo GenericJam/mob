@@ -175,7 +175,7 @@ and reports drain and rate. The 30-minute duration is the default; longer runs g
 better rate estimates. Battery is read via `ideviceinfo` at start and end (USB
 connected briefly for reads only) for 1% precision. The screen-on row was measured
 at minimum brightness with the screen forced on; the screen-off row uses
-`Mob.Background` audio keep-alive so the BEAM keeps running after the device
+the `mob_background` plugin's audio keep-alive so the BEAM keeps running after the device
 locks. Android uses `mix mob.battery_bench_android` with `adb shell dumpsys
 battery` for per-second mAh readings.
 

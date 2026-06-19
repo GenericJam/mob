@@ -12,6 +12,24 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.3] - 2026-06-19
+
+### Removed (BREAKING)
+- **`Mob.Background` is no longer in core — it moved to the opt-in
+  `mob_background` plugin.** Background-execution keep-alive (iOS silent
+  AVAudioEngine / Android `dataSync` foreground service) and its
+  `background_keep_alive`/`background_stop` NIFs are removed from `:mob_nif`.
+  Apps that call `Mob.Background.keep_alive/0` must add
+  `{:mob_background, "~> 0.1"}`, enable it in `mob.exs`
+  (`config :mob, :plugins, [:mob_background]`), and call
+  `MobBackground.keep_alive/0` instead. Most apps never used it; the default is
+  now that an app ships **no** foreground service unless it opts in — which is
+  also what Google Play wants (an unused `dataSync` FGS is a policy rejection).
+  Verified on Android (physical + emulator) and the iOS simulator via
+  mob_plugin_demo.
+
+---
+
 ## [0.7.2] - 2026-06-19
 
 ### Added
