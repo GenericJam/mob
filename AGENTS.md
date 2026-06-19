@@ -23,8 +23,8 @@ Mob is three coordinated repos. **Know which one to edit before you change anyth
 | Repo | Path | What lives here | Edit when |
 |---|---|---|---|
 | **mob** | `~/code/mob` | Runtime library: `Mob.Screen`, `Mob.App`, `Mob.Renderer`, `Mob.Dist`, `Mob.Test`, the iOS Swift / Android Kotlin native bridges, the NIF | UI behavior, on-device runtime, native bridge changes |
-| **mob_dev** | `~/code/mob_dev` | Mix tasks: `mob.deploy`, `mob.connect`, `mob.devices`, `mob.emulators`, `mob.provision`, `mob.doctor`, `mob.battery_bench_*`. Device discovery (`MobDev.Discovery.{Android,IOS}`). Native build orchestration (`MobDev.NativeBuild`). OTP tarball download/cache (`MobDev.OtpDownloader`). | Build/deploy mechanics, device handling, dev tooling |
-| **mob_new** | `~/code/mob_new` | Project generator. Hex archive (`mix archive.install hex mob_new`). Templates in `priv/templates/mob.new/`. Generates both native Mob UI projects and Phoenix LiveView wrappers. | Generator output for new projects |
+| **mob_dev** | `~/code/mob_dev` | Mix tasks: `mob.deploy`, `mob.connect`, `mob.devices`, `mob.emulators`, `mob.provision`, `mob.doctor`, `mob.battery_bench_*`. Igniter installers (`mob.add_nif`, `mob.enable`, `mob.adopt`). Device discovery (`MobDev.Discovery.{Android,IOS}`). Native build orchestration (`MobDev.NativeBuild`). OTP tarball download/cache (`MobDev.OtpDownloader`). | Build/deploy mechanics, device handling, dev tooling, **Igniter tasks that mutate an existing project** |
+| **mob_new** | `~/code/mob_new` | Project generator. Hex archive (`mix archive.install hex mob_new`). Templates in `priv/templates/mob.new/`. Generates both native Mob UI projects and Phoenix LiveView wrappers. | Greenfield generator output. **Must stay self-contained** (`ArchiveSelfContainedTest`) — no hex-dep modules reachable from archive code, so Igniter-based tasks live in mob_dev, not here |
 
 Cross-repo changes are common — fixing one user-visible behavior often needs
 the runtime patched in `mob`, the build retooled in `mob_dev`, **and** the
@@ -189,6 +189,18 @@ These are the things we've burned ourselves on. Following them isn't optional.
     when a cached OTP runtime *lacks* `lib/crypto-*/ebin/crypto.beam`;
     current tarballs have it. See `mob/crypto_plan.md` for the rebuild
     process when bumping OpenSSL.
+
+13. **Igniter-based tasks live in mob_dev, never in the mob_new archive.**
+    mob_new ships as a self-contained Mix archive; `ArchiveSelfContainedTest`
+    pins that no hex-dep modules are reachable from archive code (an archive
+    bundles only its own beams, so a call into a hex dep crashes every
+    installed user with `UndefinedFunctionError`). Igniter is a hex dep, so any
+    `Igniter.Mix.Task` (`mob.add_nif`, `mob.enable`, `mob.adopt`) belongs in
+    mob_dev — a normal project dependency where Igniter is on the path. A task
+    that needs mob_new's *templates* (e.g. `mob.adopt --android/--ios`) reads
+    them from the installed mob_new archive via `:code.priv_dir(:mob_new)`
+    rather than duplicating them. See
+    `mob_dev/decisions/2026-06-19-mob-adopt-lives-in-mob_dev.md`.
 
 ## Where to look
 
