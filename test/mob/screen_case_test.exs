@@ -43,6 +43,24 @@ defmodule Mob.ScreenCaseTest do
     end
   end
 
+  # Pushes another screen, both from an explicit event and from a tap message.
+  defmodule NavScreen do
+    use Mob.Screen
+
+    def mount(_params, _session, socket), do: {:ok, socket}
+    def render(_assigns), do: %{type: :column, props: %{}, children: []}
+
+    def handle_event("go", _params, socket) do
+      {:noreply, Mob.Socket.push_screen(socket, CounterScreen)}
+    end
+
+    def handle_info({:tap, :go}, socket) do
+      {:noreply, Mob.Socket.push_screen(socket, CounterScreen)}
+    end
+
+    def handle_info(_message, socket), do: {:noreply, socket}
+  end
+
   describe "mount_screen/3 + assigns/1" do
     test "mounts with initial assigns" do
       assert assigns(mount_screen(CounterScreen)).count == 0
@@ -131,6 +149,37 @@ defmodule Mob.ScreenCaseTest do
       assert MapSet.member?(types, :column)
       assert MapSet.member?(types, :text)
       assert MapSet.member?(types, :native_view)
+    end
+  end
+
+  describe "navigated_to/1" do
+    test "nil before any navigation" do
+      assert navigated_to(mount_screen(CounterScreen)) == nil
+    end
+
+    test "records a push from an explicit event" do
+      view = NavScreen |> mount_screen() |> render_event("go")
+      assert navigated_to(view) == {:push, CounterScreen, %{}}
+    end
+
+    test "records a push from a tap (handle_info)" do
+      view = NavScreen |> mount_screen() |> render_info({:tap, :go})
+      assert navigated_to(view) == {:push, CounterScreen, %{}}
+    end
+  end
+
+  # The same assertion helpers, pointed at a live device over Mob.Test instead
+  # of an in-process socket. Excluded by default (needs hardware + a connected
+  # node); shown here as the worked example of the device backend.
+  describe "device backend (@tag :on_device)" do
+    @tag :on_device
+    test "the same assertions run against a live device node" do
+      node = :"mob_screen_case_demo@127.0.0.1"
+      Mob.Test.navigate(node, CounterScreen)
+
+      view = device_view(node)
+      assert_renderable(view)
+      assert navigated_to(view) == CounterScreen
     end
   end
 end

@@ -71,9 +71,21 @@ defmodule Mob.ScreenCase do
   end
 
   defmodule View do
-    @moduledoc "A mounted screen under test: the screen module plus its current socket."
-    @enforce_keys [:module, :socket]
-    defstruct [:module, :socket]
+    @moduledoc """
+    A screen under test. Two backends, same query/assertion surface:
+
+      * `source: :beam`   — `module` + `socket`, driven in-process (the default,
+        built by `mount_screen/3`).
+      * `source: :device` — a `node` running the app, read over `Mob.Test`'s
+        Erlang-distribution RPC (built by `device_view/1`, gated behind
+        `@tag :on_device`).
+
+    `tree/1`, `assigns/1`, `find/3`, `text/1`, `assert_renderable/2` and
+    `navigated_to/1` work against either, so an assertion reads the same whether
+    it ran here in milliseconds or against real hardware.
+    """
+    @enforce_keys [:source]
+    defstruct [:source, :module, :socket, :node]
   end
 
   # Renderable node types, derived at compile time from the same authoritative
@@ -120,7 +132,7 @@ defmodule Mob.ScreenCase do
 
     case module.mount(params, session, socket) do
       {:ok, %Mob.Socket{} = socket} ->
-        %View{module: module, socket: socket}
+        %View{source: :beam, module: module, socket: socket}
 
       other ->
         raise ArgumentError,
@@ -128,9 +140,35 @@ defmodule Mob.ScreenCase do
     end
   end
 
-  @doc "Dispatch a `handle_event/3` (the explicit-event style) and return the updated `View`."
+  @doc """
+  Wrap a running device `node` as a `View` so the query/assertion helpers read
+  it over `Mob.Test`'s Erlang-distribution RPC. The device-backed counterpart to
+  `mount_screen/3`. Use behind `@tag :on_device`; get the `node` from
+  `mix mob.connect` / `Mob.Test`. Driving (navigate, tap) stays on `Mob.Test`;
+  this is for asserting against the live screen with the same helpers.
+
+      @tag :on_device
+      test "the live home screen is renderable" do
+        node = :"my_app_android@127.0.0.1"
+        Mob.Test.navigate(node, MyApp.HomeScreen)
+        view = device_view(node)
+        assert_renderable(view)
+        assert navigated_to(view) == MyApp.HomeScreen
+      end
+  """
+  @spec device_view(node()) :: View.t()
+  def device_view(node) when is_atom(node), do: %View{source: :device, node: node}
+
+  @doc """
+  Dispatch a `handle_event/3` (the explicit-event style) and return the updated
+  `View`. In-BEAM only; on a device, drive with `Mob.Test.tap/2`.
+  """
   @spec render_event(View.t(), String.t(), map()) :: View.t()
-  def render_event(%View{module: module, socket: socket} = view, event, params \\ %{})
+  def render_event(
+        %View{source: :beam, module: module, socket: socket} = view,
+        event,
+        params \\ %{}
+      )
       when is_binary(event) do
     {:noreply, socket} = module.handle_event(event, params, socket)
     %{view | socket: socket}
@@ -139,23 +177,38 @@ defmodule Mob.ScreenCase do
   @doc """
   Deliver a message to the screen's `handle_info/2` and return the updated
   `View`. This is how taps reach a screen on device (a `Button`'s `on_tap`
-  sends a message), so it is the in-BEAM equivalent of a tap.
+  sends a message), so it is the in-BEAM equivalent of a tap. In-BEAM only.
   """
   @spec render_info(View.t(), term()) :: View.t()
-  def render_info(%View{module: module, socket: socket} = view, message) do
+  def render_info(%View{source: :beam, module: module, socket: socket} = view, message) do
     {:noreply, socket} = module.handle_info(message, socket)
     %{view | socket: socket}
   end
 
-  @doc "The screen's current assigns. Mirrors `Mob.Test.assigns/1`."
+  @doc "The screen's current assigns. Mirrors `Mob.Test.assigns/1` (and uses it on device)."
   @spec assigns(View.t()) :: map()
-  def assigns(%View{socket: socket}), do: socket.assigns
+  def assigns(%View{source: :beam, socket: socket}), do: socket.assigns
+  def assigns(%View{source: :device, node: node}), do: Mob.Test.assigns(node)
+
+  @doc """
+  The screen the last event navigated to, or `nil` if none.
+
+    * in-BEAM: the navigation action recorded on the socket by
+      `Mob.Socket.push_screen/3` and friends, e.g. `{:push, Dest, params}`.
+    * on device: the screen currently showing (`Mob.Test.screen/1`).
+  """
+  @spec navigated_to(View.t()) :: term() | nil
+  def navigated_to(%View{source: :beam, socket: socket}), do: Map.get(socket.__mob__, :nav_action)
+  def navigated_to(%View{source: :device, node: node}), do: Mob.Test.screen(node)
 
   # ── Querying the rendered tree ───────────────────────────────────────────────
 
-  @doc "Render the screen to its current view tree. Mirrors `Mob.Test.tree/1`."
+  @doc "The current view tree, from in-BEAM render or the device. Mirrors `Mob.Test.tree/1`."
   @spec tree(View.t() | map()) :: map()
-  def tree(%View{module: module, socket: socket}), do: module.render(socket.assigns)
+  def tree(%View{source: :beam, module: module, socket: socket}),
+    do: module.render(socket.assigns)
+
+  def tree(%View{source: :device, node: node}), do: Mob.Test.view_tree(node)
   def tree(%{type: _} = node), do: node
 
   @doc "Every node in the tree, depth-first. Mirrors `Mob.Test.flatten_tree/1`."
