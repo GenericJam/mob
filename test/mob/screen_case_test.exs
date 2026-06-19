@@ -157,14 +157,30 @@ defmodule Mob.ScreenCaseTest do
       assert navigated_to(mount_screen(CounterScreen)) == nil
     end
 
-    test "records a push from an explicit event" do
+    test "records a push from an explicit event as the destination module" do
       view = NavScreen |> mount_screen() |> render_event("go")
-      assert navigated_to(view) == {:push, CounterScreen, %{}}
+      assert navigated_to(view) == CounterScreen
     end
 
-    test "records a push from a tap (handle_info)" do
+    test "records a push from a tap (handle_info) as the destination module" do
       view = NavScreen |> mount_screen() |> render_info({:tap, :go})
-      assert navigated_to(view) == {:push, CounterScreen, %{}}
+      assert navigated_to(view) == CounterScreen
+    end
+  end
+
+  # tree/1's :device clause must route to Mob.Test.tree/1 (the logical render
+  # tree, shape %{type, props, children}) — NOT Mob.Test.view_tree/1, which is
+  # the native accessibility tree (shape %{type, label, value, frame}) the query
+  # helpers can't read. The @tag :on_device test below is excluded by default,
+  # so this regression shipped undetected once; this pins the dispatch with no
+  # device by exploiting the two functions' divergent behavior against a down
+  # node: Mob.Test.tree/1 does `rpc(node, :inspect).tree` and so raises
+  # BadMapError on the `{:badrpc, :nodedown}` it gets back, whereas
+  # Mob.Test.view_tree/1 returns that tuple without raising.
+  describe "tree/1 :device dispatch" do
+    test "routes to Mob.Test.tree/1, not Mob.Test.view_tree/1" do
+      view = device_view(:"nonexistent_node@127.0.0.1")
+      assert_raise BadMapError, fn -> tree(view) end
     end
   end
 

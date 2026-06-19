@@ -193,12 +193,28 @@ defmodule Mob.ScreenCase do
   @doc """
   The screen the last event navigated to, or `nil` if none.
 
-    * in-BEAM: the navigation action recorded on the socket by
-      `Mob.Socket.push_screen/3` and friends, e.g. `{:push, Dest, params}`.
+  Returns the destination **module** on both backends, so the same assertion
+  reads identically whether the test ran in-BEAM or against a device:
+
+      assert navigated_to(view) == MyApp.CounterScreen
+
+    * in-BEAM: the destination of the nav action recorded on the socket by
+      `Mob.Socket.push_screen/3` and friends. Destination-bearing actions
+      (`{:push, Dest, _}`, `{:reset, Dest, _}`, `{:pop_to, Dest}`) return
+      `Dest`; destinationless ones (`{:pop}`, `{:pop_to_root}`,
+      `{:switch_tab, tab}`) return the raw action unchanged.
     * on device: the screen currently showing (`Mob.Test.screen/1`).
   """
   @spec navigated_to(View.t()) :: term() | nil
-  def navigated_to(%View{source: :beam, socket: socket}), do: Map.get(socket.__mob__, :nav_action)
+  def navigated_to(%View{source: :beam, socket: socket}) do
+    case Map.get(socket.__mob__, :nav_action) do
+      {:push, dest, _params} -> dest
+      {:reset, dest, _params} -> dest
+      {:pop_to, dest} -> dest
+      other -> other
+    end
+  end
+
   def navigated_to(%View{source: :device, node: node}), do: Mob.Test.screen(node)
 
   # ── Querying the rendered tree ───────────────────────────────────────────────
@@ -208,7 +224,7 @@ defmodule Mob.ScreenCase do
   def tree(%View{source: :beam, module: module, socket: socket}),
     do: module.render(socket.assigns)
 
-  def tree(%View{source: :device, node: node}), do: Mob.Test.view_tree(node)
+  def tree(%View{source: :device, node: node}), do: Mob.Test.tree(node)
   def tree(%{type: _} = node), do: node
 
   @doc "Every node in the tree, depth-first. Mirrors `Mob.Test.flatten_tree/1`."
