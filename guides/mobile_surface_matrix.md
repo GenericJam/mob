@@ -197,7 +197,7 @@ and orthogonal — composition over a fat component library.
 
 | Capability | Status | iOS | Android | Notes |
 |--|--|--|--|--|
-| Foreground service / keep-alive | ✅ | ✓ | ✓ | `Mob.Background.keep_alive/0` |
+| Foreground service / keep-alive | ✅ | ✓ | ✓ | `MobBackground.keep_alive/0` (mob_background plugin) |
 | Background fetch (silent periodic) | ❌ | — | — | Plugin candidate (iOS Background Tasks framework / Android WorkManager) |
 | Silent push handling | 🟡 | 🟡 | 🟡 | Push arrives but no dedicated "wake-and-handle-then-suspend" lifecycle |
 | Background URL session | ❌ | — | — | Plugin candidate |

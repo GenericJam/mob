@@ -59,9 +59,6 @@
     %% Native view components
     register_component/1,
     deregister_component/1,
-    %% Background execution
-    background_keep_alive/0,
-    background_stop/0,
     %% Device state
     battery_level/0,
     %% Device lifecycle (Mob.Device)
@@ -154,8 +151,6 @@
     motion_stop/0,
     take_launch_notification/0,
     take_opened_document/0,
-    background_keep_alive/0,
-    background_stop/0,
     battery_level/0,
     device_set_dispatcher/1,
     device_battery_state/0,
@@ -271,8 +266,6 @@ motion_start(_Sensors, _Interval) -> erlang:nif_error(not_loaded).
 motion_stop() -> erlang:nif_error(not_loaded).
 take_launch_notification() -> erlang:nif_error(not_loaded).
 take_opened_document() -> erlang:nif_error(not_loaded).
-background_keep_alive() -> erlang:nif_error(not_loaded).
-background_stop() -> erlang:nif_error(not_loaded).
 battery_level() -> erlang:nif_error(not_loaded).
 device_set_dispatcher(_Pid) -> erlang:nif_error(not_loaded).
 device_battery_state() -> erlang:nif_error(not_loaded).
