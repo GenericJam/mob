@@ -12,6 +12,18 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.2] - 2026-06-19
+
+### Added
+- **`Mob.ScreenCase`** — the blessed way to unit-test a `Mob.Screen` in-BEAM,
+  with an optional device backend. Provides `mount_screen/3`,
+  `render_event`/`render_info`, tree queries (`find`/`find_all`/`text`),
+  `assert_renderable/2`, and `navigated_to/1`. On `:beam` it runs in
+  milliseconds; the same assertions run against real hardware via `:device`.
+  `navigated_to/1` returns the destination module on both backends. (#44)
+
+---
+
 ## [0.7.1] - 2026-06-16
 
 ### Added
