@@ -10,6 +10,18 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **Tap-handle registry is now double-buffered (Android + iOS) — high-frequency
+  events no longer drop during a render.** `clear_taps` reset the handle count
+  to 0 and re-registered every handler in tree order, so a drag/scroll firing
+  from the UI thread *while* a render rebuilt the table saw a transiently-small
+  count and a half-built table and got dropped — worse the later a widget
+  registered (e.g. a `Canvas` after a row of `Button`s). `register_tap` now
+  builds into the inactive table while readers keep resolving the last committed
+  one; `set_root` swaps them atomically under `tap_mutex`. A concurrent event
+  always sees a complete table on either side of the swap. No API change.
+  Verified on-device (moto, finger-drag canvas).
+
 ---
 
 ## [0.7.3] - 2026-06-19

@@ -949,8 +949,17 @@ const ComponentHandle = extern struct {
     active: c_int,
 };
 
-var tap_handles: [MAX_TAP_HANDLES]TapHandle = @splat(std.mem.zeroes(TapHandle));
-var tap_handle_next: c_int = 0;
+// Double-buffered tap registry. Readers (mob_send_*) resolve a handle against
+// the ACTIVE table; a render frame builds into the INACTIVE table (register_tap)
+// and swaps it in atomically at set_root. This closes a race where a high-
+// frequency event (drag/scroll) firing *during* a re-render saw a half-rebuilt
+// table and got dropped — worse the later a widget registered (e.g. a canvas
+// after a row of buttons). With the swap a concurrent send always sees a
+// complete table (old or new), never a partial one.
+var tap_tables: [2][MAX_TAP_HANDLES]TapHandle = std.mem.zeroes([2][MAX_TAP_HANDLES]TapHandle);
+var tap_active: usize = 0; // index of the table readers resolve against
+var tap_active_count: c_int = 0; // committed handle count in the active table
+var tap_build_count: c_int = 0; // handles registered so far into the building table
 var tap_mutex: ?*erts.ErlNifMutex = null;
 /// Snapshotted by nif_set_root; written by nif_set_transition. Guarded by
 /// tap_mutex (the C original reused that mutex rather than allocating a
@@ -995,8 +1004,8 @@ const TapSnap = struct {
 fn snapTap(handle: c_int) ?TapSnap {
     erts.enif_mutex_lock(tap_mutex);
     defer erts.enif_mutex_unlock(tap_mutex);
-    if (handle < 0 or handle >= tap_handle_next) return null;
-    const h = &tap_handles[@intCast(handle)];
+    if (handle < 0 or handle >= tap_active_count) return null;
+    const h = &tap_tables[tap_active][@intCast(handle)];
     if (h.tag_env == null) return null;
     return TapSnap{ .pid = h.pid, .tag = h.tag, .seq = h.seq };
 }
@@ -1157,8 +1166,8 @@ pub export fn mob_set_throttle_config(
 ) callconv(.c) void {
     erts.enif_mutex_lock(tap_mutex);
     defer erts.enif_mutex_unlock(tap_mutex);
-    if (handle < 0 or handle >= tap_handle_next) return;
-    const h = &tap_handles[@intCast(handle)];
+    if (handle < 0 or handle >= tap_active_count) return;
+    const h = &tap_tables[tap_active][@intCast(handle)];
     if (h.tag_env == null) return;
     h.throttle_ms = throttle_ms;
     h.debounce_ms = debounce_ms;
@@ -1174,8 +1183,8 @@ pub export fn mob_set_throttle_config(
 fn throttleCheck(handle: c_int, x: f64, y: f64, default_throttle_ms: i32, default_delta: f64) bool {
     erts.enif_mutex_lock(tap_mutex);
     defer erts.enif_mutex_unlock(tap_mutex);
-    if (handle < 0 or handle >= tap_handle_next) return false;
-    const h = &tap_handles[@intCast(handle)];
+    if (handle < 0 or handle >= tap_active_count) return false;
+    const h = &tap_tables[tap_active][@intCast(handle)];
     if (h.tag_env == null) return false;
 
     const throttle_ms: i32 = if (h.throttle_ms != 0) h.throttle_ms else default_throttle_ms;
@@ -1499,6 +1508,12 @@ export fn nif_set_root(
     g_transition[1] = 'o';
     g_transition[2] = 'n';
     g_transition[3] = 'e';
+    // Commit the freshly-built tap table: register_tap wrote this frame's
+    // handlers into 1 - tap_active, so make that table active now. Events for
+    // the new tree (delivered to Compose just below) resolve against it, and
+    // any send racing this swap sees a complete table on either side.
+    tap_active = 1 - tap_active;
+    tap_active_count = tap_build_count;
     erts.enif_mutex_unlock(tap_mutex);
     const transition_cstr: [*:0]const u8 = @ptrCast(&transition);
 
@@ -1538,11 +1553,11 @@ export fn nif_register_tap(
 
     erts.enif_mutex_lock(tap_mutex);
     defer erts.enif_mutex_unlock(tap_mutex);
-    if (tap_handle_next >= @as(c_int, @intCast(MAX_TAP_HANDLES))) return erts.badarg(env);
+    if (tap_build_count >= @as(c_int, @intCast(MAX_TAP_HANDLES))) return erts.badarg(env);
 
-    const handle: c_int = tap_handle_next;
-    tap_handle_next += 1;
-    const slot = &tap_handles[@intCast(handle)];
+    const handle: c_int = tap_build_count;
+    tap_build_count += 1;
+    const slot = &tap_tables[1 - tap_active][@intCast(handle)];
     slot.pid = pid;
     slot.tag_env = erts.enif_alloc_env() orelse return erts.atom(env, "error");
     slot.tag = erts.enif_make_copy(slot.tag_env, tag_term);
@@ -1561,9 +1576,13 @@ export fn nif_clear_taps(
     _ = argv;
     erts.enif_mutex_lock(tap_mutex);
     defer erts.enif_mutex_unlock(tap_mutex);
+    // Prepare the INACTIVE (building) table for a fresh frame; leave the active
+    // table intact so concurrent mob_send_* keep resolving the last committed
+    // frame. The freshly built table is swapped in at set_root.
+    const build = &tap_tables[1 - tap_active];
     var i: usize = 0;
-    while (i < @as(usize, @intCast(tap_handle_next))) : (i += 1) {
-        const h = &tap_handles[i];
+    while (i < MAX_TAP_HANDLES) : (i += 1) {
+        const h = &build[i];
         if (h.tag_env != null) {
             erts.enif_free_env(h.tag_env);
             h.tag_env = null;
@@ -1579,7 +1598,7 @@ export fn nif_clear_taps(
         h.last_y = 0;
         h.seq = 0;
     }
-    tap_handle_next = 0;
+    tap_build_count = 0;
     return erts.ok(env);
 }
 

@@ -77,8 +77,17 @@ typedef struct {
     uint64_t seq;          // monotonic counter per handle
 } TapHandle;
 
-static TapHandle tap_handles[MAX_TAP_HANDLES];
-static int tap_handle_next = 0;
+// Double-buffered tap registry (see android/jni/mob_nif.zig for full rationale).
+// `tap_handles`/`tap_handle_next` point at the ACTIVE table + its committed
+// count — readers (mob_send_*) keep using them unchanged. A render builds into
+// the INACTIVE table via register_tap (tap_build_count) and set_root swaps it in
+// atomically under tap_mutex, so a concurrent high-frequency send (drag/scroll)
+// never observes a half-rebuilt table.
+static TapHandle tap_tables[2][MAX_TAP_HANDLES];
+static int tap_active = 0;
+static TapHandle *tap_handles = tap_tables[0]; // active table (readers use this)
+static int tap_handle_next = 0;                // active committed count (readers' bound)
+static int tap_build_count = 0;                // cursor into the building table
 static ErlNifMutex *tap_mutex = NULL;
 
 // Convert mach absolute time to nanoseconds (initialised once).
@@ -1682,6 +1691,12 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     strncpy(transition, g_transition, sizeof(transition) - 1);
     transition[sizeof(transition) - 1] = 0;
     strncpy(g_transition, "none", sizeof(g_transition));
+    // Commit the freshly-built tap table: register_tap wrote this frame's
+    // handlers into 1 - tap_active; make that table active now so events for the
+    // new tree resolve against it (readers see a consistent pair under the lock).
+    tap_active = 1 - tap_active;
+    tap_handles = tap_tables[tap_active];
+    tap_handle_next = tap_build_count;
     enif_mutex_unlock(tap_mutex);
 
     NSString *transitionStr = [NSString stringWithUTF8String:transition];
@@ -1709,14 +1724,15 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
     }
 
     enif_mutex_lock(tap_mutex);
-    if (tap_handle_next >= MAX_TAP_HANDLES) {
+    if (tap_build_count >= MAX_TAP_HANDLES) {
         enif_mutex_unlock(tap_mutex);
         return enif_make_badarg(env);
     }
-    int handle = tap_handle_next++;
-    tap_handles[handle].pid = pid;
-    tap_handles[handle].tag_env = enif_alloc_env();
-    tap_handles[handle].tag = enif_make_copy(tap_handles[handle].tag_env, tag_term);
+    TapHandle *build = tap_tables[1 - tap_active];
+    int handle = tap_build_count++;
+    build[handle].pid = pid;
+    build[handle].tag_env = enif_alloc_env();
+    build[handle].tag = enif_make_copy(build[handle].tag_env, tag_term);
     enif_mutex_unlock(tap_mutex);
 
     return enif_make_int(env, handle);
@@ -1726,23 +1742,27 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
 
 static ERL_NIF_TERM nif_clear_taps(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     enif_mutex_lock(tap_mutex);
-    for (int i = 0; i < tap_handle_next; i++) {
-        if (tap_handles[i].tag_env) {
-            enif_free_env(tap_handles[i].tag_env);
-            tap_handles[i].tag_env = NULL;
+    // Prepare the INACTIVE (building) table for a fresh frame; leave the active
+    // table intact so concurrent mob_send_* keep resolving the last committed
+    // frame. The freshly built table is swapped in at set_root.
+    TapHandle *build = tap_tables[1 - tap_active];
+    for (int i = 0; i < MAX_TAP_HANDLES; i++) {
+        if (build[i].tag_env) {
+            enif_free_env(build[i].tag_env);
+            build[i].tag_env = NULL;
         }
         // Reset throttle state — slots get reused across renders.
-        tap_handles[i].throttle_ms = 0;
-        tap_handles[i].debounce_ms = 0;
-        tap_handles[i].delta_threshold = 0;
-        tap_handles[i].leading = 1;
-        tap_handles[i].trailing = 1;
-        tap_handles[i].last_emit_ns = 0;
-        tap_handles[i].last_x = 0;
-        tap_handles[i].last_y = 0;
-        tap_handles[i].seq = 0;
+        build[i].throttle_ms = 0;
+        build[i].debounce_ms = 0;
+        build[i].delta_threshold = 0;
+        build[i].leading = 1;
+        build[i].trailing = 1;
+        build[i].last_emit_ns = 0;
+        build[i].last_x = 0;
+        build[i].last_y = 0;
+        build[i].seq = 0;
     }
-    tap_handle_next = 0;
+    tap_build_count = 0;
     enif_mutex_unlock(tap_mutex);
     return enif_make_atom(env, "ok");
 }
