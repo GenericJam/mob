@@ -8,7 +8,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.7.4] - 2026-06-20
 
 ### Fixed
 - **Tap-handle registry is now double-buffered (Android + iOS) — high-frequency
