@@ -312,6 +312,37 @@ rather than hot-push.
 
 ---
 
+## Path-dependency mob: on-device `mob_nif:log` undef / stale beams
+
+**Symptom:** You depend on mob as a local **path dependency**
+(`{:mob, path: "../mob", override: true}`) to test an unreleased framework
+change on a device. The app crash-loops at boot — logcat shows the bootstrap's
+first `mob_nif:log/1` (or `mob_nif:platform/0`) call returning **`undef`**, even
+though the on-device `mob_nif.beam` is present and exports the function and the
+native `.so` loaded without a `load_nif` error.
+
+**Cause:** The path-dep's beams in `_build` were stale or only partially
+recompiled, so `mix mob.deploy` pushed an `mob` that disagreed with the boot
+script — `mob_nif` wasn't loaded when boot first called it. A coherently-built
+mob (the published Hex package, or a path-dep recompiled as its own step) boots
+fine from the identical app, which is how you tell this apart from a real
+framework regression.
+
+**Fix:** Recompile the path-dep explicitly *before* deploying, then deploy:
+
+```bash
+mix deps.compile mob --force
+mix mob.deploy --native --device <serial>
+```
+
+Also compile with the toolchain whose Elixir matches the on-device runtime
+(`mob.exs`'s `elixir_lib`) — building candidate `.exs` with a different Elixir
+(e.g. an `-rc` vs the final OTP build) emits `:elixir_quote` calls the device
+stdlib lacks, a *separate* on-device `undef`. For the committed project, prefer
+the Hex package and use the path-dep only as a transient verification vehicle.
+
+---
+
 ## Android: app crashes on first distribution startup
 
 **Symptom:** App starts successfully, then crashes 3–5 seconds later. Logcat
