@@ -623,8 +623,12 @@ private func boxAlignmentFromString(_ s: String) -> Alignment {
 private struct MobCanvasView: View {
     let node: MobNode
 
+    // Tracks whether the active drag has emitted its "began" sample yet, so the
+    // first onChanged reports phase "began" and the rest "dragging".
+    @State private var dragging = false
+
     var body: some View {
-        Canvas { ctx, size in
+        let canvas = Canvas { ctx, size in
             let ops = node.canvasOps as? [[String: Any]] ?? []
             for op in ops {
                 drawOp(op, in: &ctx, size: size)
@@ -634,6 +638,35 @@ private struct MobCanvasView: View {
             width: node.canvasWidth > 0 ? CGFloat(node.canvasWidth) : nil,
             height: node.canvasHeight > 0 ? CGFloat(node.canvasHeight) : nil
         )
+
+        // Finger-drag input: when the node registered an on_drag handle, attach a
+        // continuous drag recognizer (the iOS analog of Android MobCanvas's
+        // detectDragGestures). The Canvas frame is sized to the declared logical
+        // units (points), and draw ops are drawn in that same space, so the
+        // gesture's local-space location is already in canvas coordinates — no
+        // pixel→logical rescale needed (unlike Android, where it is).
+        if node.onDrag != nil {
+            canvas.gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let phase = dragging ? "dragging" : "began"
+                        dragging = true
+                        node.onDrag?(
+                            value.translation.width, value.translation.height,
+                            value.location.x, value.location.y, phase
+                        )
+                    }
+                    .onEnded { value in
+                        dragging = false
+                        node.onDrag?(
+                            value.translation.width, value.translation.height,
+                            value.location.x, value.location.y, "ended"
+                        )
+                    }
+            )
+        } else {
+            canvas
+        }
     }
 
     private func drawOp(_ op: [String: Any], in ctx: inout GraphicsContext, size: CGSize) {

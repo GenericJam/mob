@@ -8,6 +8,23 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- **iOS canvas now delivers finger-drag (`on_drag`) — at parity with Android.**
+  The SwiftUI `MobCanvasView` rendered draw ops but attached no drag recognizer,
+  so a canvas's `on_drag` handle (wired through the NIF to `node.onDrag`) was
+  never invoked — continuous finger-drag was dead on iOS, while Android's
+  `MobCanvas` had `detectDragGestures`. Added a canvas-scoped
+  `DragGesture(minimumDistance: 0)` that calls `node.onDrag` with
+  began/dragging/ended phases; the gesture's local-space location is already in
+  canvas logical units (the frame is sized to the declared width/height), so no
+  rescale is needed. Verified on a physical iPhone (iOS 26.5): a finger-drawing
+  screen with a color picker and thickness control routes drags and renders
+  strokes correctly.
+
+---
+
 ## [0.7.4] - 2026-06-20
 
 ### Fixed
