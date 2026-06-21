@@ -176,6 +176,22 @@ defmodule Mob.RendererTest do
       assert is_integer(decoded["props"]["on_tap"])
     end
 
+    test "on_drag {pid, tag} is replaced by integer handle" do
+      pid = self()
+      tree = %{type: :canvas, props: %{on_drag: {pid, :draw}}, children: []}
+      Renderer.render(tree, :ios, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert is_integer(decoded["props"]["on_drag"])
+    end
+
+    test "register_tap is called for an on_drag handle" do
+      pid = self()
+      tree = %{type: :canvas, props: %{on_drag: {pid, :draw}}, children: []}
+      Renderer.render(tree, :ios, MockNIF)
+      assert Enum.any?(MockNIF.calls(), fn {f, _} -> f == :register_tap end)
+    end
+
     test "on_change {pid, tag} is replaced by integer handle" do
       pid = self()
       tree = %{type: :text_field, props: %{value: "hi", on_change: {pid, :name}}, children: []}
