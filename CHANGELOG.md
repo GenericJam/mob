@@ -8,7 +8,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.7.5] - 2026-06-20
 
 ### Fixed
 - **iOS canvas now delivers finger-drag (`on_drag`) — at parity with Android.**
