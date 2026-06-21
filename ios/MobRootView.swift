@@ -645,12 +645,25 @@ private struct MobCanvasView: View {
         // units (points), and draw ops are drawn in that same space, so the
         // gesture's local-space location is already in canvas coordinates — no
         // pixel→logical rescale needed (unlike Android, where it is).
+        //
+        // minimumDistance: 0 is intentional: a finger-drawing canvas wants an
+        // immediate response and a stationary tap to register as a single point
+        // (a dot). This is a deliberate divergence from Android's
+        // detectDragGestures, which has a touch-slop threshold, so a bare tap
+        // fires a zero-length began/ended drag on iOS but nothing on Android.
         if node.onDrag != nil {
             canvas.gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        let phase = dragging ? "dragging" : "began"
-                        dragging = true
+                        // Flip the @State flag only once, on the first sample, so
+                        // a fast drag does not invalidate the view on every move.
+                        let phase: String
+                        if dragging {
+                            phase = "dragging"
+                        } else {
+                            dragging = true
+                            phase = "began"
+                        }
                         node.onDrag?(
                             value.translation.width, value.translation.height,
                             value.location.x, value.location.y, phase
