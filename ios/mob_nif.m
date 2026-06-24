@@ -1351,6 +1351,60 @@ static const char *battery_state_atom(UIDeviceBatteryState s) {
     }
 }
 
+// ── Orientation ────────────────────────────────────────────────────────────
+// The locked mask the app shell's root view controller must report from
+// -supportedInterfaceOrientations. UIInterfaceOrientationMaskAll means "no
+// lock, follow the device". The shell reads this via the exported
+// mob_locked_orientation_mask() (see PR notes — the VC override is the
+// companion piece that makes the lock actually hold).
+static UIInterfaceOrientationMask g_locked_orientation_mask = UIInterfaceOrientationMaskAll;
+
+UIInterfaceOrientationMask mob_locked_orientation_mask(void) { return g_locked_orientation_mask; }
+
+static const char *interface_orientation_atom(UIInterfaceOrientation o) {
+    switch (o) {
+    case UIInterfaceOrientationPortrait:
+        return "portrait";
+    case UIInterfaceOrientationPortraitUpsideDown:
+        return "portrait_upside_down";
+    case UIInterfaceOrientationLandscapeLeft:
+        return "landscape_left";
+    case UIInterfaceOrientationLandscapeRight:
+        return "landscape_right";
+    default:
+        return "unknown";
+    }
+}
+
+// Read the foreground window scene's interface orientation (must run on the
+// main thread).
+static UIInterfaceOrientation mob_current_interface_orientation(void) {
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes)
+        if ([scene isKindOfClass:[UIWindowScene class]] &&
+            scene.activationState == UISceneActivationStateForegroundActive)
+            return ((UIWindowScene *)scene).interfaceOrientation;
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes)
+        if ([scene isKindOfClass:[UIWindowScene class]])
+            return ((UIWindowScene *)scene).interfaceOrientation;
+    return UIInterfaceOrientationUnknown;
+}
+
+// Map a lock atom (from Mob.Device.lock_orientation/1, plus :unspecified for
+// unlock) to a UIKit mask.
+static UIInterfaceOrientationMask orientation_mask_for_atom(const char *name) {
+    if (strcmp(name, "portrait") == 0)
+        return UIInterfaceOrientationMaskPortrait;
+    if (strcmp(name, "portrait_upside_down") == 0)
+        return UIInterfaceOrientationMaskPortraitUpsideDown;
+    if (strcmp(name, "landscape") == 0)
+        return UIInterfaceOrientationMaskLandscape;
+    if (strcmp(name, "landscape_left") == 0)
+        return UIInterfaceOrientationMaskLandscapeLeft;
+    if (strcmp(name, "landscape_right") == 0)
+        return UIInterfaceOrientationMaskLandscapeRight;
+    return UIInterfaceOrientationMaskAll; // :unspecified -> unlock
+}
+
 static void register_device_observers_once(void) {
     dispatch_once(&g_device_observers_once, ^{
       NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
@@ -1497,6 +1551,26 @@ static void register_device_observers_once(void) {
                     mob_device_send_atom("mob_device_ios", "audio_route_changed");
                   }];
 
+      // ── Orientation ──
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
+      });
+      [nc addObserverForName:UIDeviceOrientationDidChangeNotification
+                      object:nil
+                       queue:q
+                  usingBlock:^(NSNotification *n) {
+                    // Report the *interface* orientation (skips face up/down),
+                    // which is the one screens care about.
+                    const char *s =
+                        interface_orientation_atom(mob_current_interface_orientation());
+                    if (strcmp(s, "unknown") == 0)
+                        return;
+                    ErlNifEnv *e = enif_alloc_env();
+                    ERL_NIF_TERM payload = enif_make_atom(e, s);
+                    mob_device_send_atom_payload("mob_device", "orientation_changed", payload, e);
+                    enif_free_env(e);
+                  }];
+
       NSLog(@"[mob] Mob.Device observers registered");
     });
 }
@@ -1572,6 +1646,55 @@ static ERL_NIF_TERM nif_device_model(ErlNifEnv *env, int argc, const ERL_NIF_TER
     NSString *m = [[UIDevice currentDevice] model];
     const char *cstr = m.UTF8String;
     return enif_make_string(env, cstr ? cstr : "", ERL_NIF_LATIN1);
+}
+
+static ERL_NIF_TERM nif_device_orientation(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    // interfaceOrientation must be read on the main thread.
+    __block UIInterfaceOrientation o = UIInterfaceOrientationUnknown;
+    if ([NSThread isMainThread])
+        o = mob_current_interface_orientation();
+    else
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          o = mob_current_interface_orientation();
+        });
+    return enif_make_atom(env, interface_orientation_atom(o));
+}
+
+static ERL_NIF_TERM nif_device_lock_orientation(ErlNifEnv *env, int argc,
+                                                const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    char name[32];
+    if (enif_get_atom(env, argv[0], name, sizeof(name), ERL_NIF_LATIN1) == 0)
+        return enif_make_badarg(env);
+
+    UIInterfaceOrientationMask mask = orientation_mask_for_atom(name);
+    g_locked_orientation_mask = mask;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+          if (![scene isKindOfClass:[UIWindowScene class]])
+              continue;
+          UIWindowScene *ws = (UIWindowScene *)scene;
+          UIViewController *root =
+              ws.keyWindow.rootViewController ?: ws.windows.firstObject.rootViewController;
+          if (@available(iOS 16.0, *)) {
+              // The lock holds only if the root VC reports
+              // mob_locked_orientation_mask() from -supportedInterfaceOrientations
+              // (companion shell change). This requests the actual rotation.
+              [root setNeedsUpdateOfSupportedInterfaceOrientations];
+              UIWindowSceneGeometryPreferencesIOS *prefs =
+                  [[UIWindowSceneGeometryPreferencesIOS alloc]
+                      initWithInterfaceOrientations:mask];
+              [ws requestGeometryUpdateWithPreferences:prefs
+                                          errorHandler:^(NSError *err) {
+                                            (void)err;
+                                          }];
+          }
+      }
+    });
+    return enif_make_atom(env, "ok");
 }
 
 // ── NIF: safe_area/0 ─────────────────────────────────────────────────────────
@@ -5813,6 +5936,8 @@ static ErlNifFunc nif_funcs[] = {
     {"device_foreground", 0, nif_device_foreground, 0},
     {"device_os_version", 0, nif_device_os_version, 0},
     {"device_model", 0, nif_device_model, 0},
+    {"device_orientation", 0, nif_device_orientation, 0},
+    {"device_lock_orientation", 1, nif_device_lock_orientation, 0},
     {"platform", 0, nif_platform, 0},
     {"color_scheme", 0, nif_color_scheme, 0},
     {"log", 1, nif_log, 0},
