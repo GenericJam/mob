@@ -2326,7 +2326,6 @@ pub export fn mob_deliver_file_result(
     _ = erts.enif_send(null, &pid, env, msg);
 }
 
-
 pub export fn mob_deliver_push_token(jpid: jni.JLong, token: [*:0]const u8) callconv(.c) void {
     var pid = pidFromLong(jpid);
     const env = erts.enif_alloc_env() orelse return;

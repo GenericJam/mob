@@ -1359,7 +1359,9 @@ static const char *battery_state_atom(UIDeviceBatteryState s) {
 // companion piece that makes the lock actually hold).
 static UIInterfaceOrientationMask g_locked_orientation_mask = UIInterfaceOrientationMaskAll;
 
-UIInterfaceOrientationMask mob_locked_orientation_mask(void) { return g_locked_orientation_mask; }
+UIInterfaceOrientationMask mob_locked_orientation_mask(void) {
+    return g_locked_orientation_mask;
+}
 
 static const char *interface_orientation_atom(UIInterfaceOrientation o) {
     switch (o) {
@@ -1561,8 +1563,7 @@ static void register_device_observers_once(void) {
                   usingBlock:^(NSNotification *n) {
                     // Report the *interface* orientation (skips face up/down),
                     // which is the one screens care about.
-                    const char *s =
-                        interface_orientation_atom(mob_current_interface_orientation());
+                    const char *s = interface_orientation_atom(mob_current_interface_orientation());
                     if (strcmp(s, "unknown") == 0)
                         return;
                     ErlNifEnv *e = enif_alloc_env();
@@ -1685,8 +1686,7 @@ static ERL_NIF_TERM nif_device_lock_orientation(ErlNifEnv *env, int argc,
               // (companion shell change). This requests the actual rotation.
               [root setNeedsUpdateOfSupportedInterfaceOrientations];
               UIWindowSceneGeometryPreferencesIOS *prefs =
-                  [[UIWindowSceneGeometryPreferencesIOS alloc]
-                      initWithInterfaceOrientations:mask];
+                  [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:mask];
               [ws requestGeometryUpdateWithPreferences:prefs
                                           errorHandler:^(NSError *err) {
                                             (void)err;
