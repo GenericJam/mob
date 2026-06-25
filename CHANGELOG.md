@@ -8,6 +8,20 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.7] - 2026-06-24
+
+### Fixed
+- **Boot crash on all apps (regression in 0.7.6).** `device_orientation/0` and
+  `device_lock_orientation/1` were added to `mob_nif`'s native NIF tables and
+  `-export` in 0.7.6 but not to its `-nifs([])` attribute. `load_nif/2` rejects a
+  library that registers a NIF not declared in `-nifs`, so `on_load` failed,
+  `mob_nif` was purged, and every app crashed at boot with `{undef, {mob_nif,
+  log, 1}}` on the first boot step (iOS and Android). Added the two functions to
+  `-nifs([])`. A new source-level test (`test/mob/nif_declaration_test.exs`)
+  asserts every NIF in the iOS/Android tables is declared in `-nifs([])`, so this
+  class of mismatch — invisible to host tests, since NIFs don't load on the host —
+  can't ship again. Upgrade from 0.7.6 immediately.
+
 ## [0.7.6] - 2026-06-24
 
 ### Added
