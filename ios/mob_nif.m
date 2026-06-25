@@ -2043,6 +2043,25 @@ static ERL_NIF_TERM nif_open_url(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     return enif_make_atom(env, "ok");
 }
 
+// ── NIF: open_settings/1 ──────────────────────────────────────────────────────
+// Opens this app's settings page. The target arg (app|notifications|exact_alarm)
+// is honored on Android; iOS exposes only the single app settings page, so the
+// target is validated but otherwise ignored. Fire-and-forget; returns :ok.
+
+static ERL_NIF_TERM nif_open_settings(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[0], &bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &bin))
+        return enif_make_badarg(env);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      NSURL *url = [NSURL URLWithString:UIApplicationOpenSettingsURLString];
+      if (url)
+          [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+    });
+    return enif_make_atom(env, "ok");
+}
+
 // ── NIF: share_text/1 ─────────────────────────────────────────────────────────
 // Opens the iOS share sheet with plain text. Fire-and-forget.
 
@@ -5954,6 +5973,7 @@ static ErlNifFunc nif_funcs[] = {
     {"clipboard_get", 0, nif_clipboard_get, 0},
     {"share_text", 1, nif_share_text, 0},
     {"open_url", 1, nif_open_url, 0},
+    {"open_settings", 1, nif_open_settings, 0},
     {"request_permission", 1, nif_request_permission, 0},
     {"files_pick", 1, nif_files_pick, 0},
     {"audio_start_recording", 1, nif_audio_start_recording, 0},

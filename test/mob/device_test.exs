@@ -101,6 +101,16 @@ defmodule Mob.DeviceTest do
     end
   end
 
+  describe "open_settings/1" do
+    test "rejects an unknown target before touching the NIF" do
+      # Unknown targets short-circuit to {:error, :invalid} (no clause matches the
+      # guard), so this is safe to assert on the host without a loaded NIF.
+      assert Device.open_settings(:bogus) == {:error, :invalid}
+      assert Device.open_settings("app") == {:error, :invalid}
+      assert Device.open_settings(nil) == {:error, :invalid}
+    end
+  end
+
   describe "subscription fan-out" do
     test "subscriber receives events for its categories", %{dispatcher: d} do
       :ok = GenServer.call(d, {:subscribe, self(), [:app]})
