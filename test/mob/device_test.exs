@@ -54,6 +54,7 @@ defmodule Mob.DeviceTest do
     test "maps display events" do
       assert Device.category_for(:screen_off) == :display
       assert Device.category_for(:screen_on) == :display
+      assert Device.category_for(:orientation_changed) == :display
     end
 
     test "maps audio events" do
@@ -76,6 +77,27 @@ defmodule Mob.DeviceTest do
 
     test "unknown events fall through to :unknown" do
       assert Device.category_for(:no_such_event) == :unknown
+    end
+  end
+
+  describe "orientation lock" do
+    test "valid_lock?/1 accepts the five lock values" do
+      for o <- [:portrait, :portrait_upside_down, :landscape, :landscape_left, :landscape_right] do
+        assert Device.valid_lock?(o), "expected #{o} to be a valid lock"
+      end
+    end
+
+    test "valid_lock?/1 rejects anything else" do
+      refute Device.valid_lock?(:unspecified)
+      refute Device.valid_lock?(:sideways)
+      refute Device.valid_lock?(nil)
+    end
+
+    test "lock_orientation/1 rejects an invalid value before touching the NIF" do
+      # Invalid values short-circuit to {:error, :invalid} (the guard fails)
+      # rather than raising nif_error, so this is safe to assert on the host.
+      assert Device.lock_orientation(:sideways) == {:error, :invalid}
+      assert Device.lock_orientation("landscape") == {:error, :invalid}
     end
   end
 
