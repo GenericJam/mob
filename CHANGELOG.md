@@ -8,6 +8,18 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.8] - 2026-06-25
+
+### Added
+- **`Mob.Device.open_settings/1`.** Opens an OS settings screen for the app:
+  `:app` (the app details / permissions page, both platforms), `:notifications`,
+  or `:exact_alarm` (Android special-access screens; iOS falls back to the app
+  page). The go-to when a permission was permanently denied and the user must
+  re-enable it by hand. An unknown target returns `{:error, :invalid}` without
+  touching the NIF. On Android the bridge call is optional, so an app whose
+  scaffolded `MobBridge.kt` predates `openSettings` no-ops instead of crashing
+  (add `MobBridge.openSettings/1` to wire it up). (#50)
+
 ## [0.7.7] - 2026-06-24
 
 ### Fixed
