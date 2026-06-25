@@ -8,7 +8,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.7.6] - 2026-06-24
 
 ### Added
 - **Device orientation: detect + lock (`Mob.Device`).** New `orientation/0`
