@@ -161,6 +161,8 @@
     device_foreground/0,
     device_os_version/0,
     device_model/0,
+    device_orientation/0,
+    device_lock_orientation/1,
     ui_tree/0,
     ui_view_tree/0,
     ui_debug/0,
