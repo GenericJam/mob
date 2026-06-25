@@ -218,6 +218,34 @@ defmodule Mob.Device do
     :ok
   end
 
+  @doc """
+  Opens an OS settings screen for this app.
+
+  `target` is one of:
+
+    * `:app` — the app's details / permissions page (both platforms). The
+      go-to when a runtime permission was *permanently* denied and the user
+      must re-enable it by hand.
+    * `:notifications` — the app's notification settings (Android). iOS has no
+      granular deep-link, so it opens the app page.
+    * `:exact_alarm` — the "Alarms & reminders" special-access screen
+      (Android 12+). iOS opens the app page.
+
+  iOS exposes only the single app settings page, so `target` is honored on
+  Android and falls back to the app page on iOS. Fire-and-forget: a valid target
+  returns `:ok` immediately (an unavailable screen is a no-op, not a raise); an
+  unknown target returns `{:error, :invalid}` without touching the NIF.
+  """
+  @spec open_settings(:app | :notifications | :exact_alarm) :: :ok | {:error, :invalid}
+  def open_settings(target \\ :app)
+
+  def open_settings(target) when target in [:app, :notifications, :exact_alarm] do
+    :mob_nif.open_settings(Atom.to_string(target))
+    :ok
+  end
+
+  def open_settings(_target), do: {:error, :invalid}
+
   # ── GenServer ─────────────────────────────────────────────────────────────
 
   @impl true
