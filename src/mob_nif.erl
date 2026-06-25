@@ -18,6 +18,7 @@
     clipboard_get/0,
     share_text/1,
     open_url/1,
+    open_settings/1,
     %% Permissions
     request_permission/1,
     %% Biometric
@@ -139,6 +140,7 @@
     clipboard_get/0,
     share_text/1,
     open_url/1,
+    open_settings/1,
     request_permission/1,
     files_pick/1,
     audio_start_recording/1,
@@ -256,6 +258,7 @@ clipboard_put(_Text) -> erlang:nif_error(not_loaded).
 clipboard_get() -> erlang:nif_error(not_loaded).
 share_text(_Text) -> erlang:nif_error(not_loaded).
 open_url(_Url) -> erlang:nif_error(not_loaded).
+open_settings(_Target) -> erlang:nif_error(not_loaded).
 request_permission(_Cap) -> erlang:nif_error(not_loaded).
 files_pick(_MimeTypes) -> erlang:nif_error(not_loaded).
 audio_start_recording(_OptsJson) -> erlang:nif_error(not_loaded).

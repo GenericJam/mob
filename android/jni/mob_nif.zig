@@ -243,6 +243,7 @@ pub const BridgeMethods = extern struct {
     tts_stop: jni.JMethodID = null,
     share_text: jni.JMethodID = null,
     open_url: jni.JMethodID = null,
+    open_settings: jni.JMethodID = null,
     request_permission: jni.JMethodID = null,
     alert_show: jni.JMethodID = null,
     action_sheet_show: jni.JMethodID = null,
@@ -2077,6 +2078,29 @@ export fn nif_open_url(
     return erts.ok(env);
 }
 
+// nif_open_settings/1 — open an OS settings screen. target is "app" |
+// "notifications" | "exact_alarm" (the Kotlin side maps it to the Intent).
+// Cached optionally, so an app whose scaffolded MobBridge.kt predates
+// openSettings just no-ops instead of crashing.
+export fn nif_open_settings(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const target = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(target);
+    if (Bridge.open_settings == null) return erts.ok(env);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jtarget = jni.newStringUTF(jenv, target);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.open_settings, jtarget);
+    jni.deleteLocalRef(jenv, jtarget);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
 // nif_share_text/1 — system share sheet (Intent ACTION_SEND text/plain).
 export fn nif_share_text(
     env: ?*erts.ErlNifEnv,
@@ -3338,6 +3362,7 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     cacheOptional(jenv, "ttsStop", "()V", &Bridge.tts_stop);
     if (!cacheRequired(jenv, "shareText", "(Ljava/lang/String;)V", &Bridge.share_text)) return -1;
     if (!cacheRequired(jenv, "openUrl", "(Ljava/lang/String;)V", &Bridge.open_url)) return -1;
+    cacheOptional(jenv, "openSettings", "(Ljava/lang/String;)V", &Bridge.open_settings);
 
     // Async device-capability methods. Most take (J, String) where J is
     // the pid as a long.
@@ -3463,6 +3488,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "tts_stop", .arity = 0, .fptr = nif_tts_stop, .flags = 0 },
     .{ .name = "share_text", .arity = 1, .fptr = nif_share_text, .flags = 0 },
     .{ .name = "open_url", .arity = 1, .fptr = nif_open_url, .flags = 0 },
+    .{ .name = "open_settings", .arity = 1, .fptr = nif_open_settings, .flags = 0 },
     .{ .name = "request_permission", .arity = 1, .fptr = nif_request_permission, .flags = 0 },
     .{ .name = "files_pick", .arity = 1, .fptr = nif_files_pick, .flags = 0 },
     .{ .name = "audio_start_recording", .arity = 1, .fptr = nif_audio_start_recording, .flags = 0 },
