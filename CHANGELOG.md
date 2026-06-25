@@ -8,7 +8,27 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [0.7.5] - 2026-06-20
+## [Unreleased]
+
+### Added
+- **Device orientation: detect + lock (`Mob.Device`).** New `orientation/0`
+  query, an `{:mob_device, :orientation_changed, orientation}` event under the
+  existing `:display` subscription category, and `lock_orientation/1` /
+  `unlock_orientation/0` to force (or release) a specific orientation regardless
+  of the OS auto-rotate setting. Values: `:portrait`, `:portrait_upside_down`,
+  `:landscape` (either side), `:landscape_left`, `:landscape_right`. Use case: a
+  screen that must be landscape (e.g. a wide keyboard) locks on enter, unlocks
+  on leave.
+
+  iOS reads the foreground window scene's interface orientation, observes
+  `UIDeviceOrientationDidChangeNotification`, and drives rotation via
+  `requestGeometryUpdate` (iOS 16+); the lock holds once the app shell's root
+  view controller reports `mob_locked_orientation_mask()` from
+  `-supportedInterfaceOrientations` (companion shell change). Android locks via
+  `MobBridge.orientationLock/1` → `Activity.setRequestedOrientation`, with change
+  delivery from `MainActivity.onConfigurationChanged` (companion `mob_new`
+  changes). Android `orientation/0` returns the last reported orientation
+  (partial, consistent with the other Android device queries).
 
 ### Fixed
 - **iOS canvas now delivers finger-drag (`on_drag`) — at parity with Android.**

@@ -281,6 +281,9 @@ pub const BridgeMethods = extern struct {
     screenshot: jni.JMethodID = null,
     scroll_info: jni.JMethodID = null,
     scroll_to: jni.JMethodID = null,
+    // MobBridge.orientationLock(Int) — calls activity.setRequestedOrientation.
+    // Companion Kotlin method ships in the mob_new template (see PR notes).
+    orientation_lock: jni.JMethodID = null,
     element_frames: jni.JMethodID = null,
     // ── Mob.Peripheral.VendorUsb ─────────────────────────────────────────
     // Each takes a pid as jlong (so Kotlin can echo it back when calling
@@ -2323,7 +2326,6 @@ pub export fn mob_deliver_file_result(
     _ = erts.enif_send(null, &pid, env, msg);
 }
 
-
 pub export fn mob_deliver_push_token(jpid: jni.JLong, token: [*:0]const u8) callconv(.c) void {
     var pid = pidFromLong(jpid);
     const env = erts.enif_alloc_env() orelse return;
@@ -2926,6 +2928,32 @@ pub export fn mob_send_color_scheme_changed(scheme: ?[*:0]const u8) callconv(.c)
     deviceSendAtomPayload("mob_device", "color_scheme_changed", s);
 }
 
+// Last-known interface orientation, updated by mob_send_orientation_changed.
+// device_orientation/0 returns this (a partial getter, like the other Android
+// device queries — accurate after the first onConfigurationChanged).
+var g_last_orientation: [*:0]const u8 = "portrait";
+
+/// Called from beam_jni.c's `Java_..._MobBridge_nativeNotifyOrientation` when
+/// MainActivity.onConfigurationChanged sees an orientation flip. `orient` is
+/// one of "portrait" | "landscape_left" | "landscape_right" |
+/// "portrait_upside_down". (Companion hook ships in the mob_new template.)
+pub export fn mob_send_orientation_changed(orient: ?[*:0]const u8) callconv(.c) void {
+    const o = orient orelse return;
+    g_last_orientation = o;
+    deviceSendAtomPayload("mob_device", "orientation_changed", o);
+}
+
+// Map a lock atom (+ :unspecified for unlock) to an Android
+// ActivityInfo.SCREEN_ORIENTATION_* constant.
+fn androidOrientationConst(name: []const u8) c_int {
+    if (std.mem.eql(u8, name, "portrait")) return 1; // PORTRAIT
+    if (std.mem.eql(u8, name, "portrait_upside_down")) return 9; // REVERSE_PORTRAIT
+    if (std.mem.eql(u8, name, "landscape")) return 6; // SENSOR_LANDSCAPE (either side)
+    if (std.mem.eql(u8, name, "landscape_left")) return 0; // LANDSCAPE
+    if (std.mem.eql(u8, name, "landscape_right")) return 8; // REVERSE_LANDSCAPE
+    return -1; // UNSPECIFIED -> unlock
+}
+
 export fn nif_device_set_dispatcher(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -3006,6 +3034,37 @@ export fn nif_device_model(
     _ = argv;
     // TODO(android): Build.MODEL via JNI.
     return erts.enif_make_string(env, "Android", erts.ERL_NIF_LATIN1);
+}
+
+export fn nif_device_orientation(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    // Partial getter (like the other Android device queries): returns the last
+    // orientation reported via onConfigurationChanged; "portrait" until then.
+    return erts.enif_make_atom(env, g_last_orientation);
+}
+
+export fn nif_device_lock_orientation(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var buf: [32]u8 = undefined;
+    if (erts.enif_get_atom(env, argv[0], &buf, buf.len, erts.ERL_NIF_LATIN1) == 0)
+        return erts.badarg(env);
+    const code = androidOrientationConst(std.mem.sliceTo(&buf, 0));
+
+    if (Bridge.orientation_lock == null) return notLoaded(env);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    defer detachIfAttached(attached);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.orientation_lock, @as(jni.JInt, code));
+    return erts.ok(env);
 }
 
 // ── Mob.Peripheral.VendorUsb NIFs ────────────────────────────────────────
@@ -3343,6 +3402,7 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     cacheOptional(jenv, "screenInfo", "()[F", &Bridge.screen_info);
     cacheOptional(jenv, "screenshot", "(Ljava/lang/String;ID)[B", &Bridge.screenshot);
     cacheOptional(jenv, "scrollInfo", "(Ljava/lang/String;)Ljava/lang/String;", &Bridge.scroll_info);
+    cacheOptional(jenv, "orientationLock", "(I)V", &Bridge.orientation_lock);
     cacheOptional(jenv, "scrollTo", "(Ljava/lang/String;DD)Z", &Bridge.scroll_to);
     cacheOptional(jenv, "elementFrames", "()Ljava/lang/String;", &Bridge.element_frames);
     cacheOptional(jenv, "tapXy", "(FF)Z", &Bridge.tap_xy);
@@ -3436,6 +3496,8 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "device_foreground", .arity = 0, .fptr = nif_device_foreground, .flags = 0 },
     .{ .name = "device_os_version", .arity = 0, .fptr = nif_device_os_version, .flags = 0 },
     .{ .name = "device_model", .arity = 0, .fptr = nif_device_model, .flags = 0 },
+    .{ .name = "device_orientation", .arity = 0, .fptr = nif_device_orientation, .flags = 0 },
+    .{ .name = "device_lock_orientation", .arity = 1, .fptr = nif_device_lock_orientation, .flags = 0 },
     // ── Mob.Peripheral.VendorUsb (Android USB host) ──────────────────────────
     .{ .name = "vendor_usb_list_devices", .arity = 1, .fptr = nif_vendor_usb_list_devices, .flags = 0 },
     .{ .name = "vendor_usb_request_permission", .arity = 1, .fptr = nif_vendor_usb_request_permission, .flags = 0 },

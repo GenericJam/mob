@@ -21,7 +21,8 @@ defmodule Mob.Device do
 
   - `:app` — `:will_resign_active`, `:did_become_active`, `:did_enter_background`,
     `:will_enter_foreground`, `:will_terminate`
-  - `:display` — `:screen_off`, `:screen_on`
+  - `:display` — `:screen_off`, `:screen_on`,
+    `{:orientation_changed, :portrait | :portrait_upside_down | :landscape_left | :landscape_right}`
   - `:audio` — `:audio_interrupted`, `:audio_resumed`, `:audio_route_changed`
   - `:appearance` — `{:color_scheme_changed, :light | :dark}`
   - `:power` — `{:battery_state_changed, :unplugged | :charging | :full | :unknown}`,
@@ -41,6 +42,22 @@ defmodule Mob.Device do
       Mob.Device.foreground?()        # boolean
       Mob.Device.os_version()         # binary
       Mob.Device.model()              # binary
+      Mob.Device.orientation()        # :portrait | :landscape_left | ...
+
+  ## Orientation
+
+  `orientation/0` reports the current interface orientation; subscribe to
+  `:display` to get `{:mob_device, :orientation_changed, orientation}` when the
+  device rotates.
+
+      Mob.Device.orientation()                 # :portrait
+      Mob.Device.lock_orientation(:landscape)  # force landscape (either side)
+      Mob.Device.unlock_orientation()          # follow the sensor again
+
+  Locking forces the orientation regardless of the OS auto-rotate-lock setting
+  (Android `setRequestedOrientation`; iOS supported-orientations + a geometry
+  request). It is global to the app — a screen that wants to be landscape-only
+  should `lock_orientation/1` on enter and `unlock_orientation/0` on leave.
   """
 
   use GenServer
@@ -55,7 +72,7 @@ defmodule Mob.Device do
     :will_enter_foreground,
     :will_terminate
   ]
-  @display_events [:screen_off, :screen_on]
+  @display_events [:screen_off, :screen_on, :orientation_changed]
   @audio_events [:audio_interrupted, :audio_resumed, :audio_route_changed]
   @appearance_events [:color_scheme_changed]
   @power_events [:battery_state_changed, :battery_level_changed, :low_power_mode_changed]
@@ -137,6 +154,57 @@ defmodule Mob.Device do
   @doc "Device model (e.g. \"iPhone\", \"Pixel 8\")."
   @spec model() :: String.t()
   def model, do: to_string(:mob_nif.device_model())
+
+  @typedoc "A concrete interface orientation."
+  @type orientation ::
+          :portrait | :portrait_upside_down | :landscape_left | :landscape_right | :unknown
+
+  @typedoc """
+  A lock request. `:landscape` / `:portrait` allow either side of that axis;
+  the four concrete values pin a single orientation.
+  """
+  @type lock ::
+          :portrait
+          | :portrait_upside_down
+          | :landscape
+          | :landscape_left
+          | :landscape_right
+
+  @valid_locks [:portrait, :portrait_upside_down, :landscape, :landscape_left, :landscape_right]
+
+  @doc """
+  Current interface orientation — `:portrait | :portrait_upside_down |
+  :landscape_left | :landscape_right`, or `:unknown` if it can't be determined.
+  """
+  @spec orientation() :: orientation()
+  def orientation, do: :mob_nif.device_orientation()
+
+  @doc """
+  Lock the app to `orientation`, overriding the OS auto-rotate setting.
+
+  Accepts `:portrait`, `:portrait_upside_down`, `:landscape` (either side),
+  `:landscape_left`, or `:landscape_right`. Returns `{:error, :invalid}` for
+  anything else. Global to the app; pair with `unlock_orientation/0`.
+  """
+  @spec lock_orientation(lock()) :: :ok | {:error, :invalid}
+  def lock_orientation(orientation) when orientation in @valid_locks do
+    :mob_nif.device_lock_orientation(orientation)
+    :ok
+  end
+
+  def lock_orientation(_), do: {:error, :invalid}
+
+  @doc "Release an orientation lock; the app follows the sensor again."
+  @spec unlock_orientation() :: :ok
+  def unlock_orientation do
+    :mob_nif.device_lock_orientation(:unspecified)
+    :ok
+  end
+
+  @doc false
+  # Pure predicate behind lock_orientation/1's guard — exposed for tests.
+  @spec valid_lock?(atom()) :: boolean()
+  def valid_lock?(orientation), do: orientation in @valid_locks
 
   @doc """
   Hands a URL to the OS to open in the default browser/handler.
