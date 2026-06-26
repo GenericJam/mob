@@ -594,7 +594,10 @@ private extension View {
                 self.background(.ultraThinMaterial, in: shape)
             }
         } else {
-            self.background(node.backgroundColor.map { Color($0) } ?? Color.clear)
+            // `in: shape` so the solid fill is clipped to the corner radius — without
+            // it the fill is a plain rectangle and only the (separately-stroked)
+            // border looks rounded, leaving square fill corners on non-glass boxes.
+            self.background(node.backgroundColor.map { Color($0) } ?? Color.clear, in: shape)
         }
     }
 }

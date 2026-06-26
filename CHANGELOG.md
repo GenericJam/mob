@@ -8,6 +8,16 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.9] - 2026-06-26
+
+### Fixed
+- **Non-glass `:box` fill ignored `corner_radius` on iOS.** `mobBoxBackground`
+  filled the solid (non-glass) background as a plain rectangle, so only the
+  separately-stroked border was rounded while the fill kept square corners
+  (visible on solid-color boxes; bordered light cards hid it). Clip the fill to
+  the corner shape with `in: shape`, matching the glass branches. Thanks to the
+  reporter who diagnosed it.
+
 ## [0.7.8] - 2026-06-25
 
 ### Added
