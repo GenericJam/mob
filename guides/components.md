@@ -39,6 +39,67 @@ Expression child slots use `{...}` and accept a single node map or a list:
 """
 ```
 
+## Control flow
+
+The sigil borrows three authoring idioms from Phoenix HEEx, so screens read the way LiveView developers expect.
+
+### `@assigns` shorthand
+
+Inside any `{...}` expression, `@foo` rewrites to `assigns.foo` (this happens at compile time). It works in attribute values, `{expr}` children, and the `:if`/`:for` directives below. Nested access like `@user.name` works too.
+
+```elixir
+def render(assigns) do
+  ~MOB"""
+  <Column padding={16}>
+    <Text text={@title} text_size={:xl} />
+    <Text text={"by #{@author.name}"} />
+  </Column>
+  """
+end
+```
+
+`@title` is exactly `assigns.title` — the two forms are interchangeable, so reach for whichever reads better.
+
+### `:if` — conditional rendering
+
+`:if={expr}` renders the element only when the expression is truthy. A falsy `:if` drops the element entirely (it does not render an empty placeholder):
+
+```elixir
+~MOB"""
+<Column>
+  <Badge text="New" :if={@unread > 0} />
+  <Text text="All caught up" :if={@unread == 0} />
+</Column>
+"""
+```
+
+### `:for` — comprehension
+
+`:for={x <- list}` repeats the element once per item and splices the results into the parent's children:
+
+```elixir
+~MOB"""
+<Column>
+  <Row :for={user <- @users}>
+    <Text text={user.name} />
+  </Row>
+</Column>
+"""
+```
+
+This is the declarative equivalent of the `{Enum.map(...)}` child slot shown above — use whichever is clearer for the case at hand.
+
+### Combining `:for` and `:if`
+
+When both are present on the same element, `:if` acts as a comprehension filter (matching LiveView): an element is produced only for items where the condition holds.
+
+```elixir
+# Renders a Text for 2 and 4 only
+<Text text={to_string(n)} :for={n <- 1..4} :if={rem(n, 2) == 0} />
+```
+
+`:if` and `:for` each require a `{expr}` value — `:if="true"` (a string) raises a `CompileError`. Only `:if` and `:for` are recognised; any other `:`-prefixed attribute is a compile-time error.
+
 ## Map syntax
 
 The sigil compiles to plain maps. You can also write them directly — useful when building components programmatically:
