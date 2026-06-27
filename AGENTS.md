@@ -229,6 +229,10 @@ These are the things we've burned ourselves on. Following them isn't optional.
   that can't happen. Validate at system boundaries (user input, external APIs).
 - **Don't add features beyond what was requested.** A bug fix doesn't need
   surrounding cleanup; a one-shot doesn't need a helper.
+- **Write UI the LiveView way.** The `~MOB` sigil supports `@assigns` shorthand
+  and `:if` / `:for` control attributes (`<Row :for={u <- @users}>`), and
+  `Mob.Socket` has `assign/2,3`, `update/3`, `assign_new/3`. See
+  `guides/components.md` → Control flow.
 
 ## Don't write this slop
 

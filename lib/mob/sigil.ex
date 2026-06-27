@@ -31,6 +31,35 @@ defmodule Mob.Sigil do
       </Column>
       \"""
 
+  ## Assigns shorthand
+
+  Inside a `{...}` expression, `@foo` rewrites to `assigns.foo` (matching
+  Phoenix HEEx), so a `render(assigns)` body reads cleanly:
+
+      ~MOB(<Text text={@title} />)   # same as text={assigns.title}
+
+  ## Control attributes — `:if` and `:for`
+
+  Two LiveView-style directives wrap an element without extra ceremony.
+  Both take a `{expr}` value and may read `@assigns`.
+
+      # Conditional — omitted entirely when the expression is falsy
+      ~MOB(<Badge text="New" :if={@unread > 0} />)
+
+      # Comprehension — one element per item; splices into the parent
+      ~MOB\"""
+      <Column>
+        <Row :for={user <- @users}>
+          <Text text={user.name} />
+        </Row>
+      </Column>
+      \"""
+
+  Combine them — `:if` then acts as a comprehension filter (an element is
+  produced only for items where the condition holds):
+
+      <Text text={n} :for={n <- @nums} :if={rem(n, 2) == 0} />
+
   ## Tag whitelist
 
   Tags are validated against `priv/tags/ios.txt` and `priv/tags/android.txt` at
@@ -82,9 +111,12 @@ defmodule Mob.Sigil do
     |> reduce({List, :to_string, []})
     |> label("tag name starting with uppercase letter")
 
-  # Attribute name
+  # Attribute name. An optional leading `:` marks a control attribute
+  # (`:if`, `:for`) — LiveView-style directives handled specially by the AST
+  # builder rather than emitted as a prop.
   attr_name =
-    ascii_char([?a..?z, ?A..?Z, ?_])
+    optional(ascii_char([?:]))
+    |> ascii_char([?a..?z, ?A..?Z, ?_])
     |> ascii_string([?a..?z, ?A..?Z, ?0..?9, ?_], min: 0)
     |> reduce({List, :to_string, []})
     |> label("attribute name")
@@ -239,9 +271,11 @@ defmodule Mob.Sigil do
 
   defp build_ast({:self_closing, parts}, caller) do
     {tag, attrs} = split_tag_attrs(parts)
+    {control, attrs} = split_control_attrs(attrs, caller)
     type = resolve_type(tag, caller)
     props = build_props_ast(attrs, caller)
-    quote do: %{type: unquote(type), props: unquote(props), children: []}
+    node = quote do: %{type: unquote(type), props: unquote(props), children: []}
+    wrap_control(node, control, caller)
   end
 
   defp build_ast({:element, parts}, caller) do
@@ -261,14 +295,81 @@ defmodule Mob.Sigil do
         description: "~MOB: mismatched tags <#{tag}> ... </#{close_name}>"
     end
 
+    {control, attrs} = split_control_attrs(attrs, caller)
     type = resolve_type(tag, caller)
     props = build_props_ast(attrs, caller)
     children_ast = build_children_ast(rest2, caller)
 
-    quote do: %{type: unquote(type), props: unquote(props), children: unquote(children_ast)}
+    node =
+      quote do: %{type: unquote(type), props: unquote(props), children: unquote(children_ast)}
+
+    wrap_control(node, control, caller)
   end
 
   defp split_tag_attrs([tag | attrs]), do: {tag, attrs}
+
+  # Partition control attributes (`:if`, `:for`) out of the normal attr list.
+  # Returns `{%{if: value_tag, for: value_tag}, remaining_attrs}`. Control
+  # attrs never become props; they wrap the node in `if`/`for` instead.
+  defp split_control_attrs(attrs, caller) do
+    {control, rev_normal} =
+      Enum.reduce(attrs, {%{}, []}, fn
+        {:attr, [":if", value_tag]}, {control, normal} ->
+          {Map.put(control, :if, value_tag), normal}
+
+        {:attr, [":for", value_tag]}, {control, normal} ->
+          {Map.put(control, :for, value_tag), normal}
+
+        {:attr, [":" <> bad, _value]}, _acc ->
+          raise CompileError,
+            file: caller.file,
+            line: caller.line,
+            description:
+              "~MOB: unknown control attribute :#{bad} (only :if and :for are supported)"
+
+        attr, {control, normal} ->
+          {control, [attr | normal]}
+      end)
+
+    {control, Enum.reverse(rev_normal)}
+  end
+
+  # Wrap a node's AST in a `:for` comprehension and/or `:if` guard. When both
+  # are present, `:if` acts as a comprehension filter (LiveView semantics):
+  # the element is produced for each item where the condition holds. A bare
+  # `:if` that fails yields `nil`, which `wrap_child/1` drops from its parent.
+  defp wrap_control(node_ast, control, caller) do
+    # Branch on attr *presence* (the value-tag), never on the parsed expr —
+    # `:if={false}` parses to the literal `false`, which would otherwise
+    # short-circuit a truthiness check and skip the wrapping entirely.
+    cond do
+      control[:for] && control[:if] ->
+        for_ast = parse_control_expr(:for, control[:for], caller)
+        if_ast = parse_control_expr(:if, control[:if], caller)
+        quote do: for(unquote(for_ast), unquote(if_ast), do: unquote(node_ast))
+
+      control[:for] ->
+        for_ast = parse_control_expr(:for, control[:for], caller)
+        quote do: for(unquote(for_ast), do: unquote(node_ast))
+
+      control[:if] ->
+        if_ast = parse_control_expr(:if, control[:if], caller)
+        quote do: if(unquote(if_ast), do: unquote(node_ast))
+
+      true ->
+        node_ast
+    end
+  end
+
+  defp parse_control_expr(_which, {:expr_val, [expr_str]}, caller),
+    do: parse_expr(expr_str, caller)
+
+  defp parse_control_expr(which, {:string_val, _}, caller) do
+    raise CompileError,
+      file: caller.file,
+      line: caller.line,
+      description: "~MOB: :#{which} requires a {expr} value, e.g. :#{which}={...}"
+  end
 
   defp build_props_ast(attrs, caller) do
     pairs =
@@ -283,16 +384,40 @@ defmodule Mob.Sigil do
 
   defp build_value_ast({:string_val, [str]}, _caller), do: str
 
-  defp build_value_ast({:expr_val, [expr_str]}, caller) do
-    Code.string_to_quoted!(String.trim(expr_str), file: caller.file, line: caller.line)
+  defp build_value_ast({:expr_val, [expr_str]}, caller), do: parse_expr(expr_str, caller)
+
+  # Parse a `{expr}` source string into an AST, expanding LiveView-style
+  # `@foo` references into `assigns.foo`. Applies to attribute values,
+  # `{expr}` children, and `:if`/`:for` control expressions alike.
+  defp parse_expr(expr_str, caller) do
+    expr_str
+    |> String.trim()
+    |> Code.string_to_quoted!(file: caller.file, line: caller.line)
+    |> expand_assigns()
+  end
+
+  # Rewrite every `@name` (the unary `@` operator on a bare identifier) to
+  # `assigns.name`, mirroring HEEx. Nested forms like `@user.name` rewrite
+  # too, since prewalk reaches the inner `@user` node first.
+  defp expand_assigns(ast) do
+    Macro.prewalk(ast, fn
+      {:@, _meta, [{name, _, ctx}]} when is_atom(name) and (is_atom(ctx) or is_nil(ctx)) ->
+        # Build `assigns.name` with a nil-context `assigns` var so it
+        # resolves to the caller's binding (same as a literal `assigns`
+        # parsed from source), not a hygienic Mob.Sigil-scoped variable.
+        # `no_parens: true` marks it as map-field access, not `assigns.name()`.
+        {{:., [], [Macro.var(:assigns, nil), name]}, [no_parens: true], []}
+
+      other ->
+        other
+    end)
   end
 
   defp build_children_ast(children, caller) do
     child_asts =
       Enum.map(children, fn
         {:expr_child, [expr_str]} ->
-          quoted =
-            Code.string_to_quoted!(String.trim(expr_str), file: caller.file, line: caller.line)
+          quoted = parse_expr(expr_str, caller)
 
           # Emit a call to `wrap_child/1` rather than an inline `case`.
           # The inline version generates a `case` per call site whose
@@ -308,21 +433,26 @@ defmodule Mob.Sigil do
           quote do: Mob.Sigil.wrap_child(unquote(quoted))
 
         node_tuple ->
+          # A node may now be a bare map, a `:for` list, or a `:if` nil after
+          # control-attr wrapping. Route it through wrap_child/1 so all three
+          # normalize to a list before the surrounding List.flatten.
           ast = build_ast(node_tuple, caller)
-          quote do: [unquote(ast)]
+          quote do: Mob.Sigil.wrap_child(unquote(ast))
       end)
 
     quote do: List.flatten(unquote(child_asts))
   end
 
   @doc """
-  Normalizes a `{expr}` child's value to a list of UI-node maps for
-  the surrounding sigil. Single nodes wrap into a one-element list;
-  lists pass through. Public so the sigil-generated AST can call it
-  by FQ name; not part of the application API.
+  Normalizes a child's value to a list of UI-node maps for the
+  surrounding sigil. Single nodes wrap into a one-element list; lists
+  pass through; `nil` (a `:if` that didn't render) drops to `[]`.
+  Public so the sigil-generated AST can call it by FQ name; not part
+  of the application API.
   """
-  @spec wrap_child(list() | map()) :: list()
+  @spec wrap_child(list() | map() | nil) :: list()
   def wrap_child(list) when is_list(list), do: list
+  def wrap_child(nil), do: []
   def wrap_child(node), do: [node]
 
   defp resolve_type(tag, caller) do

@@ -48,6 +48,47 @@ defmodule Mob.SocketTest do
     end
   end
 
+  describe "update/3" do
+    test "applies the function to the current value" do
+      socket =
+        Socket.new(MyScreen) |> Socket.assign(:count, 1) |> Socket.update(:count, &(&1 + 1))
+
+      assert socket.assigns.count == 2
+    end
+
+    test "raises if the key is not assigned" do
+      assert_raise KeyError, fn ->
+        Socket.new(MyScreen) |> Socket.update(:missing, &(&1 + 1))
+      end
+    end
+
+    test "leaves other assigns untouched" do
+      socket =
+        Socket.new(MyScreen)
+        |> Socket.assign(a: 1, b: 2)
+        |> Socket.update(:a, &(&1 * 10))
+
+      assert socket.assigns.a == 10
+      assert socket.assigns.b == 2
+    end
+  end
+
+  describe "assign_new/3" do
+    test "assigns and runs the fun when the key is absent" do
+      socket = Socket.new(MyScreen) |> Socket.assign_new(:user, fn -> "computed" end)
+      assert socket.assigns.user == "computed"
+    end
+
+    test "keeps the existing value and does not run the fun" do
+      socket =
+        Socket.new(MyScreen)
+        |> Socket.assign(:user, "existing")
+        |> Socket.assign_new(:user, fn -> raise "assign_new ran when key was present" end)
+
+      assert socket.assigns.user == "existing"
+    end
+  end
+
   describe "assign/2 — keyword list" do
     test "sets multiple assigns at once" do
       socket = Socket.new(MyScreen) |> Socket.assign(count: 0, name: "test")
