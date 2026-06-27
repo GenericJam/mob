@@ -4,9 +4,8 @@ defmodule Mob.Socket do
 
   Holds two things:
   - `assigns` — the public data map your `render/1` function reads via
-    `assigns.foo` (the `~MOB` sigil does not support Phoenix HEEx's
-    `@foo` shortcut — `@foo` inside `render/1` resolves to a module
-    attribute, which is almost always `nil`)
+    `assigns.foo`, or the `@foo` shorthand inside a `~MOB` template
+    (the sigil rewrites `@foo` to `assigns.foo`, matching Phoenix HEEx)
   - `__mob__` — internal Mob metadata (screen module, platform, view refs, nav stack)
 
   You interact with a socket via `assign/2` and `assign/3`. Never mutate `__mob__`
@@ -79,6 +78,37 @@ defmodule Mob.Socket do
   @spec assign(t(), keyword() | map()) :: t()
   def assign(%__MODULE__{assigns: assigns} = socket, kw) when is_list(kw) or is_map(kw) do
     %{socket | assigns: Map.merge(assigns, Map.new(kw))}
+  end
+
+  @doc """
+  Update an existing assign by applying `fun` to its current value.
+
+      socket = update(socket, :count, fn count -> count + 1 end)
+
+  Raises `KeyError` if `key` is not already assigned. Mirrors
+  `Phoenix.LiveView.update/3`.
+  """
+  @spec update(t(), atom(), (term() -> term())) :: t()
+  def update(%__MODULE__{assigns: assigns} = socket, key, fun)
+      when is_atom(key) and is_function(fun, 1) do
+    %{socket | assigns: Map.put(assigns, key, fun.(Map.fetch!(assigns, key)))}
+  end
+
+  @doc """
+  Assign `key` only if it is not already present, computing the value lazily.
+
+      socket = assign_new(socket, :user, fn -> fetch_user(id) end)
+
+  `fun` runs only when `key` is absent, so it's the cheap way to set a default
+  or memoize a lookup across re-renders. Mirrors `Phoenix.LiveView.assign_new/3`.
+  """
+  @spec assign_new(t(), atom(), (-> term())) :: t()
+  def assign_new(%__MODULE__{assigns: assigns} = socket, key, fun)
+      when is_atom(key) and is_function(fun, 0) do
+    case assigns do
+      %{^key => _} -> socket
+      _ -> %{socket | assigns: Map.put(assigns, key, fun.())}
+    end
   end
 
   @doc """

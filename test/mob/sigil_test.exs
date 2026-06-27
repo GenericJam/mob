@@ -271,6 +271,151 @@ defmodule Mob.SigilTest do
     end
   end
 
+  # ── @assigns sugar ────────────────────────────────────────────────────────────
+
+  describe "@assign shorthand" do
+    test "@name in an attr expands to assigns.name" do
+      assigns = %{name: "Alice"}
+      node = ~MOB(<Text text={@name} />)
+      assert node.props.text == "Alice"
+    end
+
+    test "@user.name (nested access) expands the inner @user" do
+      assigns = %{user: %{name: "Bob"}}
+      node = ~MOB(<Text text={@user.name} />)
+      assert node.props.text == "Bob"
+    end
+
+    test "@count inside a larger expression expands" do
+      assigns = %{count: 3}
+      node = ~MOB(<Text text={"n=#{@count}"} />)
+      assert node.props.text == "n=3"
+    end
+
+    test "non-@ expressions are untouched" do
+      local = "plain"
+      node = ~MOB(<Text text={local} />)
+      assert node.props.text == "plain"
+    end
+  end
+
+  # ── :if control attribute ─────────────────────────────────────────────────────
+
+  describe ":if directive" do
+    test ":if={true} keeps the node" do
+      node = ~MOB(<Text text="shown" :if={true} />)
+      assert node.type == :text
+    end
+
+    test ":if={false} yields nil at the root" do
+      node = ~MOB(<Text text="hidden" :if={false} />)
+      refute node
+    end
+
+    test ":if={false} child drops out of its parent" do
+      node = ~MOB"""
+      <Column>
+        <Text text="a" :if={true} />
+        <Text text="b" :if={false} />
+        <Text text="c" />
+      </Column>
+      """
+
+      assert Enum.map(node.children, & &1.props.text) == ["a", "c"]
+    end
+
+    test ":if reads @assigns" do
+      # Enum.member?/2 keeps `show` typed boolean() (not the literal false),
+      # so the compiler doesn't flag the generated `if`'s else branch as dead.
+      assigns = %{show: Enum.member?([], :x)}
+      node = ~MOB(<Text text="x" :if={@show} />)
+      refute node
+    end
+
+    test ":if with a string value raises CompileError" do
+      assert_raise CompileError, ~r/:if requires a \{expr\}/, fn ->
+        Code.compile_string(~S[import Mob.Sigil; ~MOB(<Text text="x" :if="true" />)])
+      end
+    end
+  end
+
+  # ── :for control attribute ────────────────────────────────────────────────────
+
+  describe ":for directive" do
+    test ":for at the root produces a list of nodes" do
+      nodes = ~MOB"""
+      <Text text={label} :for={label <- ["1", "2", "3"]} />
+      """
+
+      assert length(nodes) == 3
+      assert Enum.map(nodes, & &1.props.text) == ["1", "2", "3"]
+    end
+
+    test ":for child splices into its parent" do
+      node = ~MOB"""
+      <Column>
+        <Text text="header" />
+        <Text text={label} :for={label <- ["a", "b"]} />
+      </Column>
+      """
+
+      assert Enum.map(node.children, & &1.props.text) == ["header", "a", "b"]
+    end
+
+    test ":for reads @assigns" do
+      assigns = %{items: ["x", "y"]}
+      nodes = ~MOB(<Text text={i} :for={i <- @items} />)
+      assert Enum.map(nodes, & &1.props.text) == ["x", "y"]
+    end
+
+    test ":for over an empty list yields no children" do
+      node = ~MOB"""
+      <Column>
+        <Text text={i} :for={i <- []} />
+      </Column>
+      """
+
+      assert node.children == []
+    end
+
+    test ":for on a container element repeats the whole subtree" do
+      node = ~MOB"""
+      <Column>
+        <Row :for={label <- ["a", "b"]}>
+          <Text text={label} />
+        </Row>
+      </Column>
+      """
+
+      assert length(node.children) == 2
+      assert Enum.all?(node.children, &(&1.type == :row))
+      assert Enum.map(node.children, &hd(&1.children).props.text) == ["a", "b"]
+    end
+
+    test ":if on a container element drops the whole subtree" do
+      node = ~MOB"""
+      <Column>
+        <Row :if={false}>
+          <Text text="gone" />
+        </Row>
+        <Text text="kept" />
+      </Column>
+      """
+
+      assert Enum.map(node.children, & &1.type) == [:text]
+    end
+
+    test ":for with :if filters (LiveView comprehension semantics)" do
+      node = ~MOB"""
+      <Column>
+        <Text text={to_string(n)} :for={n <- 1..4} :if={rem(n, 2) == 0} />
+      </Column>
+      """
+
+      assert Enum.map(node.children, & &1.props.text) == ["2", "4"]
+    end
+  end
+
   # ── compile-time errors ───────────────────────────────────────────────────────
 
   describe "compile-time errors" do
