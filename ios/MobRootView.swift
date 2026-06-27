@@ -237,9 +237,10 @@ struct MobNodeView: View {
             case .row:
                 let alignment: VerticalAlignment = {
                     switch node.rowAlign {
-                    case "top":    return .top
-                    case "bottom": return .bottom
-                    default:       return .center
+                    case "top":      return .top
+                    case "bottom":   return .bottom
+                    case "baseline": return .lastTextBaseline
+                    default:         return .center
                     }
                 }()
                 HStack(alignment: alignment, spacing: 0) {

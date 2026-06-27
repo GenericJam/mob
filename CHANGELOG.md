@@ -8,6 +8,14 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.10] - 2026-06-26
+
+### Added
+- **`baseline` row alignment on iOS.** A `:row` with `align: "baseline"` now
+  maps to SwiftUI's `.lastTextBaseline` instead of silently falling through to
+  center. (Android `Row` has no row-level baseline alignment, so it still
+  centers there.)
+
 ## [0.7.9] - 2026-06-26
 
 ### Fixed
