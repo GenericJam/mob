@@ -8,6 +8,26 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.11] - 2026-06-27
+
+### Added
+- **LiveView-style authoring in the `~MOB` sigil.** Three HEEx idioms now work
+  in templates:
+  - `@foo` shorthand — inside any `{...}` expression `@foo` rewrites to
+    `assigns.foo` (attribute values, `{expr}` children, and the control
+    attributes below), including nested access like `@user.name`.
+  - `:if={expr}` — renders an element only when the expression is truthy; a
+    falsy `:if` drops the element from its parent's children.
+  - `:for={x <- list}` — repeats an element per item and splices into the
+    parent. Combined with `:if`, the `:if` becomes a comprehension filter
+    (LiveView semantics). `:if`/`:for` require a `{expr}` value; only those two
+    control attributes are recognised.
+- **`Mob.Socket.update/3` and `assign_new/3`**, mirroring
+  `Phoenix.LiveView`. `update/3` applies a function to an existing assign
+  (`KeyError` if absent); `assign_new/3` lazily sets an assign only when absent.
+- New `guides/components.md` "Control flow" section documents all of the above.
+  (#52)
+
 ## [0.7.10] - 2026-06-26
 
 ### Added
