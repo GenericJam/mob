@@ -5,6 +5,13 @@ UI code required. Mob runs a local Phoenix endpoint on the device and wraps it i
 a native WebView. LiveView updates travel over the existing WebSocket at loopback
 speed (~1–5 ms).
 
+> **Looking for LiveView-style authoring in native screens?** This guide is about
+> running an actual Phoenix LiveView in a WebView. If you instead want the *feel*
+> of LiveView while writing native `~MOB` screens, the sigil already mirrors
+> several HEEx idioms — `@assigns` shorthand and the `:if` / `:for` control
+> attributes — and `Mob.Socket` mirrors `assign/2,3`, `update/3`, and
+> `assign_new/3`. See [Components → Control flow](components.md#control-flow).
+
 ## Setup
 
 Run this from your Mob project root (the directory with `mix.exs`):
