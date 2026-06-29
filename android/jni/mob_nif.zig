@@ -2139,10 +2139,14 @@ export fn nif_audio_output_status(
 }
 
 // nif_audio_output_level/1 — {RmsDb, PeakDb} as two doubles, or an error atom.
-// Source is "mix" (global output mix, needs RECORD_AUDIO) | "mob" (Mob's own
-// player). MobBridge.audioOutputLevel(String) returns float[2] = [rms_db,
-// peak_db] on success, or null on failure (no permission / no signal /
-// unsupported), which we surface as an atom Mob.Audio maps to {:error, _}.
+// Source is "mob" (Mob's own player session) | "mix". The global output mix is
+// privileged on modern Android (a normal app gets ERROR_NO_INIT attaching a
+// Visualizer to session 0), so "mix" is unsupported here — global device-audio
+// capture lives in a separate MediaProjection-based plugin. MobBridge returns:
+//   float[2] = [rms_db, peak_db]  → success
+//   float[1] = [code]             → 1 unsupported_on_platform, 2 needs_record_audio,
+//                                    3 not_playing (no active Mob.Audio player)
+//   null                          → generic error
 export fn nif_audio_output_level(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -2160,18 +2164,30 @@ export fn nif_audio_output_level(
     jni.deleteLocalRef(jenv, jsource);
     if (arr == null) {
         detachIfAttached(attached);
-        // Kotlin signals "couldn't measure" with null; the common cause on
-        // the :mix path is the missing RECORD_AUDIO permission.
-        return erts.atom(env, "needs_record_audio");
+        return erts.atom(env, "error");
     }
-    var vals: [2]f32 = @splat(0);
-    jni.getFloatArrayRegion(jenv, arr, 0, 2, &vals);
+    const len = jni.getArrayLength(jenv, arr);
+    if (len >= 2) {
+        var vals: [2]f32 = @splat(0);
+        jni.getFloatArrayRegion(jenv, arr, 0, 2, &vals);
+        jni.deleteLocalRef(jenv, arr);
+        detachIfAttached(attached);
+        return erts.makeTuple(env, .{
+            erts.enif_make_double(env, @floatCast(vals[0])),
+            erts.enif_make_double(env, @floatCast(vals[1])),
+        });
+    }
+    // Length-1 array carries an error code the Kotlin couldn't express otherwise.
+    var code: [1]f32 = @splat(0);
+    if (len == 1) jni.getFloatArrayRegion(jenv, arr, 0, 1, &code);
     jni.deleteLocalRef(jenv, arr);
     detachIfAttached(attached);
-    return erts.makeTuple(env, .{
-        erts.enif_make_double(env, @floatCast(vals[0])),
-        erts.enif_make_double(env, @floatCast(vals[1])),
-    });
+    return switch (@as(i32, @intFromFloat(code[0]))) {
+        1 => erts.atom(env, "unsupported_on_platform"),
+        2 => erts.atom(env, "needs_record_audio"),
+        3 => erts.atom(env, "not_playing"),
+        else => erts.atom(env, "error"),
+    };
 }
 
 // nif_share_text/1 — system share sheet (Intent ACTION_SEND text/plain).

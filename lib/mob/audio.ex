@@ -38,7 +38,8 @@ defmodule Mob.Audio do
       Mob.Audio.output_status()
       # => %{volume: 0.8, muted: false, route: :speaker, other_audio: false}
 
-      Mob.Audio.output_level(source: :mix)
+      Mob.Audio.play(socket, "blip.wav")
+      Mob.Audio.output_level(source: :mob)
       # => {-18.4, -6.1}   # {rms_db, peak_db}, or :silent
 
   `output_status/0` is a cheap, permission-free read of the system audio
@@ -49,15 +50,23 @@ defmodule Mob.Audio do
 
   `output_level/1` takes a `:source`:
 
-    - `:mix` (default) — taps the **global output mix**, so it observes ALL
-      audio including playback from native code that bypasses `Mob.Audio`
-      (e.g. an app driving its own `AudioTrack`/`AudioUnit`). On Android this
-      requires the `RECORD_AUDIO` permission (a global-mix tap counts as
-      capture) and returns `{:error, :needs_record_audio}` without it. On
-      iOS the sandbox forbids a global-mix tap, so `:mix` returns
-      `{:error, :unsupported_on_platform}` — fall back to `output_status/0`.
-    - `:mob` — taps only `Mob.Audio`'s own player. Free and permission-free
-      on iOS (`AVAudioPlayer` metering); narrower on Android.
+    - `:mob` (default) — meters `Mob.Audio`'s own player. iOS reads the
+      `AVAudioPlayer` meter (free, no permission); Android attaches a
+      `Visualizer` to the player's own audio session (needs `RECORD_AUDIO`,
+      granted at runtime — without it you get `{:error, :needs_record_audio}`).
+      Returns `{:error, :not_playing}` when no `Mob.Audio` playback is active.
+    - `:mix` — *would* tap the global output mix to observe audio that bypasses
+      `Mob.Audio` (a game's own `AudioTrack`, another app). This is **not
+      available to a normal app**: iOS forbids it (sandbox) and modern Android
+      treats a session-0 `Visualizer` as privileged (`ERROR_NO_INIT` even with
+      `RECORD_AUDIO`). So `:mix` returns `{:error, :unsupported_on_platform}`
+      on both platforms. Global device-audio capture lives in a separate,
+      MediaProjection-based capture plugin intended as a test-environment
+      dependency, not here.
+
+  So in-app these probes verify *your own* audio. To check audio from a
+  foreign native player (e.g. a bundled game) without that plugin, read
+  `adb shell dumpsys media.audio_flinger` (active track + underrun counts).
 
   Metering is instantaneous and only meaningful while audio is playing, so
   the idiom is `play → sleep a beat → output_level`.
@@ -237,18 +246,18 @@ defmodule Mob.Audio do
   `play → sleep a beat → output_level`.
 
   Options:
-    - `source: :mix` (default) — global output mix (sees all audio, incl.
-      native players that bypass `Mob.Audio`). Android needs `RECORD_AUDIO`;
-      unsupported on iOS (see module docs).
-    - `source: :mob` — `Mob.Audio`'s own player only.
+    - `source: :mob` (default) — meters `Mob.Audio`'s own player. Android needs
+      `RECORD_AUDIO` (runtime-granted); iOS uses `AVAudioPlayer` metering.
+    - `source: :mix` — the global output mix. Unsupported for a normal app on
+      both platforms (see module docs); use the separate capture plugin.
 
-  Returns `{:error, reason}` when unavailable: `:needs_record_audio`
-  (Android `:mix` without permission), `:unsupported_on_platform` (iOS
-  `:mix`), or `:not_playing` (no active player for `:mob`).
+  Returns `{:error, reason}` when unavailable: `:not_playing` (no active
+  `Mob.Audio` player), `:needs_record_audio` (Android, permission not granted
+  at runtime), or `:unsupported_on_platform` (`:mix`).
   """
   @spec output_level(keyword()) :: {float(), float()} | :silent | {:error, atom()}
   def output_level(opts \\ []) do
-    source = Keyword.get(opts, :source, :mix)
+    source = Keyword.get(opts, :source, :mob)
     decode_level(:mob_nif.audio_output_level(Atom.to_string(source)))
   end
 
