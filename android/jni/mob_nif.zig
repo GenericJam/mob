@@ -259,6 +259,11 @@ pub const BridgeMethods = extern struct {
     audio_play_at: jni.JMethodID = null,
     audio_stop_playback: jni.JMethodID = null,
     audio_set_volume: jni.JMethodID = null,
+    // Output probes — optional (cacheOptional); a drifted MobBridge.kt that
+    // predates them simply leaves these null and the NIFs return an error
+    // atom instead of crashing nif_load.
+    audio_output_status: jni.JMethodID = null,
+    audio_output_level: jni.JMethodID = null,
     motion_start: jni.JMethodID = null,
     motion_stop: jni.JMethodID = null,
     take_launch_notification: jni.JMethodID = null,
@@ -2101,6 +2106,90 @@ export fn nif_open_settings(
     return erts.ok(env);
 }
 
+// nif_audio_output_status/0 — {Volume, Muted, RouteCode, OtherAudio} as four
+// doubles (decoded by Mob.Audio.output_status/0). MobBridge.audioOutputStatus()
+// returns float[4] = [volume0..1, muted(0/1), routeCode, otherAudio(0/1)].
+// Optional bridge method: an older MobBridge.kt leaves it null → return all
+// zeros (Mob.Audio decodes that as route :none, which reads as "unknown-ish"
+// rather than crashing).
+export fn nif_audio_output_status(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var vals: [4]f32 = @splat(0);
+    if (Bridge.audio_output_status != null) {
+        var attached: c_int = 0;
+        const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+        const arr = jenv.*.CallStaticObjectMethod.?(jenv, Bridge.cls, Bridge.audio_output_status);
+        if (arr != null) {
+            jni.getFloatArrayRegion(jenv, arr, 0, 4, &vals);
+            jni.deleteLocalRef(jenv, arr);
+        }
+        detachIfAttached(attached);
+    }
+    return erts.makeTuple(env, .{
+        erts.enif_make_double(env, @floatCast(vals[0])),
+        erts.enif_make_double(env, @floatCast(vals[1])),
+        erts.enif_make_double(env, @floatCast(vals[2])),
+        erts.enif_make_double(env, @floatCast(vals[3])),
+    });
+}
+
+// nif_audio_output_level/1 — {RmsDb, PeakDb} as two doubles, or an error atom.
+// Source is "mob" (Mob's own player session) | "mix". The global output mix is
+// privileged on modern Android (a normal app gets ERROR_NO_INIT attaching a
+// Visualizer to session 0), so "mix" is unsupported here — global device-audio
+// capture lives in a separate MediaProjection-based plugin. MobBridge returns:
+//   float[2] = [rms_db, peak_db]  → success
+//   float[1] = [code]             → 1 unsupported_on_platform, 2 needs_record_audio,
+//                                    3 not_playing (no active Mob.Audio player)
+//   null                          → generic error
+export fn nif_audio_output_level(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.audio_output_level == null) return erts.atom(env, "unsupported_on_platform");
+    const bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    const source = binToCString(bin) orelse return erts.atom(env, "error");
+    defer freeCString(source);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jsource = jni.newStringUTF(jenv, source);
+    const arr = jenv.*.CallStaticObjectMethod.?(jenv, Bridge.cls, Bridge.audio_output_level, jsource);
+    jni.deleteLocalRef(jenv, jsource);
+    if (arr == null) {
+        detachIfAttached(attached);
+        return erts.atom(env, "error");
+    }
+    const len = jni.getArrayLength(jenv, arr);
+    if (len >= 2) {
+        var vals: [2]f32 = @splat(0);
+        jni.getFloatArrayRegion(jenv, arr, 0, 2, &vals);
+        jni.deleteLocalRef(jenv, arr);
+        detachIfAttached(attached);
+        return erts.makeTuple(env, .{
+            erts.enif_make_double(env, @floatCast(vals[0])),
+            erts.enif_make_double(env, @floatCast(vals[1])),
+        });
+    }
+    // Length-1 array carries an error code the Kotlin couldn't express otherwise.
+    var code: [1]f32 = @splat(0);
+    if (len == 1) jni.getFloatArrayRegion(jenv, arr, 0, 1, &code);
+    jni.deleteLocalRef(jenv, arr);
+    detachIfAttached(attached);
+    return switch (@as(i32, @intFromFloat(code[0]))) {
+        1 => erts.atom(env, "unsupported_on_platform"),
+        2 => erts.atom(env, "needs_record_audio"),
+        3 => erts.atom(env, "not_playing"),
+        else => erts.atom(env, "error"),
+    };
+}
+
 // nif_share_text/1 — system share sheet (Intent ACTION_SEND text/plain).
 export fn nif_share_text(
     env: ?*erts.ErlNifEnv,
@@ -3374,6 +3463,10 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     if (!cacheRequired(jenv, "audio_play_at", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", &Bridge.audio_play_at)) return -1;
     if (!cacheRequired(jenv, "audio_stop_playback", "()V", &Bridge.audio_stop_playback)) return -1;
     if (!cacheRequired(jenv, "audio_set_volume", "(Ljava/lang/String;)V", &Bridge.audio_set_volume)) return -1;
+    // Output probes are optional so a drifted MobBridge.kt that predates them
+    // no-ops (NIF returns an error atom) instead of failing nif_load.
+    cacheOptional(jenv, "audioOutputStatus", "()[F", &Bridge.audio_output_status);
+    cacheOptional(jenv, "audioOutputLevel", "(Ljava/lang/String;)[F", &Bridge.audio_output_level);
     if (!cacheRequired(jenv, "storage_dir", "(Ljava/lang/String;)Ljava/lang/String;", &Bridge.storage_dir)) return -1;
     if (!cacheRequired(jenv, "storage_save_to_media_store", "(JLjava/lang/String;Ljava/lang/String;)V", &Bridge.storage_save_to_media_store)) return -1;
     if (!cacheRequired(jenv, "storage_external_files_dir", "(Ljava/lang/String;)Ljava/lang/String;", &Bridge.storage_external_files_dir)) return -1;
@@ -3497,6 +3590,11 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "audio_play_at", .arity = 3, .fptr = nif_audio_play_at, .flags = 0 },
     .{ .name = "audio_stop_playback", .arity = 0, .fptr = nif_audio_stop_playback, .flags = 0 },
     .{ .name = "audio_set_volume", .arity = 1, .fptr = nif_audio_set_volume, .flags = 0 },
+    .{ .name = "audio_output_status", .arity = 0, .fptr = nif_audio_output_status, .flags = 0 },
+    // Dirty IO: the Android side briefly settles a Visualizer measurement
+    // window, and iOS dispatch_syncs to the main queue — keep it off the
+    // regular schedulers.
+    .{ .name = "audio_output_level", .arity = 1, .fptr = nif_audio_output_level, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
     .{ .name = "motion_start", .arity = 2, .fptr = nif_motion_start, .flags = 0 },
     .{ .name = "motion_stop", .arity = 0, .fptr = nif_motion_stop, .flags = 0 },
     .{ .name = "take_launch_notification", .arity = 0, .fptr = nif_take_launch_notification, .flags = 0 },

@@ -125,4 +125,54 @@ defmodule Mob.AudioTest do
       end
     end
   end
+
+  describe "decode_status/1" do
+    test "maps the native 4-tuple to a status map" do
+      assert Audio.decode_status({0.8, 0.0, 1.0, 0.0}) ==
+               %{volume: 0.8, muted: false, route: :speaker, other_audio: false}
+    end
+
+    test "muted and other_audio are booleans from the 0/1 flags" do
+      status = Audio.decode_status({0.0, 1.0, 0.0, 1.0})
+      assert status.muted == true
+      assert status.other_audio == true
+      assert status.route == :none
+    end
+
+    test "route codes decode to atoms (float codes from the NIF too)" do
+      assert Audio.decode_status({0.5, 0.0, 2.0, 0.0}).route == :headphones
+      assert Audio.decode_status({0.5, 0.0, 3.0, 0.0}).route == :bluetooth
+      assert Audio.decode_status({0.5, 0.0, 4.0, 0.0}).route == :receiver
+    end
+
+    test "an unknown route code is :unknown, not a crash" do
+      assert Audio.decode_status({0.5, 0.0, 99.0, 0.0}).route == :unknown
+    end
+
+    test "a non-tuple (e.g. NIF not loaded) yields a safe default" do
+      assert Audio.decode_status(:error) ==
+               %{volume: 0.0, muted: false, route: :unknown, other_audio: false}
+    end
+  end
+
+  describe "decode_level/1" do
+    test "passes through {rms, peak} when there is signal" do
+      assert Audio.decode_level({-18.0, -6.0}) == {-18.0, -6.0}
+    end
+
+    test "a peak at or below -120 dB reads as :silent" do
+      assert Audio.decode_level({-160.0, -160.0}) == :silent
+      assert Audio.decode_level({-130.0, -120.0}) == :silent
+    end
+
+    test "an atom result becomes {:error, atom}" do
+      assert Audio.decode_level(:needs_record_audio) == {:error, :needs_record_audio}
+      assert Audio.decode_level(:unsupported_on_platform) == {:error, :unsupported_on_platform}
+      assert Audio.decode_level(:not_playing) == {:error, :not_playing}
+    end
+
+    test "an unexpected shape becomes {:error, :unknown}" do
+      assert Audio.decode_level(42) == {:error, :unknown}
+    end
+  end
 end

@@ -2062,6 +2062,67 @@ static ERL_NIF_TERM nif_open_settings(ErlNifEnv *env, int argc, const ERL_NIF_TE
     return enif_make_atom(env, "ok");
 }
 
+// nif_audio_output_status/0 — {Volume, Muted, RouteCode, OtherAudio} as four
+// doubles (decoded by Mob.Audio.output_status/0). iOS has no direct mute flag,
+// so Muted is inferred from outputVolume == 0. RouteCode mirrors the Android
+// encoding: 1=speaker, 2=headphones, 3=bluetooth, 4=receiver, 0=none.
+static ERL_NIF_TERM nif_audio_output_status(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    double volume = (double)session.outputVolume;
+    double other = session.isOtherAudioPlaying ? 1.0 : 0.0;
+    double route = 0.0;
+    for (AVAudioSessionPortDescription *out in session.currentRoute.outputs) {
+        NSString *t = out.portType;
+        if ([t isEqualToString:AVAudioSessionPortBuiltInSpeaker])
+            route = 1.0;
+        else if ([t isEqualToString:AVAudioSessionPortHeadphones])
+            route = 2.0;
+        else if ([t isEqualToString:AVAudioSessionPortBluetoothA2DP] ||
+                 [t isEqualToString:AVAudioSessionPortBluetoothLE] ||
+                 [t isEqualToString:AVAudioSessionPortBluetoothHFP])
+            route = 3.0;
+        else if ([t isEqualToString:AVAudioSessionPortBuiltInReceiver])
+            route = 4.0;
+        if (route != 0.0)
+            break;
+    }
+    double muted = (volume <= 0.0) ? 1.0 : 0.0;
+    return enif_make_tuple4(env, enif_make_double(env, volume), enif_make_double(env, muted),
+                            enif_make_double(env, route), enif_make_double(env, other));
+}
+
+// nif_audio_output_level/1 — {RmsDb, PeakDb} as two doubles, or an error atom.
+// iOS cannot tap the global output mix (sandbox), so "mix" is unsupported;
+// "mob" meters Mob.Audio's own AVAudioPlayer (metering is enabled when the
+// player is created).
+static ERL_NIF_TERM nif_audio_output_level(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[0], &bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &bin))
+        return enif_make_badarg(env);
+    NSString *source = [[NSString alloc] initWithBytes:bin.data
+                                                length:bin.size
+                                              encoding:NSUTF8StringEncoding];
+    if (![source isEqualToString:@"mob"])
+        return enif_make_atom(env, "unsupported_on_platform");
+
+    __block double rms = -160.0;
+    __block double peak = -160.0;
+    __block BOOL playing = NO;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+      AVAudioPlayer *player = g_audio_player;
+      if (player && player.playing) {
+          playing = YES;
+          [player updateMeters];
+          rms = (double)[player averagePowerForChannel:0];
+          peak = (double)[player peakPowerForChannel:0];
+      }
+    });
+    if (!playing)
+        return enif_make_atom(env, "not_playing");
+    return enif_make_tuple2(env, enif_make_double(env, rms), enif_make_double(env, peak));
+}
+
 // ── NIF: share_text/1 ─────────────────────────────────────────────────────────
 // Opens the iOS share sheet with plain text. Fire-and-forget.
 
@@ -2786,6 +2847,9 @@ static ERL_NIF_TERM nif_audio_play(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
       player.delegate = g_player_delegate;
       player.volume = (float)volume;
       player.numberOfLoops = loop ? -1 : 0;
+      // Enable metering so Mob.Audio.output_level(source: :mob) can read the
+      // signal level without a separate tap. Cheap; off by default otherwise.
+      player.meteringEnabled = YES;
       g_audio_player = player;
       [player play];
     });
@@ -5982,6 +6046,8 @@ static ErlNifFunc nif_funcs[] = {
     {"audio_play_at", 3, nif_audio_play_at, 0},
     {"audio_stop_playback", 0, nif_audio_stop_playback, 0},
     {"audio_set_volume", 1, nif_audio_set_volume, 0},
+    {"audio_output_status", 0, nif_audio_output_status, 0},
+    {"audio_output_level", 1, nif_audio_output_level, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"tts_speak", 2, nif_tts_speak, 0},
     {"tts_stop", 0, nif_tts_stop, 0},
     {"motion_start", 2, nif_motion_start, 0},
