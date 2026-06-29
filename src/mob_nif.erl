@@ -33,6 +33,9 @@
     audio_play_at/3,
     audio_stop_playback/0,
     audio_set_volume/1,
+    %% Audio output probes — verify sound is actually working (see Mob.Audio)
+    audio_output_status/0,
+    audio_output_level/1,
     %% Text-to-speech (no permission required)
     tts_speak/2,
     tts_stop/0,
@@ -149,6 +152,8 @@
     audio_play_at/3,
     audio_stop_playback/0,
     audio_set_volume/1,
+    audio_output_status/0,
+    audio_output_level/1,
     tts_speak/2,
     tts_stop/0,
     motion_start/2,
@@ -267,6 +272,8 @@ audio_play(_Path, _OptsJson) -> erlang:nif_error(not_loaded).
 audio_play_at(_Path, _OptsJson, _AtWallMs) -> erlang:nif_error(not_loaded).
 audio_stop_playback() -> erlang:nif_error(not_loaded).
 audio_set_volume(_Volume) -> erlang:nif_error(not_loaded).
+audio_output_status() -> erlang:nif_error(not_loaded).
+audio_output_level(_Source) -> erlang:nif_error(not_loaded).
 tts_speak(_Text, _OptsJson) -> erlang:nif_error(not_loaded).
 tts_stop() -> erlang:nif_error(not_loaded).
 motion_start(_Sensors, _Interval) -> erlang:nif_error(not_loaded).

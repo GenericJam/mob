@@ -28,10 +28,45 @@ defmodule Mob.Audio do
       # → handle_info({:audio, :playback_error,    %{reason: reason}}, socket)
 
   iOS: `AVAudioPlayer` / `AVPlayer`. Android: `MediaPlayer`.
+
+  ## Output probes — is sound actually working?
+
+  Two read-only probes answer "is audio coming out right now," the audio
+  analog of `Mob.Test`'s in-process `screenshot/2` for video. Use them in
+  tests and agent-driven verification.
+
+      Mob.Audio.output_status()
+      # => %{volume: 0.8, muted: false, route: :speaker, other_audio: false}
+
+      Mob.Audio.output_level(source: :mix)
+      # => {-18.4, -6.1}   # {rms_db, peak_db}, or :silent
+
+  `output_status/0` is a cheap, permission-free read of the system audio
+  config (volume, mute, route). It catches the common "no sound" causes:
+  muted, volume 0, routed to a disconnected sink. `output_level/1` reads
+  actual signal energy so you can tell live audio from pushed silence — the
+  part `output_status` (and `adb dumpsys audio`) cannot answer.
+
+  `output_level/1` takes a `:source`:
+
+    - `:mix` (default) — taps the **global output mix**, so it observes ALL
+      audio including playback from native code that bypasses `Mob.Audio`
+      (e.g. an app driving its own `AudioTrack`/`AudioUnit`). On Android this
+      requires the `RECORD_AUDIO` permission (a global-mix tap counts as
+      capture) and returns `{:error, :needs_record_audio}` without it. On
+      iOS the sandbox forbids a global-mix tap, so `:mix` returns
+      `{:error, :unsupported_on_platform}` — fall back to `output_status/0`.
+    - `:mob` — taps only `Mob.Audio`'s own player. Free and permission-free
+      on iOS (`AVAudioPlayer` metering); narrower on Android.
+
+  Metering is instantaneous and only meaningful while audio is playing, so
+  the idiom is `play → sleep a beat → output_level`.
   """
 
   @type format :: :aac | :wav
   @type quality :: :low | :medium | :high
+  @type route :: :speaker | :headphones | :bluetooth | :receiver | :none | :unknown
+  @type level_source :: :mix | :mob
 
   @doc """
   Start recording audio from the microphone.
@@ -150,4 +185,88 @@ defmodule Mob.Audio do
   def play_at_opts(opts) do
     %{"volume" => Keyword.get(opts, :volume, 1.0) * 1.0}
   end
+
+  @doc """
+  Read the current system audio output configuration.
+
+  Returns `%{volume: float, muted: boolean, route: route(), other_audio:
+  boolean}`. Cheap, synchronous, no permission. The first thing to check
+  when verifying sound: a `volume` of `0.0`, `muted: true`, or a `route` of
+  `:none` explains silence regardless of what a player is doing.
+
+  `volume` is normalized 0.0–1.0 (the media stream volume on Android,
+  `AVAudioSession.outputVolume` on iOS). `route` is the active output sink.
+  `other_audio` is true when another app is already playing (iOS
+  `isOtherAudioPlaying` / Android `isMusicActive`).
+  """
+  @spec output_status() :: %{
+          volume: float(),
+          muted: boolean(),
+          route: route(),
+          other_audio: boolean()
+        }
+  def output_status do
+    decode_status(:mob_nif.audio_output_status())
+  end
+
+  @doc false
+  @spec decode_status(term()) :: %{
+          volume: float(),
+          muted: boolean(),
+          route: route(),
+          other_audio: boolean()
+        }
+  def decode_status({volume, muted, route_code, other_audio}) do
+    %{
+      volume: volume,
+      muted: muted >= 0.5,
+      route: decode_route(route_code),
+      other_audio: other_audio >= 0.5
+    }
+  end
+
+  def decode_status(_), do: %{volume: 0.0, muted: false, route: :unknown, other_audio: false}
+
+  @doc """
+  Read the current output signal level as `{rms_db, peak_db}` (dBFS, e.g.
+  `{-18.0, -6.0}`), or `:silent` when there is no measurable signal.
+
+  This is the probe that distinguishes live audio from pushed silence — the
+  one thing `output_status/0` and `adb dumpsys audio` cannot tell you.
+  Metering is instantaneous and only valid while audio plays, so call it as
+  `play → sleep a beat → output_level`.
+
+  Options:
+    - `source: :mix` (default) — global output mix (sees all audio, incl.
+      native players that bypass `Mob.Audio`). Android needs `RECORD_AUDIO`;
+      unsupported on iOS (see module docs).
+    - `source: :mob` — `Mob.Audio`'s own player only.
+
+  Returns `{:error, reason}` when unavailable: `:needs_record_audio`
+  (Android `:mix` without permission), `:unsupported_on_platform` (iOS
+  `:mix`), or `:not_playing` (no active player for `:mob`).
+  """
+  @spec output_level(keyword()) :: {float(), float()} | :silent | {:error, atom()}
+  def output_level(opts \\ []) do
+    source = Keyword.get(opts, :source, :mix)
+    decode_level(:mob_nif.audio_output_level(Atom.to_string(source)))
+  end
+
+  @doc false
+  @spec decode_level(term()) :: {float(), float()} | :silent | {:error, atom()}
+  def decode_level({_rms, peak}) when peak <= -120.0, do: :silent
+  def decode_level({rms, peak}), do: {rms, peak}
+  def decode_level(reason) when is_atom(reason), do: {:error, reason}
+  def decode_level(_), do: {:error, :unknown}
+
+  # Native side returns a numeric route code (kept numeric to avoid building
+  # atoms in C/Zig); decode here.
+  @spec decode_route(number()) :: route()
+  defp decode_route(1), do: :speaker
+  defp decode_route(2), do: :headphones
+  defp decode_route(3), do: :bluetooth
+  defp decode_route(4), do: :receiver
+  defp decode_route(0), do: :none
+  defp decode_route(code) when is_float(code), do: decode_route(round(code))
+  defp decode_route(_), do: :unknown
 end
