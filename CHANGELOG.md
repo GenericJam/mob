@@ -8,6 +8,28 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.12] - 2026-06-30
+
+### Fixed
+- **`~MOB` now raises a clear error when `@foo` is used without `assigns` in
+  scope.** The `@foo` → `assigns.foo` shorthand (0.7.11) only works inside a
+  `render(assigns)`; used in an ordinary helper function (positional args — the
+  idiomatic composite pattern) it compiled to a cryptic "undefined variable
+  assigns". The sigil now guards with `Macro.Env.has_var?(caller, {:assigns,
+  nil})` (the same check Phoenix's `~H` uses) and raises a `CompileError` naming
+  the fix (`{title}` instead of `@title`). Only `@`-using templates trigger it —
+  a static `~MOB(<Text text="hi"/>)` in a positional-arg helper still compiles.
+  (MOB-5, #56)
+
+### Documentation
+- **Worked component-authoring examples in the Components guide.** The
+  "Defining your own components" section now carries two complete, runnable
+  screens — a function composite and a tag composite — spelling out the
+  tag→atom rule and where `on_*` event-target auto-injection applies (a
+  composite tag's own props vs a plain widget in its children). The `@assigns`
+  section documents that `@foo` only works where `assigns` is in scope and
+  steers helpers to positional `{var}`. (#56, #57)
+
 ## [0.7.11] - 2026-06-27
 
 ### Added
