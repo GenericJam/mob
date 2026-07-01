@@ -442,6 +442,8 @@ def terminate(_reason, socket) do
 end
 ```
 
+<a id="pure-elixir-composite-components"></a>
+
 ## Defining your own components
 
 You can build reusable components out of the built-in widgets with no native
