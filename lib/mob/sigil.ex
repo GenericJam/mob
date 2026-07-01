@@ -38,6 +38,19 @@ defmodule Mob.Sigil do
 
       ~MOB(<Text text={@title} />)   # same as text={assigns.title}
 
+  `@foo` only works where a variable named `assigns` is in scope — i.e. a
+  screen's or component's `render(assigns)`. Reusable helper functions take
+  positional arguments instead, so use the argument directly there:
+
+      # Screen render — assigns is in scope, @ works:
+      def render(assigns), do: ~MOB(<Text text={@title} />)
+
+      # Helper — no assigns; interpolate the argument, don't use @:
+      def label(title), do: ~MOB(<Text text={title} />)
+
+  Using `@foo` where no `assigns` exists raises a `CompileError` naming the
+  fix, rather than a cryptic "undefined variable assigns".
+
   ## Control attributes — `:if` and `:for`
 
   Two LiveView-style directives wrap an element without extra ceremony.
@@ -393,15 +406,34 @@ defmodule Mob.Sigil do
     expr_str
     |> String.trim()
     |> Code.string_to_quoted!(file: caller.file, line: caller.line)
-    |> expand_assigns()
+    |> expand_assigns(caller)
   end
 
   # Rewrite every `@name` (the unary `@` operator on a bare identifier) to
   # `assigns.name`, mirroring HEEx. Nested forms like `@user.name` rewrite
   # too, since prewalk reaches the inner `@user` node first.
-  defp expand_assigns(ast) do
+  #
+  # `@foo` only makes sense where a variable named `assigns` is in scope — a
+  # screen/component `render(assigns)`. In an ordinary helper (positional args,
+  # the idiomatic composite pattern) there is no `assigns`, and a bare rewrite
+  # would compile to a cryptic "undefined variable assigns". So before
+  # rewriting, verify `assigns` is bound in the caller (same guard Phoenix's
+  # `~H` uses) and raise a message that names the fix. Only `@`-using templates
+  # trigger this — a static `~MOB(<Text text="hi"/>)` needs no assigns.
+  defp expand_assigns(ast, caller) do
     Macro.prewalk(ast, fn
       {:@, _meta, [{name, _, ctx}]} when is_atom(name) and (is_atom(ctx) or is_nil(ctx)) ->
+        unless Macro.Env.has_var?(caller, {:assigns, nil}) do
+          raise CompileError,
+            file: caller.file,
+            line: caller.line,
+            description:
+              "~MOB: @#{name} requires a variable named \"assigns\" in scope " <>
+                "(e.g. inside `render(assigns)`). In a helper function, take the " <>
+                "value as an argument and interpolate it directly — `{#{name}}` " <>
+                "instead of `@#{name}`."
+        end
+
         # Build `assigns.name` with a nil-context `assigns` var so it
         # resolves to the caller's binding (same as a literal `assigns`
         # parsed from source), not a hygienic Mob.Sigil-scoped variable.
