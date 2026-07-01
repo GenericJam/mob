@@ -45,7 +45,7 @@ The sigil borrows three authoring idioms from Phoenix HEEx, so screens read the 
 
 ### `@assigns` shorthand
 
-Inside any `{...}` expression, `@foo` rewrites to `assigns.foo` (this happens at compile time). It works in attribute values, `{expr}` children, and the `:if`/`:for` directives below. Nested access like `@user.name` works too.
+Inside a `{...}` expression, `@foo` rewrites to `assigns.foo` at compile time. It works in attribute values, `{expr}` children, and the `:if`/`:for` directives below. Nested access like `@user.name` works too.
 
 ```elixir
 def render(assigns) do
@@ -59,6 +59,18 @@ end
 ```
 
 `@title` is exactly `assigns.title` — the two forms are interchangeable, so reach for whichever reads better.
+
+> **`@foo` only works where `assigns` is in scope** — that is, a screen's or component's `render(assigns)`. Reusable helper functions (the [function composites](#pure-elixir-composite-components) below) take **positional arguments**, and there is no `assigns` inside them, so interpolate the argument directly:
+>
+> ```elixir
+> # Screen render — assigns is in scope:
+> def render(assigns), do: ~MOB(<Text text={@title} />)
+>
+> # Helper — NO @; use the argument:
+> def label(title), do: ~MOB(<Text text={title} />)   # not @title
+> ```
+>
+> Reaching for `@foo` inside a helper is the most common mistake here. It raises a `CompileError` naming the fix (`{title}` instead of `@title`) rather than a cryptic "undefined variable assigns". If your `render` parameter is named something other than `assigns` (e.g. `socket`), `@foo` won't find it either — name it `assigns`.
 
 ### `:if` — conditional rendering
 

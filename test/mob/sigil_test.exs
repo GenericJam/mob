@@ -299,6 +299,48 @@ defmodule Mob.SigilTest do
     end
   end
 
+  # ── @assign guard: assigns must be in scope ───────────────────────────────────
+
+  describe "@assign guard" do
+    test "@foo with no assigns in scope raises a CompileError naming the fix" do
+      err =
+        assert_raise CompileError, fn ->
+          Code.compile_string(~S[import Mob.Sigil; ~MOB(<Text text={@title} />)])
+        end
+
+      msg = Exception.message(err)
+      assert msg =~ ~s(requires a variable named "assigns")
+      # The message points at the concrete fix: interpolate the argument.
+      assert msg =~ "{title}"
+    end
+
+    test ":if={@flag} with no assigns in scope also raises" do
+      assert_raise CompileError, ~r/requires a variable named "assigns"/, fn ->
+        Code.compile_string(~S[import Mob.Sigil; ~MOB(<Text text="x" :if={@flag} />)])
+      end
+    end
+
+    test "a static template (no @) compiles fine without assigns" do
+      # No @ ⇒ no guard ⇒ no assigns needed.
+      assert Code.compile_string(~S[import Mob.Sigil; ~MOB(<Text text="hi" />)]) == []
+    end
+
+    test "a helper using a positional arg (no @) needs no assigns" do
+      # The idiomatic composite pattern: interpolate the argument directly.
+      [{mod, _}] =
+        Code.compile_string(~S'''
+        defmodule Mob.SigilTest.GuardPositional do
+          import Mob.Sigil
+          def label(title), do: ~MOB(<Text text={title} />)
+        end
+        ''')
+
+      assert mod.label("Hi").props.text == "Hi"
+      :code.purge(mod)
+      :code.delete(mod)
+    end
+  end
+
   # ── :if control attribute ─────────────────────────────────────────────────────
 
   describe ":if directive" do
