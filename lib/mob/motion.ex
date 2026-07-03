@@ -39,13 +39,24 @@ defmodule Mob.Motion do
   """
   @spec start(Mob.Socket.t(), keyword()) :: Mob.Socket.t()
   def start(socket, opts \\ []) do
-    sensors =
-      Keyword.get(opts, :sensors, [:accelerometer, :gyro])
-      |> Enum.map(&Atom.to_string/1)
-
-    interval_ms = Keyword.get(opts, :interval_ms, 100)
+    {sensors, interval_ms} = parse_opts(opts)
     :mob_nif.motion_start(sensors, interval_ms)
     socket
+  end
+
+  @doc false
+  # The pure kernel of start/2: resolves opts to the `{sensor_strings, interval_ms}`
+  # the NIF expects, applying defaults. Extracted (public, hidden) so the arg
+  # building — including that `:magnetometer` survives normalization — is
+  # unit-testable without a loaded NIF.
+  @spec parse_opts(keyword()) :: {[String.t()], pos_integer()}
+  def parse_opts(opts) do
+    sensors =
+      opts
+      |> Keyword.get(:sensors, [:accelerometer, :gyro])
+      |> Enum.map(&Atom.to_string/1)
+
+    {sensors, Keyword.get(opts, :interval_ms, 100)}
   end
 
   @doc """
