@@ -464,6 +464,16 @@ code, in two forms: **function composites** (a plain function you call) and
 Elixir, and hot-pushable. Events raised from inside either kind route to the
 **screen's** `handle_info/2`, exactly like a built-in widget does.
 
+> **Reached for `use Mob.Component`?** Easy mix-up: it's a *different* feature.
+> `Mob.Component` is the behaviour for **native view components**, a stateful BEAM
+> process paired with a platform-native view (declared via `Mob.UI.native_view/2`),
+> whose `render/1` returns a **props map for a native factory** rather than a `~MOB`
+> tree. That's an advanced, native-code path (see the [Plugins guide](plugins.md)). If
+> you just want a reusable widget or custom `<Tag>` built out of the **built-in**
+> components, with no native code, that's the `Mob.Composite` path below. The names are
+> close; for pure-Elixir tags the one you want is **Composite**, and its module returns
+> a `~MOB` tree from `expand/3`.
+
 ### Function composites
 
 A function composite is a function that returns a render tree. You call it
@@ -595,6 +605,22 @@ Mob.Composite.register(:card, {MyApp.UI.Card, :expand})
 Mob.Composite.register(:labeled_button, {MyApp.UI.LabeledButton, :expand})
 ```
 
+**Expect a compile-time warning on a registered tag; it's harmless.**
+Registration happens at *runtime* (from `on_start/0` or a plugin manifest), so
+the `~MOB` macro can't see it while compiling a screen. Every custom tag
+therefore prints a warning the first time it's compiled:
+
+```
+~MOB: <Card> is not in the Mob tag whitelist — pass-through as :card
+```
+
+That is informational, not an error. The sigil compiles `<Card>` to the atom
+`:card` and defers resolution to whatever expander is registered under that atom
+at render time. As long as you registered one in Step 2, the tag renders; the
+warning is just the compiler telling you it recognized a non-built-in tag and
+passed it through. (A genuinely unregistered tag renders nothing, which is the
+real "it doesn't work" symptom to look for.)
+
 **Step 3 — use them in a screen.** Note there is no `self()` anywhere in this
 markup:
 
@@ -702,7 +728,7 @@ end
 
 ### Sub-component event isolation (planned, not yet implemented)
 
-A future `Mob.Component` wrapper will allow a subtree of the render tree to have its own `handle_info/2`, routing events to that component process instead of the screen. Until then, use the `tag` field to distinguish events from different parts of the same screen:
+Per-subtree event isolation, where a render subtree owns its own `handle_info/2` so its events route to a dedicated process instead of the screen, is planned but not yet implemented. (Distinct from `Mob.Composite`, the tag-composite mechanism under "Defining your own components" above, which exists today for reusable widgets and custom tags; and from `Mob.Component`, the existing native-view behaviour.) Until then, use the `tag` field to distinguish events from different parts of the same screen:
 
 ```elixir
 top_save_tap    = {self(), :top_save}
