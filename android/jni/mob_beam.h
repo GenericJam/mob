@@ -100,6 +100,9 @@ void mob_deliver_atom2(jlong pid, const char *a1, const char *a2);
 void mob_deliver_atom3(jlong pid, const char *a1, const char *a2, const char *a3);
 void mob_deliver_motion(jlong pid, double ax, double ay, double az, double gx, double gy, double gz,
                         long long ts);
+void mob_deliver_motion_mag(jlong pid, double ax, double ay, double az, double gx, double gy,
+                            double gz, double mx, double my, double mz, double heading,
+                            long long ts);
 void mob_deliver_file_result(jlong pid, const char *event, const char *sub, const char *json_items);
 void mob_deliver_camera_frame(jlong pid, const unsigned char *bytes, size_t nbytes, int width,
                               int height, const char *format, jlong timestamp_ms, jlong dropped);

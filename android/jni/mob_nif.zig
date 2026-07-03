@@ -2272,6 +2272,64 @@ pub export fn mob_deliver_motion(
     _ = erts.enif_send(null, &pid, env, msg);
 }
 
+/// Like `mob_deliver_motion` but with the magnetometer field (µT) and a fused
+/// heading. `heading < 0` means "unavailable" and is delivered as the atom `nil`
+/// (RFC: magnetic north, degrees [0,360)). Emits the 5-key `{:motion, _}` map.
+pub export fn mob_deliver_motion_mag(
+    jpid: jni.JLong,
+    ax: f64,
+    ay: f64,
+    az: f64,
+    gx: f64,
+    gy: f64,
+    gz: f64,
+    mx: f64,
+    my: f64,
+    mz: f64,
+    heading: f64,
+    ts: i64,
+) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const accel = erts.makeTuple(env, .{
+        erts.enif_make_double(env, ax),
+        erts.enif_make_double(env, ay),
+        erts.enif_make_double(env, az),
+    });
+    const gyro = erts.makeTuple(env, .{
+        erts.enif_make_double(env, gx),
+        erts.enif_make_double(env, gy),
+        erts.enif_make_double(env, gz),
+    });
+    const mag = erts.makeTuple(env, .{
+        erts.enif_make_double(env, mx),
+        erts.enif_make_double(env, my),
+        erts.enif_make_double(env, mz),
+    });
+    const heading_term = if (heading >= 0.0)
+        erts.enif_make_double(env, heading)
+    else
+        erts.atom(env, "nil");
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.atom(env, "accel"),
+        erts.atom(env, "gyro"),
+        erts.atom(env, "mag"),
+        erts.atom(env, "heading"),
+        erts.atom(env, "timestamp"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        accel,
+        gyro,
+        mag,
+        heading_term,
+        erts.enif_make_int64(env, ts),
+    };
+    const map = erts.makeMap(env, &keys, &vals) orelse return;
+    const msg = erts.makeTuple(env, .{ erts.atom(env, "motion"), map });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
 /// `{:webview, tag, binary}`. When `jpid == 0` the message routes to the
 /// :mob_screen registered process; otherwise to the explicit pid.
 fn deliverWebviewBinary(jpid: jni.JLong, comptime tag: [:0]const u8, utf8: [*:0]const u8) void {

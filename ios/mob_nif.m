@@ -2963,6 +2963,20 @@ static ERL_NIF_TERM nif_audio_play_at(ErlNifEnv *env, int argc, const ERL_NIF_TE
 static CMMotionManager *g_motion_manager = nil;
 static ErlNifPid g_motion_pid;
 
+// True if `name` appears in the Erlang list of sensor-name binaries (argv[0]).
+static bool motion_sensor_requested(ErlNifEnv *env, ERL_NIF_TERM list, const char *name) {
+    ERL_NIF_TERM head, tail = list;
+    ErlNifBinary bin;
+    size_t namelen = strlen(name);
+    while (enif_get_list_cell(env, tail, &head, &tail)) {
+        if (enif_inspect_binary(env, head, &bin) && bin.size == namelen &&
+            memcmp(bin.data, name, namelen) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static ERL_NIF_TERM nif_motion_start(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifPid pid;
     enif_self(env, &pid);
@@ -2970,44 +2984,69 @@ static ERL_NIF_TERM nif_motion_start(ErlNifEnv *env, int argc, const ERL_NIF_TER
     int interval_ms = 100;
     // argv[0] is a list of sensor name binaries; argv[1] is interval_ms int
     enif_get_int(env, argv[1], &interval_ms);
+    bool want_mag = motion_sensor_requested(env, argv[0], "magnetometer");
 
     dispatch_async(dispatch_get_main_queue(), ^{
       if (!g_motion_manager)
           g_motion_manager = [[CMMotionManager alloc] init];
       NSTimeInterval interval = interval_ms / 1000.0;
       g_motion_manager.deviceMotionUpdateInterval = interval;
-      [g_motion_manager
-          startDeviceMotionUpdatesToQueue:[NSOperationQueue new]
-                              withHandler:^(CMDeviceMotion *motion, NSError *err) {
-                                if (!motion)
-                                    return;
-                                ErlNifPid p = g_motion_pid;
-                                double ax = motion.userAcceleration.x + motion.gravity.x;
-                                double ay = motion.userAcceleration.y + motion.gravity.y;
-                                double az = motion.userAcceleration.z + motion.gravity.z;
-                                double gx = motion.rotationRate.x;
-                                double gy = motion.rotationRate.y;
-                                double gz = motion.rotationRate.z;
-                                ErlNifEnv *e = enif_alloc_env();
-                                ERL_NIF_TERM accel = enif_make_tuple3(e, enif_make_double(e, ax),
-                                                                      enif_make_double(e, ay),
-                                                                      enif_make_double(e, az));
-                                ERL_NIF_TERM gyro = enif_make_tuple3(e, enif_make_double(e, gx),
-                                                                     enif_make_double(e, gy),
-                                                                     enif_make_double(e, gz));
-                                long long ts =
-                                    (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
-                                ERL_NIF_TERM keys[3] = {enif_make_atom(e, "accel"),
-                                                        enif_make_atom(e, "gyro"),
-                                                        enif_make_atom(e, "timestamp")};
-                                ERL_NIF_TERM vals[3] = {accel, gyro, enif_make_int64(e, ts)};
-                                ERL_NIF_TERM map;
-                                enif_make_map_from_arrays(e, keys, vals, 3, &map);
-                                ERL_NIF_TERM msg =
-                                    enif_make_tuple2(e, enif_make_atom(e, "motion"), map);
-                                enif_send(NULL, &p, e, msg);
-                                enif_free_env(e);
-                              }];
+
+      // The magnetic-north reference frame fuses accel+gyro+magnetometer and yields
+      // a calibrated field + a heading on the same stream — but only if the device
+      // has a magnetometer. Fall back to the plain accel/gyro stream otherwise.
+      BOOL magOK = want_mag && ([CMMotionManager availableAttitudeReferenceFrames] &
+                                CMAttitudeReferenceFrameXMagneticNorthZVertical);
+
+      CMDeviceMotionHandler handler = ^(CMDeviceMotion *motion, NSError *err) {
+        if (!motion)
+            return;
+        ErlNifPid p = g_motion_pid;
+        double ax = motion.userAcceleration.x + motion.gravity.x;
+        double ay = motion.userAcceleration.y + motion.gravity.y;
+        double az = motion.userAcceleration.z + motion.gravity.z;
+        double gx = motion.rotationRate.x;
+        double gy = motion.rotationRate.y;
+        double gz = motion.rotationRate.z;
+        ErlNifEnv *e = enif_alloc_env();
+        ERL_NIF_TERM accel = enif_make_tuple3(e, enif_make_double(e, ax), enif_make_double(e, ay),
+                                              enif_make_double(e, az));
+        ERL_NIF_TERM gyro = enif_make_tuple3(e, enif_make_double(e, gx), enif_make_double(e, gy),
+                                             enif_make_double(e, gz));
+        long long ts = (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
+        ERL_NIF_TERM map;
+        if (magOK) {
+            // CoreMotion reports the field in µT; heading is degrees [0,360), or -1 unavailable.
+            CMMagneticField f = motion.magneticField.field;
+            double hd = motion.heading;
+            ERL_NIF_TERM mag = enif_make_tuple3(e, enif_make_double(e, f.x),
+                                                enif_make_double(e, f.y), enif_make_double(e, f.z));
+            ERL_NIF_TERM heading = (hd >= 0.0) ? enif_make_double(e, hd) : enif_make_atom(e, "nil");
+            ERL_NIF_TERM keys[5] = {enif_make_atom(e, "accel"), enif_make_atom(e, "gyro"),
+                                    enif_make_atom(e, "mag"), enif_make_atom(e, "heading"),
+                                    enif_make_atom(e, "timestamp")};
+            ERL_NIF_TERM vals[5] = {accel, gyro, mag, heading, enif_make_int64(e, ts)};
+            enif_make_map_from_arrays(e, keys, vals, 5, &map);
+        } else {
+            ERL_NIF_TERM keys[3] = {enif_make_atom(e, "accel"), enif_make_atom(e, "gyro"),
+                                    enif_make_atom(e, "timestamp")};
+            ERL_NIF_TERM vals[3] = {accel, gyro, enif_make_int64(e, ts)};
+            enif_make_map_from_arrays(e, keys, vals, 3, &map);
+        }
+        ERL_NIF_TERM msg = enif_make_tuple2(e, enif_make_atom(e, "motion"), map);
+        enif_send(NULL, &p, e, msg);
+        enif_free_env(e);
+      };
+
+      if (magOK) {
+          [g_motion_manager startDeviceMotionUpdatesUsingReferenceFrame:
+                                CMAttitudeReferenceFrameXMagneticNorthZVertical
+                                                                toQueue:[NSOperationQueue new]
+                                                            withHandler:handler];
+      } else {
+          [g_motion_manager startDeviceMotionUpdatesToQueue:[NSOperationQueue new]
+                                                withHandler:handler];
+      }
     });
     return enif_make_atom(env, "ok");
 }
