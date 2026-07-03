@@ -8,6 +8,19 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.13] - 2026-07-02
+
+### Documentation
+- **Clarified the tag-composite warning and `Mob.Component` vs `Mob.Composite`
+  in the Components guide.** The `~MOB: <Tag> is not in the Mob tag whitelist`
+  warning is now documented as expected for a *registered* composite (registration
+  is a runtime action the compile-time sigil can't see); an unregistered tag
+  rendering nothing is the real failure to look for. A new callout separates
+  `Mob.Component` (the existing native-view behaviour, whose `render/1` returns a
+  native props map) from `Mob.Composite` (pure-Elixir tag expanders returning a
+  `~MOB` tree via `expand/3`), and the planned "sub-component event isolation"
+  note no longer reuses the `Mob.Component` name. (#53, #58)
+
 ## [0.7.12] - 2026-06-30
 
 ### Fixed
