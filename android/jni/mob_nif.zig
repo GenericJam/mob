@@ -2272,6 +2272,70 @@ pub export fn mob_deliver_motion(
     _ = erts.enif_send(null, &pid, env, msg);
 }
 
+/// Like `mob_deliver_motion` but with the magnetometer field (µT) and a fused
+/// heading. Sentinels for "no reading": `heading < 0` and a NaN `mag` component
+/// are each delivered as the atom `nil` (RFC: magnetic north, degrees [0,360)).
+/// This is the delivery used whenever `:magnetometer` was requested — even on a
+/// device with no magnetometer, so the `mag`/`heading` keys are always present
+/// (as `nil`) rather than absent. Emits the 5-key `{:motion, _}` map.
+pub export fn mob_deliver_motion_mag(
+    jpid: jni.JLong,
+    ax: f64,
+    ay: f64,
+    az: f64,
+    gx: f64,
+    gy: f64,
+    gz: f64,
+    mx: f64,
+    my: f64,
+    mz: f64,
+    heading: f64,
+    ts: i64,
+) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const accel = erts.makeTuple(env, .{
+        erts.enif_make_double(env, ax),
+        erts.enif_make_double(env, ay),
+        erts.enif_make_double(env, az),
+    });
+    const gyro = erts.makeTuple(env, .{
+        erts.enif_make_double(env, gx),
+        erts.enif_make_double(env, gy),
+        erts.enif_make_double(env, gz),
+    });
+    const mag = if (std.math.isNan(mx) or std.math.isNan(my) or std.math.isNan(mz))
+        erts.atom(env, "nil")
+    else
+        erts.makeTuple(env, .{
+            erts.enif_make_double(env, mx),
+            erts.enif_make_double(env, my),
+            erts.enif_make_double(env, mz),
+        });
+    const heading_term = if (heading >= 0.0)
+        erts.enif_make_double(env, heading)
+    else
+        erts.atom(env, "nil");
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.atom(env, "accel"),
+        erts.atom(env, "gyro"),
+        erts.atom(env, "mag"),
+        erts.atom(env, "heading"),
+        erts.atom(env, "timestamp"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        accel,
+        gyro,
+        mag,
+        heading_term,
+        erts.enif_make_int64(env, ts),
+    };
+    const map = erts.makeMap(env, &keys, &vals) orelse return;
+    const msg = erts.makeTuple(env, .{ erts.atom(env, "motion"), map });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
 /// `{:webview, tag, binary}`. When `jpid == 0` the message routes to the
 /// :mob_screen registered process; otherwise to the explicit pid.
 fn deliverWebviewBinary(jpid: jni.JLong, comptime tag: [:0]const u8, utf8: [*:0]const u8) void {
@@ -2681,6 +2745,22 @@ export fn nif_audio_set_volume(
     return erts.ok(env);
 }
 
+/// True if `list` (a list of sensor-name binaries) contains `name`. Used to
+/// plumb the requested sensor set through to the Kotlin bridge, which otherwise
+/// only sees the interval.
+fn motionSensorRequested(env: ?*erts.ErlNifEnv, list: erts.ERL_NIF_TERM, name: []const u8) bool {
+    var cur = list;
+    var head: erts.ERL_NIF_TERM = undefined;
+    var tail: erts.ERL_NIF_TERM = undefined;
+    while (erts.enif_get_list_cell(env, cur, &head, &tail) != 0) {
+        var bin: erts.ErlNifBinary = undefined;
+        if (erts.enif_inspect_binary(env, head, &bin) != 0 and
+            std.mem.eql(u8, bin.data[0..bin.size], name)) return true;
+        cur = tail;
+    }
+    return false;
+}
+
 export fn nif_motion_start(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -2689,11 +2769,20 @@ export fn nif_motion_start(
     _ = argc;
     var interval_ms: c_int = 100;
     _ = erts.enif_get_int(env, argv[1], &interval_ms);
-    var ival_buf: [16]u8 = @splat(0);
-    _ = std.fmt.bufPrint(&ival_buf, "{d}", .{interval_ms}) catch {};
+    // Encode the sensor request into the spec string the Kotlin bridge parses:
+    // "<interval>" or "<interval>,magnetometer". Android's motion_start only had
+    // the interval before, so it registered the magnetometer whenever the
+    // hardware existed — regardless of what the app asked for. Passing the flag
+    // lets it honor the request (and keep the plain accel/gyro stream plain).
+    const want_mag = motionSensorRequested(env, argv[0], "magnetometer");
+    var spec_buf: [32]u8 = @splat(0);
+    if (want_mag)
+        _ = std.fmt.bufPrint(&spec_buf, "{d},magnetometer", .{interval_ms}) catch {}
+    else
+        _ = std.fmt.bufPrint(&spec_buf, "{d}", .{interval_ms}) catch {};
     var pid: erts.ErlNifPid = undefined;
     _ = erts.enif_self(env, &pid);
-    return callBridgePidStr(env, Bridge.motion_start, pid, jni.asCStr(&ival_buf));
+    return callBridgePidStr(env, Bridge.motion_start, pid, jni.asCStr(&spec_buf));
 }
 
 export fn nif_motion_stop(
