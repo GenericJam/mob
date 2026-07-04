@@ -8,6 +8,22 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.14] - 2026-07-04
+
+### Added
+- **Magnetometer / compass support in `Mob.Motion`.** Request `:magnetometer`
+  in the sensor list and the `{:motion, _}` message additionally carries `mag`
+  (calibrated field, µT) and `heading` (degrees from magnetic north). The keys
+  are present **exactly when you requested `:magnetometer`**, on both platforms,
+  and each is `nil` when there's no reading (device has no magnetometer, or the
+  heading hasn't fused yet) — so a compass app matches on `nil` rather than
+  hitting a missing key, and accel/gyro-only consumers get the byte-identical
+  3-key map with no extra sensor cost. iOS uses the `XMagneticNorthZVertical`
+  reference frame (`CMMotionManager`); Android fuses `TYPE_MAGNETIC_FIELD` +
+  `TYPE_ROTATION_VECTOR` (`SensorManager`), registered only on request.
+  Magnetic north only (true north needs location + declination — layer
+  `Mob.Location`). Device-verified on moto g + iPhone SE. (MOB-6, #59)
+
 ## [0.7.13] - 2026-07-02
 
 ### Documentation
