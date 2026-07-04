@@ -3015,13 +3015,22 @@ static ERL_NIF_TERM nif_motion_start(ErlNifEnv *env, int argc, const ERL_NIF_TER
                                              enif_make_double(e, gz));
         long long ts = (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
         ERL_NIF_TERM map;
-        if (magOK) {
-            // CoreMotion reports the field in µT; heading is degrees [0,360), or -1 unavailable.
-            CMMagneticField f = motion.magneticField.field;
-            double hd = motion.heading;
-            ERL_NIF_TERM mag = enif_make_tuple3(e, enif_make_double(e, f.x),
-                                                enif_make_double(e, f.y), enif_make_double(e, f.z));
-            ERL_NIF_TERM heading = (hd >= 0.0) ? enif_make_double(e, hd) : enif_make_atom(e, "nil");
+        if (want_mag) {
+            // When :magnetometer was requested, always emit the 5-key map so the
+            // mag/heading keys are a stable contract — nil when there's no reading
+            // (device has no magnetometer, i.e. !magOK, or heading not yet fused).
+            ERL_NIF_TERM mag, heading;
+            if (magOK) {
+                // CoreMotion reports the field in µT; heading is degrees [0,360), or -1.
+                CMMagneticField f = motion.magneticField.field;
+                double hd = motion.heading;
+                mag = enif_make_tuple3(e, enif_make_double(e, f.x), enif_make_double(e, f.y),
+                                       enif_make_double(e, f.z));
+                heading = (hd >= 0.0) ? enif_make_double(e, hd) : enif_make_atom(e, "nil");
+            } else {
+                mag = enif_make_atom(e, "nil");
+                heading = enif_make_atom(e, "nil");
+            }
             ERL_NIF_TERM keys[5] = {enif_make_atom(e, "accel"), enif_make_atom(e, "gyro"),
                                     enif_make_atom(e, "mag"), enif_make_atom(e, "heading"),
                                     enif_make_atom(e, "timestamp")};
