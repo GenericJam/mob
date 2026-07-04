@@ -1,7 +1,7 @@
 # Magnetometer / compass support in Mob.Motion
 
 - Date: 2026-07-02
-- Status: accepted
+- Status: accepted; partially superseded by `2026-07-04-magnetometer-stable-key-contract.md` (the "Android registers whenever hardware present (v1)" activation trigger and the map-shape/`nil`-key contract — the magnetic-north scope, additive keys, and delivery-via-`mob_deliver_motion_mag` decisions still stand)
 - Issue: MOB-6
 
 ## Context
