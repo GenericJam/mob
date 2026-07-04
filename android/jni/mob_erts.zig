@@ -254,6 +254,10 @@ pub extern fn enif_get_int(env: ?*ErlNifEnv, term: ERL_NIF_TERM, ip: *c_int) c_i
 /// Read a double term. Returns 1 on success, 0 on failure.
 pub extern fn enif_get_double(env: ?*ErlNifEnv, term: ERL_NIF_TERM, dp: *f64) c_int;
 
+/// Split a list term into its head (car) and tail (cdr). Returns 1 while there
+/// is a cell to read, 0 at the empty-list tail — the standard iteration idiom.
+pub extern fn enif_get_list_cell(env: ?*ErlNifEnv, list: ERL_NIF_TERM, head: *ERL_NIF_TERM, tail: *ERL_NIF_TERM) c_int;
+
 // ── Convenience wrappers ──────────────────────────────────────────────────
 // Idiomatic Zig surface over the bare extern fns. Keeps NIF bodies tight.
 
