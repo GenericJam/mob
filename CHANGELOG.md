@@ -8,6 +8,19 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.17] - 2026-07-04
+
+### Added
+- **Keep-awake / idle-timer (`Mob.Device.keep_awake/1`).** `keep_awake(true)`
+  prevents the screen auto-dimming/locking (for video, reading, navigation, or
+  any watch-without-touch screen); `false` releases it. No permission on either
+  platform. iOS: `UIApplication.isIdleTimerDisabled`; Android: the window's
+  `FLAG_KEEP_SCREEN_ON` (the Kotlin bridge ships via mob_new 0.4.19+). The flag
+  is app-scoped and cleared by the OS on background — re-assert on resume.
+  Device-verified both directions on moto g power (2021) — `dumpsys` shows the
+  `KEEP_SCREEN_ON` window flag toggle, and the screen actually sleeps with it
+  off / stays lit with it on — and iPhone SE (3rd gen). (MOB-20, #66)
+
 ## [0.7.16] - 2026-07-04
 
 ### Added
