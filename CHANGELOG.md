@@ -8,6 +8,18 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.15] - 2026-07-04
+
+### Added
+- **Torch / flashlight support (`Mob.Torch`).** `Mob.Torch.on/1`, `off/1`, and
+  `set/2` toggle the rear-camera torch — a lightweight core capability that needs
+  no camera capture session and no permission. On a device with no flash unit
+  (tablets, the iOS simulator) it's a no-op, not an error. On/off only for now
+  (iOS brightness levels / Android per-torch strength are a follow-up). iOS:
+  `AVCaptureDevice.torchMode`; Android: `CameraManager.setTorchMode` (the Kotlin
+  bridge ships via mob_new 0.4.17+). Device-verified on moto g power (2021) and
+  iPhone SE (3rd gen). (MOB-15, #61)
+
 ## [0.7.14] - 2026-07-04
 
 ### Added
