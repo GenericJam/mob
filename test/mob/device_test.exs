@@ -75,6 +75,14 @@ defmodule Mob.DeviceTest do
       assert Device.category_for(:color_scheme_changed) == :appearance
     end
 
+    test "maps :connectivity_changed to :network" do
+      assert Device.category_for(:connectivity_changed) == :network
+    end
+
+    test ":network is a valid category and included in subscribe(:all)" do
+      assert :network in Device.categories()
+    end
+
     test "unknown events fall through to :unknown" do
       assert Device.category_for(:no_such_event) == :unknown
     end
@@ -159,6 +167,26 @@ defmodule Mob.DeviceTest do
       :ok = GenServer.call(d, {:subscribe, self(), [:thermal]})
       send(d, {:mob_device, :color_scheme_changed, :dark})
       refute_receive {:mob_device, :color_scheme_changed, :dark}, 50
+    end
+
+    test ":network subscriber receives :connectivity_changed with the state map",
+         %{dispatcher: d} do
+      :ok = GenServer.call(d, {:subscribe, self(), [:network]})
+
+      state = %{online: true, transport: :wifi, expensive: false}
+      send(d, {:mob_device, :connectivity_changed, state})
+      assert_receive {:mob_device, :connectivity_changed, ^state}, 100
+
+      offline = %{online: false, transport: :none, expensive: false}
+      send(d, {:mob_device, :connectivity_changed, offline})
+      assert_receive {:mob_device, :connectivity_changed, ^offline}, 100
+    end
+
+    test ":connectivity_changed is filtered out for subscribers in unrelated categories",
+         %{dispatcher: d} do
+      :ok = GenServer.call(d, {:subscribe, self(), [:thermal]})
+      send(d, {:mob_device, :connectivity_changed, %{online: true, transport: :wifi}})
+      refute_receive {:mob_device, :connectivity_changed, _}, 50
     end
 
     test "multiple subscribers all receive matching events", %{dispatcher: d} do
@@ -278,7 +306,15 @@ defmodule Mob.DeviceTest do
 
     # credo's VacuousTest heuristic doesn't see `apply(Device, @fun, [])` as a
     # call into application code, but it is — through indirection.
-    for fun <- [:battery_level, :battery_state, :thermal_state, :os_version, :model] do
+    for fun <- [
+          :battery_level,
+          :battery_state,
+          :thermal_state,
+          :network_state,
+          :online?,
+          :os_version,
+          :model
+        ] do
       @fun fun
       # credo:disable-for-next-line Jump.CredoChecks.VacuousTest
       test "#{fun}/0 raises when NIF not loaded" do
