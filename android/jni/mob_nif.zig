@@ -286,6 +286,9 @@ pub const BridgeMethods = extern struct {
     // MobBridge.orientationLock(Int) — calls activity.setRequestedOrientation.
     // Companion Kotlin method ships in the mob_new template (see PR notes).
     orientation_lock: jni.JMethodID = null,
+    // MobBridge.keepAwake(Int) — toggles the window's FLAG_KEEP_SCREEN_ON.
+    // Companion Kotlin method ships in the mob_new template.
+    keep_awake: jni.JMethodID = null,
     element_frames: jni.JMethodID = null,
     // ── Mob.Peripheral.VendorUsb ─────────────────────────────────────────
     // Each takes a pid as jlong (so Kotlin can echo it back when calling
@@ -3197,6 +3200,27 @@ fn androidOrientationConst(name: []const u8) c_int {
     return -1; // UNSPECIFIED -> unlock
 }
 
+// nif_device_keep_awake/1 — pass the boolean atom `true`/`false` to
+// MobBridge.keepAwake(Int) (1 = keep on). No-op if the app's bridge predates
+// the method (cacheOptional + null guard).
+export fn nif_device_keep_awake(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var buf: [8]u8 = @splat(0);
+    _ = erts.enif_get_atom(env, argv[0], &buf, buf.len, erts.ERL_NIF_LATIN1);
+    const on: jni.JInt = if (std.mem.eql(u8, std.mem.sliceTo(&buf, 0), "true")) 1 else 0;
+
+    if (Bridge.keep_awake == null) return notLoaded(env);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    defer detachIfAttached(attached);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.keep_awake, on);
+    return erts.ok(env);
+}
+
 export fn nif_device_set_dispatcher(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -3666,6 +3690,7 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     cacheOptional(jenv, "screenshot", "(Ljava/lang/String;ID)[B", &Bridge.screenshot);
     cacheOptional(jenv, "scrollInfo", "(Ljava/lang/String;)Ljava/lang/String;", &Bridge.scroll_info);
     cacheOptional(jenv, "orientationLock", "(I)V", &Bridge.orientation_lock);
+    cacheOptional(jenv, "keepAwake", "(I)V", &Bridge.keep_awake);
     cacheOptional(jenv, "scrollTo", "(Ljava/lang/String;DD)Z", &Bridge.scroll_to);
     cacheOptional(jenv, "elementFrames", "()Ljava/lang/String;", &Bridge.element_frames);
     cacheOptional(jenv, "tapXy", "(FF)Z", &Bridge.tap_xy);
@@ -3764,6 +3789,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "device_model", .arity = 0, .fptr = nif_device_model, .flags = 0 },
     .{ .name = "device_orientation", .arity = 0, .fptr = nif_device_orientation, .flags = 0 },
     .{ .name = "device_lock_orientation", .arity = 1, .fptr = nif_device_lock_orientation, .flags = 0 },
+    .{ .name = "device_keep_awake", .arity = 1, .fptr = nif_device_keep_awake, .flags = 0 },
     // ── Mob.Peripheral.VendorUsb (Android USB host) ──────────────────────────
     .{ .name = "vendor_usb_list_devices", .arity = 1, .fptr = nif_vendor_usb_list_devices, .flags = 0 },
     .{ .name = "vendor_usb_request_permission", .arity = 1, .fptr = nif_vendor_usb_request_permission, .flags = 0 },

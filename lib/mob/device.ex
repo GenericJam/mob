@@ -275,6 +275,27 @@ defmodule Mob.Device do
   def valid_lock?(orientation), do: orientation in @valid_locks
 
   @doc """
+  Keep the screen awake — disable the auto-dim / auto-lock idle timer while
+  `on?` is `true`, release it with `false`. Useful for video, reading,
+  navigation, or any screen the user watches without touching. No permission
+  required on either platform.
+
+  The keep-awake flag is app-scoped and the OS clears it when the app is
+  backgrounded, so re-assert it on resume (e.g. from the `:app`
+  `did_become_active` event) if you need it to persist across a background/
+  foreground cycle. On a device with no active window (e.g. before first
+  render) it's a no-op.
+
+  iOS: `UIApplication.isIdleTimerDisabled`. Android: the window's
+  `FLAG_KEEP_SCREEN_ON`.
+  """
+  @spec keep_awake(boolean()) :: :ok
+  def keep_awake(on?) when is_boolean(on?) do
+    :mob_nif.device_keep_awake(on?)
+    :ok
+  end
+
+  @doc """
   Hands a URL to the OS to open in the default browser/handler.
 
   Fire-and-forget. Returns `:ok` immediately; failures (malformed URL, no

@@ -106,7 +106,7 @@ and orthogonal — composition over a fat component library.
 | Network reachability | ❌ | — | — | Plugin candidate |
 | Screen brightness | ❌ | — | — | Plugin candidate |
 | Screen orientation lock | ✅ | ✓ | ✓ | `Mob.Device.lock_orientation/1` + `unlock_orientation/0` (Android `setRequestedOrientation`; iOS supported-orientations + geometry request) |
-| Idle timer / screen wake | ❌ | — | — | Plugin candidate |
+| Idle timer / screen wake | ✅ | ✓ | ✓ | `Mob.Device.keep_awake/1` — prevent auto-dim/lock (iOS `isIdleTimerDisabled`; Android `FLAG_KEEP_SCREEN_ON`) |
 | Exit app | ✅ | n/a | ✓ | Android only; iOS forbids programmatic exit |
 
 ## Storage
