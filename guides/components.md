@@ -141,6 +141,7 @@ Props accept:
 - **Strings** — used as-is
 - **Booleans** — used as-is
 - **Color atoms** (`:primary`, `:blue_500`, etc.) — resolved via the active theme and the base palette to ARGB integers. See [Theming](theming.md).
+- **Raw colors** — a 32-bit **`0xAARRGGBB` integer** (alpha first, e.g. `0xFF2196F3`), **not** a CSS `"#RRGGBB"` string and **not** alpha-last. Include the `0xFF` alpha byte or the color renders transparent. See [Theming → Raw colors](theming.md#raw-colors-are-0xaarrggbb-integers-not-css-hex-strings).
 - **Spacing tokens** (`:space_xs`, `:space_sm`, `:space_md`, `:space_lg`, `:space_xl`) — scaled by `theme.space_scale` and resolved to integers.
 - **Radius tokens** (`:radius_sm`, `:radius_md`, `:radius_lg`, `:radius_pill`) — resolved to integers from the active theme.
 - **Text size tokens** (`:xs`, `:sm`, `:base`, `:lg`, `:xl`, `:2xl`, `:3xl`, `:4xl`, `:5xl`, `:6xl`) — scaled by `theme.type_scale` and resolved to floats.
