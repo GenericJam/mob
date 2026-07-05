@@ -36,8 +36,11 @@ high value-per-effort.
 - Cross-repo, one issue: `mob` (Elixir + NIF + iOS + zig) plus `mob_new` (the
   generated `MobBridge.keepAwake` Kotlin method). Existing apps pick it up by
   regenerating their bridge + depending on the mob release that carries the NIF.
-- The `keep_awake/1` boolean guard is host-tested; the native effect
-  (screen stays lit) is directly observable and device-verified.
+- The `keep_awake/1` boolean guard is host-tested; the native effect is
+  **device-verified**: moto g power (2021) via `dumpsys` (the app window's
+  `fl=KEEP_SCREEN_ON` flag appears on `keep_awake(true)` and clears on `false`),
+  and iPhone SE (3rd gen) by observation (screen stays lit past the Auto-Lock
+  timeout while enabled, dims when released).
 - No permission required on either platform, so no manifest/plist changes.
 - Follow-ups if demand appears: a scoped/auto-release variant tied to screen
   lifecycle, and an Android `WakeLock` (CPU-on, not just screen-on) for
