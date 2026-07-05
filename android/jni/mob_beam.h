@@ -151,9 +151,9 @@ void mob_send_color_scheme_changed(const char *scheme);
 // Deliver {:mob_device, :connectivity_changed, %{online, transport, expensive}}
 // to the dispatcher pid registered via Mob.Device. Called from beam_jni.c's
 // nativeNotifyConnectivity when the ConnectivityManager.NetworkCallback fires.
-// `online`/`expensive` are 0/1; `transport` is
+// `online`/`expensive`/`validated` are 0/1; `transport` is
 // "wifi" | "cellular" | "wired" | "other" | "none".
-void mob_send_connectivity_changed(int online, const char *transport, int expensive);
+void mob_send_connectivity_changed(int online, const char *transport, int expensive, int validated);
 
 // mob_beam.h additions for Mob.Bt
 //

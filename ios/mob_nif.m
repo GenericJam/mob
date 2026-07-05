@@ -1365,6 +1365,7 @@ static dispatch_once_t g_path_monitor_once = 0;
 static _Atomic(bool) g_net_online = false;
 static _Atomic(int) g_net_transport = 0;
 static _Atomic(bool) g_net_expensive = false;
+static _Atomic(bool) g_net_constrained = false;
 
 static const char *net_transport_atom(int t) {
     switch (t) {
@@ -1393,15 +1394,22 @@ static int net_classify_path(nw_path_t path) {
     return 4;
 }
 
-// Builds %{online: bool, transport: atom, expensive: bool}.
-static ERL_NIF_TERM mob_make_network_map(ErlNifEnv *e, bool online, int transport, bool expensive) {
-    ERL_NIF_TERM keys[3] = {enif_make_atom(e, "online"), enif_make_atom(e, "transport"),
-                            enif_make_atom(e, "expensive")};
-    ERL_NIF_TERM vals[3] = {enif_make_atom(e, online ? "true" : "false"),
+// Builds %{online, transport, expensive, validated, constrained}. `validated`
+// is always :unavailable on iOS — NWPath reports a usable path but has no
+// internet-reachability probe (Android's NET_CAPABILITY_VALIDATED). `constrained`
+// is iOS Low Data Mode.
+static ERL_NIF_TERM mob_make_network_map(ErlNifEnv *e, bool online, int transport, bool expensive,
+                                         bool constrained) {
+    ERL_NIF_TERM keys[5] = {enif_make_atom(e, "online"), enif_make_atom(e, "transport"),
+                            enif_make_atom(e, "expensive"), enif_make_atom(e, "validated"),
+                            enif_make_atom(e, "constrained")};
+    ERL_NIF_TERM vals[5] = {enif_make_atom(e, online ? "true" : "false"),
                             enif_make_atom(e, net_transport_atom(transport)),
-                            enif_make_atom(e, expensive ? "true" : "false")};
+                            enif_make_atom(e, expensive ? "true" : "false"),
+                            enif_make_atom(e, "unavailable"),
+                            enif_make_atom(e, constrained ? "true" : "false")};
     ERL_NIF_TERM map;
-    if (!enif_make_map_from_arrays(e, keys, vals, 3, &map))
+    if (!enif_make_map_from_arrays(e, keys, vals, 5, &map))
         return enif_make_atom(e, "nil");
     return map;
 }
@@ -1417,19 +1425,22 @@ static void ensure_path_monitor_once(void) {
         bool online = nw_path_get_status(path) == nw_path_status_satisfied;
         int transport = net_classify_path(path);
         bool expensive = nw_path_is_expensive(path);
-        // NWPathMonitor fires on constrained/dns/other changes too; only emit an
-        // event when the snapshot we expose actually changed. The cache is still
-        // refreshed either way so the synchronous query stays current.
+        bool constrained = nw_path_is_constrained(path);
+        // NWPathMonitor fires on dns/other changes too; only emit an event when
+        // the snapshot we expose actually changed. The cache is still refreshed
+        // either way so the synchronous query stays current.
         bool changed = online != atomic_load(&g_net_online) ||
                        transport != atomic_load(&g_net_transport) ||
-                       expensive != atomic_load(&g_net_expensive);
+                       expensive != atomic_load(&g_net_expensive) ||
+                       constrained != atomic_load(&g_net_constrained);
         atomic_store(&g_net_online, online);
         atomic_store(&g_net_transport, transport);
         atomic_store(&g_net_expensive, expensive);
+        atomic_store(&g_net_constrained, constrained);
         if (!changed)
             return;
         ErlNifEnv *e = enif_alloc_env();
-        ERL_NIF_TERM payload = mob_make_network_map(e, online, transport, expensive);
+        ERL_NIF_TERM payload = mob_make_network_map(e, online, transport, expensive, constrained);
         mob_device_send_atom_payload("mob_device", "connectivity_changed", payload, e);
         enif_free_env(e);
       });
@@ -1722,7 +1733,7 @@ static ERL_NIF_TERM nif_device_network_state(ErlNifEnv *env, int argc, const ERL
     // so a query in the first few ms after boot may read the offline default.
     ensure_path_monitor_once();
     return mob_make_network_map(env, atomic_load(&g_net_online), atomic_load(&g_net_transport),
-                                atomic_load(&g_net_expensive));
+                                atomic_load(&g_net_expensive), atomic_load(&g_net_constrained));
 }
 
 static ERL_NIF_TERM nif_device_low_power_mode(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {

@@ -145,13 +145,22 @@ defmodule Mob.Device do
   @type transport :: :wifi | :cellular | :wired | :other | :none
 
   @typedoc """
-  A connectivity snapshot: whether the OS reports a usable network path, which
-  transport carries it, and whether that transport is metered/expensive.
+  A per-platform signal that this platform does not expose — distinct from a
+  known `false`. e.g. `validated` on iOS, `constrained` on Android.
+  """
+  @type unavailable :: :unavailable
+
+  @typedoc """
+  A connectivity snapshot. `online`/`transport`/`expensive` are cross-platform.
+  `validated` and `constrained` are each exposed by only one platform; the other
+  reports `:unavailable` rather than a misleading `false`.
   """
   @type network_state :: %{
           online: boolean(),
           transport: transport(),
-          expensive: boolean()
+          expensive: boolean(),
+          validated: boolean() | unavailable(),
+          constrained: boolean() | unavailable()
         }
 
   @doc """
@@ -165,8 +174,21 @@ defmodule Mob.Device do
   `:none` exactly when `online` is false. `expensive` is true on metered links
   (cellular, personal hotspot), so defer large transfers when it is set.
 
-      Mob.Device.network_state()
-      #=> %{online: true, transport: :wifi, expensive: false}
+  `validated` and `constrained` are single-platform signals — each platform
+  reports `:unavailable` (not a misleading `false`) for the one it can't answer:
+
+  * `validated` — **Android only** (`NET_CAPABILITY_VALIDATED`): the OS actively
+    probed and confirmed real internet reachability; `false` on a captive portal
+    or before validation completes. `:unavailable` on iOS (NWPath has no probe).
+  * `constrained` — **iOS only** (`nw_path_is_constrained`): Low Data Mode is on.
+    `:unavailable` on Android (no per-network equivalent).
+
+      # iOS
+      #=> %{online: true, transport: :wifi, expensive: false,
+      #     validated: :unavailable, constrained: false}
+      # Android
+      #=> %{online: true, transport: :wifi, expensive: false,
+      #     validated: true, constrained: :unavailable}
 
   Subscribe to the `:network` category to receive
   `{:mob_device, :connectivity_changed, state}` when this changes.

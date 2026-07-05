@@ -3070,6 +3070,7 @@ pub export fn mob_send_orientation_changed(orient: ?[*:0]const u8) callconv(.c) 
 var g_net_online: bool = false;
 var g_net_transport: c_int = 0;
 var g_net_expensive: bool = false;
+var g_net_validated: bool = false;
 
 fn boolAtomName(b: bool) [*:0]const u8 {
     return if (b) "true" else "false";
@@ -3094,52 +3095,64 @@ fn transportAtomName(code: c_int) [*:0]const u8 {
     };
 }
 
-// Builds %{online: bool, transport: atom, expensive: bool}.
+// Builds %{online, transport, expensive, validated, constrained}. `constrained`
+// is always :unavailable on Android — NetworkCapabilities has no per-network
+// Low-Data-Mode equivalent (iOS nw_path_is_constrained). `validated` is
+// Android's real-internet-reachability probe (NET_CAPABILITY_VALIDATED).
 fn networkStateMap(
     env: ?*erts.ErlNifEnv,
     online: bool,
     transport_code: c_int,
     expensive: bool,
+    validated: bool,
 ) erts.ERL_NIF_TERM {
     const keys = [_]erts.ERL_NIF_TERM{
         erts.enif_make_atom(env, "online"),
         erts.enif_make_atom(env, "transport"),
         erts.enif_make_atom(env, "expensive"),
+        erts.enif_make_atom(env, "validated"),
+        erts.enif_make_atom(env, "constrained"),
     };
     const vals = [_]erts.ERL_NIF_TERM{
         erts.enif_make_atom(env, boolAtomName(online)),
         erts.enif_make_atom(env, transportAtomName(transport_code)),
         erts.enif_make_atom(env, boolAtomName(expensive)),
+        erts.enif_make_atom(env, boolAtomName(validated)),
+        erts.enif_make_atom(env, "unavailable"),
     };
     return erts.makeMap(env, &keys, &vals) orelse erts.enif_make_atom(env, "nil");
 }
 
 /// Called from beam_jni.c's `Java_..._MobBridge_nativeNotifyConnectivity` when
-/// the template's ConnectivityManager.NetworkCallback fires. `online`/`expensive`
-/// are 0/1; `transport` is "wifi" | "cellular" | "wired" | "other" | "none".
-/// (Companion Kotlin hook ships in the mob_new template.)
+/// the template's ConnectivityManager.NetworkCallback fires. `online`/`expensive`/
+/// `validated` are 0/1; `transport` is "wifi" | "cellular" | "wired" | "other" |
+/// "none". (Companion Kotlin hook ships in the mob_new template.)
 pub export fn mob_send_connectivity_changed(
     online: c_int,
     transport: ?[*:0]const u8,
     expensive: c_int,
+    validated: c_int,
 ) callconv(.c) void {
     const new_online = online != 0;
     const new_transport = transportCode(transport orelse "none");
     const new_expensive = expensive != 0;
+    const new_validated = validated != 0;
     // Only emit when the exposed snapshot changed; onCapabilitiesChanged also
-    // fires on validation/bandwidth/signal updates. Cache is refreshed either
-    // way so the synchronous query stays current.
+    // fires on bandwidth/signal updates. Cache is refreshed either way so the
+    // synchronous query stays current.
     const changed = new_online != g_net_online or
         new_transport != g_net_transport or
-        new_expensive != g_net_expensive;
+        new_expensive != g_net_expensive or
+        new_validated != g_net_validated;
     g_net_online = new_online;
     g_net_transport = new_transport;
     g_net_expensive = new_expensive;
+    g_net_validated = new_validated;
     if (!changed) return;
     if (!g_device_dispatcher_set) return;
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
-    const payload = networkStateMap(env, g_net_online, g_net_transport, g_net_expensive);
+    const payload = networkStateMap(env, g_net_online, g_net_transport, g_net_expensive, g_net_validated);
     const msg = erts.makeTuple(env, .{
         erts.enif_make_atom(env, "mob_device"),
         erts.enif_make_atom(env, "connectivity_changed"),
@@ -3207,7 +3220,7 @@ export fn nif_device_network_state(
     _ = argv;
     // Partial getter (like the other Android device queries): returns the last
     // snapshot pushed by mob_send_connectivity_changed; offline until then.
-    return networkStateMap(env, g_net_online, g_net_transport, g_net_expensive);
+    return networkStateMap(env, g_net_online, g_net_transport, g_net_expensive, g_net_validated);
 }
 
 export fn nif_device_low_power_mode(
