@@ -157,10 +157,13 @@ defmodule Mob.Device do
   @doc """
   Current network connectivity snapshot.
 
-  `online` is true when the OS reports a satisfied network path. `transport`
-  names the active interface — `:wifi | :cellular | :wired | :other | :none`;
-  it is `:none` exactly when `online` is false. `expensive` is true on metered
-  links (cellular, personal hotspot), so defer large transfers when it is set.
+  `online` is true when the OS reports a usable default network *path* is up.
+  It does **not** guarantee the internet is reachable — a captive-portal or
+  not-yet-validated network reports `online: true` on both platforms (iOS
+  `NWPath` satisfied / Android default `NetworkCallback`). `transport` names
+  the active interface — `:wifi | :cellular | :wired | :other | :none`; it is
+  `:none` exactly when `online` is false. `expensive` is true on metered links
+  (cellular, personal hotspot), so defer large transfers when it is set.
 
       Mob.Device.network_state()
       #=> %{online: true, transport: :wifi, expensive: false}
@@ -173,7 +176,12 @@ defmodule Mob.Device do
 
   @doc "True if the device currently has a usable network path."
   @spec online?() :: boolean()
-  def online?, do: network_state().online == true
+  def online? do
+    case network_state() do
+      %{online: online} -> online == true
+      _ -> false
+    end
+  end
 
   @doc "True if Low Power Mode (iOS) / Power Save Mode (Android) is on."
   @spec low_power_mode?() :: boolean()

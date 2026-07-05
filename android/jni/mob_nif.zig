@@ -3123,9 +3123,19 @@ pub export fn mob_send_connectivity_changed(
     transport: ?[*:0]const u8,
     expensive: c_int,
 ) callconv(.c) void {
-    g_net_online = online != 0;
-    g_net_transport = transportCode(transport orelse "none");
-    g_net_expensive = expensive != 0;
+    const new_online = online != 0;
+    const new_transport = transportCode(transport orelse "none");
+    const new_expensive = expensive != 0;
+    // Only emit when the exposed snapshot changed; onCapabilitiesChanged also
+    // fires on validation/bandwidth/signal updates. Cache is refreshed either
+    // way so the synchronous query stays current.
+    const changed = new_online != g_net_online or
+        new_transport != g_net_transport or
+        new_expensive != g_net_expensive;
+    g_net_online = new_online;
+    g_net_transport = new_transport;
+    g_net_expensive = new_expensive;
+    if (!changed) return;
     if (!g_device_dispatcher_set) return;
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);

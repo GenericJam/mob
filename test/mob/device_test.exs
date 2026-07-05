@@ -79,6 +79,10 @@ defmodule Mob.DeviceTest do
       assert Device.category_for(:connectivity_changed) == :network
     end
 
+    test ":network is a valid category and included in subscribe(:all)" do
+      assert :network in Device.categories()
+    end
+
     test "unknown events fall through to :unknown" do
       assert Device.category_for(:no_such_event) == :unknown
     end

@@ -1417,9 +1417,17 @@ static void ensure_path_monitor_once(void) {
         bool online = nw_path_get_status(path) == nw_path_status_satisfied;
         int transport = net_classify_path(path);
         bool expensive = nw_path_is_expensive(path);
+        // NWPathMonitor fires on constrained/dns/other changes too; only emit an
+        // event when the snapshot we expose actually changed. The cache is still
+        // refreshed either way so the synchronous query stays current.
+        bool changed = online != atomic_load(&g_net_online) ||
+                       transport != atomic_load(&g_net_transport) ||
+                       expensive != atomic_load(&g_net_expensive);
         atomic_store(&g_net_online, online);
         atomic_store(&g_net_transport, transport);
         atomic_store(&g_net_expensive, expensive);
+        if (!changed)
+            return;
         ErlNifEnv *e = enif_alloc_env();
         ERL_NIF_TERM payload = mob_make_network_map(e, online, transport, expensive);
         mob_device_send_atom_payload("mob_device", "connectivity_changed", payload, e);
