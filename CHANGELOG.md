@@ -8,6 +8,25 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.16] - 2026-07-04
+
+### Added
+- **Network / connectivity state (`Mob.Device.network_state/0`).** Returns
+  `%{online, transport, expensive, validated, constrained}`: online/offline, the
+  active transport (`:wifi | :cellular | :wired | :other | :none`), whether the
+  link is metered/`expensive`, plus two single-platform signals that report the
+  atom `:unavailable` where the OS can't answer (never a misleading `false`) —
+  `validated` (Android `NET_CAPABILITY_VALIDATED`, a real-internet probe;
+  `false` on a captive portal) and `constrained` (iOS Low Data Mode). Adds
+  `online?/0` and a `:network` subscribe category delivering
+  `{:mob_device, :connectivity_changed, state}` on change. iOS `NWPathMonitor`;
+  Android `ConnectivityManager.NetworkCallback` (Kotlin bridge ships via mob_new
+  0.4.18+). Device-verified on iOS simulator and moto g power (2021). (MOB-14, #62)
+
+### Documentation
+- Getting-started: fix an undefined `tap/1` in the "first screen" example (#63),
+  and make the `0xAARRGGBB` color format explicit vs CSS hex (#64).
+
 ## [0.7.15] - 2026-07-04
 
 ### Added
