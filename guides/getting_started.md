@@ -632,7 +632,7 @@ defmodule MyApp.HomeScreen do
     ~MOB"""
     <Column padding={24} gap={16}>
       <Text text={"Count: #{assigns.count}"} text_size={:xl} />
-      <Button text="Tap me" on_tap={tap(:increment)} />
+      <Button text="Tap me" on_tap={{self(), :increment}} />
     </Column>
     """
   end
@@ -646,8 +646,9 @@ end
 ```
 
 `mount/3` initialises assigns. `render/1` returns the component tree via the `~MOB`
-sigil. `handle_info/2` updates state in response to user events. After each update,
-the framework calls `render/1` again and pushes the diff to the native layer.
+sigil. An `on_tap={{self(), :increment}}` sends `{:tap, :increment}` to the screen
+when the button is pressed, which `handle_info/2` matches to update state. After each
+update, the framework calls `render/1` again and pushes the diff to the native layer.
 
 ---
 
