@@ -2691,6 +2691,39 @@ export fn nif_audio_stop_recording(
     return erts.ok(env);
 }
 
+// Audio input metering (mic level probe). Android impl (AudioRecord bridge) is
+// MOB-35 stage 3 — these stubs keep the NIF table consistent with iOS so the
+// module loads; input_level reports :not_implemented until the bridge lands.
+export fn nif_audio_start_input_metering(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    return erts.ok(env);
+}
+
+export fn nif_audio_input_level(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    return erts.atom(env, "not_implemented");
+}
+
+export fn nif_audio_stop_input_metering(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    return erts.ok(env);
+}
+
 export fn nif_audio_play(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -3732,6 +3765,9 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "files_pick", .arity = 1, .fptr = nif_files_pick, .flags = 0 },
     .{ .name = "audio_start_recording", .arity = 1, .fptr = nif_audio_start_recording, .flags = 0 },
     .{ .name = "audio_stop_recording", .arity = 0, .fptr = nif_audio_stop_recording, .flags = 0 },
+    .{ .name = "audio_start_input_metering", .arity = 0, .fptr = nif_audio_start_input_metering, .flags = 0 },
+    .{ .name = "audio_input_level", .arity = 0, .fptr = nif_audio_input_level, .flags = 0 },
+    .{ .name = "audio_stop_input_metering", .arity = 0, .fptr = nif_audio_stop_input_metering, .flags = 0 },
     .{ .name = "audio_play", .arity = 2, .fptr = nif_audio_play, .flags = 0 },
     .{ .name = "audio_play_at", .arity = 3, .fptr = nif_audio_play_at, .flags = 0 },
     .{ .name = "audio_stop_playback", .arity = 0, .fptr = nif_audio_stop_playback, .flags = 0 },
