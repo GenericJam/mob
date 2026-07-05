@@ -62,7 +62,7 @@ defmodule Mob.Device do
 
   use GenServer
 
-  @categories [:app, :display, :audio, :appearance, :power, :thermal, :memory]
+  @categories [:app, :display, :audio, :appearance, :power, :thermal, :memory, :network]
   @default_categories [:app, :display, :audio, :appearance, :memory]
 
   @app_events [
@@ -78,8 +78,10 @@ defmodule Mob.Device do
   @power_events [:battery_state_changed, :battery_level_changed, :low_power_mode_changed]
   @thermal_events [:thermal_state_changed]
   @memory_events [:memory_warning]
+  @network_events [:connectivity_changed]
 
-  @type category :: :app | :display | :audio | :appearance | :power | :thermal | :memory
+  @type category ::
+          :app | :display | :audio | :appearance | :power | :thermal | :memory | :network
   @type event :: atom()
 
   # ── Public API ────────────────────────────────────────────────────────────
@@ -138,6 +140,72 @@ defmodule Mob.Device do
   @doc "Current thermal state — `:nominal | :fair | :serious | :critical`."
   @spec thermal_state() :: :nominal | :fair | :serious | :critical
   def thermal_state, do: :mob_nif.device_thermal_state()
+
+  @typedoc "The transport currently carrying the network path."
+  @type transport :: :wifi | :cellular | :wired | :other | :none
+
+  @typedoc """
+  A per-platform signal that this platform does not expose — distinct from a
+  known `false`. e.g. `validated` on iOS, `constrained` on Android.
+  """
+  @type unavailable :: :unavailable
+
+  @typedoc """
+  A connectivity snapshot. `online`/`transport`/`expensive` are cross-platform.
+  `validated` and `constrained` are each exposed by only one platform; the other
+  reports `:unavailable` rather than a misleading `false`.
+  """
+  @type network_state :: %{
+          online: boolean(),
+          transport: transport(),
+          expensive: boolean(),
+          validated: boolean() | unavailable(),
+          constrained: boolean() | unavailable()
+        }
+
+  @doc """
+  Current network connectivity snapshot.
+
+  `online` is true when the OS reports a usable default network *path* is up.
+  It does **not** guarantee the internet is reachable — a captive-portal or
+  not-yet-validated network reports `online: true` on both platforms (iOS
+  `NWPath` satisfied / Android default `NetworkCallback`). `transport` names
+  the active interface — `:wifi | :cellular | :wired | :other | :none`; it is
+  `:none` exactly when `online` is false. `expensive` is true on metered links
+  (cellular, personal hotspot), so defer large transfers when it is set.
+
+  `validated` and `constrained` are single-platform signals — each platform
+  reports `:unavailable` (not a misleading `false`) for the one it can't answer:
+
+  * `validated` — **Android only** (`NET_CAPABILITY_VALIDATED`): the OS actively
+    probed and confirmed real internet reachability; `false` on a captive portal
+    or before validation completes. `:unavailable` on iOS (NWPath has no probe).
+  * `constrained` — **iOS only** (`nw_path_is_constrained`): Low Data Mode is on.
+    `:unavailable` on Android (no per-network equivalent).
+
+      # iOS
+      #=> %{online: true, transport: :wifi, expensive: false,
+      #     validated: :unavailable, constrained: false}
+      # Android
+      #=> %{online: true, transport: :wifi, expensive: false,
+      #     validated: true, constrained: :unavailable}
+
+  Subscribe to the `:network` category to receive
+  `{:mob_device, :connectivity_changed, state}` when this changes — `state` is
+  the same full map shape returned here (all five keys, `validated`/`constrained`
+  included).
+  """
+  @spec network_state() :: network_state()
+  def network_state, do: :mob_nif.device_network_state()
+
+  @doc "True if the device currently has a usable network path."
+  @spec online?() :: boolean()
+  def online? do
+    case network_state() do
+      %{online: online} -> online == true
+      _ -> false
+    end
+  end
 
   @doc "True if Low Power Mode (iOS) / Power Save Mode (Android) is on."
   @spec low_power_mode?() :: boolean()
@@ -397,6 +465,7 @@ defmodule Mob.Device do
       event in @power_events -> :power
       event in @thermal_events -> :thermal
       event in @memory_events -> :memory
+      event in @network_events -> :network
       true -> :unknown
     end
   end

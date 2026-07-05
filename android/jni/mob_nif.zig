@@ -3076,6 +3076,116 @@ pub export fn mob_send_orientation_changed(orient: ?[*:0]const u8) callconv(.c) 
     deviceSendAtomPayload("mob_device", "orientation_changed", o);
 }
 
+// ── Network connectivity ─────────────────────────────────────────────────────
+//
+// Last-known connectivity, updated by mob_send_connectivity_changed (pushed
+// from the template's ConnectivityManager.NetworkCallback via beam_jni.c).
+// device_network_state/0 returns this; defaults to offline until the first
+// callback fires (which happens on registration at app start).
+// Transport is cached as an int code, NOT the incoming string pointer: the
+// JNI string from beam_jni.c is released as soon as the trampoline returns, so
+// storing that pointer would dangle and the query would read freed memory. The
+// atom is always derived from a static literal (mirrors the iOS int-code path).
+// 0 none, 1 wifi, 2 cellular, 3 wired, 4 other.
+// Atomic to match the iOS half of this feature: written on the JNI callback
+// thread, read on a BEAM scheduler thread in nif_device_network_state. Monotonic
+// is sufficient — the fields are independent and the snapshot is
+// eventually-consistent.
+var g_net_online = std.atomic.Value(bool).init(false);
+var g_net_transport = std.atomic.Value(c_int).init(0);
+var g_net_expensive = std.atomic.Value(bool).init(false);
+var g_net_validated = std.atomic.Value(bool).init(false);
+
+fn boolAtomName(b: bool) [*:0]const u8 {
+    return if (b) "true" else "false";
+}
+
+fn transportCode(name: [*:0]const u8) c_int {
+    const s = std.mem.sliceTo(name, 0);
+    if (std.mem.eql(u8, s, "wifi")) return 1;
+    if (std.mem.eql(u8, s, "cellular")) return 2;
+    if (std.mem.eql(u8, s, "wired")) return 3;
+    if (std.mem.eql(u8, s, "other")) return 4;
+    return 0;
+}
+
+fn transportAtomName(code: c_int) [*:0]const u8 {
+    return switch (code) {
+        1 => "wifi",
+        2 => "cellular",
+        3 => "wired",
+        4 => "other",
+        else => "none",
+    };
+}
+
+// Builds %{online, transport, expensive, validated, constrained}. `constrained`
+// is always :unavailable on Android — NetworkCapabilities has no per-network
+// Low-Data-Mode equivalent (iOS nw_path_is_constrained). `validated` is
+// Android's real-internet-reachability probe (NET_CAPABILITY_VALIDATED).
+fn networkStateMap(
+    env: ?*erts.ErlNifEnv,
+    online: bool,
+    transport_code: c_int,
+    expensive: bool,
+    validated: bool,
+) erts.ERL_NIF_TERM {
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_atom(env, "online"),
+        erts.enif_make_atom(env, "transport"),
+        erts.enif_make_atom(env, "expensive"),
+        erts.enif_make_atom(env, "validated"),
+        erts.enif_make_atom(env, "constrained"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_atom(env, boolAtomName(online)),
+        erts.enif_make_atom(env, transportAtomName(transport_code)),
+        erts.enif_make_atom(env, boolAtomName(expensive)),
+        erts.enif_make_atom(env, boolAtomName(validated)),
+        erts.enif_make_atom(env, "unavailable"),
+    };
+    return erts.makeMap(env, &keys, &vals) orelse erts.enif_make_atom(env, "nil");
+}
+
+/// Called from beam_jni.c's `Java_..._MobBridge_nativeNotifyConnectivity` when
+/// the template's ConnectivityManager.NetworkCallback fires. `online`/`expensive`/
+/// `validated` are 0/1; `transport` is "wifi" | "cellular" | "wired" | "other" |
+/// "none". (Companion Kotlin hook ships in the mob_new template.)
+pub export fn mob_send_connectivity_changed(
+    online: c_int,
+    transport: ?[*:0]const u8,
+    expensive: c_int,
+    validated: c_int,
+) callconv(.c) void {
+    const new_online = online != 0;
+    const new_transport = transportCode(transport orelse "none");
+    const new_expensive = expensive != 0;
+    const new_validated = validated != 0;
+    // Only emit when the exposed snapshot changed; onCapabilitiesChanged also
+    // fires on bandwidth/signal updates. Cache is refreshed either way so the
+    // synchronous query stays current.
+    const changed = new_online != g_net_online.load(.monotonic) or
+        new_transport != g_net_transport.load(.monotonic) or
+        new_expensive != g_net_expensive.load(.monotonic) or
+        new_validated != g_net_validated.load(.monotonic);
+    g_net_online.store(new_online, .monotonic);
+    g_net_transport.store(new_transport, .monotonic);
+    g_net_expensive.store(new_expensive, .monotonic);
+    g_net_validated.store(new_validated, .monotonic);
+    if (!changed) return;
+    if (!g_device_dispatcher_set) return;
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const payload = networkStateMap(env, new_online, new_transport, new_expensive, new_validated);
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, "mob_device"),
+        erts.enif_make_atom(env, "connectivity_changed"),
+        payload,
+    });
+    var pid = g_device_dispatcher_pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
 // Map a lock atom (+ :unspecified for unlock) to an Android
 // ActivityInfo.SCREEN_ORIENTATION_* constant.
 fn androidOrientationConst(name: []const u8) c_int {
@@ -3123,6 +3233,24 @@ export fn nif_device_thermal_state(
     _ = argv;
     // TODO(android): PowerManager.getCurrentThermalStatus() (API 29+).
     return erts.atom(env, "nominal");
+}
+
+export fn nif_device_network_state(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    // Partial getter (like the other Android device queries): returns the last
+    // snapshot pushed by mob_send_connectivity_changed; offline until then.
+    return networkStateMap(
+        env,
+        g_net_online.load(.monotonic),
+        g_net_transport.load(.monotonic),
+        g_net_expensive.load(.monotonic),
+        g_net_validated.load(.monotonic),
+    );
 }
 
 export fn nif_device_low_power_mode(
@@ -3629,6 +3757,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "device_set_dispatcher", .arity = 1, .fptr = nif_device_set_dispatcher, .flags = 0 },
     .{ .name = "device_battery_state", .arity = 0, .fptr = nif_device_battery_state, .flags = 0 },
     .{ .name = "device_thermal_state", .arity = 0, .fptr = nif_device_thermal_state, .flags = 0 },
+    .{ .name = "device_network_state", .arity = 0, .fptr = nif_device_network_state, .flags = 0 },
     .{ .name = "device_low_power_mode", .arity = 0, .fptr = nif_device_low_power_mode, .flags = 0 },
     .{ .name = "device_foreground", .arity = 0, .fptr = nif_device_foreground, .flags = 0 },
     .{ .name = "device_os_version", .arity = 0, .fptr = nif_device_os_version, .flags = 0 },

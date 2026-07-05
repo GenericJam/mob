@@ -16,6 +16,7 @@
 #include <netdb.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
+#include <stdatomic.h>
 #include <sys/socket.h>
 // dlopen/dlsym are marked unavailable in iOS SDK headers but exist at runtime
 // in the iOS Simulator (macOS). Declare prototypes directly to bypass the header
@@ -33,6 +34,7 @@ extern char *dlerror(void) __attribute__((weak));
 #import <AVFoundation/AVFoundation.h>
 #import <Accelerate/Accelerate.h>
 #import <CoreMotion/CoreMotion.h>
+#import <Network/Network.h>
 #import <Photos/Photos.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <UserNotifications/UserNotifications.h>
@@ -1351,6 +1353,101 @@ static const char *battery_state_atom(UIDeviceBatteryState s) {
     }
 }
 
+// ── Network connectivity (NWPathMonitor) ─────────────────────────────────────
+//
+// A single process-lifetime NWPathMonitor tracks the active path. Its update
+// handler runs on a private serial queue: it caches the latest snapshot (for
+// the synchronous device_network_state/0 query) and pushes a
+// connectivity_changed event to Mob.Device subscribers. Transport codes:
+// 0 none, 1 wifi, 2 cellular, 3 wired, 4 other.
+static nw_path_monitor_t g_path_monitor = NULL;
+static dispatch_once_t g_path_monitor_once = 0;
+static _Atomic(bool) g_net_online = false;
+static _Atomic(int) g_net_transport = 0;
+static _Atomic(bool) g_net_expensive = false;
+static _Atomic(bool) g_net_constrained = false;
+
+static const char *net_transport_atom(int t) {
+    switch (t) {
+    case 1:
+        return "wifi";
+    case 2:
+        return "cellular";
+    case 3:
+        return "wired";
+    case 4:
+        return "other";
+    default:
+        return "none";
+    }
+}
+
+static int net_classify_path(nw_path_t path) {
+    if (nw_path_get_status(path) != nw_path_status_satisfied)
+        return 0;
+    if (nw_path_uses_interface_type(path, nw_interface_type_wifi))
+        return 1;
+    if (nw_path_uses_interface_type(path, nw_interface_type_cellular))
+        return 2;
+    if (nw_path_uses_interface_type(path, nw_interface_type_wired))
+        return 3;
+    return 4;
+}
+
+// Builds %{online, transport, expensive, validated, constrained}. `validated`
+// is always :unavailable on iOS — NWPath reports a usable path but has no
+// internet-reachability probe (Android's NET_CAPABILITY_VALIDATED). `constrained`
+// is iOS Low Data Mode.
+static ERL_NIF_TERM mob_make_network_map(ErlNifEnv *e, bool online, int transport, bool expensive,
+                                         bool constrained) {
+    ERL_NIF_TERM keys[5] = {enif_make_atom(e, "online"), enif_make_atom(e, "transport"),
+                            enif_make_atom(e, "expensive"), enif_make_atom(e, "validated"),
+                            enif_make_atom(e, "constrained")};
+    ERL_NIF_TERM vals[5] = {enif_make_atom(e, online ? "true" : "false"),
+                            enif_make_atom(e, net_transport_atom(transport)),
+                            enif_make_atom(e, expensive ? "true" : "false"),
+                            enif_make_atom(e, "unavailable"),
+                            enif_make_atom(e, constrained ? "true" : "false")};
+    ERL_NIF_TERM map;
+    if (!enif_make_map_from_arrays(e, keys, vals, 5, &map))
+        return enif_make_atom(e, "nil");
+    return map;
+}
+
+// Starts the shared path monitor exactly once. Safe to call from either the
+// dispatcher handshake or a cold query.
+static void ensure_path_monitor_once(void) {
+    dispatch_once(&g_path_monitor_once, ^{
+      g_path_monitor = nw_path_monitor_create();
+      dispatch_queue_t nq = dispatch_queue_create("com.mob.netmonitor", DISPATCH_QUEUE_SERIAL);
+      nw_path_monitor_set_queue(g_path_monitor, nq);
+      nw_path_monitor_set_update_handler(g_path_monitor, ^(nw_path_t path) {
+        bool online = nw_path_get_status(path) == nw_path_status_satisfied;
+        int transport = net_classify_path(path);
+        bool expensive = nw_path_is_expensive(path);
+        bool constrained = nw_path_is_constrained(path);
+        // NWPathMonitor fires on dns/other changes too; only emit an event when
+        // the snapshot we expose actually changed. The cache is still refreshed
+        // either way so the synchronous query stays current.
+        bool changed = online != atomic_load(&g_net_online) ||
+                       transport != atomic_load(&g_net_transport) ||
+                       expensive != atomic_load(&g_net_expensive) ||
+                       constrained != atomic_load(&g_net_constrained);
+        atomic_store(&g_net_online, online);
+        atomic_store(&g_net_transport, transport);
+        atomic_store(&g_net_expensive, expensive);
+        atomic_store(&g_net_constrained, constrained);
+        if (!changed)
+            return;
+        ErlNifEnv *e = enif_alloc_env();
+        ERL_NIF_TERM payload = mob_make_network_map(e, online, transport, expensive, constrained);
+        mob_device_send_atom_payload("mob_device", "connectivity_changed", payload, e);
+        enif_free_env(e);
+      });
+      nw_path_monitor_start(g_path_monitor);
+    });
+}
+
 // ── Orientation ────────────────────────────────────────────────────────────
 // The locked mask the app shell's root view controller must report from
 // -supportedInterfaceOrientations. UIInterfaceOrientationMaskAll means "no
@@ -1572,6 +1669,12 @@ static void register_device_observers_once(void) {
                     enif_free_env(e);
                   }];
 
+      // ── Network connectivity ──
+      // NWPathMonitor delivers an initial snapshot shortly after start and on
+      // every subsequent change; the handler caches it and emits
+      // connectivity_changed.
+      ensure_path_monitor_once();
+
       NSLog(@"[mob] Mob.Device observers registered");
     });
 }
@@ -1622,6 +1725,15 @@ static ERL_NIF_TERM nif_device_battery_state(ErlNifEnv *env, int argc, const ERL
 static ERL_NIF_TERM nif_device_thermal_state(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     NSProcessInfoThermalState s = [[NSProcessInfo processInfo] thermalState];
     return enif_make_atom(env, thermal_state_atom(s));
+}
+
+static ERL_NIF_TERM nif_device_network_state(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    // Start monitoring on the first cold query too, so the value populates even
+    // if the dispatcher handshake hasn't run. The first snapshot arrives async,
+    // so a query in the first few ms after boot may read the offline default.
+    ensure_path_monitor_once();
+    return mob_make_network_map(env, atomic_load(&g_net_online), atomic_load(&g_net_transport),
+                                atomic_load(&g_net_expensive), atomic_load(&g_net_constrained));
 }
 
 static ERL_NIF_TERM nif_device_low_power_mode(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
@@ -6027,6 +6139,7 @@ static ErlNifFunc nif_funcs[] = {
     {"device_set_dispatcher", 1, nif_device_set_dispatcher, 0},
     {"device_battery_state", 0, nif_device_battery_state, 0},
     {"device_thermal_state", 0, nif_device_thermal_state, 0},
+    {"device_network_state", 0, nif_device_network_state, 0},
     {"device_low_power_mode", 0, nif_device_low_power_mode, 0},
     {"device_foreground", 0, nif_device_foreground, 0},
     {"device_os_version", 0, nif_device_os_version, 0},
