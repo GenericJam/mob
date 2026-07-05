@@ -137,6 +137,7 @@ and orthogonal — composition over a fat component library.
 | Voice activity detection | ❌ | — | — | Plugin candidate |
 | Audio effects (reverb, EQ) | ❌ | — | — | Plugin candidate |
 | Camera zoom / focus / exposure | 🟡 | 🟡 | 🟡 | Basic capture works; fine-grained control missing |
+| Torch / flashlight | ✅ | ✓ | ✓ | `Mob.Torch.on/1`, `off/1`, `set/2` — core, no camera session or permission. On/off only (brightness level is a follow-up) |
 
 ## Connectivity
 

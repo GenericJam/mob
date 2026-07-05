@@ -14,6 +14,7 @@
     safe_area/0,
     %% Device utilities (no permission required)
     haptic/1,
+    torch/1,
     clipboard_put/1,
     clipboard_get/0,
     share_text/1,
@@ -136,6 +137,7 @@
     exit_app/0,
     safe_area/0,
     haptic/1,
+    torch/1,
     clipboard_put/1,
     clipboard_get/0,
     share_text/1,
@@ -254,6 +256,7 @@ clear_taps() -> erlang:nif_error(not_loaded).
 exit_app() -> erlang:nif_error(not_loaded).
 safe_area() -> erlang:nif_error(not_loaded).
 haptic(_Type) -> erlang:nif_error(not_loaded).
+torch(_State) -> erlang:nif_error(not_loaded).
 clipboard_put(_Text) -> erlang:nif_error(not_loaded).
 clipboard_get() -> erlang:nif_error(not_loaded).
 share_text(_Text) -> erlang:nif_error(not_loaded).
