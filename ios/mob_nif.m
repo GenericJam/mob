@@ -1697,6 +1697,21 @@ static ERL_NIF_TERM nif_device_lock_orientation(ErlNifEnv *env, int argc,
     return enif_make_atom(env, "ok");
 }
 
+// ── NIF: device_keep_awake/1 ──────────────────────────────────────────────────
+// argv[0] is the boolean atom `true`/`false`. Disables the idle timer (auto-dim
+// / auto-lock) while true. Must be set on the main thread.
+static ERL_NIF_TERM nif_device_keep_awake(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    char name[8] = {0};
+    enif_get_atom(env, argv[0], name, sizeof(name), ERL_NIF_LATIN1);
+    BOOL on = (strcmp(name, "true") == 0);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [UIApplication sharedApplication].idleTimerDisabled = on;
+    });
+    return enif_make_atom(env, "ok");
+}
+
 // ── NIF: safe_area/0 ─────────────────────────────────────────────────────────
 // Returns {Top, Right, Bottom, Left} in logical points (not pixels).
 // Must read UIWindow.safeAreaInsets on the main thread.
@@ -6033,6 +6048,7 @@ static ErlNifFunc nif_funcs[] = {
     {"device_model", 0, nif_device_model, 0},
     {"device_orientation", 0, nif_device_orientation, 0},
     {"device_lock_orientation", 1, nif_device_lock_orientation, 0},
+    {"device_keep_awake", 1, nif_device_keep_awake, 0},
     {"platform", 0, nif_platform, 0},
     {"color_scheme", 0, nif_color_scheme, 0},
     {"log", 1, nif_log, 0},

@@ -73,6 +73,7 @@
     device_model/0,
     device_orientation/0,
     device_lock_orientation/1,
+    device_keep_awake/1,
     %% Test harness — native UI inspection and interaction
     ui_tree/0,
     ui_view_tree/0,
@@ -167,6 +168,7 @@
     device_model/0,
     device_orientation/0,
     device_lock_orientation/1,
+    device_keep_awake/1,
     ui_tree/0,
     ui_view_tree/0,
     ui_debug/0,
@@ -286,6 +288,7 @@ device_os_version() -> erlang:nif_error(not_loaded).
 device_model() -> erlang:nif_error(not_loaded).
 device_orientation() -> erlang:nif_error(not_loaded).
 device_lock_orientation(_Orientation) -> erlang:nif_error(not_loaded).
+device_keep_awake(_On) -> erlang:nif_error(not_loaded).
 ui_tree() -> erlang:nif_error(not_loaded).
 ui_view_tree() -> erlang:nif_error(not_loaded).
 ui_debug() -> erlang:nif_error(not_loaded).
