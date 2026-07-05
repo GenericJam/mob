@@ -8,6 +8,21 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.16] - 2026-07-04
+
+### Documentation
+- **Fixed the "first screen" example in the Getting Started guide.** The button
+  called an undefined `tap(:increment)` helper (there is no render-tree `tap/1`;
+  only the `Mob.Test.tap/2` desktop helper). It now uses the real idiom
+  `on_tap={{self(), :increment}}`, which sends `{:tap, :increment}` to the
+  screen's `handle_info/2` — matching the example's own clause. (closes #46, #63)
+- **Made the raw color format explicit: `0xAARRGGBB` integers, not CSS hex.** The
+  Components and Theming guides now spell out that a raw color prop is a 32-bit
+  integer with **alpha first** (e.g. `0xFF2196F3`) — not a `"#RRGGBB"` string,
+  and not CSS's alpha-last `#RRGGBBAA` — and that a missing alpha byte (a 6-digit
+  `0x2196F3`, read as `0x002196F3`) renders fully transparent. Includes a
+  translucent-overlay example and notes `:transparent` is `0x00000000`. (#64)
+
 ## [0.7.15] - 2026-07-04
 
 ### Added
