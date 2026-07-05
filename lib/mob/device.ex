@@ -62,7 +62,7 @@ defmodule Mob.Device do
 
   use GenServer
 
-  @categories [:app, :display, :audio, :appearance, :power, :thermal, :memory]
+  @categories [:app, :display, :audio, :appearance, :power, :thermal, :memory, :network]
   @default_categories [:app, :display, :audio, :appearance, :memory]
 
   @app_events [
@@ -78,8 +78,10 @@ defmodule Mob.Device do
   @power_events [:battery_state_changed, :battery_level_changed, :low_power_mode_changed]
   @thermal_events [:thermal_state_changed]
   @memory_events [:memory_warning]
+  @network_events [:connectivity_changed]
 
-  @type category :: :app | :display | :audio | :appearance | :power | :thermal | :memory
+  @type category ::
+          :app | :display | :audio | :appearance | :power | :thermal | :memory | :network
   @type event :: atom()
 
   # ── Public API ────────────────────────────────────────────────────────────
@@ -138,6 +140,40 @@ defmodule Mob.Device do
   @doc "Current thermal state — `:nominal | :fair | :serious | :critical`."
   @spec thermal_state() :: :nominal | :fair | :serious | :critical
   def thermal_state, do: :mob_nif.device_thermal_state()
+
+  @typedoc "The transport currently carrying the network path."
+  @type transport :: :wifi | :cellular | :wired | :other | :none
+
+  @typedoc """
+  A connectivity snapshot: whether the OS reports a usable network path, which
+  transport carries it, and whether that transport is metered/expensive.
+  """
+  @type network_state :: %{
+          online: boolean(),
+          transport: transport(),
+          expensive: boolean()
+        }
+
+  @doc """
+  Current network connectivity snapshot.
+
+  `online` is true when the OS reports a satisfied network path. `transport`
+  names the active interface — `:wifi | :cellular | :wired | :other | :none`;
+  it is `:none` exactly when `online` is false. `expensive` is true on metered
+  links (cellular, personal hotspot), so defer large transfers when it is set.
+
+      Mob.Device.network_state()
+      #=> %{online: true, transport: :wifi, expensive: false}
+
+  Subscribe to the `:network` category to receive
+  `{:mob_device, :connectivity_changed, state}` when this changes.
+  """
+  @spec network_state() :: network_state()
+  def network_state, do: :mob_nif.device_network_state()
+
+  @doc "True if the device currently has a usable network path."
+  @spec online?() :: boolean()
+  def online?, do: network_state().online == true
 
   @doc "True if Low Power Mode (iOS) / Power Save Mode (Android) is on."
   @spec low_power_mode?() :: boolean()
@@ -397,6 +433,7 @@ defmodule Mob.Device do
       event in @power_events -> :power
       event in @thermal_events -> :thermal
       event in @memory_events -> :memory
+      event in @network_events -> :network
       true -> :unknown
     end
   end

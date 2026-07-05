@@ -3056,6 +3056,61 @@ pub export fn mob_send_orientation_changed(orient: ?[*:0]const u8) callconv(.c) 
     deviceSendAtomPayload("mob_device", "orientation_changed", o);
 }
 
+// ── Network connectivity ─────────────────────────────────────────────────────
+//
+// Last-known connectivity, updated by mob_send_connectivity_changed (pushed
+// from the template's ConnectivityManager.NetworkCallback via beam_jni.c).
+// device_network_state/0 returns this; defaults to offline until the first
+// callback fires (which happens on registration at app start).
+var g_net_online: bool = false;
+var g_net_transport: [*:0]const u8 = "none"; // wifi|cellular|wired|other|none
+var g_net_expensive: bool = false;
+
+// Builds %{online: bool, transport: atom, expensive: bool}.
+fn networkStateMap(
+    env: ?*erts.ErlNifEnv,
+    online: bool,
+    transport: [*:0]const u8,
+    expensive: bool,
+) erts.ERL_NIF_TERM {
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_atom(env, "online"),
+        erts.enif_make_atom(env, "transport"),
+        erts.enif_make_atom(env, "expensive"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_atom(env, if (online) "true" else "false"),
+        erts.enif_make_atom(env, transport),
+        erts.enif_make_atom(env, if (expensive) "true" else "false"),
+    };
+    return erts.makeMap(env, &keys, &vals) orelse erts.enif_make_atom(env, "nil");
+}
+
+/// Called from beam_jni.c's `Java_..._MobBridge_nativeNotifyConnectivity` when
+/// the template's ConnectivityManager.NetworkCallback fires. `online`/`expensive`
+/// are 0/1; `transport` is "wifi" | "cellular" | "wired" | "other" | "none".
+/// (Companion Kotlin hook ships in the mob_new template.)
+pub export fn mob_send_connectivity_changed(
+    online: c_int,
+    transport: ?[*:0]const u8,
+    expensive: c_int,
+) callconv(.c) void {
+    g_net_online = online != 0;
+    g_net_transport = transport orelse "none";
+    g_net_expensive = expensive != 0;
+    if (!g_device_dispatcher_set) return;
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const payload = networkStateMap(env, g_net_online, g_net_transport, g_net_expensive);
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, "mob_device"),
+        erts.enif_make_atom(env, "connectivity_changed"),
+        payload,
+    });
+    var pid = g_device_dispatcher_pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
 // Map a lock atom (+ :unspecified for unlock) to an Android
 // ActivityInfo.SCREEN_ORIENTATION_* constant.
 fn androidOrientationConst(name: []const u8) c_int {
@@ -3103,6 +3158,18 @@ export fn nif_device_thermal_state(
     _ = argv;
     // TODO(android): PowerManager.getCurrentThermalStatus() (API 29+).
     return erts.atom(env, "nominal");
+}
+
+export fn nif_device_network_state(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    // Partial getter (like the other Android device queries): returns the last
+    // snapshot pushed by mob_send_connectivity_changed; offline until then.
+    return networkStateMap(env, g_net_online, g_net_transport, g_net_expensive);
 }
 
 export fn nif_device_low_power_mode(
@@ -3607,6 +3674,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "device_set_dispatcher", .arity = 1, .fptr = nif_device_set_dispatcher, .flags = 0 },
     .{ .name = "device_battery_state", .arity = 0, .fptr = nif_device_battery_state, .flags = 0 },
     .{ .name = "device_thermal_state", .arity = 0, .fptr = nif_device_thermal_state, .flags = 0 },
+    .{ .name = "device_network_state", .arity = 0, .fptr = nif_device_network_state, .flags = 0 },
     .{ .name = "device_low_power_mode", .arity = 0, .fptr = nif_device_low_power_mode, .flags = 0 },
     .{ .name = "device_foreground", .arity = 0, .fptr = nif_device_foreground, .flags = 0 },
     .{ .name = "device_os_version", .arity = 0, .fptr = nif_device_os_version, .flags = 0 },

@@ -66,6 +66,7 @@
     device_set_dispatcher/1,
     device_battery_state/0,
     device_thermal_state/0,
+    device_network_state/0,
     device_low_power_mode/0,
     device_foreground/0,
     device_os_version/0,
@@ -159,6 +160,7 @@
     device_set_dispatcher/1,
     device_battery_state/0,
     device_thermal_state/0,
+    device_network_state/0,
     device_low_power_mode/0,
     device_foreground/0,
     device_os_version/0,
@@ -277,6 +279,7 @@ battery_level() -> erlang:nif_error(not_loaded).
 device_set_dispatcher(_Pid) -> erlang:nif_error(not_loaded).
 device_battery_state() -> erlang:nif_error(not_loaded).
 device_thermal_state() -> erlang:nif_error(not_loaded).
+device_network_state() -> erlang:nif_error(not_loaded).
 device_low_power_mode() -> erlang:nif_error(not_loaded).
 device_foreground() -> erlang:nif_error(not_loaded).
 device_os_version() -> erlang:nif_error(not_loaded).
