@@ -24,7 +24,7 @@
 //!     The C-side `nif_load` calls `mob_nif_init_state` (exported here)
 //!     to create the mutexes during BEAM init.
 //!   * iter 3d (this iter): the finale. Remaining feature NIFs (color
-//!     scheme, exit_app, safe_area, haptic, clipboard, open_url,
+//!     scheme, exit_app, safe_area, haptic, torch, clipboard, open_url,
 //!     share_text, launch notification, request_permission,
 //!     files_pick,
 //!     audio ×5, motion ×2, scanner, notifications ×3, storage ×4,
@@ -237,6 +237,7 @@ pub const BridgeMethods = extern struct {
     get_safe_area: jni.JMethodID = null,
     get_color_scheme: jni.JMethodID = null,
     haptic: jni.JMethodID = null,
+    torch: jni.JMethodID = null,
     clipboard_put: jni.JMethodID = null,
     clipboard_get: jni.JMethodID = null,
     tts_speak: jni.JMethodID = null,
@@ -1951,6 +1952,25 @@ export fn nif_haptic(
     return erts.ok(env);
 }
 
+// nif_torch/1 — pass the atom `on` or `off` to MobBridge.torch(String), which
+// toggles the rear-camera torch. No-op on a device without a flash unit.
+export fn nif_torch(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var state_buf: [8]u8 = @splat(0);
+    _ = erts.enif_get_atom(env, argv[0], &state_buf, state_buf.len, erts.ERL_NIF_LATIN1);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jstate = jni.newStringUTF(jenv, jni.asCStr(&state_buf));
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.torch, jstate);
+    jni.deleteLocalRef(jenv, jstate);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
 // nif_clipboard_put/1 — ClipboardManager.setPrimaryClip via Kotlin.
 export fn nif_clipboard_put(
     env: ?*erts.ErlNifEnv,
@@ -3444,6 +3464,7 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     cacheOptional(jenv, "setTheme", "(Ljava/lang/String;)V", &Bridge.set_theme);
 
     if (!cacheRequired(jenv, "haptic", "(Ljava/lang/String;)V", &Bridge.haptic)) return -1;
+    if (!cacheRequired(jenv, "torch", "(Ljava/lang/String;)V", &Bridge.torch)) return -1;
     if (!cacheRequired(jenv, "clipboardPut", "(Ljava/lang/String;)V", &Bridge.clipboard_put)) return -1;
     if (!cacheRequired(jenv, "clipboardGet", "()Ljava/lang/String;", &Bridge.clipboard_get)) return -1;
     // Optional: apps generated before TTS existed lack these MobBridge methods.
@@ -3571,6 +3592,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "exit_app", .arity = 0, .fptr = nif_exit_app, .flags = 0 },
     .{ .name = "safe_area", .arity = 0, .fptr = nif_safe_area, .flags = 0 },
     .{ .name = "haptic", .arity = 1, .fptr = nif_haptic, .flags = 0 },
+    .{ .name = "torch", .arity = 1, .fptr = nif_torch, .flags = 0 },
     .{ .name = "clipboard_put", .arity = 1, .fptr = nif_clipboard_put, .flags = 0 },
     .{ .name = "clipboard_get", .arity = 0, .fptr = nif_clipboard_get, .flags = 0 },
     .{ .name = "tts_speak", .arity = 2, .fptr = nif_tts_speak, .flags = 0 },

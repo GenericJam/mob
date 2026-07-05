@@ -1923,6 +1923,34 @@ static ERL_NIF_TERM nif_haptic(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     return enif_make_atom(env, "ok");
 }
 
+// ── NIF: torch/1 ──────────────────────────────────────────────────────────────
+// Toggle the rear-camera torch. argv[0] is the atom `on` or `off`. No capture
+// session and no camera permission needed. No-op (not an error) on a device
+// without a torch — the simulator and most tablets have none.
+static ERL_NIF_TERM nif_torch(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    char state[8] = {0};
+    enif_get_atom(env, argv[0], state, sizeof(state), ERL_NIF_LATIN1);
+    BOOL on = (strcmp(state, "on") == 0);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      AVCaptureDevice *device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+      if (!device || !device.hasTorch || !device.isTorchAvailable)
+          return;
+      NSError *err = nil;
+      if (![device lockForConfiguration:&err])
+          return;
+      if (on) {
+          // setTorchModeOnWithLevel: validates the level and is preferred over
+          // the torchMode setter; max level = full brightness.
+          [device setTorchModeOnWithLevel:AVCaptureMaxAvailableTorchLevel error:NULL];
+      } else {
+          device.torchMode = AVCaptureTorchModeOff;
+      }
+      [device unlockForConfiguration];
+    });
+    return enif_make_atom(env, "ok");
+}
+
 // ── NIF: clipboard_put/1 ──────────────────────────────────────────────────────
 // Writes a UTF-8 binary to the system clipboard. Fire-and-forget.
 
@@ -6017,6 +6045,7 @@ static ErlNifFunc nif_funcs[] = {
     {"exit_app", 0, nif_exit_app, 0},
     {"safe_area", 0, nif_safe_area, 0},
     {"haptic", 1, nif_haptic, 0},
+    {"torch", 1, nif_torch, 0},
     {"clipboard_put", 1, nif_clipboard_put, 0},
     {"clipboard_get", 0, nif_clipboard_get, 0},
     {"share_text", 1, nif_share_text, 0},
