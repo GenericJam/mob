@@ -3062,19 +3062,43 @@ pub export fn mob_send_orientation_changed(orient: ?[*:0]const u8) callconv(.c) 
 // from the template's ConnectivityManager.NetworkCallback via beam_jni.c).
 // device_network_state/0 returns this; defaults to offline until the first
 // callback fires (which happens on registration at app start).
+// Transport is cached as an int code, NOT the incoming string pointer: the
+// JNI string from beam_jni.c is released as soon as the trampoline returns, so
+// storing that pointer would dangle and the query would read freed memory. The
+// atom is always derived from a static literal (mirrors the iOS int-code path).
+// 0 none, 1 wifi, 2 cellular, 3 wired, 4 other.
 var g_net_online: bool = false;
-var g_net_transport: [*:0]const u8 = "none"; // wifi|cellular|wired|other|none
+var g_net_transport: c_int = 0;
 var g_net_expensive: bool = false;
 
-// Builds %{online: bool, transport: atom, expensive: bool}.
 fn boolAtomName(b: bool) [*:0]const u8 {
     return if (b) "true" else "false";
 }
 
+fn transportCode(name: [*:0]const u8) c_int {
+    const s = std.mem.sliceTo(name, 0);
+    if (std.mem.eql(u8, s, "wifi")) return 1;
+    if (std.mem.eql(u8, s, "cellular")) return 2;
+    if (std.mem.eql(u8, s, "wired")) return 3;
+    if (std.mem.eql(u8, s, "other")) return 4;
+    return 0;
+}
+
+fn transportAtomName(code: c_int) [*:0]const u8 {
+    return switch (code) {
+        1 => "wifi",
+        2 => "cellular",
+        3 => "wired",
+        4 => "other",
+        else => "none",
+    };
+}
+
+// Builds %{online: bool, transport: atom, expensive: bool}.
 fn networkStateMap(
     env: ?*erts.ErlNifEnv,
     online: bool,
-    transport: [*:0]const u8,
+    transport_code: c_int,
     expensive: bool,
 ) erts.ERL_NIF_TERM {
     const keys = [_]erts.ERL_NIF_TERM{
@@ -3084,7 +3108,7 @@ fn networkStateMap(
     };
     const vals = [_]erts.ERL_NIF_TERM{
         erts.enif_make_atom(env, boolAtomName(online)),
-        erts.enif_make_atom(env, transport),
+        erts.enif_make_atom(env, transportAtomName(transport_code)),
         erts.enif_make_atom(env, boolAtomName(expensive)),
     };
     return erts.makeMap(env, &keys, &vals) orelse erts.enif_make_atom(env, "nil");
@@ -3100,7 +3124,7 @@ pub export fn mob_send_connectivity_changed(
     expensive: c_int,
 ) callconv(.c) void {
     g_net_online = online != 0;
-    g_net_transport = transport orelse "none";
+    g_net_transport = transportCode(transport orelse "none");
     g_net_expensive = expensive != 0;
     if (!g_device_dispatcher_set) return;
     const env = erts.enif_alloc_env() orelse return;
