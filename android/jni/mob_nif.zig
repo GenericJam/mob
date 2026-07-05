@@ -3067,6 +3067,10 @@ var g_net_transport: [*:0]const u8 = "none"; // wifi|cellular|wired|other|none
 var g_net_expensive: bool = false;
 
 // Builds %{online: bool, transport: atom, expensive: bool}.
+fn boolAtomName(b: bool) [*:0]const u8 {
+    return if (b) "true" else "false";
+}
+
 fn networkStateMap(
     env: ?*erts.ErlNifEnv,
     online: bool,
@@ -3079,9 +3083,9 @@ fn networkStateMap(
         erts.enif_make_atom(env, "expensive"),
     };
     const vals = [_]erts.ERL_NIF_TERM{
-        erts.enif_make_atom(env, if (online) "true" else "false"),
+        erts.enif_make_atom(env, boolAtomName(online)),
         erts.enif_make_atom(env, transport),
-        erts.enif_make_atom(env, if (expensive) "true" else "false"),
+        erts.enif_make_atom(env, boolAtomName(expensive)),
     };
     return erts.makeMap(env, &keys, &vals) orelse erts.enif_make_atom(env, "nil");
 }
