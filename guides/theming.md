@@ -214,10 +214,41 @@ use Mob.App, theme: AcmeCorp.BrandTheme
 
 Token atoms that are not semantic theme tokens resolve through the built-in palette. The palette covers grays, blues, greens, reds, oranges, purples, teals, pinks, and more — all as `name_weight` atoms (e.g. `:blue_500`, `:gray_200`, `:emerald_400`).
 
-You can also pass raw ARGB hex integers directly as prop values:
+### Raw colors are `0xAARRGGBB` integers, not CSS hex strings
+
+Any color prop also accepts a raw color **as a 32-bit integer literal** in
+`0xAARRGGBB` order — **alpha first**, then red, green, blue:
 
 ```elixir
 %{type: :text, props: %{text: "Hi", text_color: 0xFFFF5733}, children: []}
+#                                                ^^                        alpha = FF (fully opaque)
+#                                                  FF5733                 red/green/blue
+```
+
+This is **not** web/CSS color syntax. Two differences trip people (and coding
+assistants) up:
+
+- **It's an integer literal (`0xFFFF5733`), not a string.** A CSS-style
+  `"#FF5733"` string is **not** a valid color prop — pass the `0x…` integer.
+- **Alpha comes first (`0xAARRGGBB`), not last.** CSS's 8-digit form is
+  `#RRGGBBAA` (alpha last); Mob is `0xAARRGGBB` (alpha first), matching the
+  Android/`Color`-int and iOS ARGB convention the native layer uses. Putting the
+  opacity byte in the wrong place gives a wrong color, not just wrong
+  transparency.
+
+**Always include the alpha byte.** `0xFF2196F3` is opaque blue; `0x002196F3`
+is fully transparent (alpha `00`). A 6-digit `0x2196F3` is read as
+`0x002196F3` — invisible — because the missing top byte defaults to `00`.
+The built-in palette entries are all `0xFF…` for this reason, and
+`:transparent` is `0x00000000`.
+
+The alpha byte is what makes translucency composable. For example, a frosted
+overlay panel is just a box with a semi-transparent background stacked over
+content — no special "glass" primitive required:
+
+```elixir
+# ~40% black scrim / frosted panel over whatever is behind it
+%{type: :box, props: %{background: 0x66000000}, children: [...]}
 ```
 
 Use raw integers sparingly. Semantic tokens give you free dark-mode and theme switching.
