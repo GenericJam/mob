@@ -99,6 +99,13 @@ defmodule Mob.DeviceTest do
       assert Device.lock_orientation(:sideways) == {:error, :invalid}
       assert Device.lock_orientation("landscape") == {:error, :invalid}
     end
+
+    test "keep_awake/1 rejects a non-boolean before touching the NIF" do
+      # The is_boolean/1 guard fails on the host before the NIF is reached,
+      # so this is safe to assert without a loaded NIF.
+      assert_raise FunctionClauseError, fn -> Device.keep_awake(:yes) end
+      assert_raise FunctionClauseError, fn -> Device.keep_awake(1) end
+    end
   end
 
   describe "open_settings/1" do
