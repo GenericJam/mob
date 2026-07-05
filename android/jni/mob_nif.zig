@@ -3067,10 +3067,14 @@ pub export fn mob_send_orientation_changed(orient: ?[*:0]const u8) callconv(.c) 
 // storing that pointer would dangle and the query would read freed memory. The
 // atom is always derived from a static literal (mirrors the iOS int-code path).
 // 0 none, 1 wifi, 2 cellular, 3 wired, 4 other.
-var g_net_online: bool = false;
-var g_net_transport: c_int = 0;
-var g_net_expensive: bool = false;
-var g_net_validated: bool = false;
+// Atomic to match the iOS half of this feature: written on the JNI callback
+// thread, read on a BEAM scheduler thread in nif_device_network_state. Monotonic
+// is sufficient — the fields are independent and the snapshot is
+// eventually-consistent.
+var g_net_online = std.atomic.Value(bool).init(false);
+var g_net_transport = std.atomic.Value(c_int).init(0);
+var g_net_expensive = std.atomic.Value(bool).init(false);
+var g_net_validated = std.atomic.Value(bool).init(false);
 
 fn boolAtomName(b: bool) [*:0]const u8 {
     return if (b) "true" else "false";
@@ -3140,19 +3144,19 @@ pub export fn mob_send_connectivity_changed(
     // Only emit when the exposed snapshot changed; onCapabilitiesChanged also
     // fires on bandwidth/signal updates. Cache is refreshed either way so the
     // synchronous query stays current.
-    const changed = new_online != g_net_online or
-        new_transport != g_net_transport or
-        new_expensive != g_net_expensive or
-        new_validated != g_net_validated;
-    g_net_online = new_online;
-    g_net_transport = new_transport;
-    g_net_expensive = new_expensive;
-    g_net_validated = new_validated;
+    const changed = new_online != g_net_online.load(.monotonic) or
+        new_transport != g_net_transport.load(.monotonic) or
+        new_expensive != g_net_expensive.load(.monotonic) or
+        new_validated != g_net_validated.load(.monotonic);
+    g_net_online.store(new_online, .monotonic);
+    g_net_transport.store(new_transport, .monotonic);
+    g_net_expensive.store(new_expensive, .monotonic);
+    g_net_validated.store(new_validated, .monotonic);
     if (!changed) return;
     if (!g_device_dispatcher_set) return;
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
-    const payload = networkStateMap(env, g_net_online, g_net_transport, g_net_expensive, g_net_validated);
+    const payload = networkStateMap(env, new_online, new_transport, new_expensive, new_validated);
     const msg = erts.makeTuple(env, .{
         erts.enif_make_atom(env, "mob_device"),
         erts.enif_make_atom(env, "connectivity_changed"),
@@ -3220,7 +3224,13 @@ export fn nif_device_network_state(
     _ = argv;
     // Partial getter (like the other Android device queries): returns the last
     // snapshot pushed by mob_send_connectivity_changed; offline until then.
-    return networkStateMap(env, g_net_online, g_net_transport, g_net_expensive, g_net_validated);
+    return networkStateMap(
+        env,
+        g_net_online.load(.monotonic),
+        g_net_transport.load(.monotonic),
+        g_net_expensive.load(.monotonic),
+        g_net_validated.load(.monotonic),
+    );
 }
 
 export fn nif_device_low_power_mode(

@@ -148,7 +148,8 @@ void mob_send_component_event(int handle, const char *event, const char *payload
 // `scheme` must be "light" or "dark".
 void mob_send_color_scheme_changed(const char *scheme);
 
-// Deliver {:mob_device, :connectivity_changed, %{online, transport, expensive}}
+// Deliver {:mob_device, :connectivity_changed,
+//          %{online, transport, expensive, validated, constrained}}
 // to the dispatcher pid registered via Mob.Device. Called from beam_jni.c's
 // nativeNotifyConnectivity when the ConnectivityManager.NetworkCallback fires.
 // `online`/`expensive`/`validated` are 0/1; `transport` is

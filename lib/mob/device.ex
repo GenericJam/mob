@@ -191,7 +191,9 @@ defmodule Mob.Device do
       #     validated: true, constrained: :unavailable}
 
   Subscribe to the `:network` category to receive
-  `{:mob_device, :connectivity_changed, state}` when this changes.
+  `{:mob_device, :connectivity_changed, state}` when this changes — `state` is
+  the same full map shape returned here (all five keys, `validated`/`constrained`
+  included).
   """
   @spec network_state() :: network_state()
   def network_state, do: :mob_nif.device_network_state()
