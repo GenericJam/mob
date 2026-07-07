@@ -2762,6 +2762,63 @@ static ERL_NIF_TERM nif_audio_stop_recording(ErlNifEnv *env, int argc, const ERL
     return enif_make_atom(env, "ok");
 }
 
+// ── Audio input metering (mic level probe, no recording kept) ──────────────
+// A metering-only AVAudioRecorder: records to a throwaway temp file with
+// metering enabled and reads averagePower/peakPower (dBFS). Shares the mic
+// session with recording — callers must not run both at once. (A future
+// AVAudioEngine input tap would avoid the temp file; see MOB-35.)
+static AVAudioRecorder *g_meter_recorder = nil;
+static NSString *g_meter_path = nil;
+
+static ERL_NIF_TERM nif_audio_start_input_metering(ErlNifEnv *env, int argc,
+                                                   const ERL_NIF_TERM argv[]) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryRecord error:nil];
+      [[AVAudioSession sharedInstance] setActive:YES error:nil];
+      NSString *tmp = [NSTemporaryDirectory()
+          stringByAppendingPathComponent:[NSString stringWithFormat:@"mob_meter_%@.m4a",
+                                                                    [NSUUID UUID].UUIDString]];
+      g_meter_path = tmp;
+      NSURL *url = [NSURL fileURLWithPath:tmp];
+      NSDictionary *settings = @{
+          AVFormatIDKey : @(kAudioFormatMPEG4AAC),
+          AVSampleRateKey : @44100,
+          AVNumberOfChannelsKey : @1,
+          AVEncoderAudioQualityKey : @(AVAudioQualityMin)
+      };
+      g_meter_recorder = [[AVAudioRecorder alloc] initWithURL:url settings:settings error:nil];
+      g_meter_recorder.meteringEnabled = YES;
+      [g_meter_recorder record];
+    });
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_audio_input_level(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    AVAudioRecorder *rec = g_meter_recorder;
+    if (!rec || !rec.isRecording)
+        return enif_make_atom(env, "not_metering");
+    [rec updateMeters];
+    double avg = [rec averagePowerForChannel:0];
+    double peak = [rec peakPowerForChannel:0];
+    return enif_make_tuple2(env, enif_make_double(env, avg), enif_make_double(env, peak));
+}
+
+static ERL_NIF_TERM nif_audio_stop_input_metering(ErlNifEnv *env, int argc,
+                                                  const ERL_NIF_TERM argv[]) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (g_meter_recorder) {
+          [g_meter_recorder stop];
+          g_meter_recorder = nil;
+      }
+      [[AVAudioSession sharedInstance] setActive:NO error:nil];
+      if (g_meter_path) {
+          [[NSFileManager defaultManager] removeItemAtPath:g_meter_path error:nil];
+          g_meter_path = nil;
+      }
+    });
+    return enif_make_atom(env, "ok");
+}
+
 // ── Audio playback ────────────────────────────────────────────────────────
 
 @interface MobAudioPlayerDelegate : NSObject <AVAudioPlayerDelegate>
@@ -6184,6 +6241,9 @@ static ErlNifFunc nif_funcs[] = {
     {"files_pick", 1, nif_files_pick, 0},
     {"audio_start_recording", 1, nif_audio_start_recording, 0},
     {"audio_stop_recording", 0, nif_audio_stop_recording, 0},
+    {"audio_start_input_metering", 0, nif_audio_start_input_metering, 0},
+    {"audio_input_level", 0, nif_audio_input_level, 0},
+    {"audio_stop_input_metering", 0, nif_audio_stop_input_metering, 0},
     {"audio_play", 2, nif_audio_play, 0},
     {"audio_play_at", 3, nif_audio_play_at, 0},
     {"audio_stop_playback", 0, nif_audio_stop_playback, 0},
