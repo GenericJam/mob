@@ -256,6 +256,9 @@ pub const BridgeMethods = extern struct {
     files_pick: jni.JMethodID = null,
     audio_start_recording: jni.JMethodID = null,
     audio_stop_recording: jni.JMethodID = null,
+    audio_start_input_metering: jni.JMethodID = null,
+    audio_input_level: jni.JMethodID = null,
+    audio_stop_input_metering: jni.JMethodID = null,
     audio_play: jni.JMethodID = null,
     audio_play_at: jni.JMethodID = null,
     audio_stop_playback: jni.JMethodID = null,
@@ -2691,9 +2694,9 @@ export fn nif_audio_stop_recording(
     return erts.ok(env);
 }
 
-// Audio input metering (mic level probe). Android impl (AudioRecord bridge) is
-// MOB-35 stage 3 — these stubs keep the NIF table consistent with iOS so the
-// module loads; input_level reports :not_implemented until the bridge lands.
+// Audio input metering (mic level probe) — MediaRecorder.getMaxAmplitude via the
+// Kotlin bridge. The level NIF converts amplitude (0..32767, or -1 when not
+// metering) to dBFS and returns {rms, peak} (rms == peak here) or :not_metering.
 export fn nif_audio_start_input_metering(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -2701,6 +2704,10 @@ export fn nif_audio_start_input_metering(
 ) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     _ = argv;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.audio_start_input_metering);
+    detachIfAttached(attached);
     return erts.ok(env);
 }
 
@@ -2711,7 +2718,16 @@ export fn nif_audio_input_level(
 ) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     _ = argv;
-    return erts.atom(env, "not_implemented");
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const amp = jenv.*.CallStaticIntMethod.?(jenv, Bridge.cls, Bridge.audio_input_level);
+    detachIfAttached(attached);
+    if (amp < 0) return erts.atom(env, "not_metering");
+    const db: f64 = if (amp == 0)
+        -160.0
+    else
+        20.0 * std.math.log10(@as(f64, @floatFromInt(amp)) / 32767.0);
+    return erts.makeTuple(env, .{ erts.enif_make_double(env, db), erts.enif_make_double(env, db) });
 }
 
 export fn nif_audio_stop_input_metering(
@@ -2721,6 +2737,10 @@ export fn nif_audio_stop_input_metering(
 ) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     _ = argv;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.audio_stop_input_metering);
+    detachIfAttached(attached);
     return erts.ok(env);
 }
 
@@ -3641,6 +3661,9 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     if (!cacheRequired(jenv, "files_pick", "(JLjava/lang/String;)V", &Bridge.files_pick)) return -1;
     if (!cacheRequired(jenv, "audio_start_recording", "(JLjava/lang/String;)V", &Bridge.audio_start_recording)) return -1;
     if (!cacheRequired(jenv, "audio_stop_recording", "()V", &Bridge.audio_stop_recording)) return -1;
+    if (!cacheRequired(jenv, "audio_start_input_metering", "()V", &Bridge.audio_start_input_metering)) return -1;
+    if (!cacheRequired(jenv, "audio_input_level", "()I", &Bridge.audio_input_level)) return -1;
+    if (!cacheRequired(jenv, "audio_stop_input_metering", "()V", &Bridge.audio_stop_input_metering)) return -1;
     if (!cacheRequired(jenv, "audio_play", "(JLjava/lang/String;Ljava/lang/String;)V", &Bridge.audio_play)) return -1;
     if (!cacheRequired(jenv, "audio_play_at", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", &Bridge.audio_play_at)) return -1;
     if (!cacheRequired(jenv, "audio_stop_playback", "()V", &Bridge.audio_stop_playback)) return -1;
