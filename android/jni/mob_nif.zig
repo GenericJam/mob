@@ -2704,6 +2704,7 @@ export fn nif_audio_start_input_metering(
 ) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     _ = argv;
+    if (Bridge.audio_start_input_metering == null) return erts.atom(env, "unsupported_on_platform");
     var attached: c_int = 0;
     const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
     jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.audio_start_input_metering);
@@ -2718,6 +2719,7 @@ export fn nif_audio_input_level(
 ) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     _ = argv;
+    if (Bridge.audio_input_level == null) return erts.atom(env, "unsupported_on_platform");
     var attached: c_int = 0;
     const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
     const amp = jenv.*.CallStaticIntMethod.?(jenv, Bridge.cls, Bridge.audio_input_level);
@@ -2737,6 +2739,7 @@ export fn nif_audio_stop_input_metering(
 ) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     _ = argv;
+    if (Bridge.audio_stop_input_metering == null) return erts.atom(env, "unsupported_on_platform");
     var attached: c_int = 0;
     const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
     jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.audio_stop_input_metering);
@@ -3661,9 +3664,13 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     if (!cacheRequired(jenv, "files_pick", "(JLjava/lang/String;)V", &Bridge.files_pick)) return -1;
     if (!cacheRequired(jenv, "audio_start_recording", "(JLjava/lang/String;)V", &Bridge.audio_start_recording)) return -1;
     if (!cacheRequired(jenv, "audio_stop_recording", "()V", &Bridge.audio_stop_recording)) return -1;
-    if (!cacheRequired(jenv, "audio_start_input_metering", "()V", &Bridge.audio_start_input_metering)) return -1;
-    if (!cacheRequired(jenv, "audio_input_level", "()I", &Bridge.audio_input_level)) return -1;
-    if (!cacheRequired(jenv, "audio_stop_input_metering", "()V", &Bridge.audio_stop_input_metering)) return -1;
+    // Optional: input-level metering ships in a separate mob_new bridge
+    // template (mob_new#31). Cache-optional so core can merge independently
+    // of the template and a stale/drifted MobBridge degrades to
+    // :unsupported_on_platform at call time instead of crashing nif_load.
+    cacheOptional(jenv, "audio_start_input_metering", "()V", &Bridge.audio_start_input_metering);
+    cacheOptional(jenv, "audio_input_level", "()I", &Bridge.audio_input_level);
+    cacheOptional(jenv, "audio_stop_input_metering", "()V", &Bridge.audio_stop_input_metering);
     if (!cacheRequired(jenv, "audio_play", "(JLjava/lang/String;Ljava/lang/String;)V", &Bridge.audio_play)) return -1;
     if (!cacheRequired(jenv, "audio_play_at", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", &Bridge.audio_play_at)) return -1;
     if (!cacheRequired(jenv, "audio_stop_playback", "()V", &Bridge.audio_stop_playback)) return -1;
