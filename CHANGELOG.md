@@ -8,6 +8,27 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.18] - 2026-07-07
+
+### Added
+- **`Mob.Audio` output probes — "is sound actually coming out right now."** The
+  audio analog of `screenshot`. `Mob.Audio.output_status/0` →
+  `%{volume, muted, route, other_audio}` (cheap, no permission; catches the
+  common silence causes — muted, zero volume, dead route — via iOS
+  `AVAudioSession` / Android `AudioManager`). `Mob.Audio.output_level/1` →
+  `{rms_db, peak_db} | :silent | {:error, reason}`, the actual signal energy of
+  `Mob.Audio`'s own player (iOS `AVAudioPlayer` metering; Android `Visualizer`
+  on the player's session, needs runtime `RECORD_AUDIO`); `source: :mix` returns
+  `{:error, :unsupported_on_platform}`. (#54)
+- **`Mob.Audio` input-level metering — the agent "ears" (MOB-35).**
+  `Mob.Audio.start_input_metering/1`, `input_level/0`, `stop_input_metering/1`;
+  `input_level/0` returns `{rms, peak} | :silent | {:error, reason}` — the same
+  shape as `output_level`, so mic and output read through one unified metering
+  contract. NIF declared in `mob_nif.erl`; pure `decode_level/1` host-tested.
+  (#67)
+
+---
+
 ## [0.7.17] - 2026-07-04
 
 ### Added
