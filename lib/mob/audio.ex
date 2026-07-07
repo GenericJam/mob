@@ -110,6 +110,49 @@ defmodule Mob.Audio do
   end
 
   @doc """
+  Start metering the microphone input level — without recording to a file.
+
+  The agent-facing "ears" primitive: poll `input_level/0` to detect whether the
+  device is producing sound (e.g. an agent loop "keep going until you hear
+  sound"). The mic picks up the device's own speaker, so it registers audio from
+  any source. Shares the mic session with recording — don't run both at once.
+
+  Requires `:microphone` permission (same as recording).
+  """
+  @spec start_input_metering(Mob.Socket.t()) :: Mob.Socket.t()
+  def start_input_metering(socket) do
+    :mob_nif.audio_start_input_metering()
+    socket
+  end
+
+  @doc """
+  Read the current microphone input level as `{rms_db, peak_db}` (dBFS), `:silent`
+  when there is no measurable signal, or `{:error, reason}`.
+
+  `start_input_metering/1` must be active first, else `{:error, :not_metering}`.
+  Same `{rms, peak} | :silent` shape as `MobAudioCapture.output_level/0`, so the
+  `:mic` source (here) and the `:output` source (mob_audio_capture) read uniformly.
+  """
+  @spec input_level() :: {float(), float()} | :silent | {:error, atom()}
+  def input_level do
+    decode_level(:mob_nif.audio_input_level())
+  end
+
+  @doc "Stop microphone input metering."
+  @spec stop_input_metering(Mob.Socket.t()) :: Mob.Socket.t()
+  def stop_input_metering(socket) do
+    :mob_nif.audio_stop_input_metering()
+    socket
+  end
+
+  @doc false
+  @spec decode_level(term()) :: {float(), float()} | :silent | {:error, atom()}
+  def decode_level({_rms, peak}) when peak <= -120.0, do: :silent
+  def decode_level({rms, peak}), do: {rms, peak}
+  def decode_level(reason) when is_atom(reason), do: {:error, reason}
+  def decode_level(_), do: {:error, :unknown}
+
+  @doc """
   Play an audio file. Stops any currently playing audio first.
 
   Options:
@@ -260,13 +303,6 @@ defmodule Mob.Audio do
     source = Keyword.get(opts, :source, :mob)
     decode_level(:mob_nif.audio_output_level(Atom.to_string(source)))
   end
-
-  @doc false
-  @spec decode_level(term()) :: {float(), float()} | :silent | {:error, atom()}
-  def decode_level({_rms, peak}) when peak <= -120.0, do: :silent
-  def decode_level({rms, peak}), do: {rms, peak}
-  def decode_level(reason) when is_atom(reason), do: {:error, reason}
-  def decode_level(_), do: {:error, :unknown}
 
   # Native side returns a numeric route code (kept numeric to avoid building
   # atoms in C/Zig); decode here.

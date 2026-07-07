@@ -419,7 +419,7 @@ pub const JNINativeInterface = extern struct {
     CallStaticShortMethod: ?*anyopaque,
     CallStaticShortMethodV: ?*anyopaque,
     CallStaticShortMethodA: ?*anyopaque,
-    CallStaticIntMethod: ?*anyopaque,
+    CallStaticIntMethod: ?*const fn (env: *JNIEnv, cls: JClass, mid: JMethodID, ...) callconv(.c) JInt,
     CallStaticIntMethodV: ?*anyopaque,
     CallStaticIntMethodA: ?*anyopaque,
     CallStaticLongMethod: ?*anyopaque,

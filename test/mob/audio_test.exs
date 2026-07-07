@@ -166,9 +166,12 @@ defmodule Mob.AudioTest do
     end
 
     test "an atom result becomes {:error, atom}" do
+      # output probes (mob#54): :not_playing / :needs_record_audio;
+      # input metering (mob#67): :not_metering; shared: :unsupported_on_platform
       assert Audio.decode_level(:needs_record_audio) == {:error, :needs_record_audio}
-      assert Audio.decode_level(:unsupported_on_platform) == {:error, :unsupported_on_platform}
       assert Audio.decode_level(:not_playing) == {:error, :not_playing}
+      assert Audio.decode_level(:not_metering) == {:error, :not_metering}
+      assert Audio.decode_level(:unsupported_on_platform) == {:error, :unsupported_on_platform}
     end
 
     test "an unexpected shape becomes {:error, :unknown}" do

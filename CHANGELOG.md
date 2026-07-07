@@ -8,6 +8,101 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.17] - 2026-07-04
+
+### Added
+- **Keep-awake / idle-timer (`Mob.Device.keep_awake/1`).** `keep_awake(true)`
+  prevents the screen auto-dimming/locking (for video, reading, navigation, or
+  any watch-without-touch screen); `false` releases it. No permission on either
+  platform. iOS: `UIApplication.isIdleTimerDisabled`; Android: the window's
+  `FLAG_KEEP_SCREEN_ON` (the Kotlin bridge ships via mob_new 0.4.19+). The flag
+  is app-scoped and cleared by the OS on background — re-assert on resume.
+  Device-verified both directions on moto g power (2021) — `dumpsys` shows the
+  `KEEP_SCREEN_ON` window flag toggle, and the screen actually sleeps with it
+  off / stays lit with it on — and iPhone SE (3rd gen). (MOB-20, #66)
+
+## [0.7.16] - 2026-07-04
+
+### Added
+- **Network / connectivity state (`Mob.Device.network_state/0`).** Returns
+  `%{online, transport, expensive, validated, constrained}`: online/offline, the
+  active transport (`:wifi | :cellular | :wired | :other | :none`), whether the
+  link is metered/`expensive`, plus two single-platform signals that report the
+  atom `:unavailable` where the OS can't answer (never a misleading `false`) —
+  `validated` (Android `NET_CAPABILITY_VALIDATED`, a real-internet probe;
+  `false` on a captive portal) and `constrained` (iOS Low Data Mode). Adds
+  `online?/0` and a `:network` subscribe category delivering
+  `{:mob_device, :connectivity_changed, state}` on change. iOS `NWPathMonitor`;
+  Android `ConnectivityManager.NetworkCallback` (Kotlin bridge ships via mob_new
+  0.4.18+). Device-verified on iOS simulator and moto g power (2021). (MOB-14, #62)
+
+### Documentation
+- Getting-started: fix an undefined `tap/1` in the "first screen" example (#63),
+  and make the `0xAARRGGBB` color format explicit vs CSS hex (#64).
+
+## [0.7.15] - 2026-07-04
+
+### Added
+- **Torch / flashlight support (`Mob.Torch`).** `Mob.Torch.on/1`, `off/1`, and
+  `set/2` toggle the rear-camera torch — a lightweight core capability that needs
+  no camera capture session and no permission. On a device with no flash unit
+  (tablets, the iOS simulator) it's a no-op, not an error. On/off only for now
+  (iOS brightness levels / Android per-torch strength are a follow-up). iOS:
+  `AVCaptureDevice.torchMode`; Android: `CameraManager.setTorchMode` (the Kotlin
+  bridge ships via mob_new 0.4.17+). Device-verified on moto g power (2021) and
+  iPhone SE (3rd gen). (MOB-15, #61)
+
+## [0.7.14] - 2026-07-04
+
+### Added
+- **Magnetometer / compass support in `Mob.Motion`.** Request `:magnetometer`
+  in the sensor list and the `{:motion, _}` message additionally carries `mag`
+  (calibrated field, µT) and `heading` (degrees from magnetic north). The keys
+  are present **exactly when you requested `:magnetometer`**, on both platforms,
+  and each is `nil` when there's no reading (device has no magnetometer, or the
+  heading hasn't fused yet) — so a compass app matches on `nil` rather than
+  hitting a missing key, and accel/gyro-only consumers get the byte-identical
+  3-key map with no extra sensor cost. iOS uses the `XMagneticNorthZVertical`
+  reference frame (`CMMotionManager`); Android fuses `TYPE_MAGNETIC_FIELD` +
+  `TYPE_ROTATION_VECTOR` (`SensorManager`), registered only on request.
+  Magnetic north only (true north needs location + declination — layer
+  `Mob.Location`). Device-verified on moto g + iPhone SE. (MOB-6, #59)
+
+## [0.7.13] - 2026-07-02
+
+### Documentation
+- **Clarified the tag-composite warning and `Mob.Component` vs `Mob.Composite`
+  in the Components guide.** The `~MOB: <Tag> is not in the Mob tag whitelist`
+  warning is now documented as expected for a *registered* composite (registration
+  is a runtime action the compile-time sigil can't see); an unregistered tag
+  rendering nothing is the real failure to look for. A new callout separates
+  `Mob.Component` (the existing native-view behaviour, whose `render/1` returns a
+  native props map) from `Mob.Composite` (pure-Elixir tag expanders returning a
+  `~MOB` tree via `expand/3`), and the planned "sub-component event isolation"
+  note no longer reuses the `Mob.Component` name. (#53, #58)
+
+## [0.7.12] - 2026-06-30
+
+### Fixed
+- **`~MOB` now raises a clear error when `@foo` is used without `assigns` in
+  scope.** The `@foo` → `assigns.foo` shorthand (0.7.11) only works inside a
+  `render(assigns)`; used in an ordinary helper function (positional args — the
+  idiomatic composite pattern) it compiled to a cryptic "undefined variable
+  assigns". The sigil now guards with `Macro.Env.has_var?(caller, {:assigns,
+  nil})` (the same check Phoenix's `~H` uses) and raises a `CompileError` naming
+  the fix (`{title}` instead of `@title`). Only `@`-using templates trigger it —
+  a static `~MOB(<Text text="hi"/>)` in a positional-arg helper still compiles.
+  (MOB-5, #56)
+
+### Documentation
+- **Worked component-authoring examples in the Components guide.** The
+  "Defining your own components" section now carries two complete, runnable
+  screens — a function composite and a tag composite — spelling out the
+  tag→atom rule and where `on_*` event-target auto-injection applies (a
+  composite tag's own props vs a plain widget in its children). The `@assigns`
+  section documents that `@foo` only works where `assigns` is in scope and
+  steers helpers to positional `{var}`. (#56, #57)
+
 ## [0.7.11] - 2026-06-27
 
 ### Added

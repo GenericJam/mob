@@ -105,8 +105,8 @@ and orthogonal — composition over a fat component library.
 | Network info (cell vs wifi, type) | ❌ | — | — | Plugin candidate (NetInfo equivalent) |
 | Network reachability | ❌ | — | — | Plugin candidate |
 | Screen brightness | ❌ | — | — | Plugin candidate |
-| Screen orientation lock | ❌ | — | — | Plugin candidate |
-| Idle timer / screen wake | ❌ | — | — | Plugin candidate |
+| Screen orientation lock | ✅ | ✓ | ✓ | `Mob.Device.lock_orientation/1` + `unlock_orientation/0` (Android `setRequestedOrientation`; iOS supported-orientations + geometry request) |
+| Idle timer / screen wake | ✅ | ✓ | ✓ | `Mob.Device.keep_awake/1` — prevent auto-dim/lock (iOS `isIdleTimerDisabled`; Android `FLAG_KEEP_SCREEN_ON`) |
 | Exit app | ✅ | n/a | ✓ | Android only; iOS forbids programmatic exit |
 
 ## Storage
@@ -137,13 +137,14 @@ and orthogonal — composition over a fat component library.
 | Voice activity detection | ❌ | — | — | Plugin candidate |
 | Audio effects (reverb, EQ) | ❌ | — | — | Plugin candidate |
 | Camera zoom / focus / exposure | 🟡 | 🟡 | 🟡 | Basic capture works; fine-grained control missing |
+| Torch / flashlight | ✅ | ✓ | ✓ | `Mob.Torch.on/1`, `off/1`, `set/2` — core, no camera session or permission. On/off only (brightness level is a follow-up) |
 
 ## Connectivity
 
 | Capability | Status | iOS | Android | Notes |
 |--|--|--|--|--|
-| Bluetooth Classic | ✅ | n/a | ✓ | `MobBluetooth` plugin (extracted; Hfp / Spp / Hid sub-modules) |
-| Bluetooth Low Energy (BLE) | ❌ | — | — | Plugin candidate — common request |
+| Bluetooth Classic | ✅ | n/a | ✓ | `MobBluetooth` plugin (extracted; Hfp / Spp sub-modules) — central/host role, Android only |
+| Bluetooth Low Energy (BLE) | 🟡 | ✓ | ✓ | `MobBluetooth.Le` (mob_bluetooth 0.3.0) — GATT **peripheral** role only (advertise + notify + receive writes), iOS + Android; BLE central (scan/connect) is a future addition |
 | NFC | ❌ | — | — | Plugin candidate (Core NFC / Android NFC) |
 | WiFi info / scanning | ❌ | — | — | Plugin candidate; OS restrictions apply |
 | USB host | ✅ | n/a | ✓ | `Mob.VendorUsb` — bulk read/write, custom devices |
@@ -161,12 +162,12 @@ and orthogonal — composition over a fat component library.
 |--|--|--|--|--|
 | Accelerometer | ✅ | ✓ | ✓ | `Mob.Motion.start(:accelerometer, ...)` |
 | Gyroscope | ✅ | ✓ | ✓ | `Mob.Motion.start(:gyro, ...)` |
-| Magnetometer | ❌ | — | — | Plugin candidate; `CMMotionManager` / `Sensor.TYPE_MAGNETIC_FIELD` |
+| Magnetometer | ✅ | ✓ | ✓ | `Mob.Motion.start(:magnetometer, ...)` — µT-calibrated `mag` + fused `heading` (0.7.14); keys present only when `:magnetometer` requested |
 | Barometer | ❌ | — | — | Plugin candidate |
 | Proximity | ❌ | — | — | Plugin candidate |
 | Ambient light | ❌ | — | — | Plugin candidate |
 | Pedometer / step counter | ❌ | — | — | Plugin candidate |
-| Compass / heading | ❌ | — | — | Plugin candidate |
+| Compass / heading | ✅ | ✓ | ✓ | Fused `heading` (degrees from magnetic north) via `Mob.Motion` `:magnetometer` — same request as above |
 
 ## Location
 

@@ -24,7 +24,7 @@
 //!     The C-side `nif_load` calls `mob_nif_init_state` (exported here)
 //!     to create the mutexes during BEAM init.
 //!   * iter 3d (this iter): the finale. Remaining feature NIFs (color
-//!     scheme, exit_app, safe_area, haptic, clipboard, open_url,
+//!     scheme, exit_app, safe_area, haptic, torch, clipboard, open_url,
 //!     share_text, launch notification, request_permission,
 //!     files_pick,
 //!     audio ×5, motion ×2, scanner, notifications ×3, storage ×4,
@@ -237,6 +237,7 @@ pub const BridgeMethods = extern struct {
     get_safe_area: jni.JMethodID = null,
     get_color_scheme: jni.JMethodID = null,
     haptic: jni.JMethodID = null,
+    torch: jni.JMethodID = null,
     clipboard_put: jni.JMethodID = null,
     clipboard_get: jni.JMethodID = null,
     tts_speak: jni.JMethodID = null,
@@ -255,6 +256,9 @@ pub const BridgeMethods = extern struct {
     files_pick: jni.JMethodID = null,
     audio_start_recording: jni.JMethodID = null,
     audio_stop_recording: jni.JMethodID = null,
+    audio_start_input_metering: jni.JMethodID = null,
+    audio_input_level: jni.JMethodID = null,
+    audio_stop_input_metering: jni.JMethodID = null,
     audio_play: jni.JMethodID = null,
     audio_play_at: jni.JMethodID = null,
     audio_stop_playback: jni.JMethodID = null,
@@ -290,6 +294,9 @@ pub const BridgeMethods = extern struct {
     // MobBridge.orientationLock(Int) — calls activity.setRequestedOrientation.
     // Companion Kotlin method ships in the mob_new template (see PR notes).
     orientation_lock: jni.JMethodID = null,
+    // MobBridge.keepAwake(Int) — toggles the window's FLAG_KEEP_SCREEN_ON.
+    // Companion Kotlin method ships in the mob_new template.
+    keep_awake: jni.JMethodID = null,
     element_frames: jni.JMethodID = null,
     // ── Mob.Peripheral.VendorUsb ─────────────────────────────────────────
     // Each takes a pid as jlong (so Kotlin can echo it back when calling
@@ -1956,6 +1963,25 @@ export fn nif_haptic(
     return erts.ok(env);
 }
 
+// nif_torch/1 — pass the atom `on` or `off` to MobBridge.torch(String), which
+// toggles the rear-camera torch. No-op on a device without a flash unit.
+export fn nif_torch(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var state_buf: [8]u8 = @splat(0);
+    _ = erts.enif_get_atom(env, argv[0], &state_buf, state_buf.len, erts.ERL_NIF_LATIN1);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jstate = jni.newStringUTF(jenv, jni.asCStr(&state_buf));
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.torch, jstate);
+    jni.deleteLocalRef(jenv, jstate);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
 // nif_clipboard_put/1 — ClipboardManager.setPrimaryClip via Kotlin.
 export fn nif_clipboard_put(
     env: ?*erts.ErlNifEnv,
@@ -2361,6 +2387,70 @@ pub export fn mob_deliver_motion(
     _ = erts.enif_send(null, &pid, env, msg);
 }
 
+/// Like `mob_deliver_motion` but with the magnetometer field (µT) and a fused
+/// heading. Sentinels for "no reading": `heading < 0` and a NaN `mag` component
+/// are each delivered as the atom `nil` (RFC: magnetic north, degrees [0,360)).
+/// This is the delivery used whenever `:magnetometer` was requested — even on a
+/// device with no magnetometer, so the `mag`/`heading` keys are always present
+/// (as `nil`) rather than absent. Emits the 5-key `{:motion, _}` map.
+pub export fn mob_deliver_motion_mag(
+    jpid: jni.JLong,
+    ax: f64,
+    ay: f64,
+    az: f64,
+    gx: f64,
+    gy: f64,
+    gz: f64,
+    mx: f64,
+    my: f64,
+    mz: f64,
+    heading: f64,
+    ts: i64,
+) callconv(.c) void {
+    var pid = pidFromLong(jpid);
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const accel = erts.makeTuple(env, .{
+        erts.enif_make_double(env, ax),
+        erts.enif_make_double(env, ay),
+        erts.enif_make_double(env, az),
+    });
+    const gyro = erts.makeTuple(env, .{
+        erts.enif_make_double(env, gx),
+        erts.enif_make_double(env, gy),
+        erts.enif_make_double(env, gz),
+    });
+    const mag = if (std.math.isNan(mx) or std.math.isNan(my) or std.math.isNan(mz))
+        erts.atom(env, "nil")
+    else
+        erts.makeTuple(env, .{
+            erts.enif_make_double(env, mx),
+            erts.enif_make_double(env, my),
+            erts.enif_make_double(env, mz),
+        });
+    const heading_term = if (heading >= 0.0)
+        erts.enif_make_double(env, heading)
+    else
+        erts.atom(env, "nil");
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.atom(env, "accel"),
+        erts.atom(env, "gyro"),
+        erts.atom(env, "mag"),
+        erts.atom(env, "heading"),
+        erts.atom(env, "timestamp"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        accel,
+        gyro,
+        mag,
+        heading_term,
+        erts.enif_make_int64(env, ts),
+    };
+    const map = erts.makeMap(env, &keys, &vals) orelse return;
+    const msg = erts.makeTuple(env, .{ erts.atom(env, "motion"), map });
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
 /// `{:webview, tag, binary}`. When `jpid == 0` the message routes to the
 /// :mob_screen registered process; otherwise to the explicit pid.
 fn deliverWebviewBinary(jpid: jni.JLong, comptime tag: [:0]const u8, utf8: [*:0]const u8) void {
@@ -2696,6 +2786,59 @@ export fn nif_audio_stop_recording(
     return erts.ok(env);
 }
 
+// Audio input metering (mic level probe) — MediaRecorder.getMaxAmplitude via the
+// Kotlin bridge. The level NIF converts amplitude (0..32767, or -1 when not
+// metering) to dBFS and returns {rms, peak} (rms == peak here) or :not_metering.
+export fn nif_audio_start_input_metering(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    if (Bridge.audio_start_input_metering == null) return erts.atom(env, "unsupported_on_platform");
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.audio_start_input_metering);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+export fn nif_audio_input_level(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    if (Bridge.audio_input_level == null) return erts.atom(env, "unsupported_on_platform");
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const amp = jenv.*.CallStaticIntMethod.?(jenv, Bridge.cls, Bridge.audio_input_level);
+    detachIfAttached(attached);
+    if (amp < 0) return erts.atom(env, "not_metering");
+    const db: f64 = if (amp == 0)
+        -160.0
+    else
+        20.0 * std.math.log10(@as(f64, @floatFromInt(amp)) / 32767.0);
+    return erts.makeTuple(env, .{ erts.enif_make_double(env, db), erts.enif_make_double(env, db) });
+}
+
+export fn nif_audio_stop_input_metering(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    if (Bridge.audio_stop_input_metering == null) return erts.atom(env, "unsupported_on_platform");
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.audio_stop_input_metering);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
 export fn nif_audio_play(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -2770,6 +2913,22 @@ export fn nif_audio_set_volume(
     return erts.ok(env);
 }
 
+/// True if `list` (a list of sensor-name binaries) contains `name`. Used to
+/// plumb the requested sensor set through to the Kotlin bridge, which otherwise
+/// only sees the interval.
+fn motionSensorRequested(env: ?*erts.ErlNifEnv, list: erts.ERL_NIF_TERM, name: []const u8) bool {
+    var cur = list;
+    var head: erts.ERL_NIF_TERM = undefined;
+    var tail: erts.ERL_NIF_TERM = undefined;
+    while (erts.enif_get_list_cell(env, cur, &head, &tail) != 0) {
+        var bin: erts.ErlNifBinary = undefined;
+        if (erts.enif_inspect_binary(env, head, &bin) != 0 and
+            std.mem.eql(u8, bin.data[0..bin.size], name)) return true;
+        cur = tail;
+    }
+    return false;
+}
+
 export fn nif_motion_start(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -2778,11 +2937,20 @@ export fn nif_motion_start(
     _ = argc;
     var interval_ms: c_int = 100;
     _ = erts.enif_get_int(env, argv[1], &interval_ms);
-    var ival_buf: [16]u8 = @splat(0);
-    _ = std.fmt.bufPrint(&ival_buf, "{d}", .{interval_ms}) catch {};
+    // Encode the sensor request into the spec string the Kotlin bridge parses:
+    // "<interval>" or "<interval>,magnetometer". Android's motion_start only had
+    // the interval before, so it registered the magnetometer whenever the
+    // hardware existed — regardless of what the app asked for. Passing the flag
+    // lets it honor the request (and keep the plain accel/gyro stream plain).
+    const want_mag = motionSensorRequested(env, argv[0], "magnetometer");
+    var spec_buf: [32]u8 = @splat(0);
+    if (want_mag)
+        _ = std.fmt.bufPrint(&spec_buf, "{d},magnetometer", .{interval_ms}) catch {}
+    else
+        _ = std.fmt.bufPrint(&spec_buf, "{d}", .{interval_ms}) catch {};
     var pid: erts.ErlNifPid = undefined;
     _ = erts.enif_self(env, &pid);
-    return callBridgePidStr(env, Bridge.motion_start, pid, jni.asCStr(&ival_buf));
+    return callBridgePidStr(env, Bridge.motion_start, pid, jni.asCStr(&spec_buf));
 }
 
 export fn nif_motion_stop(
@@ -3056,6 +3224,116 @@ pub export fn mob_send_orientation_changed(orient: ?[*:0]const u8) callconv(.c) 
     deviceSendAtomPayload("mob_device", "orientation_changed", o);
 }
 
+// ── Network connectivity ─────────────────────────────────────────────────────
+//
+// Last-known connectivity, updated by mob_send_connectivity_changed (pushed
+// from the template's ConnectivityManager.NetworkCallback via beam_jni.c).
+// device_network_state/0 returns this; defaults to offline until the first
+// callback fires (which happens on registration at app start).
+// Transport is cached as an int code, NOT the incoming string pointer: the
+// JNI string from beam_jni.c is released as soon as the trampoline returns, so
+// storing that pointer would dangle and the query would read freed memory. The
+// atom is always derived from a static literal (mirrors the iOS int-code path).
+// 0 none, 1 wifi, 2 cellular, 3 wired, 4 other.
+// Atomic to match the iOS half of this feature: written on the JNI callback
+// thread, read on a BEAM scheduler thread in nif_device_network_state. Monotonic
+// is sufficient — the fields are independent and the snapshot is
+// eventually-consistent.
+var g_net_online = std.atomic.Value(bool).init(false);
+var g_net_transport = std.atomic.Value(c_int).init(0);
+var g_net_expensive = std.atomic.Value(bool).init(false);
+var g_net_validated = std.atomic.Value(bool).init(false);
+
+fn boolAtomName(b: bool) [*:0]const u8 {
+    return if (b) "true" else "false";
+}
+
+fn transportCode(name: [*:0]const u8) c_int {
+    const s = std.mem.sliceTo(name, 0);
+    if (std.mem.eql(u8, s, "wifi")) return 1;
+    if (std.mem.eql(u8, s, "cellular")) return 2;
+    if (std.mem.eql(u8, s, "wired")) return 3;
+    if (std.mem.eql(u8, s, "other")) return 4;
+    return 0;
+}
+
+fn transportAtomName(code: c_int) [*:0]const u8 {
+    return switch (code) {
+        1 => "wifi",
+        2 => "cellular",
+        3 => "wired",
+        4 => "other",
+        else => "none",
+    };
+}
+
+// Builds %{online, transport, expensive, validated, constrained}. `constrained`
+// is always :unavailable on Android — NetworkCapabilities has no per-network
+// Low-Data-Mode equivalent (iOS nw_path_is_constrained). `validated` is
+// Android's real-internet-reachability probe (NET_CAPABILITY_VALIDATED).
+fn networkStateMap(
+    env: ?*erts.ErlNifEnv,
+    online: bool,
+    transport_code: c_int,
+    expensive: bool,
+    validated: bool,
+) erts.ERL_NIF_TERM {
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_atom(env, "online"),
+        erts.enif_make_atom(env, "transport"),
+        erts.enif_make_atom(env, "expensive"),
+        erts.enif_make_atom(env, "validated"),
+        erts.enif_make_atom(env, "constrained"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_atom(env, boolAtomName(online)),
+        erts.enif_make_atom(env, transportAtomName(transport_code)),
+        erts.enif_make_atom(env, boolAtomName(expensive)),
+        erts.enif_make_atom(env, boolAtomName(validated)),
+        erts.enif_make_atom(env, "unavailable"),
+    };
+    return erts.makeMap(env, &keys, &vals) orelse erts.enif_make_atom(env, "nil");
+}
+
+/// Called from beam_jni.c's `Java_..._MobBridge_nativeNotifyConnectivity` when
+/// the template's ConnectivityManager.NetworkCallback fires. `online`/`expensive`/
+/// `validated` are 0/1; `transport` is "wifi" | "cellular" | "wired" | "other" |
+/// "none". (Companion Kotlin hook ships in the mob_new template.)
+pub export fn mob_send_connectivity_changed(
+    online: c_int,
+    transport: ?[*:0]const u8,
+    expensive: c_int,
+    validated: c_int,
+) callconv(.c) void {
+    const new_online = online != 0;
+    const new_transport = transportCode(transport orelse "none");
+    const new_expensive = expensive != 0;
+    const new_validated = validated != 0;
+    // Only emit when the exposed snapshot changed; onCapabilitiesChanged also
+    // fires on bandwidth/signal updates. Cache is refreshed either way so the
+    // synchronous query stays current.
+    const changed = new_online != g_net_online.load(.monotonic) or
+        new_transport != g_net_transport.load(.monotonic) or
+        new_expensive != g_net_expensive.load(.monotonic) or
+        new_validated != g_net_validated.load(.monotonic);
+    g_net_online.store(new_online, .monotonic);
+    g_net_transport.store(new_transport, .monotonic);
+    g_net_expensive.store(new_expensive, .monotonic);
+    g_net_validated.store(new_validated, .monotonic);
+    if (!changed) return;
+    if (!g_device_dispatcher_set) return;
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const payload = networkStateMap(env, new_online, new_transport, new_expensive, new_validated);
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, "mob_device"),
+        erts.enif_make_atom(env, "connectivity_changed"),
+        payload,
+    });
+    var pid = g_device_dispatcher_pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
 // Map a lock atom (+ :unspecified for unlock) to an Android
 // ActivityInfo.SCREEN_ORIENTATION_* constant.
 fn androidOrientationConst(name: []const u8) c_int {
@@ -3065,6 +3343,27 @@ fn androidOrientationConst(name: []const u8) c_int {
     if (std.mem.eql(u8, name, "landscape_left")) return 0; // LANDSCAPE
     if (std.mem.eql(u8, name, "landscape_right")) return 8; // REVERSE_LANDSCAPE
     return -1; // UNSPECIFIED -> unlock
+}
+
+// nif_device_keep_awake/1 — pass the boolean atom `true`/`false` to
+// MobBridge.keepAwake(Int) (1 = keep on). No-op if the app's bridge predates
+// the method (cacheOptional + null guard).
+export fn nif_device_keep_awake(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    var buf: [8]u8 = @splat(0);
+    _ = erts.enif_get_atom(env, argv[0], &buf, buf.len, erts.ERL_NIF_LATIN1);
+    const on: jni.JInt = if (std.mem.eql(u8, std.mem.sliceTo(&buf, 0), "true")) 1 else 0;
+
+    if (Bridge.keep_awake == null) return notLoaded(env);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    defer detachIfAttached(attached);
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.keep_awake, on);
+    return erts.ok(env);
 }
 
 export fn nif_device_set_dispatcher(
@@ -3103,6 +3402,24 @@ export fn nif_device_thermal_state(
     _ = argv;
     // TODO(android): PowerManager.getCurrentThermalStatus() (API 29+).
     return erts.atom(env, "nominal");
+}
+
+export fn nif_device_network_state(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    // Partial getter (like the other Android device queries): returns the last
+    // snapshot pushed by mob_send_connectivity_changed; offline until then.
+    return networkStateMap(
+        env,
+        g_net_online.load(.monotonic),
+        g_net_transport.load(.monotonic),
+        g_net_expensive.load(.monotonic),
+        g_net_validated.load(.monotonic),
+    );
 }
 
 export fn nif_device_low_power_mode(
@@ -3444,6 +3761,7 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     cacheOptional(jenv, "setTheme", "(Ljava/lang/String;)V", &Bridge.set_theme);
 
     if (!cacheRequired(jenv, "haptic", "(Ljava/lang/String;)V", &Bridge.haptic)) return -1;
+    if (!cacheRequired(jenv, "torch", "(Ljava/lang/String;)V", &Bridge.torch)) return -1;
     if (!cacheRequired(jenv, "clipboardPut", "(Ljava/lang/String;)V", &Bridge.clipboard_put)) return -1;
     if (!cacheRequired(jenv, "clipboardGet", "()Ljava/lang/String;", &Bridge.clipboard_get)) return -1;
     // Optional: apps generated before TTS existed lack these MobBridge methods.
@@ -3459,6 +3777,13 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     if (!cacheRequired(jenv, "files_pick", "(JLjava/lang/String;)V", &Bridge.files_pick)) return -1;
     if (!cacheRequired(jenv, "audio_start_recording", "(JLjava/lang/String;)V", &Bridge.audio_start_recording)) return -1;
     if (!cacheRequired(jenv, "audio_stop_recording", "()V", &Bridge.audio_stop_recording)) return -1;
+    // Optional: input-level metering ships in a separate mob_new bridge
+    // template (mob_new#31). Cache-optional so core can merge independently
+    // of the template and a stale/drifted MobBridge degrades to
+    // :unsupported_on_platform at call time instead of crashing nif_load.
+    cacheOptional(jenv, "audio_start_input_metering", "()V", &Bridge.audio_start_input_metering);
+    cacheOptional(jenv, "audio_input_level", "()I", &Bridge.audio_input_level);
+    cacheOptional(jenv, "audio_stop_input_metering", "()V", &Bridge.audio_stop_input_metering);
     if (!cacheRequired(jenv, "audio_play", "(JLjava/lang/String;Ljava/lang/String;)V", &Bridge.audio_play)) return -1;
     if (!cacheRequired(jenv, "audio_play_at", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", &Bridge.audio_play_at)) return -1;
     if (!cacheRequired(jenv, "audio_stop_playback", "()V", &Bridge.audio_stop_playback)) return -1;
@@ -3521,6 +3846,7 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     cacheOptional(jenv, "screenshot", "(Ljava/lang/String;ID)[B", &Bridge.screenshot);
     cacheOptional(jenv, "scrollInfo", "(Ljava/lang/String;)Ljava/lang/String;", &Bridge.scroll_info);
     cacheOptional(jenv, "orientationLock", "(I)V", &Bridge.orientation_lock);
+    cacheOptional(jenv, "keepAwake", "(I)V", &Bridge.keep_awake);
     cacheOptional(jenv, "scrollTo", "(Ljava/lang/String;DD)Z", &Bridge.scroll_to);
     cacheOptional(jenv, "elementFrames", "()Ljava/lang/String;", &Bridge.element_frames);
     cacheOptional(jenv, "tapXy", "(FF)Z", &Bridge.tap_xy);
@@ -3575,6 +3901,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "exit_app", .arity = 0, .fptr = nif_exit_app, .flags = 0 },
     .{ .name = "safe_area", .arity = 0, .fptr = nif_safe_area, .flags = 0 },
     .{ .name = "haptic", .arity = 1, .fptr = nif_haptic, .flags = 0 },
+    .{ .name = "torch", .arity = 1, .fptr = nif_torch, .flags = 0 },
     .{ .name = "clipboard_put", .arity = 1, .fptr = nif_clipboard_put, .flags = 0 },
     .{ .name = "clipboard_get", .arity = 0, .fptr = nif_clipboard_get, .flags = 0 },
     .{ .name = "tts_speak", .arity = 2, .fptr = nif_tts_speak, .flags = 0 },
@@ -3586,6 +3913,9 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "files_pick", .arity = 1, .fptr = nif_files_pick, .flags = 0 },
     .{ .name = "audio_start_recording", .arity = 1, .fptr = nif_audio_start_recording, .flags = 0 },
     .{ .name = "audio_stop_recording", .arity = 0, .fptr = nif_audio_stop_recording, .flags = 0 },
+    .{ .name = "audio_start_input_metering", .arity = 0, .fptr = nif_audio_start_input_metering, .flags = 0 },
+    .{ .name = "audio_input_level", .arity = 0, .fptr = nif_audio_input_level, .flags = 0 },
+    .{ .name = "audio_stop_input_metering", .arity = 0, .fptr = nif_audio_stop_input_metering, .flags = 0 },
     .{ .name = "audio_play", .arity = 2, .fptr = nif_audio_play, .flags = 0 },
     .{ .name = "audio_play_at", .arity = 3, .fptr = nif_audio_play_at, .flags = 0 },
     .{ .name = "audio_stop_playback", .arity = 0, .fptr = nif_audio_stop_playback, .flags = 0 },
@@ -3616,12 +3946,14 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "device_set_dispatcher", .arity = 1, .fptr = nif_device_set_dispatcher, .flags = 0 },
     .{ .name = "device_battery_state", .arity = 0, .fptr = nif_device_battery_state, .flags = 0 },
     .{ .name = "device_thermal_state", .arity = 0, .fptr = nif_device_thermal_state, .flags = 0 },
+    .{ .name = "device_network_state", .arity = 0, .fptr = nif_device_network_state, .flags = 0 },
     .{ .name = "device_low_power_mode", .arity = 0, .fptr = nif_device_low_power_mode, .flags = 0 },
     .{ .name = "device_foreground", .arity = 0, .fptr = nif_device_foreground, .flags = 0 },
     .{ .name = "device_os_version", .arity = 0, .fptr = nif_device_os_version, .flags = 0 },
     .{ .name = "device_model", .arity = 0, .fptr = nif_device_model, .flags = 0 },
     .{ .name = "device_orientation", .arity = 0, .fptr = nif_device_orientation, .flags = 0 },
     .{ .name = "device_lock_orientation", .arity = 1, .fptr = nif_device_lock_orientation, .flags = 0 },
+    .{ .name = "device_keep_awake", .arity = 1, .fptr = nif_device_keep_awake, .flags = 0 },
     // ── Mob.Peripheral.VendorUsb (Android USB host) ──────────────────────────
     .{ .name = "vendor_usb_list_devices", .arity = 1, .fptr = nif_vendor_usb_list_devices, .flags = 0 },
     .{ .name = "vendor_usb_request_permission", .arity = 1, .fptr = nif_vendor_usb_request_permission, .flags = 0 },

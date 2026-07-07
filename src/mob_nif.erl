@@ -14,6 +14,7 @@
     safe_area/0,
     %% Device utilities (no permission required)
     haptic/1,
+    torch/1,
     clipboard_put/1,
     clipboard_get/0,
     share_text/1,
@@ -28,6 +29,10 @@
     %% Audio recording
     audio_start_recording/1,
     audio_stop_recording/0,
+    %% Audio input metering (mic level probe)
+    audio_start_input_metering/0,
+    audio_input_level/0,
+    audio_stop_input_metering/0,
     %% Audio playback
     audio_play/2,
     audio_play_at/3,
@@ -69,12 +74,14 @@
     device_set_dispatcher/1,
     device_battery_state/0,
     device_thermal_state/0,
+    device_network_state/0,
     device_low_power_mode/0,
     device_foreground/0,
     device_os_version/0,
     device_model/0,
     device_orientation/0,
     device_lock_orientation/1,
+    device_keep_awake/1,
     %% Test harness — native UI inspection and interaction
     ui_tree/0,
     ui_view_tree/0,
@@ -139,6 +146,7 @@
     exit_app/0,
     safe_area/0,
     haptic/1,
+    torch/1,
     clipboard_put/1,
     clipboard_get/0,
     share_text/1,
@@ -148,6 +156,9 @@
     files_pick/1,
     audio_start_recording/1,
     audio_stop_recording/0,
+    audio_start_input_metering/0,
+    audio_input_level/0,
+    audio_stop_input_metering/0,
     audio_play/2,
     audio_play_at/3,
     audio_stop_playback/0,
@@ -164,12 +175,14 @@
     device_set_dispatcher/1,
     device_battery_state/0,
     device_thermal_state/0,
+    device_network_state/0,
     device_low_power_mode/0,
     device_foreground/0,
     device_os_version/0,
     device_model/0,
     device_orientation/0,
     device_lock_orientation/1,
+    device_keep_awake/1,
     ui_tree/0,
     ui_view_tree/0,
     ui_debug/0,
@@ -259,6 +272,7 @@ clear_taps() -> erlang:nif_error(not_loaded).
 exit_app() -> erlang:nif_error(not_loaded).
 safe_area() -> erlang:nif_error(not_loaded).
 haptic(_Type) -> erlang:nif_error(not_loaded).
+torch(_State) -> erlang:nif_error(not_loaded).
 clipboard_put(_Text) -> erlang:nif_error(not_loaded).
 clipboard_get() -> erlang:nif_error(not_loaded).
 share_text(_Text) -> erlang:nif_error(not_loaded).
@@ -268,6 +282,9 @@ request_permission(_Cap) -> erlang:nif_error(not_loaded).
 files_pick(_MimeTypes) -> erlang:nif_error(not_loaded).
 audio_start_recording(_OptsJson) -> erlang:nif_error(not_loaded).
 audio_stop_recording() -> erlang:nif_error(not_loaded).
+audio_start_input_metering() -> erlang:nif_error(not_loaded).
+audio_input_level() -> erlang:nif_error(not_loaded).
+audio_stop_input_metering() -> erlang:nif_error(not_loaded).
 audio_play(_Path, _OptsJson) -> erlang:nif_error(not_loaded).
 audio_play_at(_Path, _OptsJson, _AtWallMs) -> erlang:nif_error(not_loaded).
 audio_stop_playback() -> erlang:nif_error(not_loaded).
@@ -284,12 +301,14 @@ battery_level() -> erlang:nif_error(not_loaded).
 device_set_dispatcher(_Pid) -> erlang:nif_error(not_loaded).
 device_battery_state() -> erlang:nif_error(not_loaded).
 device_thermal_state() -> erlang:nif_error(not_loaded).
+device_network_state() -> erlang:nif_error(not_loaded).
 device_low_power_mode() -> erlang:nif_error(not_loaded).
 device_foreground() -> erlang:nif_error(not_loaded).
 device_os_version() -> erlang:nif_error(not_loaded).
 device_model() -> erlang:nif_error(not_loaded).
 device_orientation() -> erlang:nif_error(not_loaded).
 device_lock_orientation(_Orientation) -> erlang:nif_error(not_loaded).
+device_keep_awake(_On) -> erlang:nif_error(not_loaded).
 ui_tree() -> erlang:nif_error(not_loaded).
 ui_view_tree() -> erlang:nif_error(not_loaded).
 ui_debug() -> erlang:nif_error(not_loaded).

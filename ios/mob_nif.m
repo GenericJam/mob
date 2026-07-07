@@ -16,6 +16,7 @@
 #include <netdb.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
+#include <stdatomic.h>
 #include <sys/socket.h>
 // dlopen/dlsym are marked unavailable in iOS SDK headers but exist at runtime
 // in the iOS Simulator (macOS). Declare prototypes directly to bypass the header
@@ -33,6 +34,7 @@ extern char *dlerror(void) __attribute__((weak));
 #import <AVFoundation/AVFoundation.h>
 #import <Accelerate/Accelerate.h>
 #import <CoreMotion/CoreMotion.h>
+#import <Network/Network.h>
 #import <Photos/Photos.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <UserNotifications/UserNotifications.h>
@@ -1351,6 +1353,101 @@ static const char *battery_state_atom(UIDeviceBatteryState s) {
     }
 }
 
+// ── Network connectivity (NWPathMonitor) ─────────────────────────────────────
+//
+// A single process-lifetime NWPathMonitor tracks the active path. Its update
+// handler runs on a private serial queue: it caches the latest snapshot (for
+// the synchronous device_network_state/0 query) and pushes a
+// connectivity_changed event to Mob.Device subscribers. Transport codes:
+// 0 none, 1 wifi, 2 cellular, 3 wired, 4 other.
+static nw_path_monitor_t g_path_monitor = NULL;
+static dispatch_once_t g_path_monitor_once = 0;
+static _Atomic(bool) g_net_online = false;
+static _Atomic(int) g_net_transport = 0;
+static _Atomic(bool) g_net_expensive = false;
+static _Atomic(bool) g_net_constrained = false;
+
+static const char *net_transport_atom(int t) {
+    switch (t) {
+    case 1:
+        return "wifi";
+    case 2:
+        return "cellular";
+    case 3:
+        return "wired";
+    case 4:
+        return "other";
+    default:
+        return "none";
+    }
+}
+
+static int net_classify_path(nw_path_t path) {
+    if (nw_path_get_status(path) != nw_path_status_satisfied)
+        return 0;
+    if (nw_path_uses_interface_type(path, nw_interface_type_wifi))
+        return 1;
+    if (nw_path_uses_interface_type(path, nw_interface_type_cellular))
+        return 2;
+    if (nw_path_uses_interface_type(path, nw_interface_type_wired))
+        return 3;
+    return 4;
+}
+
+// Builds %{online, transport, expensive, validated, constrained}. `validated`
+// is always :unavailable on iOS — NWPath reports a usable path but has no
+// internet-reachability probe (Android's NET_CAPABILITY_VALIDATED). `constrained`
+// is iOS Low Data Mode.
+static ERL_NIF_TERM mob_make_network_map(ErlNifEnv *e, bool online, int transport, bool expensive,
+                                         bool constrained) {
+    ERL_NIF_TERM keys[5] = {enif_make_atom(e, "online"), enif_make_atom(e, "transport"),
+                            enif_make_atom(e, "expensive"), enif_make_atom(e, "validated"),
+                            enif_make_atom(e, "constrained")};
+    ERL_NIF_TERM vals[5] = {enif_make_atom(e, online ? "true" : "false"),
+                            enif_make_atom(e, net_transport_atom(transport)),
+                            enif_make_atom(e, expensive ? "true" : "false"),
+                            enif_make_atom(e, "unavailable"),
+                            enif_make_atom(e, constrained ? "true" : "false")};
+    ERL_NIF_TERM map;
+    if (!enif_make_map_from_arrays(e, keys, vals, 5, &map))
+        return enif_make_atom(e, "nil");
+    return map;
+}
+
+// Starts the shared path monitor exactly once. Safe to call from either the
+// dispatcher handshake or a cold query.
+static void ensure_path_monitor_once(void) {
+    dispatch_once(&g_path_monitor_once, ^{
+      g_path_monitor = nw_path_monitor_create();
+      dispatch_queue_t nq = dispatch_queue_create("com.mob.netmonitor", DISPATCH_QUEUE_SERIAL);
+      nw_path_monitor_set_queue(g_path_monitor, nq);
+      nw_path_monitor_set_update_handler(g_path_monitor, ^(nw_path_t path) {
+        bool online = nw_path_get_status(path) == nw_path_status_satisfied;
+        int transport = net_classify_path(path);
+        bool expensive = nw_path_is_expensive(path);
+        bool constrained = nw_path_is_constrained(path);
+        // NWPathMonitor fires on dns/other changes too; only emit an event when
+        // the snapshot we expose actually changed. The cache is still refreshed
+        // either way so the synchronous query stays current.
+        bool changed = online != atomic_load(&g_net_online) ||
+                       transport != atomic_load(&g_net_transport) ||
+                       expensive != atomic_load(&g_net_expensive) ||
+                       constrained != atomic_load(&g_net_constrained);
+        atomic_store(&g_net_online, online);
+        atomic_store(&g_net_transport, transport);
+        atomic_store(&g_net_expensive, expensive);
+        atomic_store(&g_net_constrained, constrained);
+        if (!changed)
+            return;
+        ErlNifEnv *e = enif_alloc_env();
+        ERL_NIF_TERM payload = mob_make_network_map(e, online, transport, expensive, constrained);
+        mob_device_send_atom_payload("mob_device", "connectivity_changed", payload, e);
+        enif_free_env(e);
+      });
+      nw_path_monitor_start(g_path_monitor);
+    });
+}
+
 // ── Orientation ────────────────────────────────────────────────────────────
 // The locked mask the app shell's root view controller must report from
 // -supportedInterfaceOrientations. UIInterfaceOrientationMaskAll means "no
@@ -1572,6 +1669,12 @@ static void register_device_observers_once(void) {
                     enif_free_env(e);
                   }];
 
+      // ── Network connectivity ──
+      // NWPathMonitor delivers an initial snapshot shortly after start and on
+      // every subsequent change; the handler caches it and emits
+      // connectivity_changed.
+      ensure_path_monitor_once();
+
       NSLog(@"[mob] Mob.Device observers registered");
     });
 }
@@ -1622,6 +1725,15 @@ static ERL_NIF_TERM nif_device_battery_state(ErlNifEnv *env, int argc, const ERL
 static ERL_NIF_TERM nif_device_thermal_state(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     NSProcessInfoThermalState s = [[NSProcessInfo processInfo] thermalState];
     return enif_make_atom(env, thermal_state_atom(s));
+}
+
+static ERL_NIF_TERM nif_device_network_state(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    // Start monitoring on the first cold query too, so the value populates even
+    // if the dispatcher handshake hasn't run. The first snapshot arrives async,
+    // so a query in the first few ms after boot may read the offline default.
+    ensure_path_monitor_once();
+    return mob_make_network_map(env, atomic_load(&g_net_online), atomic_load(&g_net_transport),
+                                atomic_load(&g_net_expensive), atomic_load(&g_net_constrained));
 }
 
 static ERL_NIF_TERM nif_device_low_power_mode(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
@@ -1693,6 +1805,21 @@ static ERL_NIF_TERM nif_device_lock_orientation(ErlNifEnv *env, int argc,
                                           }];
           }
       }
+    });
+    return enif_make_atom(env, "ok");
+}
+
+// ── NIF: device_keep_awake/1 ──────────────────────────────────────────────────
+// argv[0] is the boolean atom `true`/`false`. Disables the idle timer (auto-dim
+// / auto-lock) while true. Must be set on the main thread.
+static ERL_NIF_TERM nif_device_keep_awake(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    char name[8] = {0};
+    enif_get_atom(env, argv[0], name, sizeof(name), ERL_NIF_LATIN1);
+    BOOL on = (strcmp(name, "true") == 0);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [UIApplication sharedApplication].idleTimerDisabled = on;
     });
     return enif_make_atom(env, "ok");
 }
@@ -1923,6 +2050,34 @@ static ERL_NIF_TERM nif_haptic(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     return enif_make_atom(env, "ok");
 }
 
+// ── NIF: torch/1 ──────────────────────────────────────────────────────────────
+// Toggle the rear-camera torch. argv[0] is the atom `on` or `off`. No capture
+// session and no camera permission needed. No-op (not an error) on a device
+// without a torch — the simulator and most tablets have none.
+static ERL_NIF_TERM nif_torch(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    char state[8] = {0};
+    enif_get_atom(env, argv[0], state, sizeof(state), ERL_NIF_LATIN1);
+    BOOL on = (strcmp(state, "on") == 0);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      AVCaptureDevice *device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+      if (!device || !device.hasTorch || !device.isTorchAvailable)
+          return;
+      NSError *err = nil;
+      if (![device lockForConfiguration:&err])
+          return;
+      if (on) {
+          // setTorchModeOnWithLevel: validates the level and is preferred over
+          // the torchMode setter; max level = full brightness.
+          [device setTorchModeOnWithLevel:AVCaptureMaxAvailableTorchLevel error:NULL];
+      } else {
+          device.torchMode = AVCaptureTorchModeOff;
+      }
+      [device unlockForConfiguration];
+    });
+    return enif_make_atom(env, "ok");
+}
+
 // ── NIF: clipboard_put/1 ──────────────────────────────────────────────────────
 // Writes a UTF-8 binary to the system clipboard. Fire-and-forget.
 
@@ -2095,6 +2250,10 @@ static ERL_NIF_TERM nif_audio_output_status(ErlNifEnv *env, int argc, const ERL_
 // iOS cannot tap the global output mix (sandbox), so "mix" is unsupported;
 // "mob" meters Mob.Audio's own AVAudioPlayer (metering is enabled when the
 // player is created).
+//
+// Forward-declare the play/1 player: it lives with the audio-playback globals
+// defined further below, but output_level/1 (here) meters that same player.
+static AVAudioPlayer *g_audio_player;
 static ERL_NIF_TERM nif_audio_output_level(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifBinary bin;
     if (!enif_inspect_binary(env, argv[0], &bin) &&
@@ -2668,6 +2827,63 @@ static ERL_NIF_TERM nif_audio_stop_recording(ErlNifEnv *env, int argc, const ERL
     return enif_make_atom(env, "ok");
 }
 
+// ── Audio input metering (mic level probe, no recording kept) ──────────────
+// A metering-only AVAudioRecorder: records to a throwaway temp file with
+// metering enabled and reads averagePower/peakPower (dBFS). Shares the mic
+// session with recording — callers must not run both at once. (A future
+// AVAudioEngine input tap would avoid the temp file; see MOB-35.)
+static AVAudioRecorder *g_meter_recorder = nil;
+static NSString *g_meter_path = nil;
+
+static ERL_NIF_TERM nif_audio_start_input_metering(ErlNifEnv *env, int argc,
+                                                   const ERL_NIF_TERM argv[]) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryRecord error:nil];
+      [[AVAudioSession sharedInstance] setActive:YES error:nil];
+      NSString *tmp = [NSTemporaryDirectory()
+          stringByAppendingPathComponent:[NSString stringWithFormat:@"mob_meter_%@.m4a",
+                                                                    [NSUUID UUID].UUIDString]];
+      g_meter_path = tmp;
+      NSURL *url = [NSURL fileURLWithPath:tmp];
+      NSDictionary *settings = @{
+          AVFormatIDKey : @(kAudioFormatMPEG4AAC),
+          AVSampleRateKey : @44100,
+          AVNumberOfChannelsKey : @1,
+          AVEncoderAudioQualityKey : @(AVAudioQualityMin)
+      };
+      g_meter_recorder = [[AVAudioRecorder alloc] initWithURL:url settings:settings error:nil];
+      g_meter_recorder.meteringEnabled = YES;
+      [g_meter_recorder record];
+    });
+    return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM nif_audio_input_level(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    AVAudioRecorder *rec = g_meter_recorder;
+    if (!rec || !rec.isRecording)
+        return enif_make_atom(env, "not_metering");
+    [rec updateMeters];
+    double avg = [rec averagePowerForChannel:0];
+    double peak = [rec peakPowerForChannel:0];
+    return enif_make_tuple2(env, enif_make_double(env, avg), enif_make_double(env, peak));
+}
+
+static ERL_NIF_TERM nif_audio_stop_input_metering(ErlNifEnv *env, int argc,
+                                                  const ERL_NIF_TERM argv[]) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (g_meter_recorder) {
+          [g_meter_recorder stop];
+          g_meter_recorder = nil;
+      }
+      [[AVAudioSession sharedInstance] setActive:NO error:nil];
+      if (g_meter_path) {
+          [[NSFileManager defaultManager] removeItemAtPath:g_meter_path error:nil];
+          g_meter_path = nil;
+      }
+    });
+    return enif_make_atom(env, "ok");
+}
+
 // ── Audio playback ────────────────────────────────────────────────────────
 
 @interface MobAudioPlayerDelegate : NSObject <AVAudioPlayerDelegate>
@@ -3027,6 +3243,20 @@ static ERL_NIF_TERM nif_audio_play_at(ErlNifEnv *env, int argc, const ERL_NIF_TE
 static CMMotionManager *g_motion_manager = nil;
 static ErlNifPid g_motion_pid;
 
+// True if `name` appears in the Erlang list of sensor-name binaries (argv[0]).
+static bool motion_sensor_requested(ErlNifEnv *env, ERL_NIF_TERM list, const char *name) {
+    ERL_NIF_TERM head, tail = list;
+    ErlNifBinary bin;
+    size_t namelen = strlen(name);
+    while (enif_get_list_cell(env, tail, &head, &tail)) {
+        if (enif_inspect_binary(env, head, &bin) && bin.size == namelen &&
+            memcmp(bin.data, name, namelen) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static ERL_NIF_TERM nif_motion_start(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifPid pid;
     enif_self(env, &pid);
@@ -3034,44 +3264,78 @@ static ERL_NIF_TERM nif_motion_start(ErlNifEnv *env, int argc, const ERL_NIF_TER
     int interval_ms = 100;
     // argv[0] is a list of sensor name binaries; argv[1] is interval_ms int
     enif_get_int(env, argv[1], &interval_ms);
+    bool want_mag = motion_sensor_requested(env, argv[0], "magnetometer");
 
     dispatch_async(dispatch_get_main_queue(), ^{
       if (!g_motion_manager)
           g_motion_manager = [[CMMotionManager alloc] init];
       NSTimeInterval interval = interval_ms / 1000.0;
       g_motion_manager.deviceMotionUpdateInterval = interval;
-      [g_motion_manager
-          startDeviceMotionUpdatesToQueue:[NSOperationQueue new]
-                              withHandler:^(CMDeviceMotion *motion, NSError *err) {
-                                if (!motion)
-                                    return;
-                                ErlNifPid p = g_motion_pid;
-                                double ax = motion.userAcceleration.x + motion.gravity.x;
-                                double ay = motion.userAcceleration.y + motion.gravity.y;
-                                double az = motion.userAcceleration.z + motion.gravity.z;
-                                double gx = motion.rotationRate.x;
-                                double gy = motion.rotationRate.y;
-                                double gz = motion.rotationRate.z;
-                                ErlNifEnv *e = enif_alloc_env();
-                                ERL_NIF_TERM accel = enif_make_tuple3(e, enif_make_double(e, ax),
-                                                                      enif_make_double(e, ay),
-                                                                      enif_make_double(e, az));
-                                ERL_NIF_TERM gyro = enif_make_tuple3(e, enif_make_double(e, gx),
-                                                                     enif_make_double(e, gy),
-                                                                     enif_make_double(e, gz));
-                                long long ts =
-                                    (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
-                                ERL_NIF_TERM keys[3] = {enif_make_atom(e, "accel"),
-                                                        enif_make_atom(e, "gyro"),
-                                                        enif_make_atom(e, "timestamp")};
-                                ERL_NIF_TERM vals[3] = {accel, gyro, enif_make_int64(e, ts)};
-                                ERL_NIF_TERM map;
-                                enif_make_map_from_arrays(e, keys, vals, 3, &map);
-                                ERL_NIF_TERM msg =
-                                    enif_make_tuple2(e, enif_make_atom(e, "motion"), map);
-                                enif_send(NULL, &p, e, msg);
-                                enif_free_env(e);
-                              }];
+
+      // The magnetic-north reference frame fuses accel+gyro+magnetometer and yields
+      // a calibrated field + a heading on the same stream — but only if the device
+      // has a magnetometer. Fall back to the plain accel/gyro stream otherwise.
+      BOOL magOK = want_mag && ([CMMotionManager availableAttitudeReferenceFrames] &
+                                CMAttitudeReferenceFrameXMagneticNorthZVertical);
+
+      CMDeviceMotionHandler handler = ^(CMDeviceMotion *motion, NSError *err) {
+        if (!motion)
+            return;
+        ErlNifPid p = g_motion_pid;
+        double ax = motion.userAcceleration.x + motion.gravity.x;
+        double ay = motion.userAcceleration.y + motion.gravity.y;
+        double az = motion.userAcceleration.z + motion.gravity.z;
+        double gx = motion.rotationRate.x;
+        double gy = motion.rotationRate.y;
+        double gz = motion.rotationRate.z;
+        ErlNifEnv *e = enif_alloc_env();
+        ERL_NIF_TERM accel = enif_make_tuple3(e, enif_make_double(e, ax), enif_make_double(e, ay),
+                                              enif_make_double(e, az));
+        ERL_NIF_TERM gyro = enif_make_tuple3(e, enif_make_double(e, gx), enif_make_double(e, gy),
+                                             enif_make_double(e, gz));
+        long long ts = (long long)([[NSDate date] timeIntervalSince1970] * 1000.0);
+        ERL_NIF_TERM map;
+        if (want_mag) {
+            // When :magnetometer was requested, always emit the 5-key map so the
+            // mag/heading keys are a stable contract — nil when there's no reading
+            // (device has no magnetometer, i.e. !magOK, or heading not yet fused).
+            ERL_NIF_TERM mag, heading;
+            if (magOK) {
+                // CoreMotion reports the field in µT; heading is degrees [0,360), or -1.
+                CMMagneticField f = motion.magneticField.field;
+                double hd = motion.heading;
+                mag = enif_make_tuple3(e, enif_make_double(e, f.x), enif_make_double(e, f.y),
+                                       enif_make_double(e, f.z));
+                heading = (hd >= 0.0) ? enif_make_double(e, hd) : enif_make_atom(e, "nil");
+            } else {
+                mag = enif_make_atom(e, "nil");
+                heading = enif_make_atom(e, "nil");
+            }
+            ERL_NIF_TERM keys[5] = {enif_make_atom(e, "accel"), enif_make_atom(e, "gyro"),
+                                    enif_make_atom(e, "mag"), enif_make_atom(e, "heading"),
+                                    enif_make_atom(e, "timestamp")};
+            ERL_NIF_TERM vals[5] = {accel, gyro, mag, heading, enif_make_int64(e, ts)};
+            enif_make_map_from_arrays(e, keys, vals, 5, &map);
+        } else {
+            ERL_NIF_TERM keys[3] = {enif_make_atom(e, "accel"), enif_make_atom(e, "gyro"),
+                                    enif_make_atom(e, "timestamp")};
+            ERL_NIF_TERM vals[3] = {accel, gyro, enif_make_int64(e, ts)};
+            enif_make_map_from_arrays(e, keys, vals, 3, &map);
+        }
+        ERL_NIF_TERM msg = enif_make_tuple2(e, enif_make_atom(e, "motion"), map);
+        enif_send(NULL, &p, e, msg);
+        enif_free_env(e);
+      };
+
+      if (magOK) {
+          [g_motion_manager startDeviceMotionUpdatesUsingReferenceFrame:
+                                CMAttitudeReferenceFrameXMagneticNorthZVertical
+                                                                toQueue:[NSOperationQueue new]
+                                                            withHandler:handler];
+      } else {
+          [g_motion_manager startDeviceMotionUpdatesToQueue:[NSOperationQueue new]
+                                                withHandler:handler];
+      }
     });
     return enif_make_atom(env, "ok");
 }
@@ -6015,12 +6279,14 @@ static ErlNifFunc nif_funcs[] = {
     {"device_set_dispatcher", 1, nif_device_set_dispatcher, 0},
     {"device_battery_state", 0, nif_device_battery_state, 0},
     {"device_thermal_state", 0, nif_device_thermal_state, 0},
+    {"device_network_state", 0, nif_device_network_state, 0},
     {"device_low_power_mode", 0, nif_device_low_power_mode, 0},
     {"device_foreground", 0, nif_device_foreground, 0},
     {"device_os_version", 0, nif_device_os_version, 0},
     {"device_model", 0, nif_device_model, 0},
     {"device_orientation", 0, nif_device_orientation, 0},
     {"device_lock_orientation", 1, nif_device_lock_orientation, 0},
+    {"device_keep_awake", 1, nif_device_keep_awake, 0},
     {"platform", 0, nif_platform, 0},
     {"color_scheme", 0, nif_color_scheme, 0},
     {"log", 1, nif_log, 0},
@@ -6033,6 +6299,7 @@ static ErlNifFunc nif_funcs[] = {
     {"exit_app", 0, nif_exit_app, 0},
     {"safe_area", 0, nif_safe_area, 0},
     {"haptic", 1, nif_haptic, 0},
+    {"torch", 1, nif_torch, 0},
     {"clipboard_put", 1, nif_clipboard_put, 0},
     {"clipboard_get", 0, nif_clipboard_get, 0},
     {"share_text", 1, nif_share_text, 0},
@@ -6042,6 +6309,9 @@ static ErlNifFunc nif_funcs[] = {
     {"files_pick", 1, nif_files_pick, 0},
     {"audio_start_recording", 1, nif_audio_start_recording, 0},
     {"audio_stop_recording", 0, nif_audio_stop_recording, 0},
+    {"audio_start_input_metering", 0, nif_audio_start_input_metering, 0},
+    {"audio_input_level", 0, nif_audio_input_level, 0},
+    {"audio_stop_input_metering", 0, nif_audio_stop_input_metering, 0},
     {"audio_play", 2, nif_audio_play, 0},
     {"audio_play_at", 3, nif_audio_play_at, 0},
     {"audio_stop_playback", 0, nif_audio_stop_playback, 0},

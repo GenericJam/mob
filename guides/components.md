@@ -45,7 +45,7 @@ The sigil borrows three authoring idioms from Phoenix HEEx, so screens read the 
 
 ### `@assigns` shorthand
 
-Inside any `{...}` expression, `@foo` rewrites to `assigns.foo` (this happens at compile time). It works in attribute values, `{expr}` children, and the `:if`/`:for` directives below. Nested access like `@user.name` works too.
+Inside a `{...}` expression, `@foo` rewrites to `assigns.foo` at compile time. It works in attribute values, `{expr}` children, and the `:if`/`:for` directives below. Nested access like `@user.name` works too.
 
 ```elixir
 def render(assigns) do
@@ -59,6 +59,18 @@ end
 ```
 
 `@title` is exactly `assigns.title` — the two forms are interchangeable, so reach for whichever reads better.
+
+> **`@foo` only works where `assigns` is in scope** — that is, a screen's or component's `render(assigns)`. Reusable helper functions (the [function composites](#pure-elixir-composite-components) below) take **positional arguments**, and there is no `assigns` inside them, so interpolate the argument directly:
+>
+> ```elixir
+> # Screen render — assigns is in scope:
+> def render(assigns), do: ~MOB(<Text text={@title} />)
+>
+> # Helper — NO @; use the argument:
+> def label(title), do: ~MOB(<Text text={title} />)   # not @title
+> ```
+>
+> Reaching for `@foo` inside a helper is the most common mistake here. It raises a `CompileError` naming the fix (`{title}` instead of `@title`) rather than a cryptic "undefined variable assigns". If your `render` parameter is named something other than `assigns` (e.g. `socket`), `@foo` won't find it either — name it `assigns`.
 
 ### `:if` — conditional rendering
 
@@ -129,6 +141,7 @@ Props accept:
 - **Strings** — used as-is
 - **Booleans** — used as-is
 - **Color atoms** (`:primary`, `:blue_500`, etc.) — resolved via the active theme and the base palette to ARGB integers. See [Theming](theming.md).
+- **Raw colors** — a 32-bit **`0xAARRGGBB` integer** (alpha first, e.g. `0xFF2196F3`), **not** a CSS `"#RRGGBB"` string and **not** alpha-last. Include the `0xFF` alpha byte or the color renders transparent. See [Theming → Raw colors](theming.md#raw-colors-are-0xaarrggbb-integers-not-css-hex-strings).
 - **Spacing tokens** (`:space_xs`, `:space_sm`, `:space_md`, `:space_lg`, `:space_xl`) — scaled by `theme.space_scale` and resolved to integers.
 - **Radius tokens** (`:radius_sm`, `:radius_md`, `:radius_lg`, `:radius_pill`) — resolved to integers from the active theme.
 - **Text size tokens** (`:xs`, `:sm`, `:base`, `:lg`, `:xl`, `:2xl`, `:3xl`, `:4xl`, `:5xl`, `:6xl`) — scaled by `theme.type_scale` and resolved to floats.
@@ -442,61 +455,230 @@ def terminate(_reason, socket) do
 end
 ```
 
-## Pure-Elixir composite components
+<a id="pure-elixir-composite-components"></a>
+
+## Defining your own components
 
 You can build reusable components out of the built-in widgets with no native
-code, in two forms.
+code, in two forms: **function composites** (a plain function you call) and
+**tag composites** (a custom `<Tag>` you register). Both are stateless, pure
+Elixir, and hot-pushable. Events raised from inside either kind route to the
+**screen's** `handle_info/2`, exactly like a built-in widget does.
 
-**Function composites** — a plain function returning a render tree, invoked
-through `{...}` interpolation in the sigil:
+> **Reached for `use Mob.Component`?** Easy mix-up: it's a *different* feature.
+> `Mob.Component` is the behaviour for **native view components**, a stateful BEAM
+> process paired with a platform-native view (declared via `Mob.UI.native_view/2`),
+> whose `render/1` returns a **props map for a native factory** rather than a `~MOB`
+> tree. That's an advanced, native-code path (see the [Plugins guide](plugins.md)). If
+> you just want a reusable widget or custom `<Tag>` built out of the **built-in**
+> components, with no native code, that's the `Mob.Composite` path below. The names are
+> close; for pure-Elixir tags the one you want is **Composite**, and its module returns
+> a `~MOB` tree from `expand/3`.
+
+### Function composites
+
+A function composite is a function that returns a render tree. You call it
+through `{...}` interpolation inside the sigil. This is the lightest way to
+factor out a chunk of UI you repeat.
+
+Here is a complete screen that defines a `stat_card/3` composite and uses it.
+The tap target is built in `render/1` and passed in as an argument, so the
+button inside the composite delivers to this screen's `handle_info/2`:
 
 ```elixir
-def card(title, children) do
-  ~MOB"""
-  <Column background={:surface_raised} corner_radius={12} padding={:space_md}>
-    <Text text={title} text_size={:lg} text_color={:on_surface} />
-    {children}
-  </Column>
-  """
-end
+defmodule MyApp.DashboardScreen do
+  use Mob.Screen
 
-def render(assigns) do
-  ~MOB"""
-  <Column>
-    {card("Settings", settings_rows(assigns))}
-  </Column>
-  """
+  @impl true
+  def mount(_params, _session, socket) do
+    {:ok, Mob.Socket.assign(socket, :taps, 0)}
+  end
+
+  # A function composite: returns a render tree, so it drops into the screen
+  # via {...}. `on_tap` is a pre-built {pid, tag} tuple passed in by the caller.
+  defp stat_card(label, value, on_tap) do
+    ~MOB"""
+    <Box background={:surface_raised} corner_radius={:radius_md} padding={:space_md}>
+      <Column gap={4}>
+        <Text text={label} text_size={:sm} text_color={:muted} />
+        <Text text={to_string(value)} text_size={:2xl} text_color={:on_surface} />
+        <Button text="Tap me" on_tap={on_tap} />
+      </Column>
+    </Box>
+    """
+  end
+
+  @impl true
+  def render(assigns) do
+    bump = {self(), :bump}
+
+    ~MOB"""
+    <Column padding={:space_lg} gap={12}>
+      <Text text="Dashboard" text_size={:xl} text_color={:on_surface} />
+      {stat_card("Taps", @taps, bump)}
+    </Column>
+    """
+  end
+
+  @impl true
+  def handle_info({:tap, :bump}, socket) do
+    {:noreply, Mob.Socket.update(socket, :taps, &(&1 + 1))}
+  end
 end
 ```
 
-**Tag composites** — the same idea with tag syntax (`<DemoCard title="...">`).
-Register an *expander* for the tag atom, either through a plugin manifest's
-`ui_components` `expand:` entry:
+Two things to notice:
+
+- `@taps` inside `{stat_card(...)}` is `assigns.taps` (the `@` shorthand works
+  in any `{...}` expression, including a composite call).
+- The composite is a plain function call in `render/1`, which runs in the screen
+  process, so events from the `<Button>` inside it reach this screen. Building
+  the `{self(), :bump}` tuple in `render/1` and passing it in keeps the
+  composite reusable and follows the pre-compute-the-tuple convention.
+
+### Tag composites
+
+A tag composite gives you custom tag syntax, like `<Card title="...">`. You
+register an *expander* for the tag, then write the tag in any screen.
+
+The sigil turns a PascalCase tag into a snake_case atom (`<Card>` becomes
+`:card`, `<LabeledButton>` becomes `:labeled_button`), and the expander is
+looked up by that atom. An expander is a function `expand(props, children, ctx)`
+that returns a render tree (`~MOB` output).
+
+**Step 1 — write the expanders.** `Card` wraps its children in a titled
+surface; `LabeledButton` raises a tap event:
+
+```elixir
+defmodule MyApp.UI.Card do
+  @moduledoc "`<Card title=\"...\">children</Card>` — a titled raised surface."
+  import Mob.Sigil
+
+  @spec expand(map(), [map()], map()) :: map()
+  def expand(props, children, _ctx) do
+    title = Map.get(props, :title, "")
+
+    ~MOB"""
+    <Column background={:surface_raised} corner_radius={:radius_md} padding={:space_md}>
+      <Text text={title} text_size={:lg} text_color={:on_surface} />
+      <Spacer size={8} />
+      {children}
+    </Column>
+    """
+  end
+end
+
+defmodule MyApp.UI.LabeledButton do
+  @moduledoc ~S(`<LabeledButton label="..." on_press="save" />` — a button with an auto-injected tap target.)
+  import Mob.Sigil
+
+  @spec expand(map(), [map()], map()) :: map()
+  def expand(props, _children, _ctx) do
+    label = Map.get(props, :label, "")
+    # `on_press` arrives already shaped as {screen_pid, :save} (see "Event
+    # ergonomics" below), so we pass it straight to the button's on_tap.
+    on_press = Map.fetch!(props, :on_press)
+
+    ~MOB"""
+    <Button text={label} on_tap={on_press} />
+    """
+  end
+end
+```
+
+`~MOB` is auto-imported inside `use Mob.Screen`, but an expander is a plain
+module, so it needs `import Mob.Sigil`.
+
+**Step 2 — register the tags.** Through a plugin manifest's `ui_components`:
 
 ```elixir
 ui_components: [
-  %{tag: "DemoCard", atom: :demo_card, expand: {MobDemoKit.Card, :expand}}
+  %{tag: "Card",          atom: :card,           expand: {MyApp.UI.Card, :expand}},
+  %{tag: "LabeledButton", atom: :labeled_button, expand: {MyApp.UI.LabeledButton, :expand}}
 ]
 ```
 
-…or at runtime (plain Hex UI kits with no manifest — call from the host's
+…or at runtime, for a plain Hex UI kit with no manifest (call from the host's
 `on_start/0`) via `Mob.Composite.register/2`:
 
 ```elixir
-Mob.Composite.register(:demo_card, {MobDemoKit.Card, :expand})
+Mob.Composite.register(:card, {MyApp.UI.Card, :expand})
+Mob.Composite.register(:labeled_button, {MyApp.UI.LabeledButton, :expand})
 ```
 
-The expander contract is `expand(props, children, ctx)` — it returns a node
-map or list of nodes (the `~MOB` sigil output), which is re-expanded to a
-fixpoint so composites can build on composites. Event ergonomics: any `on_*`
-prop written as a bare string or atom (`on_select="combo_select"`) arrives in
-`props` already shaped as `{screen_pid, tag}` — no `self()` threading in
-either the kit or the screen that uses it.
+**Expect a compile-time warning on a registered tag; it's harmless.**
+Registration happens at *runtime* (from `on_start/0` or a plugin manifest), so
+the `~MOB` macro can't see it while compiling a screen. Every custom tag
+therefore prints a warning the first time it's compiled:
 
-Composites are stateless and pure Elixir, so they're hot-pushable. See
-`Mob.Composite` and the "Pure-Elixir composite components" section of
-[`MOB_PLUGINS.md`](../MOB_PLUGINS.md) for the full design; the `mob_demo_kit`
-plugin in `mob_plugin_demo` (`<DemoCard>`/`<DemoCombobox>`) is the worked,
+```
+~MOB: <Card> is not in the Mob tag whitelist — pass-through as :card
+```
+
+That is informational, not an error. The sigil compiles `<Card>` to the atom
+`:card` and defers resolution to whatever expander is registered under that atom
+at render time. As long as you registered one in Step 2, the tag renders; the
+warning is just the compiler telling you it recognized a non-built-in tag and
+passed it through. (A genuinely unregistered tag renders nothing, which is the
+real "it doesn't work" symptom to look for.)
+
+**Step 3 — use them in a screen.** Note there is no `self()` anywhere in this
+markup:
+
+```elixir
+defmodule MyApp.ProfileScreen do
+  use Mob.Screen
+
+  @impl true
+  def mount(_params, _session, socket) do
+    {:ok, Mob.Socket.assign(socket, :status, "not saved yet")}
+  end
+
+  @impl true
+  def render(assigns) do
+    ~MOB"""
+    <Column padding={:space_lg} gap={12}>
+      <Card title="Profile">
+        <Text text="Tap save to record it." text_color={:muted} />
+        <Spacer size={8} />
+        <LabeledButton label="Save" on_press="save" />
+      </Card>
+      <Card title="Status">
+        <Text text={@status} text_color={:primary} />
+      </Card>
+    </Column>
+    """
+  end
+
+  @impl true
+  def handle_info({:tap, :save}, socket) do
+    {:noreply, Mob.Socket.assign(socket, :status, "saved")}
+  end
+end
+```
+
+**The expander contract.** `expand(props, children, ctx)` returns a node map or
+a list of nodes, which is re-expanded to a fixpoint so composites can build on
+other composites. `ctx` carries the screen process as `ctx.screen`.
+
+**Event ergonomics (auto-injected targets).** Any `on_*` prop you write on a
+composite tag as a bare string or atom (`on_press="save"`) arrives in the
+expander's `props` already shaped as `{screen_pid, :save}`. That is why
+`ProfileScreen` never writes `self()`, and why the screen receives
+`{:tap, :save}` in `handle_info/2`.
+
+This auto-injection applies only to a composite tag's **own** props. A built-in
+widget you place directly (a `<TextField>` or `<Button>` in a screen's own
+markup, even one nested inside a composite's children) still needs an explicit
+`{self(), tag}` tuple, because its props are not run through an expander. That
+is why `DashboardScreen` above builds `bump = {self(), :bump}` for its plain
+`<Button>`, while `ProfileScreen` can write `<LabeledButton on_press="save">`
+unadorned: `LabeledButton` is a composite tag, so its `on_press` is shaped for
+you.
+
+For the full design see `Mob.Composite` and the "Pure-Elixir composite
+components" section of [`MOB_PLUGINS.md`](../MOB_PLUGINS.md). The `mob_demo_kit`
+plugin in `mob_plugin_demo` (`<DemoCard>` / `<DemoCombobox>`) is a worked,
 device-verified example.
 
 ## Using `Mob.Style` for reusable styles
@@ -547,7 +729,7 @@ end
 
 ### Sub-component event isolation (planned, not yet implemented)
 
-A future `Mob.Component` wrapper will allow a subtree of the render tree to have its own `handle_info/2`, routing events to that component process instead of the screen. Until then, use the `tag` field to distinguish events from different parts of the same screen:
+Per-subtree event isolation, where a render subtree owns its own `handle_info/2` so its events route to a dedicated process instead of the screen, is planned but not yet implemented. (Distinct from `Mob.Composite`, the tag-composite mechanism under "Defining your own components" above, which exists today for reusable widgets and custom tags; and from `Mob.Component`, the existing native-view behaviour.) Until then, use the `tag` field to distinguish events from different parts of the same screen:
 
 ```elixir
 top_save_tap    = {self(), :top_save}

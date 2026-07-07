@@ -100,6 +100,9 @@ void mob_deliver_atom2(jlong pid, const char *a1, const char *a2);
 void mob_deliver_atom3(jlong pid, const char *a1, const char *a2, const char *a3);
 void mob_deliver_motion(jlong pid, double ax, double ay, double az, double gx, double gy, double gz,
                         long long ts);
+void mob_deliver_motion_mag(jlong pid, double ax, double ay, double az, double gx, double gy,
+                            double gz, double mx, double my, double mz, double heading,
+                            long long ts);
 void mob_deliver_file_result(jlong pid, const char *event, const char *sub, const char *json_items);
 void mob_deliver_camera_frame(jlong pid, const unsigned char *bytes, size_t nbytes, int width,
                               int height, const char *format, jlong timestamp_ms, jlong dropped);
@@ -144,6 +147,14 @@ void mob_send_component_event(int handle, const char *event, const char *payload
 // nativeNotifyColorScheme when MainActivity sees a uiMode flip.
 // `scheme` must be "light" or "dark".
 void mob_send_color_scheme_changed(const char *scheme);
+
+// Deliver {:mob_device, :connectivity_changed,
+//          %{online, transport, expensive, validated, constrained}}
+// to the dispatcher pid registered via Mob.Device. Called from beam_jni.c's
+// nativeNotifyConnectivity when the ConnectivityManager.NetworkCallback fires.
+// `online`/`expensive`/`validated` are 0/1; `transport` is
+// "wifi" | "cellular" | "wired" | "other" | "none".
+void mob_send_connectivity_changed(int online, const char *transport, int expensive, int validated);
 
 // mob_beam.h additions for Mob.Bt
 //
