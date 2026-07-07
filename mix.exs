@@ -4,7 +4,7 @@ defmodule Mob.MixProject do
   def project do
     [
       app: :mob,
-      version: "0.7.17",
+      version: "0.7.18",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -197,6 +197,9 @@ defmodule Mob.MixProject do
 
   defp deps do
     [
+      {:ex_ast, "~> 0.12", only: [:dev, :test], runtime: false},
+      {:reach, "~> 2.7", only: [:dev, :test], runtime: false},
+      {:recon, "~> 2.5", only: [:dev, :test]},
       # HTML/HEEx template engine — same one Phoenix uses
       # {:phoenix_live_view, "~> 1.0", optional: true},  # add when HEEx rendering lands
       {:nimble_parsec, "~> 1.0"},
