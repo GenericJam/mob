@@ -256,6 +256,9 @@ pub const BridgeMethods = extern struct {
     files_pick: jni.JMethodID = null,
     audio_start_recording: jni.JMethodID = null,
     audio_stop_recording: jni.JMethodID = null,
+    audio_start_input_metering: jni.JMethodID = null,
+    audio_input_level: jni.JMethodID = null,
+    audio_stop_input_metering: jni.JMethodID = null,
     audio_play: jni.JMethodID = null,
     audio_play_at: jni.JMethodID = null,
     audio_stop_playback: jni.JMethodID = null,
@@ -2694,6 +2697,59 @@ export fn nif_audio_stop_recording(
     return erts.ok(env);
 }
 
+// Audio input metering (mic level probe) — MediaRecorder.getMaxAmplitude via the
+// Kotlin bridge. The level NIF converts amplitude (0..32767, or -1 when not
+// metering) to dBFS and returns {rms, peak} (rms == peak here) or :not_metering.
+export fn nif_audio_start_input_metering(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    if (Bridge.audio_start_input_metering == null) return erts.atom(env, "unsupported_on_platform");
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.audio_start_input_metering);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+export fn nif_audio_input_level(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    if (Bridge.audio_input_level == null) return erts.atom(env, "unsupported_on_platform");
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const amp = jenv.*.CallStaticIntMethod.?(jenv, Bridge.cls, Bridge.audio_input_level);
+    detachIfAttached(attached);
+    if (amp < 0) return erts.atom(env, "not_metering");
+    const db: f64 = if (amp == 0)
+        -160.0
+    else
+        20.0 * std.math.log10(@as(f64, @floatFromInt(amp)) / 32767.0);
+    return erts.makeTuple(env, .{ erts.enif_make_double(env, db), erts.enif_make_double(env, db) });
+}
+
+export fn nif_audio_stop_input_metering(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    if (Bridge.audio_stop_input_metering == null) return erts.atom(env, "unsupported_on_platform");
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.audio_stop_input_metering);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
 export fn nif_audio_play(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -3632,6 +3688,13 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     if (!cacheRequired(jenv, "files_pick", "(JLjava/lang/String;)V", &Bridge.files_pick)) return -1;
     if (!cacheRequired(jenv, "audio_start_recording", "(JLjava/lang/String;)V", &Bridge.audio_start_recording)) return -1;
     if (!cacheRequired(jenv, "audio_stop_recording", "()V", &Bridge.audio_stop_recording)) return -1;
+    // Optional: input-level metering ships in a separate mob_new bridge
+    // template (mob_new#31). Cache-optional so core can merge independently
+    // of the template and a stale/drifted MobBridge degrades to
+    // :unsupported_on_platform at call time instead of crashing nif_load.
+    cacheOptional(jenv, "audio_start_input_metering", "()V", &Bridge.audio_start_input_metering);
+    cacheOptional(jenv, "audio_input_level", "()I", &Bridge.audio_input_level);
+    cacheOptional(jenv, "audio_stop_input_metering", "()V", &Bridge.audio_stop_input_metering);
     if (!cacheRequired(jenv, "audio_play", "(JLjava/lang/String;Ljava/lang/String;)V", &Bridge.audio_play)) return -1;
     if (!cacheRequired(jenv, "audio_play_at", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", &Bridge.audio_play_at)) return -1;
     if (!cacheRequired(jenv, "audio_stop_playback", "()V", &Bridge.audio_stop_playback)) return -1;
@@ -3757,6 +3820,9 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "files_pick", .arity = 1, .fptr = nif_files_pick, .flags = 0 },
     .{ .name = "audio_start_recording", .arity = 1, .fptr = nif_audio_start_recording, .flags = 0 },
     .{ .name = "audio_stop_recording", .arity = 0, .fptr = nif_audio_stop_recording, .flags = 0 },
+    .{ .name = "audio_start_input_metering", .arity = 0, .fptr = nif_audio_start_input_metering, .flags = 0 },
+    .{ .name = "audio_input_level", .arity = 0, .fptr = nif_audio_input_level, .flags = 0 },
+    .{ .name = "audio_stop_input_metering", .arity = 0, .fptr = nif_audio_stop_input_metering, .flags = 0 },
     .{ .name = "audio_play", .arity = 2, .fptr = nif_audio_play, .flags = 0 },
     .{ .name = "audio_play_at", .arity = 3, .fptr = nif_audio_play_at, .flags = 0 },
     .{ .name = "audio_stop_playback", .arity = 0, .fptr = nif_audio_stop_playback, .flags = 0 },

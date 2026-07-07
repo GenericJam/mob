@@ -125,4 +125,24 @@ defmodule Mob.AudioTest do
       end
     end
   end
+
+  describe "decode_level/1" do
+    test "passes through {rms, peak} when there is signal" do
+      assert Audio.decode_level({-12.0, -3.4}) == {-12.0, -3.4}
+    end
+
+    test "a peak at or below -120 dB reads as :silent" do
+      assert Audio.decode_level({-160.0, -160.0}) == :silent
+      assert Audio.decode_level({-130.0, -120.0}) == :silent
+    end
+
+    test "an atom result becomes {:error, atom}" do
+      assert Audio.decode_level(:not_metering) == {:error, :not_metering}
+      assert Audio.decode_level(:unsupported_on_platform) == {:error, :unsupported_on_platform}
+    end
+
+    test "an unexpected shape becomes {:error, :unknown}" do
+      assert Audio.decode_level(42) == {:error, :unknown}
+    end
+  end
 end
