@@ -8,6 +8,24 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.20] - 2026-07-11
+
+### Changed
+- **iOS `screenshot/3` can now be opted into release builds.** The iOS test
+  harness is stripped from release (`#if !MOB_RELEASE`) because its
+  synthetic-input NIFs (`tap`, `type_text`, …) use private UIKit/IOKit selectors
+  the App Store auto-rejects. `screenshot/3` uses only public APIs
+  (`UIGraphicsImageRenderer` + `drawViewHierarchy`) but was collateral, so a
+  shipped app couldn't be screenshotted — an agent driving it over dist couldn't
+  see the screen to error-correct (it returned `:not_loaded`). `screenshot/3` and
+  its registration are carved into `#if !MOB_RELEASE || defined(MOB_ENABLE_SCREENSHOT)`.
+  Default behaviour is unchanged (still stripped); a host opts in with
+  `-DMOB_ENABLE_SCREENSHOT`, plumbed from `mob_dev`'s `ios_release_screenshot: true`
+  config. The private synthetic-input NIFs stay strictly `#if !MOB_RELEASE` and
+  can never ship — a release build can SEE the screen but never DRIVE it. Opt-in by
+  design: screenshot captures the app's own window with no OS prompt or indicator,
+  so shipping a remotely-triggerable capture must be a conscious choice. (#71)
+
 ## [0.7.19] - 2026-07-10
 
 ### Fixed
