@@ -8,6 +8,22 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.19] - 2026-07-10
+
+### Fixed
+- **`Mob.Motion` iOS `accel` now matches Android's units and sign.** The iOS NIF
+  emitted CoreMotion's `userAcceleration + gravity` verbatim — in G (~1.0), not
+  the documented m/s² (~9.81), and in iOS's own convention where the gravity
+  vector points down (the up-axis reads −g at rest), the opposite of Android's
+  specific-force convention (+g on the up-axis). iOS `accel` was therefore off
+  from Android by both a scale factor and a sign, so a tilt- or shake-driven UI
+  barely moved on iOS and moved backwards when it did. Now emits
+  `(userAcceleration − gravity) × 9.80665`, which is Android's `a_coord −
+  g_field` exactly — +g up at rest, m/s², correct for both the static tilt term
+  and the dynamic linear term. `gyro` (rad/s) and `mag` (µT) already matched and
+  are unchanged. The `accel` convention is now a documented contract in the
+  `Mob.Motion` moduledoc. (#70)
+
 ## [0.7.18] - 2026-07-07
 
 ### Added
