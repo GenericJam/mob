@@ -3282,9 +3282,21 @@ static ERL_NIF_TERM nif_motion_start(ErlNifEnv *env, int argc, const ERL_NIF_TER
         if (!motion)
             return;
         ErlNifPid p = g_motion_pid;
-        double ax = motion.userAcceleration.x + motion.gravity.x;
-        double ay = motion.userAcceleration.y + motion.gravity.y;
-        double az = motion.userAcceleration.z + motion.gravity.z;
+        // Normalize to Android's SensorManager convention so `accel` means the same
+        // thing on both platforms:
+        //   * units — CoreMotion is in G (~1.0 at rest); Android TYPE_ACCELEROMETER is
+        //     m/s² (~9.81). Scale by g (9.80665).
+        //   * sign  — Android reports specific force / proper acceleration, a_coord −
+        //     g_field, so at rest it reads +g on the axis pointing UP (away from the
+        //     ground). CoreMotion splits this into userAcceleration (a_coord) and
+        //     gravity (the gravity field vector, pointing DOWN). So the Android-
+        //     equivalent reading is userAcceleration − gravity, NOT + gravity (which is
+        //     iOS's own "total acceleration" convention, sign-flipped from Android and
+        //     what made a tilt-driven UI move backwards). Subtracting gravity matches
+        //     Android for both the static tilt term and the dynamic linear term.
+        double ax = (motion.userAcceleration.x - motion.gravity.x) * 9.80665;
+        double ay = (motion.userAcceleration.y - motion.gravity.y) * 9.80665;
+        double az = (motion.userAcceleration.z - motion.gravity.z) * 9.80665;
         double gx = motion.rotationRate.x;
         double gy = motion.rotationRate.y;
         double gz = motion.rotationRate.z;
