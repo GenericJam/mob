@@ -5354,9 +5354,12 @@ static ERL_NIF_TERM nif_swipe_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
 // ── In-process screenshot + scroll control (agent driving over dist) ─────────
 //
 // screenshot/3, scroll_info/1, scroll_to/3 give a remotely-connected agent
-// pixels and deterministic scroll without adb/xcrun. They use only public
-// UIKit APIs (UIGraphicsImageRenderer, UIScrollView.contentOffset) but live in
-// the debug-only harness block alongside the other driving NIFs.
+// pixels and deterministic scroll without adb/xcrun, using only public UIKit
+// APIs (UIGraphicsImageRenderer, UIScrollView.contentOffset). scroll_* stay in
+// the debug-only harness; screenshot/3 is carved out just below so a host can
+// opt it into release with -DMOB_ENABLE_SCREENSHOT — an agent needs to SEE the
+// screen to error-correct even in a shipped build, while still being unable to
+// DRIVE it (the synthetic-input NIFs above stay stripped in release).
 
 // Recursively collect every UIScrollView under `view` into `acc`.
 static void mob_collect_scroll_views(UIView *view, NSMutableArray<UIScrollView *> *acc) {
@@ -5405,7 +5408,16 @@ static UIScrollView *mob_find_scroll_view(NSString *identifier) {
     }
     return best;
 }
+#endif // !MOB_RELEASE — end of the debug-only synthetic-input + scroll harness
 
+// Screen capture — public UIKit only (UIGraphicsImageRenderer + drawViewHierarchy),
+// no private selectors, so it is App-Store-safe. Carved out of the harness so a host
+// can opt it into release builds via -DMOB_ENABLE_SCREENSHOT (mob_dev config
+// `ios_release_screenshot: true`); OFF by default. It captures the app's own key window
+// with no OS prompt or indicator, so shipping a remotely-triggerable capture must be a
+// conscious build choice, never a silent default. In release this lets an agent SEE the
+// screen to error-correct while remaining unable to DRIVE it (tap/type stay stripped).
+#if !MOB_RELEASE || defined(MOB_ENABLE_SCREENSHOT)
 static ERL_NIF_TERM nif_screenshot(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     char fmt[8] = {0};
     int quality = 90;
@@ -5464,7 +5476,9 @@ static ERL_NIF_TERM nif_screenshot(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
     memcpy(bin.data, imageData.bytes, imageData.length);
     return enif_make_binary(env, &bin);
 }
+#endif // !MOB_RELEASE || MOB_ENABLE_SCREENSHOT
 
+#if !MOB_RELEASE // resume the debug-only harness (scroll + element frames)
 static ERL_NIF_TERM nif_scroll_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifBinary idb;
     if (!enif_inspect_binary(env, argv[0], &idb))
@@ -6280,7 +6294,11 @@ static ErlNifFunc nif_funcs[] = {
     {"clear_text", 0, nif_clear_text, 0},
     {"long_press_xy", 3, nif_long_press_xy, 0},
     {"swipe_xy", 4, nif_swipe_xy, 0},
+#endif
+#if !MOB_RELEASE || defined(MOB_ENABLE_SCREENSHOT)
     {"screenshot", 3, nif_screenshot, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+#endif
+#if !MOB_RELEASE
     {"scroll_info", 1, nif_scroll_info, 0},
     {"scroll_to", 3, nif_scroll_to, 0},
     {"element_frames", 0, nif_element_frames, ERL_NIF_DIRTY_JOB_CPU_BOUND},
