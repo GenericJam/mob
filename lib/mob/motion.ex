@@ -7,12 +7,24 @@ defmodule Mob.Motion do
   Updates arrive at `handle_info` at the requested interval:
 
       handle_info({:motion, %{
-        accel:     {ax, ay, az},          # m/s² (gravity included)
+        accel:     {ax, ay, az},          # m/s² (gravity included); +g points UP at rest — see below
         gyro:      {gx, gy, gz},          # rad/s
         mag:       {mx, my, mz} | nil,    # µT (microtesla), calibrated — key present only with :magnetometer
         heading:   float | nil,           # degrees [0, 360) from MAGNETIC north — key present only with :magnetometer
         timestamp: unix_ms
       }}, socket)
+
+  ## The `accel` convention
+
+  `accel` is the **specific force** (proper acceleration) in m/s², gravity
+  included, in the device's own axes: `+x` right, `+y` toward the top, `+z` out
+  of the screen. At rest it reads `+g` (≈ 9.81) on the axis pointing **away from
+  the ground** — held upright in portrait, `ay ≈ +9.81`; laid flat face-up,
+  `az ≈ +9.81`. Tilt the device and gravity redistributes across the axes; add
+  linear motion and it superimposes. This matches Android's `SensorManager`
+  `TYPE_ACCELEROMETER`, and iOS is normalized to the same sign and units (its
+  raw `CMMotionManager` stream is in G with the opposite gravity sign), so a
+  tilt- or shake-driven UI behaves identically on both platforms.
 
   ## The `:magnetometer` contract
 
