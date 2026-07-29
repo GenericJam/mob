@@ -7,6 +7,13 @@ import Combine
 @objc public class MobViewModel: NSObject, ObservableObject {
     @objc public static let shared = MobViewModel()
 
+    // How long to wait for BEAM boot to produce a first screen before treating
+    // it as stuck. An indefinite spinner and a persistent error look identical
+    // to "frozen" from the outside — this turns a silent hang into an explicit,
+    // diagnosable state instead of leaving the app on the black startup screen
+    // forever (seen: App Store review reporting an indefinite/blank launch).
+    private static let bootWatchdogSeconds: TimeInterval = 15
+
     @Published public var root: MobNode?
     /// Increments on every setRoot call; views use onChange(of: rootVersion) to
     /// trigger withAnimation rather than watching root directly (root identity
@@ -24,6 +31,17 @@ import Combine
     @Published public var startupPhase: String = "Starting…"
     /// Non-nil when a fatal startup error has occurred; the error screen stalls here.
     @Published public var startupError: String?
+
+    override init() {
+        super.init()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.bootWatchdogSeconds) { [weak self] in
+            guard let self, self.root == nil, self.startupError == nil else { return }
+            self.startupError =
+                "Startup is taking longer than expected — this usually means a " +
+                "native call blocked the main thread during boot. Please force-quit " +
+                "and relaunch the app."
+        }
+    }
 
     @objc public func setRoot(_ node: MobNode?, transition: String) {
         DispatchQueue.main.async {
