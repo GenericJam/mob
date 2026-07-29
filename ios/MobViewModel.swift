@@ -36,10 +36,13 @@ import Combine
         super.init()
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.bootWatchdogSeconds) { [weak self] in
             guard let self, self.root == nil, self.startupError == nil else { return }
+            let info = Bundle.main.infoDictionary
+            let shortVersion = (info?["CFBundleShortVersionString"] as? String) ?? "?"
+            let build = (info?["CFBundleVersion"] as? String) ?? "?"
             self.startupError =
                 "Startup is taking longer than expected — this usually means a " +
                 "native call blocked the main thread during boot. Please force-quit " +
-                "and relaunch the app."
+                "and relaunch the app.\n\nVersion \(shortVersion) (\(build))"
         }
     }
 
