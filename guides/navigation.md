@@ -148,7 +148,7 @@ The framework automatically picks the right animation based on the navigation ac
 
 ## Passing data on pop
 
-Mob's navigation is process-based. When you pop back to a previous screen, that screen's process is still running with its original state. To pass data back, send a message to the parent's pid.
+When you push a screen, Mob snapshots its `{module, socket}` into the stack history. Popping back restores that snapshot — it runs no `mount/3` again and all screens in a stack share the same `Mob.Screen` GenServer. To pass data back, send a message to the parent's pid.
 
 Pass the parent pid as a param when pushing:
 

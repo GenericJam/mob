@@ -1204,7 +1204,7 @@ Two distinct layers, each handling a different class of failure:
 
 Most "crashes" in a Mob app are BEAM process exits with a structured reason and stacktrace — OTP gives you this for free. These can be captured without any native SDK:
 
-- `Mob.Screen.terminate/2` is called on every screen process exit — hook in here to capture the reason + stacktrace
+- `Mob.Screen.terminate/2` is called when the single `Mob.Screen` GenServer (which owns the whole navigation stack) exits — hook in here to capture the reason + stacktrace
 - OTP `Logger` already receives supervision tree crash reports as `:error` level messages — `Mob.NativeLogger` captures these natively, a crash reporter can also forward them
 - A `Mob.CrashReporter` module (separate opt-in package) would collect these, batch them, and POST to a reporting backend over HTTP using `req` or `finch`
 

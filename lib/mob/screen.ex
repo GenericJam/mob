@@ -2,15 +2,16 @@ defmodule Mob.Screen do
   @moduledoc """
   Behaviour and GenServer wrapper for a Mob screen.
 
-  Each screen runs as a supervised GenServer whose state is a `Mob.Socket`.
-  Putting one process per screen — instead of one big process for the whole
-  app — gives you isolation: a buggy `handle_event` crashes its own screen
-  and the supervisor restarts it without taking down navigation, audio,
-  background services, or the BEAM itself. Lifecycle callbacks (`mount`,
-  `render`, `handle_event`, `handle_info`, `terminate`) map directly to the
-  GenServer lifecycle, so the BEAM's existing concurrency tools (selective
-  receive, monitors, hot code push) work on screens without any Mob-specific
-  scaffolding.
+  One `Mob.Screen` GenServer owns the whole navigation stack. The active
+  screen is a `{module, socket}` pair in the process state, and `nav_history`
+  keeps a snapshot of every pushed screen. A push mounts the next module in
+  this same process; a pop restores the previous snapshot without running
+  `mount/3` again or starting a new process. `terminate/2` therefore fires
+  only when the whole GenServer stops (app exit, crash, shutdown) — not when
+  navigation leaves a screen. All `mount`/`handle_event`/`handle_info`/
+  `render` callbacks run inside this one process, so the BEAM's concurrency
+  tools (selective receive, monitors, hot code push) apply to the app's whole
+  event loop.
 
   ## Usage
 

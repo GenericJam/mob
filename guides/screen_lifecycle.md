@@ -1,6 +1,6 @@
 # Screen Lifecycle
 
-A Mob screen is a GenServer wrapped by `Mob.Screen`. Each screen in the navigation stack is a separate, supervised process. Understanding the lifecycle means understanding when each callback fires and what you can do in it.
+A Mob screen is a GenServer wrapped by `Mob.Screen`. One `Mob.Screen` GenServer owns the whole navigation stack: the active screen is a `{module, socket}` pair in the process state, and `nav_history` keeps a snapshot of each pushed screen. A push mounts the next module in that same process; a pop restores the previous snapshot — it neither starts a new process nor calls `terminate/2`. Understanding the lifecycle means understanding when each callback fires and what you can do in it.
 
 ## Callbacks
 
@@ -11,7 +11,7 @@ A Mob screen is a GenServer wrapped by `Mob.Screen`. Each screen in the navigati
   {:ok, Mob.Socket.t()} | {:error, term()}
 ```
 
-Called once when the screen process starts. Initialize your assigns here.
+Called when the screen first enters the navigation stack — via `start_root/2` or when it is pushed. The mounted socket is snapshotted into `nav_history`; popping back to this screen restores that snapshot and does **not** call `mount/3` again.
 
 `params` comes from the navigation call that opened this screen:
 
@@ -142,9 +142,9 @@ The default implementation (from `use Mob.Screen`) raises for any unhandled even
 @callback terminate(reason :: term(), socket :: Mob.Socket.t()) :: term()
 ```
 
-Called when the screen process is about to stop. Use it for cleanup — cancel timers, release resources. The return value is ignored.
+Called only when the whole `Mob.Screen` GenServer is about to stop — the app exits, the process crashes, or is shut down. It is **not** called when navigation pops or resets a screen: those actions only swap the active module/socket and the stack snapshot inside the same process. So do not rely on it for per-screen cleanup; to release a screen's resources (timers, subscriptions) before it leaves the stack, do it explicitly in the callback that triggers `pop_screen/1`.
 
-The default is a no-op. Most screens don't need to implement this.
+The return value is ignored. The default is a no-op. Most screens don't need to implement this.
 
 ## Lifecycle flow
 
@@ -165,7 +165,7 @@ start_root/2 or push_screen/2
         │                                                  │
         ├── send(pid, msg)  ──────► handle_info/2  ──► render/1
         │                                                  │
-        └── screen popped from stack ─► terminate/2  ──────┘
+        └── screen popped from stack ─► snapshot restored ─┘
 ```
 
 ## The socket
