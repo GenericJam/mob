@@ -119,6 +119,10 @@ defmodule Mob.Theme do
     #
     # Off by default; opt in via a preset (`MobThemes.ObsidianGlass`, the mob_themes package) or by
     # passing `glass: true` to `Mob.Theme.build/1`.
+    #
+    # This is a per-theme *default*. A `glass:` prop on an individual Box wins
+    # over it in either direction — `glass: false` keeps a solid fill under a
+    # glass theme, `glass: true` opts one Box in without one.
     glass: false
   ]
 
