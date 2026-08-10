@@ -2238,17 +2238,24 @@ export fn nif_share_text(
 // ── Launch notification (written from Kotlin on cold start) ──────────────
 // MobBridge.setLaunchNotification(json) → mob_set_launch_notification(json).
 // Apps call Mob.Device.take_launch_notification/0 → nif_take_launch_notification
-// to consume it. Guarded by g_launch_notif_mutex (lazily created in nif_load).
+// to consume it. Guarded by g_launch_notif_mutex once nif_load created it;
+// stores before that are unguarded on purpose (see below).
 
 var g_launch_notif_json: ?[*:0]u8 = null;
 var g_launch_notif_mutex: ?*erts.ErlNifMutex = null;
 
 pub export fn mob_set_launch_notification(json: ?[*:0]const u8) callconv(.c) void {
-    const mutex = g_launch_notif_mutex orelse return;
-    erts.enif_mutex_lock(mutex);
-    defer erts.enif_mutex_unlock(mutex);
+    // Store even before nif_load created the mutex: on a cold start from a
+    // notification tap, MainActivity.onCreate calls this before the BEAM
+    // thread starts, and nothing reads the global until take_launch_notification
+    // (post-nif_load), so there's no concurrent access in that window. The
+    // previous `orelse return` silently dropped exactly that cold-start
+    // payload — tap-to-open from a killed app never worked. Same pattern as
+    // mob_set_opened_document below.
+    if (g_launch_notif_mutex) |mutex| erts.enif_mutex_lock(mutex);
     if (g_launch_notif_json) |old| jni.free(@as(?*anyopaque, @ptrCast(old)));
     g_launch_notif_json = if (json) |j| jni.strdup(j) else null;
+    if (g_launch_notif_mutex) |mutex| erts.enif_mutex_unlock(mutex);
 }
 
 export fn nif_take_launch_notification(

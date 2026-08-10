@@ -8,6 +8,21 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- **Cold-start launch notifications are no longer dropped (Android + iOS).**
+  `mob_set_launch_notification` (Android) and `mob_set_launch_notification_json`
+  (iOS) bailed out when called before `nif_load` had created their mutex — which
+  is exactly when the cold-start path runs (MainActivity.onCreate / the app
+  delegate store the tapped notification before the BEAM boots). The payload
+  was silently discarded, so tap-to-open from a killed app never worked; a
+  warm/backgrounded tap (delivered via `onNewIntent` / the running delegate)
+  was unaffected. Both setters now store before the mutex exists, the same
+  pre-mutex pattern `mob_set_opened_document` has always used — safe because
+  nothing reads the global until `take_launch_notification`, which can only
+  run post-`nif_load`.
+
 ## [0.7.20] - 2026-07-11
 
 ### Changed

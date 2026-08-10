@@ -2383,12 +2383,18 @@ void mob_send_push_token(const char *hex_token) {
 }
 
 void mob_set_launch_notification_json(const char *json) {
-    if (!g_launch_notif_mutex)
-        return;
-    enif_mutex_lock(g_launch_notif_mutex);
+    // Store even before nif_load created the mutex: on a cold start from a
+    // notification tap, the app delegate calls this before the BEAM starts,
+    // and nothing reads the global until take_launch_notification
+    // (post-nif_load), so there's no concurrent access in that window. The
+    // previous early return silently dropped exactly that cold-start payload
+    // — tap-to-open from a killed app never worked.
+    if (g_launch_notif_mutex)
+        enif_mutex_lock(g_launch_notif_mutex);
     free(g_launch_notification_json);
     g_launch_notification_json = json ? strdup(json) : NULL;
-    enif_mutex_unlock(g_launch_notif_mutex);
+    if (g_launch_notif_mutex)
+        enif_mutex_unlock(g_launch_notif_mutex);
 }
 
 static ERL_NIF_TERM nif_take_launch_notification(ErlNifEnv *env, int argc,
