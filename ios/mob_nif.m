@@ -180,6 +180,29 @@ static void mob_handle_meta(int handle, uint64_t *seq_out, uint64_t *ts_out) {
 }
 static char g_transition[16] = "none";
 
+// ── UI-event observation counter (test-harness honesty) ──────────────────────
+//
+// Every user-originated event we hand to the BEAM bumps this counter. The
+// synthetic-input NIFs sample it before and after injecting a touch so they can
+// answer "did the app actually react?" instead of "did the injection API not
+// return an error?". Without it tap_xy reports :ok whenever the private input
+// API accepts the event — which on a physical device is always, even when the
+// touch lands on nothing and no handler runs.
+//
+// Bumped from the send helpers rather than from the SwiftUI callbacks so it
+// covers every route into the BEAM (tap, focus, blur, submit, select, change).
+static _Atomic uint64_t g_ui_event_seq;
+
+#if !MOB_RELEASE // only the harness reads it; the writers stay unconditional
+static uint64_t mob_ui_event_seq(void) {
+    return atomic_load_explicit(&g_ui_event_seq, memory_order_relaxed);
+}
+#endif
+
+static void mob_note_ui_event(void) {
+    atomic_fetch_add_explicit(&g_ui_event_seq, 1, memory_order_relaxed);
+}
+
 // Called from node onTap blocks — routes tap to BEAM via enif_send.
 static void mob_send_tap(int handle) {
     enif_mutex_lock(tap_mutex);
@@ -191,6 +214,7 @@ static void mob_send_tap(int handle) {
     ERL_NIF_TERM tag = tap_handles[handle].tag;
     enif_mutex_unlock(tap_mutex);
 
+    mob_note_ui_event();
     ErlNifEnv *msg_env = enif_alloc_env();
     ERL_NIF_TERM msg =
         enif_make_tuple2(msg_env, enif_make_atom(msg_env, "tap"), enif_make_copy(msg_env, tag));
@@ -211,6 +235,7 @@ static void mob_send_event(int handle, const char *atom) {
     ERL_NIF_TERM tag = tap_handles[handle].tag;
     enif_mutex_unlock(tap_mutex);
 
+    mob_note_ui_event();
     ErlNifEnv *msg_env = enif_alloc_env();
     ERL_NIF_TERM msg =
         enif_make_tuple2(msg_env, enif_make_atom(msg_env, atom), enif_make_copy(msg_env, tag));
@@ -560,6 +585,7 @@ static void mob_send_change(int handle, ERL_NIF_TERM value_term) {
     ERL_NIF_TERM tag = tap_handles[handle].tag;
     enif_mutex_unlock(tap_mutex);
 
+    mob_note_ui_event();
     ErlNifEnv *msg_env = enif_alloc_env();
     ERL_NIF_TERM msg =
         enif_make_tuple3(msg_env, enif_make_atom(msg_env, "change"), enif_make_copy(msg_env, tag),
@@ -3857,7 +3883,8 @@ static void ax_walk(void *elem, ErlNifEnv *env, ERL_NIF_TERM *list, int depth) {
 //   - ui_tree returns a flat list of accessibility leaves; useful when an
 //     agent wants the same view of the world VoiceOver/XCUITest see.
 //   - ui_view_tree returns the full UIView hierarchy as a nested map,
-//     including non-accessible containers, with frames in window coords.
+//     including non-accessible containers, with frames in window coords and
+//     the colours actually painted (bg_color / text_color, 0xAARRGGBB).
 //     Strict superset of what AX exposes — class names, hidden subviews,
 //     things AX wouldn't surface.
 
@@ -3902,6 +3929,56 @@ static NSString *extract_view_text(UIView *view) {
     return nil;
 }
 
+// ── Drawn colour extraction for ui_view_tree ─────────────────────────────────
+//
+// Inverse of color_from_argb: packs a resolved UIColor into the repo's
+// canonical 0xAARRGGBB integer (guides/theming.md — alpha first, NOT CSS
+// #RRGGBBAA). Returns the atom nil when there is no colour, or when the colour
+// is a pattern (or otherwise unconvertible) one with no single RGBA value.
+//
+// Must run on the main thread: dynamic colours (UIColor.labelColor, anything
+// from an asset catalog) resolve against the current trait collection.
+static ERL_NIF_TERM argb_term_from_uicolor(ErlNifEnv *env, UIColor *color) {
+    if (!color)
+        return enif_make_atom(env, "nil");
+    CGFloat r = 0, g = 0, b = 0, a = 0;
+    if (![color getRed:&r green:&g blue:&b alpha:&a])
+        return enif_make_atom(env, "nil");
+    // Wide-gamut (Display P3) colours can land outside 0..1 once converted to
+    // sRGB components; clamp so the packed byte is always in range.
+    CGFloat comps[4] = {a, r, g, b};
+    unsigned long argb = 0;
+    for (int i = 0; i < 4; i++) {
+        CGFloat c = comps[i] < 0 ? 0 : (comps[i] > 1 ? 1 : comps[i]);
+        argb = (argb << 8) | (unsigned long)(c * 255.0 + 0.5);
+    }
+    return enif_make_ulong(env, argb);
+}
+
+// What the view actually paints behind its content. SwiftUI's
+// `.background(Color)` lands on a plain UIView's backgroundColor, but shape
+// fills and several UIKit controls set only the layer, so both are consulted.
+static ERL_NIF_TERM extract_view_bg_color(ErlNifEnv *env, UIView *view) {
+    if (view.backgroundColor)
+        return argb_term_from_uicolor(env, view.backgroundColor);
+    if (view.layer.backgroundColor)
+        return argb_term_from_uicolor(env, [UIColor colorWithCGColor:view.layer.backgroundColor]);
+    return enif_make_atom(env, "nil");
+}
+
+static ERL_NIF_TERM extract_view_text_color(ErlNifEnv *env, UIView *view) {
+    if ([view isKindOfClass:[UILabel class]])
+        return argb_term_from_uicolor(env, ((UILabel *)view).textColor);
+    if ([view isKindOfClass:[UITextField class]])
+        return argb_term_from_uicolor(env, ((UITextField *)view).textColor);
+    if ([view isKindOfClass:[UITextView class]])
+        return argb_term_from_uicolor(env, ((UITextView *)view).textColor);
+    if ([view isKindOfClass:[UIButton class]])
+        return argb_term_from_uicolor(env,
+                                      [(UIButton *)view titleColorForState:UIControlStateNormal]);
+    return enif_make_atom(env, "nil");
+}
+
 static ERL_NIF_TERM build_view_node(ErlNifEnv *env, UIView *view, int depth) {
     if (!view || depth > 50)
         return enif_make_atom(env, "nil");
@@ -3922,13 +3999,19 @@ static ERL_NIF_TERM build_view_node(ErlNifEnv *env, UIView *view, int depth) {
         children = enif_make_list_cell(env, child, children);
     }
 
-    ERL_NIF_TERM keys[5] = {enif_make_atom(env, "type"), enif_make_atom(env, "label"),
-                            enif_make_atom(env, "value"), enif_make_atom(env, "frame"),
+    ERL_NIF_TERM keys[7] = {enif_make_atom(env, "type"),     enif_make_atom(env, "label"),
+                            enif_make_atom(env, "value"),    enif_make_atom(env, "frame"),
+                            enif_make_atom(env, "bg_color"), enif_make_atom(env, "text_color"),
                             enif_make_atom(env, "children")};
-    ERL_NIF_TERM vals[5] = {enif_make_atom(env, type_str), nsstring_to_term(env, text),
-                            nsstring_to_term(env, value), frame, children};
+    ERL_NIF_TERM vals[7] = {enif_make_atom(env, type_str),
+                            nsstring_to_term(env, text),
+                            nsstring_to_term(env, value),
+                            frame,
+                            extract_view_bg_color(env, view),
+                            extract_view_text_color(env, view),
+                            children};
     ERL_NIF_TERM result;
-    enif_make_map_from_arrays(env, keys, vals, 5, &result);
+    enif_make_map_from_arrays(env, keys, vals, 7, &result);
     return result;
 }
 
@@ -3954,17 +4037,24 @@ static ERL_NIF_TERM nif_ui_view_tree(ErlNifEnv *env, int argc, const ERL_NIF_TER
 
     // Synthetic root wrapping all top-level windows. Frame is the screen size
     // so consumers always have a valid bounding box for the whole UI.
-    ERL_NIF_TERM root_keys[5] = {enif_make_atom(env, "type"), enif_make_atom(env, "label"),
-                                 enif_make_atom(env, "value"), enif_make_atom(env, "frame"),
+    // The synthetic root paints nothing, so its colours are always nil — but the
+    // keys are present so consumers can read node.bg_color on any node.
+    ERL_NIF_TERM root_keys[7] = {enif_make_atom(env, "type"),     enif_make_atom(env, "label"),
+                                 enif_make_atom(env, "value"),    enif_make_atom(env, "frame"),
+                                 enif_make_atom(env, "bg_color"), enif_make_atom(env, "text_color"),
                                  enif_make_atom(env, "children")};
-    ERL_NIF_TERM root_vals[5] = {
-        enif_make_atom(env, "root"), enif_make_atom(env, "nil"), enif_make_atom(env, "nil"),
-        enif_make_tuple4(env, enif_make_double(env, 0.0), enif_make_double(env, 0.0),
-                         enif_make_double(env, screen_size.width),
-                         enif_make_double(env, screen_size.height)),
-        windows_list};
+    ERL_NIF_TERM root_vals[7] = {enif_make_atom(env, "root"),
+                                 enif_make_atom(env, "nil"),
+                                 enif_make_atom(env, "nil"),
+                                 enif_make_tuple4(env, enif_make_double(env, 0.0),
+                                                  enif_make_double(env, 0.0),
+                                                  enif_make_double(env, screen_size.width),
+                                                  enif_make_double(env, screen_size.height)),
+                                 enif_make_atom(env, "nil"),
+                                 enif_make_atom(env, "nil"),
+                                 windows_list};
     ERL_NIF_TERM root;
-    enif_make_map_from_arrays(env, root_keys, root_vals, 5, &root);
+    enif_make_map_from_arrays(env, root_keys, root_vals, 7, &root);
     return root;
 }
 
@@ -4965,6 +5055,26 @@ static ERL_NIF_TERM nif_tap_xy_probe(ErlNifEnv *env) {
     return list;
 }
 
+// Block until a UI event reaches the BEAM, or timeout_ms elapses.
+//
+// Synthetic input is delivered on the main runloop; the SwiftUI gesture handler
+// that ends up calling mob_send_tap has usually NOT run by the time the
+// dispatch_sync that injected the touch returns. Polling (rather than a fixed
+// sleep) keeps a landed tap fast — the common case returns in one step.
+static BOOL mob_await_ui_event(uint64_t seq_before, int timeout_ms) {
+    for (int waited = 0; waited < timeout_ms; waited += 5) {
+        if (mob_ui_event_seq() != seq_before)
+            return YES;
+        [NSThread sleepForTimeInterval:0.005];
+    }
+    return mob_ui_event_seq() != seq_before;
+}
+
+// How long tap_xy waits for the app to react before reporting :no_effect.
+// 300ms is well past a SwiftUI tap gesture's recognition delay while staying
+// short enough for the tight loops the harness runs.
+#define MOB_TAP_SETTLE_MS 300
+
 static ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     // Diagnostics mode — pass :probe or :enumerate_touch or :enumerate_event
     if (enif_is_atom(env, argv[0])) {
@@ -5071,53 +5181,14 @@ static ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 
     CGPoint pt = CGPointMake(x, y);
 
-#if TARGET_OS_SIMULATOR
-    // ── Simulator: accessibility-based activation by coordinates ─────────────────
-    // The iOS simulator rejects in-process synthetic IOHIDEvents (no valid display
-    // context) and SwiftUI on iOS 26 ignores direct touchesBegan: calls without
-    // proper event system backing. Accessibility activation is the reliable path
-    // for the simulator; for scroll views and custom GRs that lack accessibility,
-    // a simulator-specific event injection mechanism would be needed.
-    // Find-then-act atomically inside ONE dispatch_sync per attempt (see
-    // mob_retry_main_thread_bool) — using the SAME window the element was
-    // found in for the text-field focus walk below, not a second,
-    // independently-resolved window (MOB-99 review: with an overlapping
-    // keyboard window, an independent re-scan could land on the wrong one).
-    BOOL activated = mob_retry_main_thread_bool("tap_xy(sim)", ^BOOL {
-      UIWindow *win = nil;
-      id elem = find_a11y_at_point_in_current_windows(pt, &win);
-      if (!elem)
-          return NO;
+    // Sampled before any injection so we can tell a tap that ran a handler from
+    // one the input API merely accepted. See mob_note_ui_event.
+    const uint64_t seq_before = mob_ui_event_seq();
 
-      LOGI(@"tap_xy(sim): accessibilityActivate on %@ frame=%@",
-           NSStringFromClass(object_getClass(elem)), NSStringFromCGRect([elem accessibilityFrame]));
-      [elem accessibilityActivate];
-      // For text fields: accessibilityActivate on UITextFieldLabel (the hint
-      // label inside UITextField) doesn't focus the field. Walk the
-      // responder chain up from the hit view to find the first
-      // UITextField/UITextView and focus it.
-      UIView *hv = [win hitTest:pt withEvent:nil];
-      UIResponder *r = hv;
-      while (r) {
-          if ([r isKindOfClass:[UITextField class]] || [r isKindOfClass:[UITextView class]]) {
-              [(UIView *)r becomeFirstResponder];
-              break;
-          }
-          r = r.nextResponder;
-      }
-      return YES;
-    });
-
-    if (activated)
-        return enif_make_atom(env, "ok");
-    return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                            enif_make_atom(env, "no_element_at_point"));
-
-#else
-    // ── Real device: UITouch injection via IOHIDEvent ─────────────────────────────
+    // Hit-test on both platforms first: a coordinate outside every visible window
+    // can never do anything, and saying so beats reporting :no_effect.
     __block UIWindow *targetWindow = nil;
     __block UIView *hitView = nil;
-
     dispatch_sync(dispatch_get_main_queue(), ^{
       for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
           if (![scene isKindOfClass:[UIWindowScene class]])
@@ -5134,12 +5205,67 @@ static ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
           }
       }
     });
-
     if (!hitView) {
         return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                 enif_make_atom(env, "no_view_at_point"));
     }
 
+#if TARGET_OS_SIMULATOR
+    // ── Simulator: accessibility-based activation by coordinates ─────────────────
+    // The iOS simulator rejects in-process synthetic IOHIDEvents (no valid display
+    // context) and SwiftUI on iOS 26 ignores direct touchesBegan: calls without
+    // proper event system backing. Accessibility activation is the reliable path
+    // for the simulator; for scroll views and custom GRs that lack accessibility,
+    // a simulator-specific event injection mechanism would be needed.
+    //
+    // Find-then-act atomically inside ONE dispatch_sync per attempt (see
+    // mob_retry_main_thread_bool) — using the SAME window the element was
+    // found in for the text-field focus walk below, not a second,
+    // independently-resolved window (MOB-99 review: with an overlapping
+    // keyboard window, an independent re-scan could land on the wrong one).
+    //
+    // accessibilityActivate returning YES does NOT mean the app reacted: SwiftUI
+    // only maps it to a default action for Button-like views. A plain
+    // `.onTapGesture` (what Mob's Box/Row/Column use for on_tap) has no AX action,
+    // so activation "succeeds" and the handler never fires. That is why the
+    // outcome is decided by the event counter below, not by `activated`.
+    BOOL activated = mob_retry_main_thread_bool("tap_xy(sim)", ^BOOL {
+      UIWindow *win = nil;
+      id elem = find_a11y_at_point_in_current_windows(pt, &win);
+      if (!elem)
+          return NO;
+
+      LOGI(@"tap_xy(sim): accessibilityActivate on %@ frame=%@ hitWindow=%@",
+           NSStringFromClass(object_getClass(elem)), NSStringFromCGRect([elem accessibilityFrame]),
+           NSStringFromClass(object_getClass(targetWindow)));
+      [elem accessibilityActivate];
+      // For text fields: accessibilityActivate on UITextFieldLabel (the hint
+      // label inside UITextField) doesn't focus the field. Walk the
+      // responder chain up from the hit view to find the first
+      // UITextField/UITextView and focus it.
+      UIView *hv = [win hitTest:pt withEvent:nil];
+      UIResponder *r = hv;
+      while (r) {
+          if ([r isKindOfClass:[UITextField class]] || [r isKindOfClass:[UITextView class]]) {
+              [(UIView *)r becomeFirstResponder];
+              break;
+          }
+          r = r.nextResponder;
+      }
+      return YES;
+    });
+    if (!activated) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "no_element_at_point"));
+    }
+    if (!mob_await_ui_event(seq_before, MOB_TAP_SETTLE_MS)) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "no_effect"));
+    }
+    return enif_make_atom(env, "ok");
+
+#else
+    // ── Real device: UITouch injection via IOHIDEvent ─────────────────────────────
     __block BOOL ok = NO;
     dispatch_sync(dispatch_get_main_queue(), ^{
       ok = mob_send_touch_phase(targetWindow, hitView, pt, UITouchPhaseBegan);
@@ -5154,6 +5280,15 @@ static ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
       mob_send_touch_phase(targetWindow, hitView, pt, UITouchPhaseEnded);
     });
 
+    // mob_send_touch_phase's YES only means "the private input API exists and
+    // accepted the event" — on iOS 26 devices UIKit routinely swallows the
+    // in-process IOHID event and no touch is ever delivered (decisions/
+    // 2026-08-09-ios-device-tap-injection-has-no-effect.md). The counter is the
+    // only thing that distinguishes a real tap from an accepted no-op.
+    if (!mob_await_ui_event(seq_before, MOB_TAP_SETTLE_MS)) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "no_effect"));
+    }
     return enif_make_atom(env, "ok");
 #endif
 }
@@ -6692,11 +6827,15 @@ static ERL_NIF_TERM nif_vendor_usb_close(ErlNifEnv *env, int argc, const ERL_NIF
 //   * ui_tree         — recursive UIAccessibility walk (variable, can be 10s of ms)
 //   * ui_debug        — same walk, more output
 //
-// Synthetic-input NIFs (tap_xy, swipe_xy, long_press_xy, type_text, key_press,
+// Synthetic-input NIFs (swipe_xy, long_press_xy, type_text, key_press,
 // delete_backward, clear_text) dispatch_sync to the main queue but also do
 // some pre-dispatch work; they're left on regular schedulers for now because
 // the test harness calls them in tight loops and dirty-dispatch overhead would
 // add up. Re-evaluate if benchmarks show scheduler stalls under heavy harness use.
+//
+// tap_xy is the exception: it blocks up to MOB_TAP_SETTLE_MS waiting for the
+// app to react (that wait is what makes its :ok trustworthy), which is far too
+// long to hold a normal scheduler.
 static ErlNifFunc nif_funcs[] = {
 #if !MOB_RELEASE
     // ── Test harness (listed first to survive linker dead-code stripping) ──────
@@ -6711,7 +6850,7 @@ static ErlNifFunc nif_funcs[] = {
     {"tap", 1, nif_tap, 0},
     {"ax_action", 2, nif_ax_action, 0},
     {"ax_action_at_xy", 3, nif_ax_action_at_xy, 0},
-    {"tap_xy", 2, nif_tap_xy, 0},
+    {"tap_xy", 2, nif_tap_xy, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"type_text", 1, nif_type_text, 0},
     {"delete_backward", 0, nif_delete_backward, 0},
     {"key_press", 1, nif_key_press, 0},

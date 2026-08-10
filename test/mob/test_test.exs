@@ -13,24 +13,32 @@ defmodule Mob.TestTest do
       label: nil,
       value: nil,
       frame: {0.0, 0.0, 393.0, 852.0},
+      bg_color: nil,
+      text_color: nil,
       children: [
         %{
           type: :window,
           label: nil,
           value: nil,
           frame: {0.0, 0.0, 393.0, 852.0},
+          bg_color: 0xFF000000,
+          text_color: nil,
           children: [
             %{
               type: :scroll,
               label: nil,
               value: nil,
               frame: {0.0, 62.0, 393.0, 756.0},
+              bg_color: nil,
+              text_color: nil,
               children: [
                 %{
                   type: :button,
                   label: "Roll Dice",
                   value: nil,
                   frame: {24.0, 416.0, 327.0, 53.5},
+                  bg_color: 0xFF2196F3,
+                  text_color: 0xFFFFFFFF,
                   children: []
                 },
                 %{
@@ -38,6 +46,8 @@ defmodule Mob.TestTest do
                   label: "Hello",
                   value: nil,
                   frame: {24.0, 480.0, 100.0, 24.0},
+                  bg_color: nil,
+                  text_color: 0xDE000000,
                   children: []
                 },
                 %{
@@ -45,6 +55,8 @@ defmodule Mob.TestTest do
                   label: "Roll again",
                   value: nil,
                   frame: {24.0, 520.0, 327.0, 53.5},
+                  bg_color: 0xFF2196F3,
+                  text_color: 0xFFFFFFFF,
                   children: []
                 }
               ]
@@ -86,11 +98,26 @@ defmodule Mob.TestTest do
         label: "Solo",
         value: nil,
         frame: {0.0, 0.0, 1.0, 1.0},
+        bg_color: nil,
+        text_color: nil,
         children: []
       }
 
       assert [{[], node}] = M.flatten_tree(tree)
       assert node.label == "Solo"
+    end
+
+    test "keeps painted colours on every flattened entry" do
+      colours =
+        sample_tree()
+        |> M.flatten_tree()
+        |> Enum.map(fn {_p, n} -> {n.bg_color, n.text_color} end)
+
+      # A styling regression that dropped every Box background would turn each
+      # of these into {nil, nil} — that is the whole point of surfacing them.
+      assert {0xFF2196F3, 0xFFFFFFFF} in colours
+      assert {nil, 0xDE000000} in colours
+      assert Enum.count(colours, fn {bg, _} -> bg == 0xFF2196F3 end) == 2
     end
   end
 
@@ -118,12 +145,16 @@ defmodule Mob.TestTest do
         label: nil,
         value: nil,
         frame: {0.0, 0.0, 1.0, 1.0},
+        bg_color: nil,
+        text_color: nil,
         children: [
           %{
             type: :text_field,
             label: "Name",
             value: "Roll-something",
             frame: {0.0, 0.0, 1.0, 1.0},
+            bg_color: nil,
+            text_color: nil,
             children: []
           }
         ]
@@ -141,21 +172,53 @@ defmodule Mob.TestTest do
     end
   end
 
-  describe "tree shape normalization (Android JSON path)" do
-    # Mob.Test.view_tree/1 normalizes JSON-decoded trees (string keys, list frame)
-    # into the iOS map shape (atom keys, tuple frame). normalize_tree is private
-    # but exercised via the public API by sending a JSON binary through view_tree
-    # would require RPC — so we test the contract by mirroring the JSON shape and
-    # asserting the documented surface.
-
-    test "documented output frame shape is a 4-tuple of floats" do
-      {x, y, w, h} = sample_tree().frame
-      for v <- [x, y, w, h], do: assert(is_float(v))
+  describe "normalize_view_tree/1 (Android JSON path)" do
+    defp android_json do
+      """
+      {"type":"root","label":null,"value":null,"frame":[0,0,393,852],
+       "bg_color":null,"text_color":null,
+       "children":[{"type":"button","label":"Save","value":null,
+                    "frame":[24,720,327,48],
+                    "bg_color":4280391411,"text_color":4294967295,
+                    "children":[]}]}
+      """
     end
 
-    test "documented output uses atom :type and :children keys" do
-      assert sample_tree().type == :root
-      assert length(sample_tree().children) > 0
+    test "converts string keys, string type and list frame to the iOS shape" do
+      root = android_json() |> :json.decode() |> M.normalize_view_tree()
+
+      assert root.type == :root
+      assert root.frame == {0.0, 0.0, 393.0, 852.0}
+
+      [button] = root.children
+      assert button.type == :button
+      assert button.label == "Save"
+      assert button.frame == {24.0, 720.0, 327.0, 48.0}
+    end
+
+    test "carries colours through as 0xAARRGGBB integers, matching iOS" do
+      [button] =
+        android_json() |> :json.decode() |> M.normalize_view_tree() |> Map.fetch!(:children)
+
+      # JSON has no hex literal, so the bridge sends the same integer decimal.
+      assert button.bg_color == 0xFF2196F3
+      assert button.text_color == 0xFFFFFFFF
+    end
+
+    test "JSON null becomes nil, not :json.decode's :null atom" do
+      root = android_json() |> :json.decode() |> M.normalize_view_tree()
+
+      # A node that paints nothing still carries the keys, so consumers can read
+      # node.bg_color on any node and compare against nil.
+      assert Map.has_key?(root, :bg_color)
+      assert root.bg_color == nil
+      assert root.text_color == nil
+      assert root.label == nil
+      assert root.value == nil
+    end
+
+    test "passes non-node terms (e.g. an error tuple) through untouched" do
+      assert M.normalize_view_tree({:error, :not_loaded}) == {:error, :not_loaded}
     end
   end
 

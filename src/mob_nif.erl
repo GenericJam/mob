@@ -310,12 +310,21 @@ device_orientation() -> erlang:nif_error(not_loaded).
 device_lock_orientation(_Orientation) -> erlang:nif_error(not_loaded).
 device_keep_awake(_On) -> erlang:nif_error(not_loaded).
 ui_tree() -> erlang:nif_error(not_loaded).
+%% ui_view_tree() -> nested map (iOS) | JSON binary (Android) | {error, Reason}
+%% Node shape: #{type, label, value, frame, bg_color, text_color, children}.
+%% bg_color/text_color are the colours the view actually painted, as
+%% 0xAARRGGBB integers (see guides/theming.md), or nil.
 ui_view_tree() -> erlang:nif_error(not_loaded).
 ui_debug() -> erlang:nif_error(not_loaded).
 screen_info() -> erlang:nif_error(not_loaded).
 tap(_Label) -> erlang:nif_error(not_loaded).
 ax_action(_Match, _Action) -> erlang:nif_error(not_loaded).
 ax_action_at_xy(_X, _Y, _Action) -> erlang:nif_error(not_loaded).
+%% tap_xy(X, Y) -> ok | {error, Reason}
+%% ok is only returned when the tap demonstrably reached the BEAM (a tap/focus/
+%% change/submit/select event arrived within 300ms). Reason is one of
+%% no_view_at_point | no_element_at_point (simulator) | no_effect | Probe.
+%% See Mob.Test.tap_xy/3 for the per-platform capabilities behind those.
 tap_xy(_X, _Y) -> erlang:nif_error(not_loaded).
 type_text(_Text) -> erlang:nif_error(not_loaded).
 delete_backward() -> erlang:nif_error(not_loaded).

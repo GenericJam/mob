@@ -505,10 +505,17 @@ export fn nif_ui_tree(
 // nif_ui_view_tree/0 — returns nested-map UI tree from MobBridge.uiViewTree().
 //
 // Bridge contract: Kotlin returns a JSON string of the form
-//   {"type":"root","label":null,"value":null,"frame":[0,0,W,H],"children":[...]}
+//   {"type":"root","label":null,"value":null,"frame":[0,0,W,H],
+//    "bg_color":null,"text_color":null,"children":[...]}
 // parsed by Mob.Test.tree/1 (jason decode is fast; no need for a C-side
 // JSON tokenizer). Returns {:error, :not_loaded} when MobBridge.uiViewTree()
 // isn't present (early-adopter apps without registry).
+//
+// bg_color/text_color are 0xAARRGGBB integers (guides/theming.md), matching
+// what iOS build_view_node emits, so Mob.Test.view_tree/1 reads the same on
+// both platforms. null when the view paints no colour of its own. No shipped
+// MobBridge.kt implements uiViewTree() yet — Android view_tree is
+// {:error, :not_loaded} until one does; keep these keys when it lands.
 export fn nif_ui_view_tree(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
