@@ -4041,8 +4041,8 @@ static NSSet *mob_subview_layers(UIView *view) {
 static ERL_NIF_TERM extract_view_bg_color(ErlNifEnv *env, UIView *view) {
     if (view.backgroundColor && CGColorGetAlpha(view.backgroundColor.CGColor) > 0)
         return argb_term_from_uicolor(env, view.backgroundColor);
-    CGColorRef painted = mob_walk_layers(view.layer, mob_subview_layers(view), mob_layer_fill_color,
-                                         0);
+    CGColorRef painted =
+        mob_walk_layers(view.layer, mob_subview_layers(view), mob_layer_fill_color, 0);
     if (painted)
         return argb_term_from_uicolor(env, [UIColor colorWithCGColor:painted]);
     return enif_make_atom(env, "nil");
@@ -4058,8 +4058,8 @@ static ERL_NIF_TERM extract_view_text_color(ErlNifEnv *env, UIView *view) {
     if ([view isKindOfClass:[UIButton class]])
         return argb_term_from_uicolor(env,
                                       [(UIButton *)view titleColorForState:UIControlStateNormal]);
-    CGColorRef painted = mob_walk_layers(view.layer, mob_subview_layers(view), mob_layer_text_color,
-                                         0);
+    CGColorRef painted =
+        mob_walk_layers(view.layer, mob_subview_layers(view), mob_layer_text_color, 0);
     if (painted)
         return argb_term_from_uicolor(env, [UIColor colorWithCGColor:painted]);
     return enif_make_atom(env, "nil");
@@ -4131,9 +4131,9 @@ static ERL_NIF_TERM nif_ui_view_tree(ErlNifEnv *env, int argc, const ERL_NIF_TER
     // The synthetic root paints nothing and has no class, so those are always
     // nil — but the keys are present so consumers can read them on any node.
     ERL_NIF_TERM root_keys[8] = {
-        enif_make_atom(env, "type"),     enif_make_atom(env, "class"),
-        enif_make_atom(env, "label"),    enif_make_atom(env, "value"),
-        enif_make_atom(env, "frame"),    enif_make_atom(env, "bg_color"),
+        enif_make_atom(env, "type"),       enif_make_atom(env, "class"),
+        enif_make_atom(env, "label"),      enif_make_atom(env, "value"),
+        enif_make_atom(env, "frame"),      enif_make_atom(env, "bg_color"),
         enif_make_atom(env, "text_color"), enif_make_atom(env, "children")};
     ERL_NIF_TERM root_vals[8] = {enif_make_atom(env, "root"),
                                  enif_make_atom(env, "nil"),
@@ -4201,15 +4201,15 @@ static void mob_paint_census(UIView *view, NSMutableDictionary *groups, int dept
     if ([view.layer isKindOfClass:[CAShapeLayer class]] && ((CAShapeLayer *)view.layer).fillColor)
         shapeFill = YES;
 
-    BOOL uikitText = [view isKindOfClass:[UILabel class]] ||
-                     [view isKindOfClass:[UITextField class]] ||
-                     [view isKindOfClass:[UITextView class]] || [view isKindOfClass:[UIButton class]];
+    BOOL uikitText =
+        [view isKindOfClass:[UILabel class]] || [view isKindOfClass:[UITextField class]] ||
+        [view isKindOfClass:[UITextView class]] || [view isKindOfClass:[UIButton class]];
 
     NSString *viewClass = NSStringFromClass(object_getClass(view));
     NSString *layerClass = NSStringFromClass(object_getClass(view.layer));
     NSArray *sortedSublayers = [sublayerClasses sortedArrayUsingSelector:@selector(compare:)];
-    NSString *key = [NSString
-        stringWithFormat:@"%@|%@|%@", viewClass, layerClass, [sortedSublayers componentsJoinedByString:@","]];
+    NSString *key = [NSString stringWithFormat:@"%@|%@|%@", viewClass, layerClass,
+                                               [sortedSublayers componentsJoinedByString:@","]];
 
     NSMutableDictionary *group = groups[key];
     if (!group) {
