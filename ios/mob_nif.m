@@ -6051,6 +6051,44 @@ static UIScrollView *mob_find_scroll_view(NSString *identifier) {
 // conscious build choice, never a silent default. In release this lets an agent SEE the
 // screen to error-correct while remaining unable to DRIVE it (tap/type stay stripped).
 #if !MOB_RELEASE || defined(MOB_ENABLE_SCREENSHOT)
+// The window capture reads from: the key window, else the first visible one.
+// Main-thread only.
+static UIWindow *mob_capture_window(void) {
+    UIWindow *fallback = nil;
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]])
+            continue;
+        for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+            if (win.isHidden)
+                continue;
+            if (win.isKeyWindow)
+                return win;
+            if (!fallback)
+                fallback = win;
+        }
+    }
+    return fallback;
+}
+
+// Render `crop` (a rect in window points — pass `window.bounds` for the whole
+// surface) at `scale` × the native screen scale. The window is drawn offset by
+// -crop.origin so the cropped region lands at the context origin, which makes
+// the returned image exactly that region. Main-thread only.
+static UIImage *mob_capture_image(UIWindow *window, CGRect crop, CGFloat scale) {
+    UIGraphicsImageRendererFormat *rf = [UIGraphicsImageRendererFormat preferredFormat];
+    rf.scale = [UIScreen mainScreen].scale * scale;
+    rf.opaque = YES;
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:crop.size
+                                                                               format:rf];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *_Nonnull ctx) {
+      (void)ctx;
+      CGRect r = window.bounds;
+      r.origin.x -= crop.origin.x;
+      r.origin.y -= crop.origin.y;
+      [window drawViewHierarchyInRect:r afterScreenUpdates:YES];
+    }];
+}
+
 static ERL_NIF_TERM nif_screenshot(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     char fmt[8] = {0};
     int quality = 90;
@@ -6065,37 +6103,13 @@ static ERL_NIF_TERM nif_screenshot(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 
     __block NSData *imageData = nil;
     dispatch_sync(dispatch_get_main_queue(), ^{
-      UIWindow *window = nil;
-      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-          if (![scene isKindOfClass:[UIWindowScene class]])
-              continue;
-          for (UIWindow *win in [(UIWindowScene *)scene windows]) {
-              if (win.isHidden)
-                  continue;
-              if (win.isKeyWindow) {
-                  window = win;
-                  break;
-              }
-              if (!window)
-                  window = win; // first visible window as fallback
-          }
-          if (window.isKeyWindow)
-              break;
-      }
+      UIWindow *window = mob_capture_window();
       if (!window)
           return;
 
       // `scale` is a multiplier of the native screen scale: 1.0 = crisp native
       // resolution, 0.5 = half (smaller payload over dist).
-      UIGraphicsImageRendererFormat *rf = [UIGraphicsImageRendererFormat preferredFormat];
-      rf.scale = [UIScreen mainScreen].scale * (CGFloat)scale;
-      rf.opaque = YES;
-      UIGraphicsImageRenderer *renderer =
-          [[UIGraphicsImageRenderer alloc] initWithSize:window.bounds.size format:rf];
-      UIImage *img = [renderer imageWithActions:^(UIGraphicsImageRendererContext *_Nonnull ctx) {
-        (void)ctx;
-        [window drawViewHierarchyInRect:window.bounds afterScreenUpdates:YES];
-      }];
+      UIImage *img = mob_capture_image(window, window.bounds, (CGFloat)scale);
       imageData = jpeg ? UIImageJPEGRepresentation(img, (CGFloat)quality / 100.0)
                        : UIImagePNGRepresentation(img);
     });
@@ -6111,7 +6125,94 @@ static ERL_NIF_TERM nif_screenshot(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 }
 #endif // !MOB_RELEASE || MOB_ENABLE_SCREENSHOT
 
-#if !MOB_RELEASE // resume the debug-only harness (scroll + element frames)
+#if !MOB_RELEASE // resume the debug-only harness (sampling + scroll + element frames)
+
+// sample_region(X, Y, W, H) -> {ok, PixelW, PixelH, RGBA} | {error, Reason}
+//
+// Raw pixels for one region of the app's own surface. This is the only reliable
+// way to verify what colour was actually drawn: on iOS 26 SwiftUI paints through
+// SDFLayer or rasterises into `contents`, so neither the view nor the layer tree
+// exposes a readable colour — see
+// decisions/2026-08-09-view-tree-colour-needs-screenshot-sampling.md.
+//
+// The crop happens in the render, not after it, so what crosses distribution is
+// one element's worth of pixels instead of a whole framebuffer. Coordinates are
+// window points (the same space element_frames/0 reports); the returned buffer is
+// PixelW*PixelH*4 bytes of 8-bit RGBA at the native screen scale, so its size is
+// W*H*scale^2*4 — a 100x50pt element is ~180 KB at 3x.
+//
+// Rects are clamped to the window, so a partly-scrolled-off element samples the
+// visible part and reports the pixel dimensions it actually got. A rect entirely
+// outside the window is `offscreen` rather than a plausible-looking black.
+//
+// Unlike screenshot/3 this stays strictly debug-only: it is a screen-capture
+// primitive, and a release build shipping it could reconstruct the screen region
+// by region, silently defeating the MOB_ENABLE_SCREENSHOT opt-in.
+static ERL_NIF_TERM nif_sample_region(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    double x = 0.0, y = 0.0, w = 0.0, h = 0.0;
+    if (!enif_get_double(env, argv[0], &x) || !enif_get_double(env, argv[1], &y) ||
+        !enif_get_double(env, argv[2], &w) || !enif_get_double(env, argv[3], &h))
+        return enif_make_badarg(env);
+
+    __block const char *err = NULL;
+    __block NSMutableData *rgba = nil;
+    __block size_t pw = 0, ph = 0;
+
+    if (w <= 0.0 || h <= 0.0)
+        err = "empty_region";
+
+    if (!err)
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          UIWindow *window = mob_capture_window();
+          if (!window) {
+              err = "no_window";
+              return;
+          }
+          CGRect crop = CGRectIntersection(window.bounds, CGRectMake(x, y, w, h));
+          if (CGRectIsNull(crop) || CGRectIsEmpty(crop)) {
+              err = "offscreen";
+              return;
+          }
+
+          CGImageRef cg = mob_capture_image(window, crop, 1.0).CGImage;
+          if (!cg) {
+              err = "capture_failed";
+              return;
+          }
+          pw = CGImageGetWidth(cg);
+          ph = CGImageGetHeight(cg);
+
+          // Redraw into a bitmap context of known layout: a UIImage's own backing
+          // store has no guaranteed byte order or component count, so reading it
+          // directly would make the returned bytes device-dependent.
+          size_t stride = pw * 4;
+          rgba = [NSMutableData dataWithLength:stride * ph];
+          CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+          CGContextRef bmp =
+              CGBitmapContextCreate(rgba.mutableBytes, pw, ph, 8, stride, cs,
+                                    kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+          CGColorSpaceRelease(cs);
+          if (!bmp) {
+              rgba = nil;
+              err = "capture_failed";
+              return;
+          }
+          CGContextDrawImage(bmp, CGRectMake(0, 0, pw, ph), cg);
+          CGContextRelease(bmp);
+        });
+
+    if (err || !rgba)
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, err ?: "capture_failed"));
+
+    ErlNifBinary bin;
+    enif_alloc_binary(rgba.length, &bin);
+    memcpy(bin.data, rgba.mutableBytes, rgba.length);
+    return enif_make_tuple4(env, enif_make_atom(env, "ok"), enif_make_ulong(env, pw),
+                            enif_make_ulong(env, ph), enif_make_binary(env, &bin));
+}
+
 static ERL_NIF_TERM nif_scroll_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifBinary idb;
     if (!enif_inspect_binary(env, argv[0], &idb))
@@ -7091,6 +7192,7 @@ static ErlNifFunc nif_funcs[] = {
     {"screenshot", 3, nif_screenshot, ERL_NIF_DIRTY_JOB_CPU_BOUND},
 #endif
 #if !MOB_RELEASE
+    {"sample_region", 4, nif_sample_region, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"scroll_info", 1, nif_scroll_info, 0},
     {"scroll_to", 3, nif_scroll_to, 0},
     {"element_frames", 0, nif_element_frames, ERL_NIF_DIRTY_JOB_CPU_BOUND},

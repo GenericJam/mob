@@ -371,4 +371,127 @@ defmodule Mob.TestTest do
       assert M.tour_offsets(info, []) == [{0.0, 0.0}]
     end
   end
+
+  # ── Colour sampling (pure reduction over a raw RGBA buffer) ───────────────────
+
+  describe "reduce_rgba/3" do
+    # sample_region/4 hands back the buffer in R,G,B,A order; colours come out
+    # 0xAARRGGBB. `px` builds buffer bytes from a 0xAARRGGBB literal so the tests
+    # read in the repo's colour form.
+    defp px(argb) do
+      <<a, r, g, b>> = <<argb::32>>
+      <<r, g, b, a>>
+    end
+
+    defp fill(argb, count), do: argb |> px() |> :binary.copy(count)
+
+    test "channel order: R,G,B,A bytes in, 0xAARRGGBB out" do
+      # Distinct values per channel, so a swapped byte order can't pass.
+      assert {:ok, %{average: 0x04010203, dominant: 0x04010203}} =
+               M.reduce_rgba(<<1, 2, 3, 4>>, 1, 1)
+    end
+
+    test "a single pixel reports itself with full confidence" do
+      assert {:ok, sample} = M.reduce_rgba(px(0xFF2196F3), 1, 1)
+
+      assert sample == %{
+               average: 0xFF2196F3,
+               dominant: 0xFF2196F3,
+               dominant_share: 1.0,
+               distinct: 1,
+               pixels: 1
+             }
+    end
+
+    test "a flat fill: average and dominant agree, share is 1.0" do
+      assert {:ok, sample} = M.reduce_rgba(fill(0xFF2196F3, 8), 4, 2)
+
+      assert sample.average == 0xFF2196F3
+      assert sample.dominant == 0xFF2196F3
+      assert sample.dominant_share == 1.0
+      assert sample.distinct == 1
+      assert sample.pixels == 8
+    end
+
+    test "text over a fill: dominant keeps the background, average is dragged off it" do
+      # 8 px of :primary blue + 2 px of white "text".
+      buffer = fill(0xFF2196F3, 8) <> fill(0xFFFFFFFF, 2)
+
+      assert {:ok, sample} = M.reduce_rgba(buffer, 5, 2)
+
+      assert sample.dominant == 0xFF2196F3
+      assert sample.dominant_share == 0.8
+      assert sample.distinct == 2
+      # (8*33 + 2*255)/10 = 77.4, (8*150 + 2*255)/10 = 171.0, (8*243 + 2*255)/10 = 245.4
+      assert sample.average == 0xFF4DABF5
+      refute sample.average == sample.dominant
+    end
+
+    test "average is a per-channel mean rounded to nearest, alpha included" do
+      # Same RGB at alpha 0 and 255: alpha averages to round(127.5) = 128 and the
+      # colour channels are untouched — no un-premultiplying, no alpha weighting.
+      buffer = px(0x00808080) <> px(0xFF808080)
+
+      assert {:ok, sample} = M.reduce_rgba(buffer, 2, 1)
+      assert sample.average == 0x80808080
+    end
+
+    test "a tie for dominant breaks toward the higher colour value (deterministic)" do
+      buffer = px(0x00808080) <> px(0xFF808080)
+
+      assert {:ok, sample} = M.reduce_rgba(buffer, 2, 1)
+      assert sample.dominant == 0xFF808080
+      assert sample.dominant_share == 0.5
+      assert sample.distinct == 2
+    end
+
+    test "a gradient reports a low dominant_share — don't trust :dominant there" do
+      buffer =
+        Enum.map_join(0..9, fn i -> px(0xFF000000 + i) end)
+
+      assert {:ok, sample} = M.reduce_rgba(buffer, 10, 1)
+
+      assert sample.distinct == 10
+      assert sample.dominant_share == 0.1
+    end
+
+    test "zero-size regions are refused, not reported as black" do
+      assert M.reduce_rgba(<<>>, 0, 0) == {:error, :empty_region}
+      assert M.reduce_rgba(<<>>, 10, 0) == {:error, :empty_region}
+      assert M.reduce_rgba(px(0xFF2196F3), -1, 1) == {:error, :empty_region}
+    end
+
+    test "a buffer that doesn't match the reported dimensions yields no colour" do
+      # The whole point of this branch: a truncated or mis-sized buffer must not
+      # produce a plausible-looking colour from partial data.
+      assert M.reduce_rgba(fill(0xFF2196F3, 7), 4, 2) == {:error, :size_mismatch}
+      assert M.reduce_rgba(fill(0xFF2196F3, 9), 4, 2) == {:error, :size_mismatch}
+      assert M.reduce_rgba(<<1, 2, 3>>, 1, 1) == {:error, :size_mismatch}
+    end
+
+    test "the glass-theme regression is visible in the reduction" do
+      # The real bug: the iOS renderer discarded every Box background, so a Box
+      # with background: :primary rendered identically to one with
+      # :surface_raised. Sampling the two regions is what makes that detectable.
+      primary = fill(0xFF2196F3, 16)
+      surface_raised = fill(0xFF1E1E1E, 16)
+
+      {:ok, a} = M.reduce_rgba(primary, 4, 4)
+      {:ok, b} = M.reduce_rgba(surface_raised, 4, 4)
+      refute a.dominant == b.dominant
+
+      # Under the bug both Boxes paint the theme's base surface: identical samples.
+      {:ok, bug_a} = M.reduce_rgba(surface_raised, 4, 4)
+      assert bug_a.dominant == b.dominant
+    end
+  end
+
+  describe "sample_color/2" do
+    test "an unreachable node surfaces the dist failure instead of a colour" do
+      assert {:error, {:badrpc, _}} = M.sample_color(:"nonexistent_mob_node@127.0.0.1", "card")
+
+      assert {:error, {:badrpc, _}} =
+               M.sample_color(:"nonexistent_mob_node@127.0.0.1", {0.0, 0.0, 10.0, 10.0})
+    end
+  end
 end

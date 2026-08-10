@@ -51,6 +51,21 @@ defmodule Mob.ReleaseScreenshotTest do
            "screenshot must sit behind a MOB_ENABLE_SCREENSHOT opt-in guard; got: #{guards["screenshot"]}"
   end
 
+  test "sample_region stays debug-only — it must not ride the screenshot opt-in" do
+    guards = registration_guards()
+    assert guards["sample_region"], "sample_region NIF not found in the registration table"
+
+    # sample_region returns raw pixels of an arbitrary rect. Shipped in a release
+    # build it would let a caller reconstruct the screen region by region, which
+    # is exactly the capability MOB_ENABLE_SCREENSHOT exists to make a conscious
+    # opt-in. It is a dev-time colour-verification tool: keep it out of release.
+    refute guards["sample_region"] =~ "MOB_ENABLE_SCREENSHOT",
+           "sample_region must not be release-opt-in; guard was: #{guards["sample_region"]}"
+
+    assert guards["sample_region"] =~ "!MOB_RELEASE",
+           "sample_region must stay behind `#if !MOB_RELEASE`; guard was: #{guards["sample_region"]}"
+  end
+
   test "private synthetic-input NIFs stay strictly debug-only, never release-opt-in" do
     guards = registration_guards()
 
