@@ -10,6 +10,7 @@ defmodule Mob.TestTest do
   defp sample_tree do
     %{
       type: :root,
+      class: nil,
       label: nil,
       value: nil,
       frame: {0.0, 0.0, 393.0, 852.0},
@@ -18,6 +19,7 @@ defmodule Mob.TestTest do
       children: [
         %{
           type: :window,
+          class: "UIWindow",
           label: nil,
           value: nil,
           frame: {0.0, 0.0, 393.0, 852.0},
@@ -26,6 +28,7 @@ defmodule Mob.TestTest do
           children: [
             %{
               type: :scroll,
+              class: "SwiftUI.ScrollViewHost",
               label: nil,
               value: nil,
               frame: {0.0, 62.0, 393.0, 756.0},
@@ -34,6 +37,7 @@ defmodule Mob.TestTest do
               children: [
                 %{
                   type: :button,
+                  class: "SwiftUI.CGDrawingView",
                   label: "Roll Dice",
                   value: nil,
                   frame: {24.0, 416.0, 327.0, 53.5},
@@ -43,6 +47,7 @@ defmodule Mob.TestTest do
                 },
                 %{
                   type: :text,
+                  class: "SwiftUI.CGDrawingView",
                   label: "Hello",
                   value: nil,
                   frame: {24.0, 480.0, 100.0, 24.0},
@@ -52,6 +57,7 @@ defmodule Mob.TestTest do
                 },
                 %{
                   type: :button,
+                  class: "SwiftUI.CGDrawingView",
                   label: "Roll again",
                   value: nil,
                   frame: {24.0, 520.0, 327.0, 53.5},
@@ -95,6 +101,7 @@ defmodule Mob.TestTest do
     test "leaves with no children still emit one entry" do
       tree = %{
         type: :button,
+        class: "UIButton",
         label: "Solo",
         value: nil,
         frame: {0.0, 0.0, 1.0, 1.0},
@@ -142,6 +149,7 @@ defmodule Mob.TestTest do
     test "matches against value as well as label" do
       tree = %{
         type: :root,
+        class: nil,
         label: nil,
         value: nil,
         frame: {0.0, 0.0, 1.0, 1.0},
@@ -150,6 +158,7 @@ defmodule Mob.TestTest do
         children: [
           %{
             type: :text_field,
+            class: "UITextField",
             label: "Name",
             value: "Roll-something",
             frame: {0.0, 0.0, 1.0, 1.0},
@@ -175,9 +184,10 @@ defmodule Mob.TestTest do
   describe "normalize_view_tree/1 (Android JSON path)" do
     defp android_json do
       """
-      {"type":"root","label":null,"value":null,"frame":[0,0,393,852],
+      {"type":"root","class":null,"label":null,"value":null,"frame":[0,0,393,852],
        "bg_color":null,"text_color":null,
-       "children":[{"type":"button","label":"Save","value":null,
+       "children":[{"type":"button","class":"android.widget.Button",
+                    "label":"Save","value":null,
                     "frame":[24,720,327,48],
                     "bg_color":4280391411,"text_color":4294967295,
                     "children":[]}]}
@@ -193,6 +203,7 @@ defmodule Mob.TestTest do
       [button] = root.children
       assert button.type == :button
       assert button.label == "Save"
+      assert button.class == "android.widget.Button"
       assert button.frame == {24.0, 720.0, 327.0, 48.0}
     end
 
@@ -215,10 +226,50 @@ defmodule Mob.TestTest do
       assert root.text_color == nil
       assert root.label == nil
       assert root.value == nil
+      assert root.class == nil
     end
 
     test "passes non-node terms (e.g. an error tuple) through untouched" do
       assert M.normalize_view_tree({:error, :not_loaded}) == {:error, :not_loaded}
+    end
+  end
+
+  describe "color_census/1" do
+    test "tallies painted colours by channel, ignoring nils" do
+      assert %{background: bg, text: text} = M.color_census(sample_tree())
+
+      assert bg == %{0xFF000000 => 1, 0xFF2196F3 => 2}
+      assert text == %{0xFFFFFFFF => 2, 0xDE000000 => 1}
+    end
+
+    test "a tree whose backgrounds were all discarded reports none" do
+      stripped = strip_backgrounds(sample_tree())
+
+      assert %{background: bg, text: text} = M.color_census(stripped)
+
+      # This is the regression shape the API exists to make visible: a theme
+      # that drops every Box background collapses :background to empty while
+      # text colours are untouched.
+      assert bg == %{}
+      assert map_size(text) == 2
+    end
+
+    test "two themes that differ produce different background key sets" do
+      primary = M.color_census(sample_tree()).background
+      raised = M.color_census(recolor(sample_tree(), 0xFF1E1E1E)).background
+
+      refute primary == raised
+      assert Map.keys(raised) == [0xFF1E1E1E]
+    end
+
+    defp strip_backgrounds(node), do: recolor(node, nil)
+
+    defp recolor(%{children: children} = node, color) do
+      %{
+        node
+        | bg_color: if(node.bg_color, do: color),
+          children: Enum.map(children, &recolor(&1, color))
+      }
     end
   end
 
