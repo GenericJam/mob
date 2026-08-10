@@ -76,6 +76,19 @@ Mob.Test.inspect(node)           # full snapshot: screen, assigns, nav stack, wi
 This is faster, exact (not pixel-inferred), and works without taking a
 screenshot. Use it as the default.
 
+**Colour is the exception.** `view_tree/1`'s `bg_color`/`text_color` are `nil`
+for virtually all SwiftUI content (iOS 26 paints via `SDFLayer` or rasterises
+into `contents` — colour for 4 of 443 nodes when measured). To verify what was
+actually drawn, sample pixels:
+
+```elixir
+Mob.Test.sample_color(node, "my-card")   # {:ok, %{average: 0xFF2196F3, dominant: ..., ...}}
+```
+
+It crops in the NIF, so only that element's pixels cross dist. See
+`decisions/2026-08-09-view-tree-colour-needs-screenshot-sampling.md` and
+`decisions/2026-08-10-sample-region-crops-natively-and-stays-debug-only.md`.
+
 ### Drive
 
 ```elixir

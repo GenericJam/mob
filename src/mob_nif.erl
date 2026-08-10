@@ -102,6 +102,7 @@
     %% (remote-driving: agent gets pixels + deterministic scroll over dist,
     %% no adb/xcrun). See Mob.Test.screenshot/2, scroll_info/2, scroll_to/3.
     screenshot/3,
+    sample_region/4,
     scroll_info/1,
     scroll_to/3,
     element_frames/0,
@@ -200,6 +201,7 @@
     long_press_xy/3,
     swipe_xy/4,
     screenshot/3,
+    sample_region/4,
     scroll_info/1,
     scroll_to/3,
     element_frames/0,
@@ -345,6 +347,13 @@ swipe_xy(_X1, _Y1, _X2, _Y2) -> erlang:nif_error(not_loaded).
 %% scroll_info(Id) -> #{offset, content, viewport, max_offset, kind} | {error, Reason}
 %% scroll_to(Id, X, Y) -> ok | {error, Reason}
 screenshot(_Format, _Quality, _Scale) -> erlang:nif_error(not_loaded).
+%% sample_region(X, Y, W, H) -> {ok, PixelW, PixelH, RGBA} | {error, Reason}
+%%   X/Y/W/H are window points (the element_frames/0 space); RGBA is
+%%   PixelW*PixelH*4 bytes of 8-bit RGBA at the native screen scale.
+%%   Reason :: empty_region | offscreen | no_window | capture_failed.
+%% Pixel sampling is the only reliable way to verify a drawn colour on iOS 26 —
+%% see Mob.Test.sample_color/2. iOS only; the stub raises on Android.
+sample_region(_X, _Y, _W, _H) -> erlang:nif_error(not_loaded).
 scroll_info(_Id) -> erlang:nif_error(not_loaded).
 scroll_to(_Id, _X, _Y) -> erlang:nif_error(not_loaded).
 %% element_frames() -> JSON binary {"id":[x,y,w,h],...} of on-screen frames for

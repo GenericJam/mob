@@ -39,6 +39,9 @@ defmodule Mob.Test do
       Mob.Test.frame(node, "save")                  # {x, y, w, h}
       Mob.Test.tap_id(node, "save")                 # drive by id at real coords
 
+      # What colour did the app actually draw? (samples pixels — the view tree can't)
+      Mob.Test.sample_color(node, "my-card")        # %{average: 0xFF2196F3, ...}
+
       # Device API simulation
       Mob.Test.send_message(node, {:permission, :camera, :granted})
       Mob.Test.send_message(node, {:camera, :photo, %{path: "/tmp/photo.jpg", width: 1920, height: 1080}})
@@ -120,6 +123,7 @@ defmodule Mob.Test do
   | `send_message/2`             | ✅            | ✅            | ✅              |
   | `screen_info/1`              | ✅            | ✅            | ✅              |
   | `view_tree/1`                | ✅ (shallow†) | ✅ (shallow†) | ❌ not_loaded‡  |
+  | `sample_color/2`             | ✅            | ✅            | ❌ not_loaded°  |
   | `find_view/2`                | ✅            | ✅            | ❌ not_loaded‡  |
   | `ui_tree/1` (legacy AX)      | ⚠️ AX active§ | ⚠️ AX active§ | ❌ not_loaded   |
   | `ax_action/3`                | ⚠️ AX active§ | ⚠️ AX active§ | ❌ not_supported |
@@ -142,6 +146,9 @@ defmodule Mob.Test do
     would stop at the `AndroidComposeView` host anyway — the real fix is
     `Modifier.onGloballyPositioned` in Mob's components writing to a registry
     the NIF reads. See `issues.md` #11.
+  - **°** `sample_region/4` is implemented in `ios/mob_nif.m` only. Android
+    would need the same crop-in-the-render treatment against the activity
+    window; until then `sample_color/2` returns `{:error, {:badrpc, _}}` there.
   - **§** "AX active" means an iOS accessibility client is asking for the
     AX tree so SwiftUI materializes it. Today: VoiceOver toggle. Production:
     `XCAXClient_iOS` activation, debug-only — see WireTap stretch goals in
@@ -517,7 +524,9 @@ defmodule Mob.Test do
 
   **If colours come back `nil` across the board**, don't guess at the reason —
   call `paint_debug/1`, which reports which view/layer classes the renderer
-  produced and which colour properties they actually set.
+  produced and which colour properties they actually set. On iOS 26 SwiftUI that
+  is the expected outcome, and `sample_color/2` (real pixels) is the way to
+  verify a drawn colour.
 
   On Android, the JSON returned by `mob_nif:ui_view_tree/0` is decoded here —
   but no shipped `MobBridge.kt` implements `uiViewTree()`, so today Android
@@ -1438,6 +1447,152 @@ defmodule Mob.Test do
       {:error, _} = err -> err
     end
   end
+
+  # ── Colour sampling (pixels, because the view tree can't answer) ─────────────
+
+  @doc """
+  What colour did the app actually draw in a region? Samples real pixels.
+
+  Address the region either by an element `:id` (resolved through
+  `element_frames/1`) or by an explicit `{x, y, w, h}` rect in logical points:
+
+      Mob.Test.sample_color(node, "my-card")
+      Mob.Test.sample_color(node, {24.0, 416.0, 327.0, 53.5})
+
+  Returns `{:ok, sample}` where `sample` is the map `reduce_rgba/3` produces:
+
+      {:ok, %{average: 0xFF2196F3, dominant: 0xFF2196F3, dominant_share: 0.94,
+              distinct: 37, pixels: 2400}}
+
+  ## Why pixels and not `view_tree/1`
+
+  `view_tree/1`'s `:bg_color` is `nil` for virtually all SwiftUI content — on
+  iOS 26 SwiftUI paints via `SDFLayer` or rasterises into `contents`, exposing no
+  readable paint property (measured: colour for 4 of 443 nodes; see
+  `decisions/2026-08-09-view-tree-colour-needs-screenshot-sampling.md`). Sampling
+  the rendered pixels is the only way to catch a regression like the glass theme
+  that discarded every Box background — under which a `background: :primary` Box
+  and a `:surface_raised` Box sample to the *same* colour, and that difference is
+  what this asserts.
+
+  ## Reading the result
+
+  A region is rarely one flat colour — a card has text, a border, antialiased
+  corners — so a bare mean can be misleading. `:average` is the mean, `:dominant`
+  is the most common exact pixel value (the background of a mostly-flat region),
+  and `:dominant_share` says how much to trust it: `0.9` is a flat fill, `0.2` is
+  a gradient or a busy region where only `:average` means much. Assert on
+  `:dominant` for solid fills, on `:average` for anything glassy.
+
+  ## Errors
+
+    * `{:error, :not_found}` — no element with that `:id` has a tracked frame
+      (the element needs an `:id`, and must have laid out at least once)
+    * `{:error, :empty_frame}` — the element's frame has zero width or height
+    * `{:error, :offscreen}` — the rect lies entirely outside the window
+    * `{:error, :no_window}` — app has no visible window (backgrounded)
+    * `{:error, :size_mismatch}` — the buffer didn't match the reported
+      dimensions, so no colour is reported rather than a wrong one
+    * `{:error, {:badrpc, _}}` — no `sample_region/4` on this platform; the NIF
+      is iOS-only and debug-build only
+
+  A rect that only partly overlaps the window is clamped to the visible part and
+  `:pixels` reports what was actually sampled.
+
+  The payload is `w * h * screen_scale^2 * 4` bytes — cropping happens in the
+  native render, so an element-sized region is tens to hundreds of KB, not a
+  framebuffer. Don't hand it a full-screen rect.
+  """
+  @spec sample_color(node(), String.t() | atom() | {number(), number(), number(), number()}) ::
+          {:ok, map()} | {:error, term()}
+  def sample_color(node, id_or_rect)
+
+  def sample_color(node, {x, y, w, h})
+      when is_number(x) and is_number(y) and is_number(w) and is_number(h) do
+    sample_rect(node, x, y, w, h)
+  end
+
+  def sample_color(node, id) do
+    case frame(node, id) do
+      {_x, _y, w, h} when w <= 0.0 or h <= 0.0 -> {:error, :empty_frame}
+      {x, y, w, h} -> sample_rect(node, x, y, w, h)
+      nil -> {:error, :not_found}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp sample_rect(node, x, y, w, h) do
+    args = [x * 1.0, y * 1.0, w * 1.0, h * 1.0]
+
+    case :rpc.call(node, :mob_nif, :sample_region, args) do
+      {:ok, pixel_w, pixel_h, rgba} -> reduce_rgba(rgba, pixel_w, pixel_h)
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  end
+
+  @doc """
+  Reduce a raw RGBA buffer to colour statistics. Pure — no device needed.
+
+  `rgba` is `width * height` pixels of 4 bytes each in R, G, B, A order (what
+  `:mob_nif.sample_region/4` returns). Colours come back as `0xAARRGGBB`
+  integers, alpha first, matching component props (`guides/theming.md`).
+
+      Mob.Test.reduce_rgba(<<0, 0, 255, 255, 0, 0, 255, 255>>, 2, 1)
+      #=> {:ok, %{average: 0xFF0000FF, dominant: 0xFF0000FF, dominant_share: 1.0,
+      #           distinct: 1, pixels: 2}}
+
+  `:average` is the per-channel mean (each channel independently, alpha
+  included, rounded to nearest). `:dominant` is the most frequent exact pixel
+  value, ties broken by the higher `0xAARRGGBB` value so the result is
+  deterministic. `:dominant_share` is its fraction of all pixels and
+  `:distinct` counts distinct values — together they say whether `:dominant`
+  describes a flat fill or just the most common pixel of a gradient.
+
+  The capture path renders opaque, so alpha is `255` in practice; a buffer with
+  varying alpha is averaged channel-wise and *not* un-premultiplied.
+
+  `{:error, :empty_region}` for a non-positive dimension, `{:error,
+  :size_mismatch}` when `byte_size(rgba) != width * height * 4`.
+  """
+  @spec reduce_rgba(binary(), integer(), integer()) :: {:ok, map()} | {:error, atom()}
+  def reduce_rgba(rgba, width, height)
+      when is_binary(rgba) and is_integer(width) and is_integer(height) do
+    pixels = width * height
+
+    cond do
+      width <= 0 or height <= 0 -> {:error, :empty_region}
+      byte_size(rgba) != pixels * 4 -> {:error, :size_mismatch}
+      true -> {:ok, rgba_stats(rgba, pixels)}
+    end
+  end
+
+  defp rgba_stats(rgba, pixels) do
+    {sum_a, sum_r, sum_g, sum_b, freq} =
+      for <<r, g, b, a <- rgba>>, reduce: {0, 0, 0, 0, %{}} do
+        {sum_a, sum_r, sum_g, sum_b, freq} ->
+          {sum_a + a, sum_r + r, sum_g + g, sum_b + b,
+           Map.update(freq, argb(a, r, g, b), 1, &(&1 + 1))}
+      end
+
+    {dominant, count} = Enum.max_by(freq, fn {color, n} -> {n, color} end)
+
+    %{
+      average:
+        argb(
+          round(sum_a / pixels),
+          round(sum_r / pixels),
+          round(sum_g / pixels),
+          round(sum_b / pixels)
+        ),
+      dominant: dominant,
+      dominant_share: count / pixels,
+      distinct: map_size(freq),
+      pixels: pixels
+    }
+  end
+
+  defp argb(a, r, g, b), do: a * 0x1000000 + r * 0x10000 + g * 0x100 + b
 
   # ── Native UI (requires MCP tools) ───────────────────────────────────────────
 
