@@ -81,7 +81,7 @@ defmodule Mob.Test do
   | API                           | Source                              | When to use |
   |-------------------------------|-------------------------------------|-------------|
   | `tree/1`, `find/2`            | Mob render tree (logical components) | Mob apps you control. Fast, exact, has `on_tap` tags, no AX activation needed. |
-  | `view_tree/1`, `find_view/2`  | Native view hierarchy via NIF       | Native pixel frames; works for any app on iOS UIKit; shallow on SwiftUI/Compose. |
+  | `view_tree/1`, `find_view/2`  | Native view hierarchy via NIF       | Native pixel frames **and painted colours**; works for any app on iOS UIKit; shallow on SwiftUI/Compose. |
   | `ui_tree/1`                   | OS accessibility tree               | What sighted users read; works on any app *if* AX is active (iOS: VoiceOver). Strict superset of `view_tree` for UIKit; the only path to semantics inside SwiftUI/Compose. |
 
   Choose render tree first if your app is Mob-rendered. Reach for `view_tree`
@@ -119,29 +119,44 @@ defmodule Mob.Test do
   | `back/1`, `pop/1`, `navigate`| ✅            | ✅            | ✅              |
   | `send_message/2`             | ✅            | ✅            | ✅              |
   | `screen_info/1`              | ✅            | ✅            | ✅              |
-  | `view_tree/1`                | ✅ (shallow†) | ✅ (shallow†) | ✅ (root only‡) |
-  | `find_view/2`                | ✅            | ✅            | ✅              |
+  | `view_tree/1`                | ✅ (shallow†) | ✅ (shallow†) | ❌ not_loaded‡  |
+  | `find_view/2`                | ✅            | ✅            | ❌ not_loaded‡  |
   | `ui_tree/1` (legacy AX)      | ⚠️ AX active§ | ⚠️ AX active§ | ❌ not_loaded   |
   | `ax_action/3`                | ⚠️ AX active§ | ⚠️ AX active§ | ❌ not_supported |
   | `ax_action_at_xy/4`          | ⚠️ AX active§ | ⚠️ AX active§ | ❌ not_supported |
   | `toggle/2`                   | ⚠️ AX active§ | ⚠️ AX active§ | ❌ ui_tree_unavailable |
   | `dismiss_alert/2`            | ⚠️ AX active§ | ⚠️ AX active§ | ❌ ui_tree_unavailable |
   | `adjust_slider/4`            | ⚠️ AX active§ | ⚠️ AX active§ | ❌ ui_tree_unavailable |
-  | `tap_xy/3`                   | ✅ (AX path)  | ✅ (HID inj.) | n/a             |
-  | `swipe/5`                    | ⚠️ scroll only| ✅ (HID inj.) | n/a             |
+  | `tap_xy/3`                   | ⚠️ AX-activatable only¶ | ❌ no_effect¶ | n/a  |
+  | `swipe/5`                    | ⚠️ scroll only| ⚠️ unverified✱| n/a             |
 
   - **†** SwiftUI doesn't expose its content as separate UIView instances —
     `view_tree` reaches the SwiftUI hosting view's container and stops.
     For semantic content on Mob screens use `tree/1` (render tree); for any
     other SwiftUI-based content use `ui_tree/1`.
-  - **‡** Android's Mob renderer is Compose. The View walk stops at the
-    `AndroidComposeView` host. The eventual fix is `Modifier.onGloballyPositioned`
-    in Mob's components writing to a registry the NIF reads (planned).
-    See `issues.md` #11.
+  - **‡** Android's `ui_view_tree` NIF delegates to a `MobBridge.uiViewTree()`
+    Kotlin method that no shipped template implements, so it returns
+    `{:error, :not_loaded}`. When it lands it must emit the same keys iOS does
+    (including `bg_color`/`text_color`); the contract is documented at the NIF
+    in `android/jni/mob_nif.zig`. The Mob renderer is Compose, so the View walk
+    would stop at the `AndroidComposeView` host anyway — the real fix is
+    `Modifier.onGloballyPositioned` in Mob's components writing to a registry
+    the NIF reads. See `issues.md` #11.
   - **§** "AX active" means an iOS accessibility client is asking for the
     AX tree so SwiftUI materializes it. Today: VoiceOver toggle. Production:
     `XCAXClient_iOS` activation, debug-only — see WireTap stretch goals in
     `future_developments.md`.
+  - **¶** `tap_xy/3` now verifies that the tap actually produced an event
+    before returning `:ok`. On the simulator that limits it to elements SwiftUI
+    exposes an accessibility action for (`Button`, text fields) — a `Box` with
+    `on_tap:` returns `{:error, :no_effect}`. On a physical device the
+    IOHID-injected touch is accepted but never delivered, so **every**
+    coordinate returns `{:error, :no_effect}`. Drive taps with `tap/2` (by tag);
+    see `tap_xy/3` and
+    `decisions/2026-08-09-ios-device-tap-injection-has-no-effect.md`.
+  - **✱** `swipe/5` and `long_press/4` use the same device injection path as
+    `tap_xy/3` and still report `:ok` on acceptance rather than on effect.
+    Same root cause, not yet converted — treat their `:ok` as unverified.
 
   Helpers that depend on AX return clear error tuples on Android instead of
   raising. Callers should match on `{:error, :not_supported_on_android}` and
@@ -453,44 +468,78 @@ defmodule Mob.Test do
       %{
         type: :root, label: nil, value: nil,
         frame: {0.0, 0.0, 393.0, 852.0},
+        bg_color: nil, text_color: nil,
         children: [
           %{type: :window, ..., children: [
             %{type: :scroll, ..., children: [
               %{type: :button, label: "Roll Dice",
-                frame: {24.0, 416.0, 327.0, 53.5}, children: []}
+                frame: {24.0, 416.0, 327.0, 53.5},
+                bg_color: 0xFF2196F3, text_color: 0xFFFFFFFF, children: []}
             ]}
           ]}
         ]
       }
 
-  On Android, the JSON returned by `mob_nif:ui_view_tree/0` is decoded here.
+  ## Colours
+
+  `:bg_color` and `:text_color` are the colours the view **actually painted**,
+  as `0xAARRGGBB` integers — the same representation component props use
+  (`guides/theming.md`). `nil` means the view paints no colour of its own
+  (most containers) or the colour has no single RGBA value (pattern fills).
+
+  Because these are read back off `UIView`/`CALayer` rather than echoed from
+  the render tree, they are the way to catch a styling regression where a theme
+  or modifier silently drops a colour Elixir sent. Compare against
+  `tree/1` (what Elixir asked for) to see the two diverge.
+
+  Colours are subject to the same coverage caveat as everything else here: on a
+  SwiftUI Mob screen you get the hosting containers' colours, not one node per
+  Mob component.
+
+  On Android, the JSON returned by `mob_nif:ui_view_tree/0` is decoded here —
+  but no shipped `MobBridge.kt` implements `uiViewTree()`, so today Android
+  returns `{:error, :not_loaded}`.
   """
   @spec view_tree(node()) :: map() | {:error, term()}
   def view_tree(node) do
     case :rpc.call(node, :mob_nif, :ui_view_tree, []) do
-      bin when is_binary(bin) -> :json.decode(bin) |> normalize_tree()
+      bin when is_binary(bin) -> bin |> :json.decode() |> normalize_view_tree()
       %{} = m -> m
       other -> other
     end
   end
 
-  # JSON decode produces string keys; the iOS NIF returns atom keys directly.
-  # Normalize to atom keys so the API is uniform across platforms.
-  defp normalize_tree(%{"type" => _} = node) do
+  @doc """
+  Normalize an Android-shaped (JSON-decoded, string-keyed) view tree into the
+  iOS map shape: atom keys, atom `:type`, `{x, y, w, h}` frame tuple.
+
+  `view_tree/1` applies this automatically. It's public so a captured tree can
+  be normalized without a device.
+  """
+  @spec normalize_view_tree(map() | term()) :: map() | term()
+  def normalize_view_tree(%{"type" => _} = node) do
     %{
       type: normalize_atom(node["type"]),
-      label: node["label"],
-      value: node["value"],
+      label: denull(node["label"]),
+      value: denull(node["value"]),
       frame:
         case node["frame"] do
           [x, y, w, h] -> {x * 1.0, y * 1.0, w * 1.0, h * 1.0}
-          other -> other
+          other -> denull(other)
         end,
-      children: Enum.map(node["children"] || [], &normalize_tree/1)
+      bg_color: denull(node["bg_color"]),
+      text_color: denull(node["text_color"]),
+      children: Enum.map(denull(node["children"]) || [], &normalize_view_tree/1)
     }
   end
 
-  defp normalize_tree(other), do: other
+  def normalize_view_tree(other), do: other
+
+  # `:json.decode/1` maps JSON null to the atom :null. Left as-is it leaks into
+  # every comparison against nil, and `:null || []` is truthy, so an absent
+  # children list would crash Enum.map.
+  defp denull(:null), do: nil
+  defp denull(other), do: other
 
   defp normalize_atom(s) when is_binary(s), do: String.to_atom(s)
   defp normalize_atom(a) when is_atom(a), do: a
@@ -787,12 +836,48 @@ defmodule Mob.Test do
   end
 
   @doc """
-  Tap at screen coordinates on the native app. On simulator uses accessibility
-  activation; on real device synthesises a UITouch via IOHIDEvent.
+  Tap at screen coordinates on the native app.
 
       Mob.Test.tap_xy(node, 289.7, 518.8)
+
+  ## Return values
+
+  `:ok` means **the app reacted** — an event reached the BEAM within 300ms of
+  the tap. Every other outcome is an error tuple; there is no "probably worked".
+
+  | Value | Meaning |
+  |---|---|
+  | `:ok` | A `tap`/`focus`/`change`/`submit`/`select` event reached the BEAM. |
+  | `{:error, :no_view_at_point}` | Hit-test found nothing — the coordinate is outside every visible window. |
+  | `{:error, :no_element_at_point}` | iOS simulator only: a view is there but no accessibility element to activate. |
+  | `{:error, :no_effect}` | Input was accepted by the OS but no handler ran. |
+  | `{:error, probe}` | iOS device only: the private injection API is missing; `probe` lists which selectors resolved. |
+
+  ## Real capability per platform — read before trusting a result
+
+  - **iOS simulator** — activates the accessibility element under the point.
+    That works for `Button`, and for text fields (the responder chain is walked
+    to focus them). It does **not** work for Mob's `Box`/`Row`/`Column` with
+    `on_tap:`: SwiftUI gives a plain `.onTapGesture` no accessibility action, so
+    activation is accepted and the handler never runs. Those taps return
+    `{:error, :no_effect}`. Use `tap/2` (by tag) to drive them.
+  - **iOS physical device** — synthesises an `IOHIDEvent`. As of iOS 26.5 UIKit
+    accepts the event and delivers no touch, so this returns
+    `{:error, :no_effect}` for every coordinate. Treat coordinate tapping as
+    **not working on device** and use `tap/2`. See
+    `decisions/2026-08-09-ios-device-tap-injection-has-no-effect.md`.
+  - **Android** — not routed through this function; `adb shell input tap` works
+    and is what the tooling uses.
+
+  ## `:no_effect` in sidecar mode
+
+  The check is "did an event reach the BEAM", so it only sees handlers Mob owns.
+  Driving a non-Mob app (sidecar mode), a genuinely successful tap still reports
+  `{:error, :no_effect}` because there is nothing for the NIF to observe.
+  Confirm those with `ui_tree/1` or a screenshot instead.
   """
-  @spec tap_xy(node(), number(), number()) :: :ok | {:error, atom()}
+  @spec tap_xy(node(), number(), number()) ::
+          :ok | {:error, :no_view_at_point | :no_element_at_point | :no_effect | term()}
   def tap_xy(node, x, y) do
     :rpc.call(node, :mob_nif, :tap_xy, [x * 1.0, y * 1.0])
   end
@@ -1248,6 +1333,9 @@ defmodule Mob.Test do
   (see `element_frames/1`).
 
       Mob.Test.tap_id(node, "save")
+
+  Inherits `tap_xy/3`'s return contract, including its platform limits — read
+  those before treating a non-`:ok` result as a test failure.
   """
   @spec tap_id(node(), String.t() | atom()) :: :ok | {:error, term()}
   def tap_id(node, id) do

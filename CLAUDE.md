@@ -223,13 +223,23 @@ over Erlang distribution to a remote test runner or agent.
   `[{type, label, value, {x,y,w,h}}, ...]` tuples. Works on any app with zero modification.
 - `ui_debug/0` — raw accessibility dump for debugging
 
-**Phase 2 — Synthetic interaction (complete)**
+**Phase 2 — Synthetic interaction (partial — see the honesty note below)**
 
 - `tap/1` — tap by accessibility label
 - `tap_xy/2` — tap at screen coordinates (with responder-chain walk to focus text fields)
 - `type_text/1` — type into the focused text field
 - `delete_backward/0`, `key_press/1`, `clear_text/0` — keyboard control
 - `long_press_xy/3`, `swipe_xy/4` — gesture synthesis
+
+Coordinate-driven input is *not* finished, whatever the list above implies.
+`tap_xy/2` now returns `:ok` only when the app demonstrably reacted; on the
+simulator that limits it to `Button`s and text fields, and on a physical device
+the injected IOHID touch is accepted but never delivered, so every coordinate
+returns `{:error, :no_effect}`. `swipe_xy/4` and `long_press_xy/3` still report
+on acceptance and their `:ok` is unverified. Drive Mob screens with
+`Mob.Test.tap/2` (by tag). See
+`decisions/2026-08-09-tap-xy-reports-observed-effect.md` and
+`decisions/2026-08-09-ios-device-tap-injection-has-no-effect.md`.
 
 **Phase 3 — Full cocoon / event interception (future)**
 

@@ -212,6 +212,17 @@ These are the things we've burned ourselves on. Following them isn't optional.
     rather than duplicating them. See
     `mob_dev/decisions/2026-06-19-mob-adopt-lives-in-mob_dev.md`.
 
+14. **Don't drive iOS by coordinate — use `Mob.Test.tap/2`.** `tap_xy/3` works
+    on the simulator only for elements SwiftUI gives an accessibility action
+    (`Button`, text fields); a `Box` with `on_tap:` has none. On a physical
+    device the injected IOHID touch is accepted and never delivered, so every
+    coordinate fails. Both now return `{:error, :no_effect}` instead of the
+    `:ok` they used to — a harness that reported success for taps that did
+    nothing let a downstream iOS renderer bug sit unverified for weeks. When
+    you add a harness NIF, make its success value mean *observed effect*, never
+    *the platform API didn't complain*. See
+    `decisions/2026-08-09-tap-xy-reports-observed-effect.md`.
+
 ## Where to look
 
 | Question | File |
