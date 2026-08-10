@@ -3955,14 +3955,96 @@ static ERL_NIF_TERM argb_term_from_uicolor(ErlNifEnv *env, UIColor *color) {
     return enif_make_ulong(env, argb);
 }
 
-// What the view actually paints behind its content. SwiftUI's
-// `.background(Color)` lands on a plain UIView's backgroundColor, but shape
-// fills and several UIKit controls set only the layer, so both are consulted.
+// ── Where the paint actually lives ───────────────────────────────────────────
+//
+// UIKit puts colour on the view (`UILabel.textColor`, `UIView.backgroundColor`).
+// SwiftUI mostly doesn't: `.background(Color, in: shape)` and `.foregroundColor`
+// (which is what `MobRootView` uses for every Box and Text) go through SwiftUI's
+// own renderer, and the resulting colour lands on a CALayer — usually a
+// CAShapeLayer fill — hanging off a structural view whose own backgroundColor
+// stays nil. Reading only the view is why a 443-node dump came back with two
+// colours, both system chrome.
+//
+// So each node harvests from its own layer subtree as well. A view's
+// `layer.sublayers` includes its subviews' layers; those are excluded so a
+// container never claims a child's paint as its own.
+
+// Depth cap: SwiftUI stacks a handful of layers per view, never dozens. Bounding
+// the walk keeps ui_view_tree's cost linear in views, not in the whole layer graph.
+#define MOB_LAYER_WALK_DEPTH 6
+
+static BOOL mob_all_gradient_stops_equal(CAGradientLayer *gradient) {
+    if (gradient.colors.count < 2)
+        return YES;
+    id first = gradient.colors.firstObject;
+    for (id c in gradient.colors) {
+        if (!CGColorEqualToColor((__bridge CGColorRef)c, (__bridge CGColorRef)first))
+            return NO;
+    }
+    return YES;
+}
+
+// The single colour this layer paints, or NULL. A gradient with distinct stops
+// has no single colour, so it reports none rather than inventing one from a stop.
+static CGColorRef mob_layer_fill_color(CALayer *layer) {
+    if ([layer isKindOfClass:[CAShapeLayer class]]) {
+        CGColorRef fill = ((CAShapeLayer *)layer).fillColor;
+        if (fill && CGColorGetAlpha(fill) > 0)
+            return fill;
+    }
+    if ([layer isKindOfClass:[CAGradientLayer class]]) {
+        CAGradientLayer *gradient = (CAGradientLayer *)layer;
+        if (gradient.colors.count && mob_all_gradient_stops_equal(gradient))
+            return (__bridge CGColorRef)gradient.colors.firstObject;
+    }
+    if (layer.backgroundColor && CGColorGetAlpha(layer.backgroundColor) > 0)
+        return layer.backgroundColor;
+    return NULL;
+}
+
+static CGColorRef mob_layer_text_color(CALayer *layer) {
+    if ([layer isKindOfClass:[CATextLayer class]])
+        return ((CATextLayer *)layer).foregroundColor;
+    return NULL;
+}
+
+typedef CGColorRef (*MobLayerColorFn)(CALayer *);
+
+// First colour `probe` finds in this layer subtree, skipping layers owned by
+// subviews (they are visited as their own nodes).
+static CGColorRef mob_walk_layers(CALayer *layer, NSSet *subviewLayers, MobLayerColorFn probe,
+                                  int depth) {
+    if (!layer || depth > MOB_LAYER_WALK_DEPTH)
+        return NULL;
+    CGColorRef own = probe(layer);
+    if (own)
+        return own;
+    for (CALayer *sub in layer.sublayers) {
+        if ([subviewLayers containsObject:sub])
+            continue;
+        CGColorRef found = mob_walk_layers(sub, subviewLayers, probe, depth + 1);
+        if (found)
+            return found;
+    }
+    return NULL;
+}
+
+static NSSet *mob_subview_layers(UIView *view) {
+    NSMutableSet *layers = [NSMutableSet setWithCapacity:view.subviews.count];
+    for (UIView *sub in view.subviews) {
+        if (sub.layer)
+            [layers addObject:sub.layer];
+    }
+    return layers;
+}
+
 static ERL_NIF_TERM extract_view_bg_color(ErlNifEnv *env, UIView *view) {
-    if (view.backgroundColor)
+    if (view.backgroundColor && CGColorGetAlpha(view.backgroundColor.CGColor) > 0)
         return argb_term_from_uicolor(env, view.backgroundColor);
-    if (view.layer.backgroundColor)
-        return argb_term_from_uicolor(env, [UIColor colorWithCGColor:view.layer.backgroundColor]);
+    CGColorRef painted = mob_walk_layers(view.layer, mob_subview_layers(view), mob_layer_fill_color,
+                                         0);
+    if (painted)
+        return argb_term_from_uicolor(env, [UIColor colorWithCGColor:painted]);
     return enif_make_atom(env, "nil");
 }
 
@@ -3976,6 +4058,10 @@ static ERL_NIF_TERM extract_view_text_color(ErlNifEnv *env, UIView *view) {
     if ([view isKindOfClass:[UIButton class]])
         return argb_term_from_uicolor(env,
                                       [(UIButton *)view titleColorForState:UIControlStateNormal]);
+    CGColorRef painted = mob_walk_layers(view.layer, mob_subview_layers(view), mob_layer_text_color,
+                                         0);
+    if (painted)
+        return argb_term_from_uicolor(env, [UIColor colorWithCGColor:painted]);
     return enif_make_atom(env, "nil");
 }
 
@@ -3999,11 +4085,16 @@ static ERL_NIF_TERM build_view_node(ErlNifEnv *env, UIView *view, int depth) {
         children = enif_make_list_cell(env, child, children);
     }
 
-    ERL_NIF_TERM keys[7] = {enif_make_atom(env, "type"),     enif_make_atom(env, "label"),
-                            enif_make_atom(env, "value"),    enif_make_atom(env, "frame"),
-                            enif_make_atom(env, "bg_color"), enif_make_atom(env, "text_color"),
-                            enif_make_atom(env, "children")};
-    ERL_NIF_TERM vals[7] = {enif_make_atom(env, type_str),
+    // `class` is the concrete UIView subclass. On SwiftUI it's the only thing
+    // that says what a node actually is (`type` collapses everything unknown to
+    // "view"), and it's what tells you which renderer drew a node when a colour
+    // comes back nil.
+    ERL_NIF_TERM keys[8] = {enif_make_atom(env, "type"),       enif_make_atom(env, "class"),
+                            enif_make_atom(env, "label"),      enif_make_atom(env, "value"),
+                            enif_make_atom(env, "frame"),      enif_make_atom(env, "bg_color"),
+                            enif_make_atom(env, "text_color"), enif_make_atom(env, "children")};
+    ERL_NIF_TERM vals[8] = {enif_make_atom(env, type_str),
+                            nsstring_to_term(env, NSStringFromClass(object_getClass(view))),
                             nsstring_to_term(env, text),
                             nsstring_to_term(env, value),
                             frame,
@@ -4011,7 +4102,7 @@ static ERL_NIF_TERM build_view_node(ErlNifEnv *env, UIView *view, int depth) {
                             extract_view_text_color(env, view),
                             children};
     ERL_NIF_TERM result;
-    enif_make_map_from_arrays(env, keys, vals, 7, &result);
+    enif_make_map_from_arrays(env, keys, vals, 8, &result);
     return result;
 }
 
@@ -4037,13 +4128,15 @@ static ERL_NIF_TERM nif_ui_view_tree(ErlNifEnv *env, int argc, const ERL_NIF_TER
 
     // Synthetic root wrapping all top-level windows. Frame is the screen size
     // so consumers always have a valid bounding box for the whole UI.
-    // The synthetic root paints nothing, so its colours are always nil — but the
-    // keys are present so consumers can read node.bg_color on any node.
-    ERL_NIF_TERM root_keys[7] = {enif_make_atom(env, "type"),     enif_make_atom(env, "label"),
-                                 enif_make_atom(env, "value"),    enif_make_atom(env, "frame"),
-                                 enif_make_atom(env, "bg_color"), enif_make_atom(env, "text_color"),
-                                 enif_make_atom(env, "children")};
-    ERL_NIF_TERM root_vals[7] = {enif_make_atom(env, "root"),
+    // The synthetic root paints nothing and has no class, so those are always
+    // nil — but the keys are present so consumers can read them on any node.
+    ERL_NIF_TERM root_keys[8] = {
+        enif_make_atom(env, "type"),     enif_make_atom(env, "class"),
+        enif_make_atom(env, "label"),    enif_make_atom(env, "value"),
+        enif_make_atom(env, "frame"),    enif_make_atom(env, "bg_color"),
+        enif_make_atom(env, "text_color"), enif_make_atom(env, "children")};
+    ERL_NIF_TERM root_vals[8] = {enif_make_atom(env, "root"),
+                                 enif_make_atom(env, "nil"),
                                  enif_make_atom(env, "nil"),
                                  enif_make_atom(env, "nil"),
                                  enif_make_tuple4(env, enif_make_double(env, 0.0),
@@ -4054,8 +4147,143 @@ static ERL_NIF_TERM nif_ui_view_tree(ErlNifEnv *env, int argc, const ERL_NIF_TER
                                  enif_make_atom(env, "nil"),
                                  windows_list};
     ERL_NIF_TERM root;
-    enif_make_map_from_arrays(env, root_keys, root_vals, 7, &root);
+    enif_make_map_from_arrays(env, root_keys, root_vals, 8, &root);
     return root;
+}
+
+// ── ui_paint_debug/0 — census of where colour lives in this app's view tree ──
+//
+// When ui_view_tree reports nil colours you need to know *why* before changing
+// the extractor: which view classes the renderer produced, what layers hang off
+// them, and which colour-bearing properties are actually set. Guessing at
+// SwiftUI's private class names across device rebuilds is the slow way to find
+// that out; this answers it in one RPC.
+//
+// Returns a JSON binary, grouped by (view class, layer class, sublayer classes)
+// with a count and a tally of which paint properties were non-nil in that group:
+//
+//   {"total_views":443,
+//    "groups":[{"view":"SwiftUI.CGDrawingView","layer":"SwiftUI.CGDrawingLayer",
+//               "sublayers":["CAShapeLayer"],"count":40,
+//               "view_bg":0,"layer_bg":0,"shape_fill":40,"gradient":0,
+//               "text_layer_fg":0,"uikit_text":0,"has_contents":40}, ...]}
+//
+// Read it as: for these 40 views, colour is only in CAShapeLayer.fillColor, so
+// that is what the extractor has to read.
+static void mob_paint_census(UIView *view, NSMutableDictionary *groups, int depth) {
+    if (!view || depth > 50)
+        return;
+
+    NSMutableArray<NSString *> *sublayerClasses = [NSMutableArray array];
+    NSSet *ownedBySubviews = mob_subview_layers(view);
+    BOOL shapeFill = NO, gradient = NO, textLayerFg = NO, layerBg = NO, contents = NO;
+    for (CALayer *sub in view.layer.sublayers) {
+        if ([ownedBySubviews containsObject:sub])
+            continue;
+        NSString *cls = NSStringFromClass(object_getClass(sub));
+        if (![sublayerClasses containsObject:cls])
+            [sublayerClasses addObject:cls];
+        if ([sub isKindOfClass:[CAShapeLayer class]] && ((CAShapeLayer *)sub).fillColor)
+            shapeFill = YES;
+        if ([sub isKindOfClass:[CAGradientLayer class]] && ((CAGradientLayer *)sub).colors.count)
+            gradient = YES;
+        if ([sub isKindOfClass:[CATextLayer class]] && ((CATextLayer *)sub).foregroundColor)
+            textLayerFg = YES;
+        if (sub.backgroundColor)
+            layerBg = YES;
+        if (sub.contents)
+            contents = YES;
+    }
+    if (view.layer.backgroundColor)
+        layerBg = YES;
+    if (view.layer.contents)
+        contents = YES;
+    if ([view.layer isKindOfClass:[CAShapeLayer class]] && ((CAShapeLayer *)view.layer).fillColor)
+        shapeFill = YES;
+
+    BOOL uikitText = [view isKindOfClass:[UILabel class]] ||
+                     [view isKindOfClass:[UITextField class]] ||
+                     [view isKindOfClass:[UITextView class]] || [view isKindOfClass:[UIButton class]];
+
+    NSString *viewClass = NSStringFromClass(object_getClass(view));
+    NSString *layerClass = NSStringFromClass(object_getClass(view.layer));
+    NSArray *sortedSublayers = [sublayerClasses sortedArrayUsingSelector:@selector(compare:)];
+    NSString *key = [NSString
+        stringWithFormat:@"%@|%@|%@", viewClass, layerClass, [sortedSublayers componentsJoinedByString:@","]];
+
+    NSMutableDictionary *group = groups[key];
+    if (!group) {
+        group = [NSMutableDictionary dictionaryWithDictionary:@{
+            @"view" : viewClass,
+            @"layer" : layerClass,
+            @"sublayers" : sortedSublayers,
+            @"count" : @0,
+            @"view_bg" : @0,
+            @"layer_bg" : @0,
+            @"shape_fill" : @0,
+            @"gradient" : @0,
+            @"text_layer_fg" : @0,
+            @"uikit_text" : @0,
+            @"has_contents" : @0
+        }];
+        groups[key] = group;
+    }
+    group[@"count"] = @([group[@"count"] intValue] + 1);
+    if (view.backgroundColor)
+        group[@"view_bg"] = @([group[@"view_bg"] intValue] + 1);
+    if (layerBg)
+        group[@"layer_bg"] = @([group[@"layer_bg"] intValue] + 1);
+    if (shapeFill)
+        group[@"shape_fill"] = @([group[@"shape_fill"] intValue] + 1);
+    if (gradient)
+        group[@"gradient"] = @([group[@"gradient"] intValue] + 1);
+    if (textLayerFg)
+        group[@"text_layer_fg"] = @([group[@"text_layer_fg"] intValue] + 1);
+    if (uikitText)
+        group[@"uikit_text"] = @([group[@"uikit_text"] intValue] + 1);
+    if (contents)
+        group[@"has_contents"] = @([group[@"has_contents"] intValue] + 1);
+
+    for (UIView *sub in view.subviews)
+        mob_paint_census(sub, groups, depth + 1);
+}
+
+static ERL_NIF_TERM nif_ui_paint_debug(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    __block NSData *jsonData = nil;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+      NSMutableDictionary *groups = [NSMutableDictionary dictionary];
+      for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+          if (![s isKindOfClass:[UIWindowScene class]])
+              continue;
+          for (UIWindow *w in [(UIWindowScene *)s windows]) {
+              if (!w.isHidden)
+                  mob_paint_census(w, groups, 0);
+          }
+      }
+      int total = 0;
+      for (NSDictionary *g in groups.allValues)
+          total += [g[@"count"] intValue];
+      NSArray *sorted = [groups.allValues
+          sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+            return [b[@"count"] compare:a[@"count"]];
+          }];
+      jsonData = [NSJSONSerialization dataWithJSONObject:@{
+          @"total_views" : @(total),
+          @"groups" : sorted
+      }
+                                                 options:0
+                                                   error:nil];
+    });
+
+    if (!jsonData)
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "encode_failed"));
+    ErlNifBinary bin;
+    enif_alloc_binary(jsonData.length, &bin);
+    memcpy(bin.data, jsonData.bytes, jsonData.length);
+    return enif_make_binary(env, &bin);
 }
 
 // ── screen_info/0 — unified screen/safe-area shape ───────────────────────────
@@ -6845,6 +7073,7 @@ static ErlNifFunc nif_funcs[] = {
     // App Store validator rejects binaries that reference them).
     {"ui_tree", 0, nif_ui_tree, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"ui_view_tree", 0, nif_ui_view_tree, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"ui_paint_debug", 0, nif_ui_paint_debug, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"ui_debug", 0, nif_ui_debug, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"screen_info", 0, nif_screen_info, 0},
     {"tap", 1, nif_tap, 0},

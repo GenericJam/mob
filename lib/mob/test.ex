@@ -466,13 +466,13 @@ defmodule Mob.Test do
   Returns a nested map:
 
       %{
-        type: :root, label: nil, value: nil,
+        type: :root, class: nil, label: nil, value: nil,
         frame: {0.0, 0.0, 393.0, 852.0},
         bg_color: nil, text_color: nil,
         children: [
-          %{type: :window, ..., children: [
+          %{type: :window, class: "UIWindow", ..., children: [
             %{type: :scroll, ..., children: [
-              %{type: :button, label: "Roll Dice",
+              %{type: :button, class: "SwiftUI.CGDrawingView", label: "Roll Dice",
                 frame: {24.0, 416.0, 327.0, 53.5},
                 bg_color: 0xFF2196F3, text_color: 0xFFFFFFFF, children: []}
             ]}
@@ -480,21 +480,44 @@ defmodule Mob.Test do
         ]
       }
 
+  `:class` is the concrete native view class. On SwiftUI it is usually the only
+  thing that identifies a node — `:type` collapses anything it doesn't recognise
+  to `:view` — and it's what tells you which renderer drew a node when a colour
+  comes back `nil`.
+
   ## Colours
 
   `:bg_color` and `:text_color` are the colours the view **actually painted**,
   as `0xAARRGGBB` integers — the same representation component props use
-  (`guides/theming.md`). `nil` means the view paints no colour of its own
-  (most containers) or the colour has no single RGBA value (pattern fills).
+  (`guides/theming.md`). `nil` means nothing paintable was found, or the colour
+  has no single RGBA value (a multi-stop gradient, a pattern fill).
 
-  Because these are read back off `UIView`/`CALayer` rather than echoed from
-  the render tree, they are the way to catch a styling regression where a theme
-  or modifier silently drops a colour Elixir sent. Compare against
-  `tree/1` (what Elixir asked for) to see the two diverge.
+  UIKit puts colour on the view (`UIView.backgroundColor`, `UILabel.textColor`).
+  **SwiftUI mostly does not** — `.background(Color, in: shape)` and
+  `.foregroundColor`, which is what Mob's renderer uses for every Box and Text,
+  go through SwiftUI's own renderer and land on a `CALayer` (typically a
+  `CAShapeLayer` fill) under a structural view whose own `backgroundColor` stays
+  `nil`. So each node also harvests from its own layer subtree, excluding layers
+  owned by its subviews so a container never claims a child's paint.
 
-  Colours are subject to the same coverage caveat as everything else here: on a
-  SwiftUI Mob screen you get the hosting containers' colours, not one node per
-  Mob component.
+  Sources consulted per node, first match wins:
+
+  | | Background | Text |
+  |---|---|---|
+  | view | `UIView.backgroundColor` | `UILabel`/`UITextField`/`UITextView`/`UIButton` |
+  | layer subtree | `CAShapeLayer.fillColor`, single-stop `CAGradientLayer`, `CALayer.backgroundColor` | `CATextLayer.foregroundColor` |
+
+  Fully-transparent colours are treated as no colour, so a `Color.clear`
+  placeholder doesn't read as "painted black at alpha 0".
+
+  Because these are read back off `UIView`/`CALayer` rather than echoed from the
+  render tree, they are the way to catch a styling regression where a theme or
+  modifier silently drops a colour Elixir sent. Compare against `tree/1` (what
+  Elixir asked for) to see the two diverge.
+
+  **If colours come back `nil` across the board**, don't guess at the reason —
+  call `paint_debug/1`, which reports which view/layer classes the renderer
+  produced and which colour properties they actually set.
 
   On Android, the JSON returned by `mob_nif:ui_view_tree/0` is decoded here —
   but no shipped `MobBridge.kt` implements `uiViewTree()`, so today Android
@@ -520,6 +543,7 @@ defmodule Mob.Test do
   def normalize_view_tree(%{"type" => _} = node) do
     %{
       type: normalize_atom(node["type"]),
+      class: denull(node["class"]),
       label: denull(node["label"]),
       value: denull(node["value"]),
       frame:
@@ -543,6 +567,75 @@ defmodule Mob.Test do
 
   defp normalize_atom(s) when is_binary(s), do: String.to_atom(s)
   defp normalize_atom(a) when is_atom(a), do: a
+
+  @doc """
+  Census of where colour lives in the native view tree — the diagnostic to reach
+  for when `view_tree/1` reports `nil` colours and you need to know why.
+
+  Groups every native view by `(view class, layer class, sublayer classes)` and
+  reports, per group, how many views set each colour-bearing property:
+
+      Mob.Test.paint_debug(node)
+      #=> %{
+      #     "total_views" => 443,
+      #     "groups" => [
+      #       %{"view" => "SwiftUI.CGDrawingView", "layer" => "SwiftUI.CGDrawingLayer",
+      #         "sublayers" => ["CAShapeLayer"], "count" => 40,
+      #         "view_bg" => 0, "layer_bg" => 0, "shape_fill" => 40,
+      #         "gradient" => 0, "text_layer_fg" => 0, "uikit_text" => 0,
+      #         "has_contents" => 40},
+      #       ...
+      #     ]
+      #   }
+
+  Read a row as: for these 40 views the only colour set is
+  `CAShapeLayer.fillColor`, so that is the property the extractor has to read.
+  A group where every tally is 0 but `has_contents` is high is a view that drew
+  itself into a bitmap — its colour is not recoverable without pixel sampling.
+
+  iOS only, debug builds only. Android raises `:nif_error`.
+  """
+  @spec paint_debug(node()) :: map() | {:error, term()}
+  def paint_debug(node) do
+    case :rpc.call(node, :mob_nif, :ui_paint_debug, []) do
+      bin when is_binary(bin) -> :json.decode(bin)
+      other -> other
+    end
+  end
+
+  @doc """
+  Tally of the distinct painted colours in a view tree — the cheap way to assert
+  a styling change actually reached the screen.
+
+  Pass a node to fetch the tree, or an already-fetched tree to work offline.
+  Returns `%{background: %{argb => count}, text: %{argb => count}}`, `nil`
+  colours excluded.
+
+      Mob.Test.color_census(node)
+      #=> %{background: %{0xFF2196F3 => 4, 0xFF1E1E1E => 1}, text: %{0xFFFFFFFF => 9}}
+
+  A theme regression that discards backgrounds shows up as an empty (or
+  collapsed) `:background` map, and two themes that should differ produce
+  different key sets.
+  """
+  @spec color_census(node() | map()) :: %{background: map(), text: map()}
+  def color_census(node) when is_atom(node), do: color_census(view_tree(node))
+
+  def color_census(%{} = tree) do
+    tree
+    |> flatten_tree()
+    |> Enum.reduce(%{background: %{}, text: %{}}, fn {_path, n}, acc ->
+      acc
+      |> tally(:background, n[:bg_color])
+      |> tally(:text, n[:text_color])
+    end)
+  end
+
+  defp tally(acc, _key, nil), do: acc
+
+  defp tally(acc, key, color) do
+    Map.update!(acc, key, &Map.update(&1, color, 1, fn n -> n + 1 end))
+  end
 
   @doc """
   Return the view tree flattened to a list of `{path, node}` tuples.
