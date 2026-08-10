@@ -109,8 +109,11 @@ defmodule Mob.Theme do
     radius_pill: 100,
 
     # ── Material / effect flags ────────────────────────────────────────────
-    # When true, surface-style nodes (currently `Box` with a `background:` set)
-    # render with a translucent material instead of a solid fill:
+    # When true, surface-style nodes render with a translucent material instead
+    # of a solid fill. A node qualifies if it's a `Box` that has a `background:`,
+    # holds content, and isn't already inside a glass surface — each glass
+    # surface costs a backdrop sample per frame, so decoration (childless boxes)
+    # and glass-on-glass are excluded. Rendering:
     #
     #   * iOS 26+: Liquid Glass via `.glassEffect()`
     #   * iOS 17–25: graceful fallback to `.ultraThinMaterial` background

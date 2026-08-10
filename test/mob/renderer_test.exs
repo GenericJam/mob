@@ -1108,7 +1108,11 @@ defmodule Mob.RendererTest do
       Mob.Theme.set(glass: true)
 
       Renderer.render(
-        %{type: :box, props: %{background: 0xFF112233}, children: []},
+        %{
+          type: :box,
+          props: %{background: 0xFF112233},
+          children: [%{type: :text, props: %{text: "card"}, children: []}]
+        },
         :ios,
         MockNIF
       )
@@ -1142,6 +1146,160 @@ defmodule Mob.RendererTest do
 
       tree = set_root_json()
       assert tree["props"]["glass"] == true
+    end
+
+    # Each glassy Box is an independent backdrop-sampling surface on iOS, so
+    # the theme default is deliberately narrower than "every box with a
+    # background": content-bearing, outermost-in-its-branch surfaces only.
+    test "a childless Box is decoration, not a surface — keeps its solid fill" do
+      Mob.Theme.set(glass: true)
+
+      Renderer.render(
+        %{type: :box, props: %{background: :primary, corner_radius: 4}, children: []},
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      refute Map.has_key?(tree["props"], "glass")
+      assert tree["props"]["background"] == 0xFF2196F3
+    end
+
+    test "a Box nested in a glassy Box does not stack a second glass surface" do
+      Mob.Theme.set(glass: true)
+
+      Renderer.render(
+        %{
+          type: :box,
+          props: %{background: :surface},
+          children: [
+            %{
+              type: :box,
+              props: %{background: :primary},
+              children: [%{type: :text, props: %{text: "chip"}, children: []}]
+            }
+          ]
+        },
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      assert tree["props"]["glass"] == true
+      [chip] = tree["children"]
+      refute Map.has_key?(chip["props"], "glass")
+      assert chip["props"]["background"] == 0xFF2196F3
+    end
+
+    test "nesting is tracked through non-box wrappers" do
+      Mob.Theme.set(glass: true)
+
+      Renderer.render(
+        %{
+          type: :box,
+          props: %{background: :surface},
+          children: [
+            %{
+              type: :column,
+              props: %{},
+              children: [
+                %{
+                  type: :box,
+                  props: %{background: :surface},
+                  children: [%{type: :text, props: %{text: "row"}, children: []}]
+                }
+              ]
+            }
+          ]
+        },
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      assert tree["props"]["glass"] == true
+      [column] = tree["children"]
+      [inner] = column["children"]
+      refute Map.has_key?(inner["props"], "glass")
+    end
+
+    test "sibling surfaces each stay glassy — the rule is nesting, not a quota" do
+      Mob.Theme.set(glass: true)
+
+      Renderer.render(
+        %{
+          type: :column,
+          props: %{},
+          children: [box_with_background(), box_with_background()]
+        },
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      assert Enum.map(tree["children"], & &1["props"]["glass"]) == [true, true]
+    end
+
+    test "glass: false on a card hands glass to the box below it" do
+      Mob.Theme.set(glass: true)
+
+      Renderer.render(
+        %{
+          type: :box,
+          props: %{background: :surface, glass: false},
+          children: [box_with_background()]
+        },
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      assert tree["props"]["glass"] == false
+      [inner] = tree["children"]
+      assert inner["props"]["glass"] == true
+    end
+
+    test "explicit glass: true wins where the surface rule says no" do
+      Mob.Theme.set(glass: true)
+
+      Renderer.render(
+        %{
+          type: :box,
+          props: %{background: :surface},
+          children: [
+            %{type: :box, props: %{background: :primary, glass: true}, children: []}
+          ]
+        },
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      assert tree["props"]["glass"] == true
+      # childless AND nested — excluded twice over, and still opted in
+      [dot] = tree["children"]
+      assert dot["props"]["glass"] == true
+    end
+
+    test "a Box glassy by prop rather than by rule still suppresses glass below it" do
+      Mob.Theme.set(glass: true)
+
+      # No background, so the theme rule would never have marked this one — the
+      # glass comes from the prop, and the nesting check has to see it anyway.
+      Renderer.render(
+        %{
+          type: :box,
+          props: %{glass: true},
+          children: [box_with_background()]
+        },
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      assert tree["props"]["glass"] == true
+      [inner] = tree["children"]
+      refute Map.has_key?(inner["props"], "glass")
     end
   end
 end
