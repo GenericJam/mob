@@ -227,7 +227,8 @@ defmodule Mob.Renderer do
       radii: Theme.radius_map(theme),
       type_scale: theme.type_scale,
       flags: Theme.flags_map(theme),
-      platform: platform
+      platform: platform,
+      in_glass: false
     }
 
     nif.clear_taps()
@@ -256,12 +257,13 @@ defmodule Mob.Renderer do
   defp prepare(%{type: type, props: props, children: children}, nif, platform, ctx) do
     defaults = Map.get(@component_defaults, type, %{})
     with_defaults = Map.merge(defaults, props)
-    with_theme_flags = inject_theme_flags(type, with_defaults, ctx)
+    with_theme_flags = inject_theme_flags(type, with_defaults, children, ctx)
+    child_ctx = %{ctx | in_glass: ctx.in_glass or with_theme_flags[:glass] == true}
 
     %{
       "type" => Atom.to_string(type),
       "props" => prepare_props(with_theme_flags, nif, platform, ctx),
-      "children" => Enum.map(children, &prepare(&1, nif, platform, ctx))
+      "children" => Enum.map(children, &prepare(&1, nif, platform, child_ctx))
     }
   end
 
@@ -271,19 +273,30 @@ defmodule Mob.Renderer do
   # today; Android receives it but ignores it (Material 3 doesn't have a
   # first-class glassy surface yet).
   #
-  # A node is "surface-style" if it has a `background:` set — that's what
-  # the user perceives as a card / sheet. Other nodes (text, scroll, etc.)
-  # pass through untouched.
+  # A node is "surface-style" if it's a box that has a `background:` AND holds
+  # content AND isn't already inside a glass surface. Every glass surface costs
+  # its own backdrop sample per frame on iOS, so the rule has to be narrower
+  # than "has a background" — that marked every box in the tree, and a screen
+  # of cards became dozens of live sampling surfaces.
+  #
+  # Childless boxes are decoration — a dot, a swatch, a colour bar, a rule.
+  # They read as a solid shape, so a backdrop sample buys nothing.
+  #
+  # Boxes nested in a glass surface sample glass, not content: the second blur
+  # adds cost and mud where the first already established the depth. The
+  # outermost surface in a branch wins; `glass: false` on it hands glass to the
+  # layer below (that box becomes the first glass surface on its path).
   #
   # `put_new`, not `put`: the theme supplies a *default*, so an explicit
   # `glass:` on the node wins. That's the escape hatch a glass theme needs —
   # `glass: false` keeps a solid fill on the one box (a selected row, a
-  # warning banner) where translucency would cost legibility.
-  defp inject_theme_flags(:box, props, %{flags: %{glass: true}}) do
+  # warning banner) where translucency would cost legibility, and `glass: true`
+  # opts a box back in when the rule above says no.
+  defp inject_theme_flags(:box, props, [_ | _], %{flags: %{glass: true}, in_glass: false}) do
     if Map.has_key?(props, :background), do: Map.put_new(props, :glass, true), else: props
   end
 
-  defp inject_theme_flags(_type, props, _ctx), do: props
+  defp inject_theme_flags(_type, props, _children, _ctx), do: props
 
   defp prepare_props(props, nif, platform, ctx) do
     # 1. Merge any %Mob.Style{} under the :style key (inline props win)
