@@ -627,6 +627,39 @@ private extension View {
     }
 }
 
+// ── Glass batching ───────────────────────────────────────────────────────────
+// Each `.glassEffect()` samples and blurs whatever is behind it. SwiftUI runs
+// that once per call site unless the surfaces share a GlassEffectContainer, in
+// which case it renders them in a single pass — the difference between 1 and N
+// backdrop samples per frame on a screen full of glassy cards.
+//
+// Batching happens *within* one container, so a container per glass node would
+// achieve nothing and nesting containers re-splits the batch. There is exactly
+// one, wrapping the whole node tree in MobRootView.
+private struct MobGlassBatch: ViewModifier {
+    let active: Bool
+
+    func body(content: Content) -> some View {
+        if active, #available(iOS 26.0, *) {
+            // spacing: 0 — spacing is the distance at which sibling glass shapes
+            // merge into a single blob. We want the shared render pass, not the
+            // morphing; a card grid must keep its card edges.
+            GlassEffectContainer(spacing: 0) { content }
+        } else {
+            // Also the pre-26 path: `.ultraThinMaterial` has no container to
+            // join, so the fallback in mobBoxBackground is untouched.
+            content
+        }
+    }
+}
+
+// Walked once per root push rather than wrapping unconditionally: a container
+// around a tree with no glass in it is overhead charged to every non-glass
+// theme — i.e. every theme that scrolls fine today.
+private func mobTreeHasGlass(_ node: MobNode) -> Bool {
+    node.useGlass || node.childNodes.contains(where: mobTreeHasGlass)
+}
+
 private func boxAlignmentFromString(_ s: String) -> Alignment {
     switch s {
     case "center":          return .center
@@ -1348,6 +1381,7 @@ public struct MobRootView: View {
     // SwiftUI observation, which doesn't carry the animation context and
     // produces a default crossfade instead of the .move transition).
     @State private var currentNavVersion: Int = 0
+    @State private var rootHasGlass: Bool = false
 
     public init() {}
 
@@ -1362,6 +1396,9 @@ public struct MobRootView: View {
                     // .onChange(of: model.rootVersion) below.
                     .id(currentNavVersion)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    // Outside the frame so the container's own layout can't
+                    // move anything: its single child already fills the screen.
+                    .modifier(MobGlassBatch(active: rootHasGlass))
                     .transition(navTransition(currentTransition))
             } else {
                 ZStack {
@@ -1402,6 +1439,7 @@ public struct MobRootView: View {
             // Capture transition before the animation block so the modifier
             // sees the right value when the new view is inserted.
             currentTransition = t
+            rootHasGlass = newRoot.map(mobTreeHasGlass) ?? false
             // Log every nav transition so log-tail-based checks can verify
             // the animation fired without resorting to video recording.
             // Format: [MobNav] transition=<push|pop|reset|none> navVersion=<n>
