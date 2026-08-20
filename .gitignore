@@ -30,4 +30,11 @@ ios/*.o
 user_issues.md
 /docs
 
-*.DS_Store*.playwright-mcp/
+*.DS_Store
+.playwright-mcp/
+
+.env
+
+# Local Claude Code session state (permissions, worktree bookkeeping) —
+# machine-specific, not for the shared repo.
+.claude/
