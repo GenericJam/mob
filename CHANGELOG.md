@@ -8,6 +8,15 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.22] - 2026-08-19
+
+### Fixed
+- **Docs: Mishka Chelekom's component count was understated.** The 0.7.21
+  guides said "60+ ported components" without noting the source library is
+  actually 70+ components strong on the web (only 60 ported to Mob so far).
+  Corrected in `guides/packages.md`, `guides/styling.md`, and
+  `guides/theming.md`.
+
 ## [0.7.21] - 2026-08-19
 
 ### Added
