@@ -8,6 +8,17 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.21] - 2026-08-19
+
+### Added
+- **Docs: point to Mishka Chelekom from the packages, styling, and theming
+  guides.** New "Component kits" section in `guides/packages.md` covering
+  Mishka Chelekom's 60+ ported components (native SwiftUI/Compose, driven by
+  Mob's theme tokens), with cross-references from `guides/styling.md` and
+  `guides/theming.md`. Also documents the Linear (team MOB) issue-tracking
+  convention in `CLAUDE.md` and fixes a malformed `.gitignore` line that had
+  silently disabled `.DS_Store`/`.playwright-mcp/` ignoring.
+
 ## [0.7.20] - 2026-07-11
 
 ### Changed
