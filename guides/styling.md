@@ -261,7 +261,8 @@ For design decisions not covered here, refer to the platform design systems dire
 
 ## Don't want to style from scratch?
 
-[Mishka Chelekom](packages.md#component-kits) ports 60+ pre-styled
-components — sliders, dialogs, avatars, menus, pickers, and more — to the
+[Mishka Chelekom](packages.md#component-kits) is 70+ components strong on the
+web, 60 of them ported so far — sliders, dialogs, avatars, menus, pickers, and
+more — to the
 native widgets in the table above, all theme-token driven (see
 [Theming](theming.md)).
