@@ -8,6 +8,21 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.24] - 2026-08-20
+
+### Fixed
+- **Android `Mob.Device.orientation/0` could read freed memory.**
+  `mob_send_orientation_changed` stored the raw JNI string pointer handed to it
+  by the trampoline in `android/jni/beam_jni.c.eex`, which releases that buffer
+  as soon as the call returns (`GetStringUTFChars` / `ReleaseStringUTFChars`).
+  Any later `Mob.Device.orientation/0` call built its return atom from that
+  dangling pointer. The sibling network-connectivity code hit the identical
+  hazard earlier and fixed it by caching an int code instead of the string;
+  orientation now does the same (`orientationCode/1` / `orientationAtomName/1`,
+  mirroring `transportCode/1` / `transportAtomName/1`). Device-verified across
+  all four orientations on a physical Moto G Power. (MOB-46, from the 2026-07
+  mob ecosystem audit)
+
 ## [0.7.23] - 2026-08-19
 
 ### Fixed

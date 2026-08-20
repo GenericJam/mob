@@ -3212,7 +3212,30 @@ pub export fn mob_send_color_scheme_changed(scheme: ?[*:0]const u8) callconv(.c)
 // Last-known interface orientation, updated by mob_send_orientation_changed.
 // device_orientation/0 returns this (a partial getter, like the other Android
 // device queries — accurate after the first onConfigurationChanged).
-var g_last_orientation: [*:0]const u8 = "portrait";
+// Cached as an int code, NOT the incoming string pointer: the JNI string from
+// beam_jni.c is released as soon as the trampoline returns (mirrors the
+// network-connectivity fix below), so storing that pointer would dangle and
+// the query would read freed memory. The atom is always derived from a
+// static literal.
+// 0 portrait, 1 landscape_left, 2 landscape_right, 3 portrait_upside_down.
+var g_last_orientation = std.atomic.Value(c_int).init(0);
+
+fn orientationCode(name: [*:0]const u8) c_int {
+    const s = std.mem.sliceTo(name, 0);
+    if (std.mem.eql(u8, s, "landscape_left")) return 1;
+    if (std.mem.eql(u8, s, "landscape_right")) return 2;
+    if (std.mem.eql(u8, s, "portrait_upside_down")) return 3;
+    return 0;
+}
+
+fn orientationAtomName(code: c_int) [*:0]const u8 {
+    return switch (code) {
+        1 => "landscape_left",
+        2 => "landscape_right",
+        3 => "portrait_upside_down",
+        else => "portrait",
+    };
+}
 
 /// Called from beam_jni.c's `Java_..._MobBridge_nativeNotifyOrientation` when
 /// MainActivity.onConfigurationChanged sees an orientation flip. `orient` is
@@ -3220,7 +3243,7 @@ var g_last_orientation: [*:0]const u8 = "portrait";
 /// "portrait_upside_down". (Companion hook ships in the mob_new template.)
 pub export fn mob_send_orientation_changed(orient: ?[*:0]const u8) callconv(.c) void {
     const o = orient orelse return;
-    g_last_orientation = o;
+    g_last_orientation.store(orientationCode(o), .monotonic);
     deviceSendAtomPayload("mob_device", "orientation_changed", o);
 }
 
@@ -3475,7 +3498,7 @@ export fn nif_device_orientation(
     _ = argv;
     // Partial getter (like the other Android device queries): returns the last
     // orientation reported via onConfigurationChanged; "portrait" until then.
-    return erts.enif_make_atom(env, g_last_orientation);
+    return erts.enif_make_atom(env, orientationAtomName(g_last_orientation.load(.monotonic)));
 }
 
 export fn nif_device_lock_orientation(
