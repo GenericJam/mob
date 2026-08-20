@@ -46,7 +46,7 @@ config :mob, :default_style, :mob_themes
 
 | Package | Gives you | Notes |
 |---|---|---|
-| [Mishka Chelekom](https://mishka.tools/chelekom) | 70+ pre-styled components on the web, 60 already ported — sliders, dialogs, avatars, menus, pickers, and more — to real SwiftUI and Compose | Reads Mob's theme tokens (see [Theming](theming.md)), so switching `Mob.Theme.set/1` re-skins every ported component at once, identically on both platforms. Not yet its own Hex package — the port lives in the [mishka_chelekom monorepo](https://github.com/mishka-group/mishka_chelekom/tree/master/development/mob) alongside the web version. Register only the components a screen actually uses; the demo app's showcase eagerly registers and renders all 60 ported components at boot for its own catalog purposes, which is fine there but adds measurable startup cost on lower-end Android hardware if copied wholesale. |
+| [Mishka Chelekom](https://mishka.tools/chelekom) | 70+ pre-styled components on the web, with a growing set already ported natively — sliders, dialogs, avatars, menus, pickers, and more — to real SwiftUI and Compose | Reads Mob's theme tokens (see [Theming](theming.md)), so switching `Mob.Theme.set/1` re-skins every ported component at once, identically on both platforms. Not yet its own Hex package — the port lives in the [mishka_chelekom monorepo](https://github.com/mishka-group/mishka_chelekom/tree/master/development/mob) alongside the web version. Register only the components a screen actually uses; the demo app's showcase eagerly registers all 60 of its catalog pages at boot for its own gallery purposes, which is fine there but adds measurable startup cost on lower-end Android hardware if copied wholesale. |
 
 ## Framework integrations
 

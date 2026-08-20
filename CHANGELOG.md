@@ -8,6 +8,19 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.23] - 2026-08-19
+
+### Fixed
+- **Docs: dropped the "60 of Mishka Chelekom's 70+" component-count claim.**
+  That subset framing implied a clean 1:1 mapping between the web library's
+  components and the Mob port that doesn't hold up — several web `*_field`
+  variants collapse into Mob's own `:text_field` primitive plus one shared
+  Field wrapper, some web components map to Mob's core built-in node types
+  rather than Mishka-specific ports, and a few (Device Mockup) are web-only
+  concepts with no mobile equivalent. `guides/packages.md`, `guides/styling.md`,
+  and `guides/theming.md` now describe the web library's 70+ components and
+  the Mob port's growing set independently, without a false-precision fraction.
+
 ## [0.7.22] - 2026-08-19
 
 ### Fixed
