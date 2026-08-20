@@ -22,6 +22,50 @@ sequenced plan; phase ownership lives there.
 
 ---
 
+## Issue tracking — status lives in Linear
+
+We use **Linear** (team `MOB`) as the single live status board across `mob`,
+`mob_dev`, and `mob_new`. It answers "what's in flight, blocked, or next" — the
+thing that used to be scattered across branches, PRs, and decision docs. Each
+layer now has **one job**, so they don't compete:
+
+- **Linear (`MOB`)** — live status + worklist. One issue per thread/feature.
+- **`decisions/`** — durable rationale (ADRs). Link it from the issue; don't copy it in.
+- **`AGENTS.md` / `CLAUDE.md` / `~/.claude` memory** — conventions + agent recall.
+- **PRs / git** — the code. Reference the issue id.
+
+### Access
+
+GraphQL only, `https://api.linear.app/graphql`. The API key is in `~/code/mob/.env`
+as `LINEAR_API_KEY` (gitignored — **never commit it**; sibling repos `source
+~/code/mob/.env`). The auth header is the key **raw, with no `Bearer` prefix**
+(that prefix is for OAuth tokens only — the usual first tripwire). Team `MOB` =
+`07dd0939-c66d-44f2-8da5-e3a4a243e953`. No Linear MCP is wired in; use the API.
+
+### The discipline (keep it light)
+
+- **Start of a non-trivial task** → search Linear for the matching `MOB-N` issue;
+  create one if none exists. Trivial one-off edits don't need an issue.
+- Put `MOB-N` in the **branch name, PR title, and commits** so code ↔ issue link
+  both ways.
+- Keep the issue **state** current: In Progress when you start, Blocked (+ why) when
+  stuck, Done when merged **and** verified. Drop a one-line progress comment at real
+  checkpoints (blocked, device-verified, shipped) — not a running narration.
+- **Cross-repo work is ONE issue, not three.** A change spanning `mob` + `mob_new`
+  (e.g. a NIF + its template) is a single `MOB-N` with both PRs linked.
+- **Link `decisions/` docs and PRs from the issue; don't duplicate their content.**
+
+Minimal create (needs the team UUID above):
+
+```bash
+set -a; source ~/code/mob/.env; set +a
+curl -s https://api.linear.app/graphql -H "Content-Type: application/json" \
+  -H "Authorization: $LINEAR_API_KEY" \
+  -d '{"query":"mutation($t:String!,$ti:String!){issueCreate(input:{teamId:$t,title:$ti}){success issue{identifier url}}}","variables":{"t":"07dd0939-c66d-44f2-8da5-e3a4a243e953","ti":"Your title"}}'
+```
+
+---
+
 ## Worktrees
 
 **Default assumption: work happens in a git worktree.** The user runs
