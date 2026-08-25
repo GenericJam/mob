@@ -39,6 +39,18 @@ defmodule Mob.PluginsTest do
       assert Mob.Plugins.read_path(path).screens == []
     end
 
+    test "logs the rescued exception instead of failing silently" do
+      path = write_manifest("%{screens: [,,]}")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          Mob.Plugins.read_path(path)
+        end)
+
+      assert log =~ "failed to evaluate"
+      assert log =~ path
+    end
+
     test "fills in missing sections from the empty set" do
       path = write_manifest(inspect(%{screens: [%{plugin: :p, module: P, default_route: "/p"}]}))
       manifest = Mob.Plugins.read_path(path)

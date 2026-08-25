@@ -490,6 +490,15 @@ defmodule Mob.Plugins do
       @empty
     end
   rescue
-    _ -> @empty
+    e ->
+      # A malformed manifest must never crash boot (see @doc above), but
+      # silently downgrading it to "this app has no plugins" hid real
+      # authoring errors (a typo, a missing `end`) as if nothing were wrong.
+      Logger.error(
+        "[mob_plugins] #{path} failed to evaluate, using empty manifest: " <>
+          Exception.format(:error, e, __STACKTRACE__)
+      )
+
+      @empty
   end
 end
