@@ -363,8 +363,16 @@ The fix is a single linker flag at build time:
 | `libepmd.so`            | OTP runtime | rebuild OTP tarball with the flag |
 | `libmobtest.so`         | Mob's NDK build (`android/jni/`) | add to CMakeLists |
 | `libsqlite3_nif.so`     | exqlite Hex dep | upstream fix or local re-link |
-| `libimage_processing_util_jni.so` | androidx.camera | bump CameraX dep |
-| `libbarhopper_v3.so`    | com.google.mlkit:barcode-scanning | bump ML Kit dep |
+| `libimage_processing_util_jni.so` | androidx.camera | **FIXED (MOB-95)** — bumped 1.3.4 → 1.6.1 |
+| `libbarhopper_v3.so`    | com.google.mlkit:barcode-scanning | **FIXED (MOB-95)** — bumped 17.2.0 → 17.3.0 |
+
+> **Partial resolution (MOB-95).** The CameraX and ML Kit rows are fixed —
+> bumped in `mob_camera`/`mob_scanner`'s `priv/mob_plugin.exs` gradle_deps
+> and in `mob_new`'s `build.gradle.eex` template (core still links CameraX
+> directly for the camera preview, separately from what the plugins declare;
+> all three copies had to move in lockstep). The other five libraries (OTP
+> runtime ×3, `libmobtest.so`, `libsqlite3_nif.so`) are untouched — this
+> issue stays open for those.
 
 **Recommendation: bundle the fix into the next OTP tarball schema bump.**
 We already plan to re-cut the iOS-device tarball when EPMD source got
@@ -381,8 +389,9 @@ added; that same release cycle is the natural place to add
   `zipalign -p 16384` (page-aligns `.so` LOAD segments) as a
   post-processing step in the deployer's APK packaging. The
   `zipalign -p 16384` form is a real flag in NDK 27+.
-- **CameraX / ML Kit**: bump to a version that ships 16 KB-aligned
-  binaries. Most current Google libraries already do.
+- ~~**CameraX / ML Kit**: bump to a version that ships 16 KB-aligned
+  binaries.~~ **DONE (MOB-95)** — CameraX 1.3.4 → 1.6.1, ML Kit
+  barcode-scanning 17.2.0 → 17.3.0.
 
 **Priority** — low. Warning, not an error. Apps run correctly today
 in compatibility mode. Worth doing alongside the next OTP rebuild
