@@ -1930,7 +1930,17 @@ static ERL_NIF_TERM nif_set_theme(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
             if ([name isKindOfClass:[NSString class]])
                 [names addObject:name];
         }
-        g_font_fallback = [names copy];
+        NSArray<NSString *> *resolved = [names copy];
+        // g_font_fallback is read from mob_font_fallback() on the main thread
+        // during SwiftUI render. This NIF runs on the BEAM's calling thread —
+        // an unsynchronized cross-thread write/read on a plain ARC global can
+        // release the old array out from under a concurrent reader. Hop the
+        // write onto the main thread (same pattern every other NIF here uses
+        // for state the main thread touches) so both sides only ever run
+        // there, serialized.
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          g_font_fallback = resolved;
+        });
     }
 
     return enif_make_atom(env, "ok");
