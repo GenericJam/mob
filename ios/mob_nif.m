@@ -4015,6 +4015,43 @@ check_self:
     return nil;
 }
 
+// Retries find_a11y_at_point across every connected window's a11y tree a few
+// times with a short settle delay between attempts. SwiftUI's accessibility
+// tree can lag a layout pass by a run loop tick or more — a synthetic tap
+// issued the instant a screen mounts or navigates (the common automated-test
+// pattern) can race it, even though the element's *frame* (tracked
+// separately via MobFrameTracker's GeometryReader callback — see
+// mob_register_frame) is already correct by then. MOB-99.
+//
+// Must NOT sleep inside the dispatch_sync block: that blocks the main
+// thread's run loop, which is exactly what SwiftUI needs to finish
+// building the tree — a sleep there guarantees the wait never resolves.
+// Sleep on the calling (NIF) thread between dispatch_sync attempts instead.
+static id find_a11y_at_point_in_windows_retrying(CGPoint pt) {
+    for (int attempt = 0; attempt < 4; attempt++) {
+        if (attempt > 0)
+            [NSThread sleepForTimeInterval:0.05];
+
+        __block id found = nil;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+              if (![scene isKindOfClass:[UIWindowScene class]])
+                  continue;
+              for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+                  if (win.isHidden)
+                      continue;
+                  found = find_a11y_at_point(win, pt, 0);
+                  if (found)
+                      return;
+              }
+          }
+        });
+        if (found)
+            return found;
+    }
+    return nil;
+}
+
 static id find_a11y_by_label(id obj, NSString *target, int depth) {
     if (!obj || depth > 30)
         return nil;
@@ -4271,20 +4308,7 @@ static ERL_NIF_TERM nif_ax_action_at_xy(ErlNifEnv *env, int argc, const ERL_NIF_
     NSString *action = [NSString stringWithUTF8String:action_buf];
 
     CGPoint pt = CGPointMake((CGFloat)x, (CGFloat)y);
-    __block id elem = nil;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-          if (![scene isKindOfClass:[UIWindowScene class]])
-              continue;
-          for (UIWindow *win in [(UIWindowScene *)scene windows]) {
-              if (win.isHidden)
-                  continue;
-              elem = find_a11y_at_point(win, pt, 0);
-              if (elem)
-                  return;
-          }
-      }
-    });
+    id elem = find_a11y_at_point_in_windows_retrying(pt);
 
     if (!elem)
         return enif_make_tuple2(env, enif_make_atom(env, "error"),
@@ -4846,44 +4870,40 @@ static ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     // proper event system backing. Accessibility activation is the reliable path
     // for the simulator; for scroll views and custom GRs that lack accessibility,
     // a simulator-specific event injection mechanism would be needed.
-    __block BOOL activated = NO;
+    id elem = find_a11y_at_point_in_windows_retrying(pt);
+    if (!elem) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "no_element_at_point"));
+    }
+
     dispatch_sync(dispatch_get_main_queue(), ^{
+      LOGI(@"tap_xy(sim): accessibilityActivate on %@ frame=%@",
+           NSStringFromClass(object_getClass(elem)), NSStringFromCGRect([elem accessibilityFrame]));
+      [elem accessibilityActivate];
+      // For text fields: accessibilityActivate on UITextFieldLabel (the hint
+      // label inside UITextField) doesn't focus the field. Walk the
+      // responder chain up from the hit view to find the first
+      // UITextField/UITextView and focus it.
       for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
           if (![scene isKindOfClass:[UIWindowScene class]])
               continue;
           for (UIWindow *win in [(UIWindowScene *)scene windows]) {
               if (win.isHidden)
                   continue;
-              id elem = find_a11y_at_point(win, pt, 0);
-              if (elem) {
-                  LOGI(@"tap_xy(sim): accessibilityActivate on %@ frame=%@",
-                       NSStringFromClass(object_getClass(elem)),
-                       NSStringFromCGRect([elem accessibilityFrame]));
-                  [elem accessibilityActivate];
-                  // For text fields: accessibilityActivate on UITextFieldLabel
-                  // (the hint label inside UITextField) doesn't focus the
-                  // field. Walk the responder chain up from the hit view to
-                  // find the first UITextField/UITextView and focus it.
-                  UIView *hv = [win hitTest:pt withEvent:nil];
-                  UIResponder *r = hv;
-                  while (r) {
-                      if ([r isKindOfClass:[UITextField class]] ||
-                          [r isKindOfClass:[UITextView class]]) {
-                          [(UIView *)r becomeFirstResponder];
-                          break;
-                      }
-                      r = r.nextResponder;
+              UIView *hv = [win hitTest:pt withEvent:nil];
+              UIResponder *r = hv;
+              while (r) {
+                  if ([r isKindOfClass:[UITextField class]] ||
+                      [r isKindOfClass:[UITextView class]]) {
+                      [(UIView *)r becomeFirstResponder];
+                      return;
                   }
-                  activated = YES;
-                  return;
+                  r = r.nextResponder;
               }
           }
       }
     });
-    if (activated)
-        return enif_make_atom(env, "ok");
-    return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                            enif_make_atom(env, "no_element_at_point"));
+    return enif_make_atom(env, "ok");
 
 #else
     // ── Real device: UITouch injection via IOHIDEvent ─────────────────────────────
