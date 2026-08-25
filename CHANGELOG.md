@@ -8,6 +8,28 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.26] - 2026-08-25
+
+### Fixed
+- **`Mob.Plugins.read_path/1` silently swallowed a malformed manifest.** A
+  syntax error or raised exception while evaluating `priv/mob_plugins.exs`
+  was rescued straight to the empty manifest with no log line — "this app
+  has no plugins" looked identical to "the manifest evaluated cleanly to
+  nothing." The exception is now logged before falling back, matching
+  every other rescue in this module (`invoke_handler/3`,
+  `notification_match?/3`).
+
+### Documentation
+- **`MOB_PLUGINS.md`'s schema reference now explicitly states that theming
+  doesn't ride this manifest.** `styles:` / `default_style:` belong to a
+  separate file (`priv/mob_style.exs`, see `MOB_STYLES.md`) validated by a
+  separate module. The two manifests share enough vocabulary ("manifest")
+  and shape to invite declaring one in the wrong file, where it validates
+  cleanly and then goes nowhere — nothing warned about this before.
+
+Both found via a real report from someone building a style plugin
+against this system.
+
 ## [0.7.25] - 2026-08-25
 
 ### Added
