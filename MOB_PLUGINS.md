@@ -657,6 +657,15 @@ not a required entry point.
 
 ## Schema reference
 
+**Theming does not ride this manifest.** `styles:` / `default_style:`
+belong to a *different* file (`priv/mob_style.exs`, a style package's own
+manifest) validated by a different module (`MobDev.Style`) — see
+`MOB_STYLES.md`. The two files share vocabulary ("manifest") and a similar
+map shape, which invites putting a `styles:` key here by mistake; it
+validates (mob_dev warns on the unrecognized key but doesn't reject it) and
+then goes nowhere — nothing that builds the runtime manifest behind
+`Mob.Plugins.styles/0` ever reads this file.
+
 Top-level required:
 
 - `:name` — atom matching the package name. Convention: `mob_` prefix.
