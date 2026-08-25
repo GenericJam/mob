@@ -78,6 +78,35 @@ defmodule Mob.Theme do
 
       type_scale:  1.0  # multiply all text sizes by this
       space_scale: 1.0  # multiply all spacing tokens by this
+
+  ### Font tokens
+
+  `fonts` is a name → value map, resolved by the renderer exactly like
+  colors (`font: :heading` walks this map, same two-step shape as
+  `text_color: :primary`). `:default` is special — set it and the renderer
+  injects it automatically onto any node that doesn't specify its own
+  `font:`, so the whole app picks up a custom font without repeating it
+  everywhere:
+
+      Mob.Theme.set(
+        fonts: %{
+          default: Mob.Theme.font("Inter-Regular", from_file: "priv/fonts/Inter-Regular.ttf"),
+          heading: Mob.Theme.font("Inter-Bold", from_file: "priv/fonts/Inter-Bold.ttf")
+        }
+      )
+
+      # in render/1:
+      %{type: :text, props: %{text: "Section", font: :heading}, children: []}
+      %{type: :text, props: %{text: "Body copy"}, children: []}  # gets :default automatically
+
+  `font_fallback` is an ordered list of font names tried, in order, if the
+  resolved font can't be loaded on-device. Empty by default (the platform's
+  own system-font fallback still applies) — set it when you want an
+  explicit intermediate fallback before that.
+
+  A font value is either built with `Mob.Theme.font/2` (recommended — it
+  computes the Android name from the actual bundled file) or a bare string
+  used as-is on both platforms.
   """
 
   @type color_value :: atom() | non_neg_integer()
@@ -119,9 +148,36 @@ defmodule Mob.Theme do
     #
     # Off by default; opt in via a preset (`MobThemes.ObsidianGlass`, the mob_themes package) or by
     # passing `glass: true` to `Mob.Theme.build/1`.
-    glass: false
+    glass: false,
+
+    # ── Fonts ───────────────────────────────────────────────────────────────
+    # Named font tokens, resolved by the renderer exactly like colors —
+    # `font: :heading` walks this map at render time. `:default` is special:
+    # when set, it's the one token the renderer injects automatically onto
+    # any node that doesn't specify its own `font:` prop (see
+    # `Mob.Renderer`'s app-wide default injection). Absent `:default` (the
+    # neutral base's setting), nothing is injected and text renders in the
+    # platform's own system font — unchanged, zero-config behavior.
+    #
+    # A value is either a `Mob.Font.spec()` (built via `Mob.Theme.font/2`, so
+    # the Android resource name is always computed from the actual bundled
+    # file rather than hand-typed and risking a mismatch) or a bare string
+    # used as-is for both platforms — the escape hatch for a family name
+    # that's already identical on both (e.g. a built-in system font name).
+    fonts: %{},
+
+    # Ordered list of font names tried, in order, when the resolved primary
+    # font can't be loaded on-device (missing file, corrupt asset). Same
+    # value shape as a `fonts` entry. Empty by default — native's own font
+    # APIs already fall through to the OS system font when a name doesn't
+    # resolve, so an empty list still fails safe; this list is for
+    # *intermediate* fallbacks an app wants to declare explicitly (e.g. a
+    # closely-matched alternate before giving up to the system font).
+    font_fallback: []
   ]
 
+  @type font_spec :: %{optional(:ios) => String.t(), optional(:android) => String.t()}
+  @type font_value :: font_spec() | String.t()
   @type t :: %__MODULE__{}
 
   @spacing_base %{
@@ -143,6 +199,24 @@ defmodule Mob.Theme do
   @doc "Return the neutral base theme."
   @spec default() :: t()
   def default, do: %__MODULE__{}
+
+  @doc """
+  Builds a font token value: the iOS PostScript name as given, paired with
+  the Android resource name computed from the bundled file via
+  `Mob.Font.android_resource_name/1` — the same function `mob_dev`'s asset
+  planner uses when it copies the file into `res/font/`. One computation,
+  used on both the build side and the theme side, so the two can't drift
+  apart the way a hand-typed Android name could.
+
+      fonts: %{
+        heading: Mob.Theme.font("Inter-Bold", from_file: "priv/fonts/Inter-Bold.ttf")
+      }
+  """
+  @spec font(String.t(), from_file: Path.t()) :: font_spec()
+  def font(ios_family, opts) when is_binary(ios_family) do
+    file = Keyword.fetch!(opts, :from_file)
+    %{ios: ios_family, android: Mob.Font.android_resource_name(file)}
+  end
 
   @doc """
   Set the active theme. Accepts:
@@ -206,8 +280,21 @@ defmodule Mob.Theme do
   # Wrapped in try/rescue/catch because the NIF isn't loaded on the host
   # BEAM (tests, IEx without a device) and we don't want `Mob.Theme.set/1`
   # to crash in those contexts.
+  #
+  # `_font_fallback` rides the same payload: an ordered list of font names,
+  # already resolved to THIS device's platform (native never sees the raw
+  # spec map, same principle as the palette already being resolved to ARGB
+  # ints before it crosses the NIF boundary). Native tries the node's own
+  # resolved font first, then walks this list, before falling through to
+  # the OS default — see `MOB_FONTS.md`.
   defp notify_native(theme) do
-    payload = Map.put(resolved_palette(theme), :_glass, theme.glass)
+    platform = safe_platform()
+
+    payload =
+      resolved_palette(theme)
+      |> Map.put(:_glass, theme.glass)
+      |> Map.put(:_font_fallback, resolved_font_fallback(theme, platform))
+
     json = IO.iodata_to_binary(:json.encode(stringify_keys(payload)))
 
     try do
@@ -218,6 +305,29 @@ defmodule Mob.Theme do
       _, _ -> :ok
     end
   end
+
+  defp safe_platform do
+    :mob_nif.platform()
+  rescue
+    _ in [UndefinedFunctionError, ErlangError] -> :host
+  end
+
+  defp resolved_font_fallback(theme, platform) do
+    theme
+    |> font_fallback_list()
+    |> Enum.map(&resolve_font_value(&1, platform))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  # Mirrors Mob.Renderer's resolve_font/3 (a per-node prop resolver) but
+  # scoped to Theme's own narrower need — resolving a font_fallback entry
+  # for the JSON payload above, same house pattern as this module already
+  # having its own resolve_color/2 alongside the renderer's.
+  defp resolve_font_value(%{} = spec, platform),
+    do: Map.get(spec, platform) || spec[:ios] || spec[:android]
+
+  defp resolve_font_value(value, _platform) when is_binary(value), do: value
+  defp resolve_font_value(_value, _platform), do: nil
 
   defp stringify_keys(map) do
     Map.new(map, fn {k, v} -> {Atom.to_string(k), v} end)
@@ -285,4 +395,12 @@ defmodule Mob.Theme do
       radius_pill: t.radius_pill
     }
   end
+
+  @doc false
+  @spec fonts_map(t()) :: %{atom() => font_value()}
+  def fonts_map(%__MODULE__{fonts: fonts}), do: fonts
+
+  @doc false
+  @spec font_fallback_list(t()) :: [font_value()]
+  def font_fallback_list(%__MODULE__{font_fallback: list}), do: list
 end

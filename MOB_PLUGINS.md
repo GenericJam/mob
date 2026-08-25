@@ -269,7 +269,16 @@ embedded in the host). Adds `:screens`, `:migrations`, `:assets`:
   assets: %{
     fonts: ["priv/assets/iap-icons.ttf"],
     images: ["priv/assets/store-badge.png"]
-  }
+  },
+
+  # Optional: suggest this font as the app's default (Mob.Theme.fonts[:default]),
+  # without taking over the whole visual theme the way a style package (MOB_STYLES.md)
+  # does. :file must be one of assets.fonts above. Only applied if the host hasn't
+  # already set a default itself (use Mob.App theme:, an activated style package, or
+  # Mob.Theme.set/1 in on_start/0 all outrank it) — see MOB_FONTS.md for the full
+  # precedence ladder. Two activated plugins both setting default_font is a build
+  # error, not a silent pick.
+  default_font: %{family: "IAPSans-Regular", file: "priv/assets/iap-icons.ttf"}
 }
 ```
 
@@ -696,6 +705,10 @@ Multi-screen sections:
 - `:screens` — list of `%{module, default_route}` maps
 - `:migrations` — `%{repo_namespace, migrations_dir}` map
 - `:assets` — `%{fonts, images}` map
+- `:default_font` — optional `%{family, file}` map; `file` must be one of
+  `assets.fonts`. Suggests `Mob.Theme.fonts[:default]`; host/style-package
+  choices always outrank it; two plugins declaring one is a build error.
+  See `MOB_FONTS.md`.
 
 Sub-app sections:
 

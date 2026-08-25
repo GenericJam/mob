@@ -39,6 +39,12 @@ defmodule Mob.Renderer do
   **Text size props** (`:text_size`, `:font_size`): token atoms (`:xl`, `:lg`,
   etc.) are multiplied by `theme.type_scale`.
 
+  **Font props** (`:font`): an atom (`:heading`) resolves through the active
+  theme's `fonts` map to a platform-specific family name; an unresolved atom
+  or a raw string passes through unchanged. When the theme declares a
+  `:default` font token, any node without its own `font:` gets it injected
+  automatically — see `Mob.Theme`'s "Font tokens" section.
+
   ## Component defaults
 
   When a component's props omit styling keys, the renderer injects sensible
@@ -173,6 +179,8 @@ defmodule Mob.Renderer do
   @radius_props ~w(corner_radius)a
   # Props whose atom values are resolved as text sizes (scaled by type_scale)
   @size_props ~w(text_size font_size)a
+  # Props whose atom values are resolved as font tokens
+  @font_props ~w(font)a
 
   # ── Component defaults ────────────────────────────────────────────────────
   # Injected for missing styling props. Use semantic tokens so they inherit
@@ -227,6 +235,7 @@ defmodule Mob.Renderer do
       radii: Theme.radius_map(theme),
       type_scale: theme.type_scale,
       flags: Theme.flags_map(theme),
+      fonts: Theme.fonts_map(theme),
       platform: platform
     }
 
@@ -257,10 +266,11 @@ defmodule Mob.Renderer do
     defaults = Map.get(@component_defaults, type, %{})
     with_defaults = Map.merge(defaults, props)
     with_theme_flags = inject_theme_flags(type, with_defaults, ctx)
+    with_font_default = inject_font_default(with_theme_flags, ctx)
 
     %{
       "type" => Atom.to_string(type),
-      "props" => prepare_props(with_theme_flags, nif, platform, ctx),
+      "props" => prepare_props(with_font_default, nif, platform, ctx),
       "children" => Enum.map(children, &prepare(&1, nif, platform, ctx))
     }
   end
@@ -279,6 +289,22 @@ defmodule Mob.Renderer do
   end
 
   defp inject_theme_flags(_type, props, _ctx), do: props
+
+  # App-wide default font: when the active theme declares a `:default` font
+  # token, any node that doesn't already carry its own `font:` prop gets it
+  # stamped on here — that's what makes "set a custom font once" work
+  # without repeating `font:` on every text-bearing node. Not type-restricted
+  # (unlike the glass flag above) because native already treats `font` as a
+  # generic pass-through prop on any node type, not just `:text`.
+  #
+  # Themes that never set `fonts[:default]` (the neutral base) hit the second
+  # clause and this is a no-op — zero behavior change for apps that don't use
+  # this feature.
+  defp inject_font_default(props, %{fonts: %{default: _}} = _ctx) when is_map_key(props, :font),
+    do: props
+
+  defp inject_font_default(props, %{fonts: %{default: _}}), do: Map.put(props, :font, :default)
+  defp inject_font_default(props, _ctx), do: props
 
   defp prepare_props(props, nif, platform, ctx) do
     # 1. Merge any %Mob.Style{} under the :style key (inline props win)
@@ -479,6 +505,14 @@ defmodule Mob.Renderer do
     resolve_color(value, ctx.colors)
   end
 
+  # Font props — theme fonts map → platform-specific name. An atom not found
+  # in the map passes through unresolved (mirrors resolve_color/2's unknown-
+  # atom behavior) rather than raising, since a typo'd token shouldn't crash
+  # a render — it'll just look like the system font, same as an unset font.
+  defp resolve_token(key, value, ctx) when is_atom(value) and key in @font_props do
+    resolve_font(value, ctx.fonts, ctx.platform)
+  end
+
   # Text size props — scale table value by type_scale
   defp resolve_token(key, value, ctx) when is_atom(value) and key in @size_props do
     case Map.get(@text_sizes, value) do
@@ -537,6 +571,25 @@ defmodule Mob.Renderer do
   end
 
   defp resolve_color(value, _theme_colors), do: value
+
+  # Font token resolution: theme fonts map → the value for the CURRENT
+  # platform only. Unlike colors (which resolve to one value used by both
+  # platforms — an ARGB int), a font value carries a name per platform, so
+  # this is where the split happens; native only ever sees one platform's
+  # string.
+  #
+  # A map value missing the requested platform key falls back to whichever
+  # platform key IS present, rather than to the raw token atom — a
+  # differently-cased/typo'd platform key is still a usable font name,
+  # while sending back the token atom's name (e.g. "heading") would silently
+  # ask the OS for a font literally named "heading".
+  defp resolve_font(value, theme_fonts, platform) do
+    case Map.get(theme_fonts, value) do
+      %{} = spec -> Map.get(spec, platform) || spec[:ios] || spec[:android]
+      string when is_binary(string) -> string
+      nil -> value
+    end
+  end
 
   # ── Batch 5 helpers ─────────────────────────────────────────────────────
   # Encode a Mob.Event.Throttle config for the native side. We use string
