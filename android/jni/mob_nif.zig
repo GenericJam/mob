@@ -1458,10 +1458,12 @@ pub export fn mob_send_component_event(
 
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
+    // Binaries, not charlists (enif_make_string) — Mob.ComponentServer decodes
+    // payload_json with :json.decode/1, which requires a binary.
     const msg = erts.makeTuple(env, .{
         erts.enif_make_atom(env, "component_event"),
-        erts.enif_make_string(env, event, erts.ERL_NIF_LATIN1),
-        erts.enif_make_string(env, payload_json, erts.ERL_NIF_LATIN1),
+        cstrToBin(env, event, std.mem.span(event).len),
+        cstrToBin(env, payload_json, std.mem.span(payload_json).len),
     });
     var pid = pid_copy;
     _ = erts.enif_send(null, &pid, env, msg);

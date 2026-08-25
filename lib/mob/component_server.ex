@@ -88,11 +88,8 @@ defmodule Mob.ComponentServer do
         {:component_event, event, payload_json},
         %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state
       ) do
-    payload =
-      case :json.decode(payload_json) do
-        map when is_map(map) -> map
-        _ -> %{}
-      end
+    event = to_binary(event)
+    payload = decode_payload(payload_json)
 
     {:noreply, new_socket} = module.handle_event(event, payload, socket)
     send(screen_pid, {:component_changed, id, module})
@@ -106,6 +103,31 @@ defmodule Mob.ComponentServer do
     {:noreply, new_socket} = module.handle_info(message, socket)
     send(screen_pid, {:component_changed, id, module})
     {:noreply, %{state | socket: new_socket}}
+  end
+
+  # The native contract is binaries (see mob_send_component_event on both
+  # platforms). This stays TEMPORARILY so a hot-deployed BEAM doesn't crash
+  # against an older native shell that still emits charlists — MOB-98.
+  @doc false
+  @spec to_binary(binary() | charlist()) :: binary()
+  def to_binary(value) when is_binary(value), do: value
+  def to_binary(value) when is_list(value), do: List.to_string(value)
+
+  # payload_json arrives as a binary (fixed native contract) or, from an
+  # older native shell, a charlist — same compat window as to_binary/1
+  # above. :json.decode/1 raises on genuinely malformed input rather than
+  # returning an error tuple; both that and a validly-decoded non-map value
+  # (e.g. a bare `"5"` or `"null"`) fall back to %{} rather than crashing
+  # the component process over a bad event payload.
+  @doc false
+  @spec decode_payload(binary() | charlist()) :: map()
+  def decode_payload(json) do
+    case :json.decode(to_binary(json)) do
+      map when is_map(map) -> map
+      _ -> %{}
+    end
+  rescue
+    ErlangError -> %{}
   end
 
   @impl GenServer
