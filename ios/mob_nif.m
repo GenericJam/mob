@@ -6177,11 +6177,20 @@ void mob_send_component_event(int handle, const char *event, const char *payload
     ErlNifEnv *env = enif_alloc_env();
     // Binaries, not charlists (enif_make_string) — Mob.ComponentServer decodes
     // payload_json with :json.decode/1, which requires a binary.
+    size_t event_len = strlen(event);
+    size_t payload_len = strlen(payload_json);
     ErlNifBinary event_bin, payload_bin;
-    enif_alloc_binary(strlen(event), &event_bin);
-    memcpy(event_bin.data, event, strlen(event));
-    enif_alloc_binary(strlen(payload_json), &payload_bin);
-    memcpy(payload_bin.data, payload_json, strlen(payload_json));
+    if (!enif_alloc_binary(event_len, &event_bin)) {
+        enif_free_env(env);
+        return;
+    }
+    memcpy(event_bin.data, event, event_len);
+    if (!enif_alloc_binary(payload_len, &payload_bin)) {
+        enif_release_binary(&event_bin);
+        enif_free_env(env);
+        return;
+    }
+    memcpy(payload_bin.data, payload_json, payload_len);
 
     ERL_NIF_TERM msg =
         enif_make_tuple3(env, enif_make_atom(env, "component_event"),

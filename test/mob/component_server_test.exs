@@ -29,7 +29,14 @@ defmodule Mob.ComponentServerTest do
   end
 
   setup do
-    start_supervised!({Mob.ComponentRegistry, []})
+    # Mob.ComponentRegistry registers under a fixed global name. Another
+    # async test file (component_test.exs) may have already started it —
+    # start_supervised! would raise on {:already_started, _}, so tolerate
+    # that instead of racing to be first.
+    case start_supervised({Mob.ComponentRegistry, []}) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
 
     {:ok, pid} =
       Mob.ComponentServer.start(
@@ -89,6 +96,14 @@ defmodule Mob.ComponentServerTest do
 
       assert Mob.ComponentServer.render_props(pid).last_payload == %{}
     end
+
+    test "an unexpected event shape doesn't crash the component", %{pid: pid} do
+      send(pid, {:component_event, :not_a_string, "{}"})
+      assert_receive {:component_changed, :r, Recorder}
+
+      assert Mob.ComponentServer.render_props(pid).last_event == ""
+      assert Process.alive?(pid)
+    end
   end
 
   describe "to_binary/1" do
@@ -98,6 +113,25 @@ defmodule Mob.ComponentServerTest do
 
     test "a charlist converts to a binary" do
       assert Mob.ComponentServer.to_binary(String.to_charlist("x")) == "x"
+    end
+
+    test "an ASCII-only charlist round-trips through List.to_string identically" do
+      # Sanity check: for the common case (plain ASCII), byte-preserving
+      # conversion and codepoint-encoding conversion agree.
+      assert Mob.ComponentServer.to_binary(~c"tapped") == "tapped"
+    end
+
+    test "a charlist with a byte > 127 is reproduced byte-for-byte, not UTF-8 encoded" do
+      # ERL_NIF_LATIN1 maps codepoint N to byte N — the raw byte 233, not
+      # the two-byte UTF-8 encoding of codepoint 233 (é). List.to_string/1
+      # would produce <<195, 169>>; the byte-preserving conversion must not.
+      assert Mob.ComponentServer.to_binary([233]) == <<233>>
+    end
+
+    test "an unexpected shape (neither binary nor list) falls back to an empty binary" do
+      assert Mob.ComponentServer.to_binary(:not_a_string) == ""
+      assert Mob.ComponentServer.to_binary(nil) == ""
+      assert Mob.ComponentServer.to_binary({1, 2}) == ""
     end
   end
 
