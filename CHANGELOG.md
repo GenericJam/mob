@@ -8,6 +8,49 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.25] - 2026-08-25
+
+### Added
+- **Custom fonts: named tokens, app-wide/plugin defaults, and a fallback
+  chain — see [`MOB_FONTS.md`](MOB_FONTS.md) for the full design.**
+  - `Mob.Theme.font/2` builds a `%{ios:, android:}` font spec from an iOS
+    PostScript name + `from_file:`, computing the Android resource name via
+    the same helper the build-time bundler uses (`Mob.Font.android_resource_name/1`),
+    so the two names can't drift apart.
+  - `Mob.Theme` gained `fonts` (a name → spec map, referenced from a node's
+    `font:` prop the same way `:primary`/`:on_surface` reference the color
+    map) and `font_fallback` (an ordered list of specs tried, in order, on
+    either platform when a node's own font name doesn't resolve).
+    `Mob.Theme.fonts_map/1` and `font_fallback_list/1` are the accessors.
+  - Any node that doesn't set its own `font:` prop picks up the theme's
+    `fonts[:default]` automatically (`Mob.Renderer.inject_font_default/2`) —
+    set an app-wide default font once, no per-node wiring.
+  - A capability plugin can declare its own default font via
+    `default_font: %{family:, file:}` in `priv/mob_plugin.exs`
+    (`Mob.Plugins.apply_default_font/0`, run at boot right after the host's
+    own style/font setup, so a host-set default always wins over a
+    plugin's).
+  - Both platforms honor the fallback chain natively: Android walks
+    `[primary] + font_fallback` via `Typeface.create`, skipping any name
+    that resolves to `Typeface.DEFAULT` (Android's silent signal that a
+    name wasn't found — see Fixed, mob_new); iOS walks the same list via
+    `UIFont(name:size:)`, which correctly returns `nil` for an unknown name.
+  - `Mob.Theme.set/1`'s native push (`notify_native/1`) now also ships
+    `_font_fallback` to both platforms alongside the existing color palette.
+
+### Fixed
+- **Data race on `g_font_fallback` in `ios/mob_nif.m`.** The fallback list
+  was a plain `static NSArray *` written from the BEAM's calling thread in
+  `nif_set_theme` and read from the main thread in `mob_font_fallback()`
+  during SwiftUI render, with no synchronization. Under ARC, the
+  unsynchronized write releases the old array while a concurrent reader may
+  have just loaded that pointer — a rare but real use-after-release crash.
+  The write now hops onto the main thread via `dispatch_sync`, matching
+  every other NIF in the file that mutates state the main thread reads.
+  Found in code review immediately after this feature's own device
+  verification; Android's equivalent (`MobBridge.kt`'s `fontFallback`) had
+  always had this covered via `@Volatile`. (MOB-94)
+
 ## [0.7.24] - 2026-08-20
 
 ### Fixed
