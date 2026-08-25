@@ -4,6 +4,7 @@ defmodule Mob.ComponentServer do
   # screen gets its own process. Started unlinked (isolated from the screen).
 
   use GenServer
+  require Logger
 
   @doc "Start a component process (not linked to the caller)."
   @spec start(keyword()) :: {:ok, pid()} | {:error, term()}
@@ -108,10 +109,35 @@ defmodule Mob.ComponentServer do
   # The native contract is binaries (see mob_send_component_event on both
   # platforms). This stays TEMPORARILY so a hot-deployed BEAM doesn't crash
   # against an older native shell that still emits charlists — MOB-98.
+  #
+  # IO.iodata_to_binary/1, not List.to_string/1: the legacy charlist came
+  # from ObjC's enif_make_string(env, cstr, ERL_NIF_LATIN1), which maps
+  # codepoint N to byte N — the same as raw-byte iodata, NOT Unicode
+  # codepoints. List.to_string/1 would UTF-8-encode any byte > 127 into two
+  # bytes, corrupting non-ASCII legacy payloads instead of reproducing them.
+  #
+  # Never raises: this is the component-event boundary from native code, and
+  # a malformed shape here (however unlikely) must not crash the component
+  # process over a value it never asked for.
   @doc false
-  @spec to_binary(binary() | charlist()) :: binary()
+  @spec to_binary(term()) :: binary()
   def to_binary(value) when is_binary(value), do: value
-  def to_binary(value) when is_list(value), do: List.to_string(value)
+
+  def to_binary(value) when is_list(value) do
+    IO.iodata_to_binary(value)
+  rescue
+    ArgumentError -> log_unexpected_shape(value)
+  end
+
+  def to_binary(other), do: log_unexpected_shape(other)
+
+  defp log_unexpected_shape(value) do
+    Logger.warning(
+      "[mob_component_server] expected a binary or charlist event/payload, got: #{inspect(value)}"
+    )
+
+    ""
+  end
 
   # payload_json arrives as a binary (fixed native contract) or, from an
   # older native shell, a charlist — same compat window as to_binary/1

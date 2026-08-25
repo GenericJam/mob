@@ -361,10 +361,16 @@ inline fn detachIfAttached(attached: c_int) void {
 // ── Binary / string helpers ──────────────────────────────────────────────
 
 /// Make an `ErlNifBinary` from a C-style {ptr, len} pair and wrap it as a
-/// term. BEAM owns the allocated bytes after make_binary returns.
+/// term. BEAM owns the allocated bytes after make_binary returns. Falls
+/// back to `:nil` on allocation failure — the same sentinel this file's
+/// call sites already use for "absent" (see the empty-label/value guards
+/// above), so a caller that already tolerates `:nil` doesn't need a new
+/// error shape.
 fn cstrToBin(env: ?*erts.ErlNifEnv, src: [*]const u8, len: usize) erts.ERL_NIF_TERM {
     var bin: erts.ErlNifBinary = undefined;
-    _ = erts.enif_alloc_binary(len, &bin);
+    if (erts.enif_alloc_binary(len, &bin) == 0) {
+        return erts.atom(env, "nil");
+    }
     @memcpy(bin.data[0..len], src[0..len]);
     return erts.enif_make_binary(env, &bin);
 }
