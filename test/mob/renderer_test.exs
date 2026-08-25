@@ -1101,4 +1101,75 @@ defmodule Mob.RendererTest do
       assert tree["props"]["glass"] == true
     end
   end
+
+  describe "font token resolution" do
+    setup do
+      on_exit(fn -> Mob.Theme.set(%Mob.Theme{}) end)
+      :ok
+    end
+
+    test "font atom resolves to the platform-specific name" do
+      Mob.Theme.set(fonts: %{heading: %{ios: "Inter-Bold", android: "inter_bold"}})
+
+      tree = %{type: :text, props: %{text: "hi", font: :heading}, children: []}
+
+      Renderer.render(tree, :ios, MockNIF)
+      assert set_root_json()["props"]["font"] == "Inter-Bold"
+
+      MockNIF.reset()
+      Renderer.render(tree, :android, MockNIF)
+      assert set_root_json()["props"]["font"] == "inter_bold"
+    end
+
+    test "a bare string font value is used as-is on both platforms" do
+      Mob.Theme.set(fonts: %{mono: "Courier"})
+      tree = %{type: :text, props: %{text: "hi", font: :mono}, children: []}
+
+      Renderer.render(tree, :ios, MockNIF)
+      assert set_root_json()["props"]["font"] == "Courier"
+    end
+
+    test "unknown font atom is left as-is (serialised as string)" do
+      tree = %{type: :text, props: %{text: "hi", font: :not_a_real_font}, children: []}
+      Renderer.render(tree, :ios, MockNIF)
+      assert set_root_json()["props"]["font"] == "not_a_real_font"
+    end
+
+    test "a node with an explicit font: prop is untouched even with a default set" do
+      Mob.Theme.set(
+        fonts: %{
+          default: %{ios: "Inter-Regular", android: "inter_regular"},
+          heading: %{ios: "Inter-Bold", android: "inter_bold"}
+        }
+      )
+
+      tree = %{type: :text, props: %{text: "hi", font: :heading}, children: []}
+      Renderer.render(tree, :ios, MockNIF)
+      assert set_root_json()["props"]["font"] == "Inter-Bold"
+    end
+
+    test "a node with no font: prop gets the theme's :default font injected" do
+      Mob.Theme.set(fonts: %{default: %{ios: "Inter-Regular", android: "inter_regular"}})
+
+      tree = %{type: :text, props: %{text: "hi"}, children: []}
+      Renderer.render(tree, :ios, MockNIF)
+      assert set_root_json()["props"]["font"] == "Inter-Regular"
+    end
+
+    test "default font injection is not restricted to :text — any node type gets it" do
+      Mob.Theme.set(fonts: %{default: %{ios: "Inter-Regular", android: "inter_regular"}})
+
+      tree = %{type: :button, props: %{text: "Save", on_tap: self()}, children: []}
+      Renderer.render(tree, :ios, MockNIF)
+      assert set_root_json()["props"]["font"] == "Inter-Regular"
+    end
+
+    test "no :default font token configured: nothing is injected (zero-config no-op)" do
+      Mob.Theme.set(%Mob.Theme{})
+
+      tree = %{type: :text, props: %{text: "hi"}, children: []}
+      Renderer.render(tree, :ios, MockNIF)
+      refute Map.has_key?(set_root_json()["props"], "font")
+    end
+  end
 end

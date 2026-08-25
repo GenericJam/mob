@@ -175,14 +175,37 @@ extension MobNode {
             }
         }()
         var font: Font
-        if let family = fontFamily, !family.isEmpty {
-            font = Font.custom(family, size: size)
+        if let resolvedName = MobNode.resolveFontName(primary: fontFamily) {
+            font = Font.custom(resolvedName, size: size)
         } else {
             font = .system(size: size)
         }
         font = font.weight(weight)
         if italic { font = font.italic() }
         return font
+    }
+
+    /// Walks `[primary, ...fallback]` (fallback from the last `Mob.Theme.set/1`
+    /// via `mob_font_fallback()`) and returns the first name `UIFont` can
+    /// actually load. `Font.custom` itself has no "did this resolve?" signal —
+    /// it silently substitutes the system font — so this uses `UIFont(name:)`
+    /// purely as a resolvability probe. `nil` means "use the system font",
+    /// same as today's no-font-set behavior. Logs when the primary choice
+    /// misses so a missing/misnamed font is diagnosable instead of just
+    /// looking like the wrong font. See MOB_FONTS.md.
+    static func resolveFontName(primary: String?) -> String? {
+        let candidates = ([primary].compactMap { $0 } + mob_font_fallback()).filter { !$0.isEmpty }
+        guard !candidates.isEmpty else { return nil }
+
+        for (index, name) in candidates.enumerated() where UIFont(name: name, size: 12) != nil {
+            if index > 0 {
+                NSLog("[mob/font] \"%@\" not found — fell back to \"%@\"", candidates[0], name)
+            }
+            return name
+        }
+
+        NSLog("[mob/font] none of %@ resolved — using system font", candidates)
+        return nil
     }
 
     var textAlignEnum: TextAlignment {

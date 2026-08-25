@@ -411,7 +411,11 @@ Top-level optional:
 - `:description` — short string for `mix mob.styles` output.
 - `:theme` — module name. Required if the style provides tokens (almost
   always true). Module must export `theme/0` returning a `%Mob.Theme{}`
-  struct.
+  struct. `fonts` and `font_fallback` are theme fields like any other
+  token category (colors, spacing, radii) — a style package that sets
+  `fonts: %{default: ...}` gets its own default font applied for free
+  the moment it's activated via `:default_style`, no separate schema
+  needed. See `MOB_FONTS.md`.
 
 Component overrides (any combination):
 

@@ -1898,16 +1898,48 @@ static ERL_NIF_TERM nif_set_transition(ErlNifEnv *env, int argc, const ERL_NIF_T
 // SwiftUI view model. Runs on the BEAM thread — MobViewModel dispatches to main.
 
 // nif_set_theme/1 — accept the resolved theme palette (as JSON) from
-// Mob.Theme.set/1 and push it to the SwiftUI side. iOS doesn't use system
-// chrome whose appearance depends on a global theme (we render every
-// surface via mob's primitives with explicit color props), so the iOS
-// implementation is a no-op that just confirms receipt. Kept here for
+// Mob.Theme.set/1. iOS doesn't use system chrome whose appearance depends
+// on a global theme (we render every surface via mob's primitives with
+// explicit color props), so the palette itself is unused here — kept for
 // symmetry with the Android implementation, which needs it to drive
 // Material 3's NavigationBar / Button colour scheme.
+//
+// `_font_fallback` IS read: it's the ordered list of font names
+// MobRootView.swift's `resolvedFont` walks when a node's own font can't be
+// loaded (see mob_font_fallback() below and MOB_FONTS.md).
+static NSArray<NSString *> *g_font_fallback = nil;
+
 static ERL_NIF_TERM nif_set_theme(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     (void)argc;
-    (void)argv;
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[0], &bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &bin))
+        return enif_make_badarg(env);
+
+    NSData *data = [NSData dataWithBytes:bin.data length:bin.size];
+    NSError *err = nil;
+    id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&err];
+    if (err || ![json isKindOfClass:[NSDictionary class]]) {
+        return enif_make_atom(env, "ok");
+    }
+
+    id fallback = json[@"_font_fallback"];
+    if ([fallback isKindOfClass:[NSArray class]]) {
+        NSMutableArray<NSString *> *names = [NSMutableArray array];
+        for (id name in (NSArray *)fallback) {
+            if ([name isKindOfClass:[NSString class]])
+                [names addObject:name];
+        }
+        g_font_fallback = [names copy];
+    }
+
     return enif_make_atom(env, "ok");
+}
+
+// Read from MobRootView.swift's resolvedFont — see nif_set_theme above.
+// Never nil; empty when no theme has set a font_fallback (the default).
+NSArray<NSString *> *mob_font_fallback(void) {
+    return g_font_fallback ?: @[];
 }
 
 static NSMutableDictionary *mob_frame_registry(void); // both defined with the

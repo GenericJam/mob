@@ -27,3 +27,8 @@ void mob_notify_color_scheme(const char *scheme);
 // the element_frames NIF so an agent can locate/drive elements without a
 // screenshot. Implemented in mob_nif.m.
 void mob_register_frame(const char *id, double x, double y, double w, double h);
+
+// Called from MobRootView.swift's resolvedFont to get the ordered fallback
+// font names from the last Mob.Theme.set/1 (nif_set_theme in mob_nif.m
+// stores it). Empty (never nil) when no theme has set font_fallback.
+NSArray<NSString *> *mob_font_fallback(void);

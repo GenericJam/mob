@@ -135,6 +135,45 @@ defmodule Mob.ThemeTest do
       assert :ok = Mob.Theme.set(Mob.Theme.build(primary: :emerald_500))
       assert :ok = Mob.Theme.set(PresetFixture)
     end
+
+    test "does not crash with a font_fallback list configured (mixed spec/string entries)" do
+      assert :ok =
+               Mob.Theme.set(font_fallback: ["Helvetica Neue", %{ios: "Arial", android: "arial"}])
+    end
+  end
+
+  describe "fonts_map/1" do
+    test "returns the empty map on the default theme" do
+      assert Theme.fonts_map(Theme.default()) == %{}
+    end
+
+    test "reflects configured font tokens" do
+      fonts = %{default: %{ios: "Inter-Regular", android: "inter_regular"}}
+      assert Theme.fonts_map(Theme.build(fonts: fonts)) == fonts
+    end
+  end
+
+  describe "font_fallback_list/1" do
+    test "returns an empty list on the default theme" do
+      assert Theme.font_fallback_list(Theme.default()) == []
+    end
+
+    test "reflects a configured fallback list" do
+      assert Theme.font_fallback_list(Theme.build(font_fallback: ["Helvetica Neue"])) == [
+               "Helvetica Neue"
+             ]
+    end
+  end
+
+  describe "font/2" do
+    test "builds a spec pairing the given iOS name with the computed Android name" do
+      assert Theme.font("Inter-Bold", from_file: "priv/fonts/Inter-Bold.ttf") ==
+               %{ios: "Inter-Bold", android: "inter_bold"}
+    end
+
+    test "raises if :from_file is missing (author forgot the file, not a silent bad spec)" do
+      assert_raise KeyError, fn -> Theme.font("Inter-Bold", []) end
+    end
   end
 
   describe "flags_map/1" do
