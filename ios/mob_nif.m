@@ -2018,7 +2018,18 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
     enif_mutex_lock(tap_mutex);
     if (tap_build_count >= MAX_TAP_HANDLES) {
         enif_mutex_unlock(tap_mutex);
-        return enif_make_badarg(env);
+        // MOB-100 follow-up: this used to be enif_make_badarg(env), which
+        // crashed Mob.Renderer.render/3 (and the whole screen process) the
+        // same way a full component pool used to crash Mob.ComponentServer
+        // — an unvirtualized long list or big form with >MAX_TAP_HANDLES
+        // interactive elements would hit this on every render. Every
+        // mob_send_* sender already no-ops on an out-of-range handle (see
+        // mob_send_tap et al. above), so -1 is a safe "no handler wired up"
+        // sentinel here — the interactive prop silently does nothing
+        // instead of taking the screen down.
+        LOGE(@"register_tap: pool exhausted (cap=%d) — returning unhandled sentinel",
+             MAX_TAP_HANDLES);
+        return enif_make_int(env, -1);
     }
     TapHandle *build = tap_tables[1 - tap_active];
     int handle = tap_build_count++;
@@ -6139,7 +6150,12 @@ static ERL_NIF_TERM nif_webview_go_back(ErlNifEnv *env, int argc, const ERL_NIF_
 // register_component/1 allocates a slot; deregister_component/1 frees it.
 // mob_send_component_event is called from Swift when the native view fires an event.
 
-#define MAX_COMPONENT_HANDLES 64
+// MOB-100: bumped from 64 — a single screen legitimately rendering ~60
+// components (e.g. an icon catalog) plus a few leftover slots from prior
+// navigation could tip over the old cap. Keep in sync with the identical
+// constant in android/jni/mob_nif.zig. Still fixed-size: a growable pool
+// or component recycling is a longer-term follow-up, not this fix.
+#define MAX_COMPONENT_HANDLES 256
 
 typedef struct {
     ErlNifPid pid;
@@ -6149,6 +6165,12 @@ typedef struct {
 static ComponentHandle component_handles[MAX_COMPONENT_HANDLES];
 static ErlNifMutex *component_mutex = NULL;
 
+// Returns {ok, Handle} on success, {error, component_slots_exhausted} when
+// the pool is full — MOB-100: a full pool used to return the same
+// enif_make_badarg(env) as a malformed pid argument, which crashed
+// Mob.ComponentServer.init (and, via the unhandled {:error, _} tuple
+// unmatched in Mob.Component.ensure_started, the whole screen process)
+// instead of failing just the one component that couldn't get a slot.
 static ERL_NIF_TERM nif_register_component(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifPid pid;
     if (!enif_get_local_pid(env, argv[0], &pid))
@@ -6160,11 +6182,12 @@ static ERL_NIF_TERM nif_register_component(ErlNifEnv *env, int argc, const ERL_N
             component_handles[i].pid = pid;
             component_handles[i].active = 1;
             enif_mutex_unlock(component_mutex);
-            return enif_make_int(env, i);
+            return enif_make_tuple2(env, enif_make_atom(env, "ok"), enif_make_int(env, i));
         }
     }
     enif_mutex_unlock(component_mutex);
-    return enif_make_badarg(env);
+    return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                            enif_make_atom(env, "component_slots_exhausted"));
 }
 
 static ERL_NIF_TERM nif_deregister_component(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {

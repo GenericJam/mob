@@ -1,5 +1,6 @@
 defmodule Mob.ComponentServerTest do
   use ExUnit.Case, async: true
+  import ExUnit.CaptureLog
 
   # Mob.ComponentServer.dispatch/3 (the programmatic Elixir API) bypasses the
   # native pipeline entirely — payload arrives as an already-decoded map, not
@@ -132,6 +133,243 @@ defmodule Mob.ComponentServerTest do
       assert Mob.ComponentServer.to_binary(:not_a_string) == ""
       assert Mob.ComponentServer.to_binary(nil) == ""
       assert Mob.ComponentServer.to_binary({1, 2}) == ""
+    end
+  end
+
+  describe "native handle registration (MOB-100)" do
+    # A mock :mob_nif backend so these tests can exercise the
+    # register_component/deregister_component contract without a device.
+    # Agent (not GenServer), unlinked, so it survives across test process
+    # boundaries the same way test/mob/renderer_test.exs's MockNIF does.
+    defmodule MockNIF do
+      use Agent
+
+      def start_link,
+        do:
+          Agent.start(fn -> %{calls: [], next: 0, freed: [], result: :allocate} end,
+            name: __MODULE__
+          )
+
+      def calls, do: Agent.get(__MODULE__, & &1.calls)
+
+      def reset,
+        do:
+          Agent.update(__MODULE__, fn _ -> %{calls: [], next: 0, freed: [], result: :allocate} end)
+
+      # :allocate — a real freelist pool: reuse a freed slot before growing.
+      # :exhausted — always report the pool full, like the real pool at capacity.
+      # :legacy_int / :legacy_badarg — simulate a native binary older than
+      # MOB-100 (mix mob.push can hot-deploy this BEAM onto native code that
+      # wasn't rebuilt with `mix mob.deploy --native`): the pre-fix contract
+      # returned a bare int on success and raised (enif_make_badarg) on
+      # exhaustion, neither of which matches {:ok, _} / {:error, _}.
+      def set_result(result), do: Agent.update(__MODULE__, &%{&1 | result: result})
+
+      def register_component(pid) do
+        # :legacy_badarg must raise in the CALLING process (matching a real
+        # NIF's enif_make_badarg), not inside this Agent's own process —
+        # so the Agent only ever returns a marker; the raise happens below,
+        # back in the caller.
+        case Agent.get_and_update(__MODULE__, fn s ->
+               calls = [{:register_component, [pid]} | s.calls]
+
+               case s.result do
+                 :allocate ->
+                   case s.freed do
+                     [handle | rest] -> {{:ok, handle}, %{s | calls: calls, freed: rest}}
+                     [] -> {{:ok, s.next}, %{s | calls: calls, next: s.next + 1}}
+                   end
+
+                 :exhausted ->
+                   {{:error, :component_slots_exhausted}, %{s | calls: calls}}
+
+                 :legacy_int ->
+                   {s.next, %{s | calls: calls, next: s.next + 1}}
+
+                 :legacy_badarg ->
+                   {:legacy_badarg_marker, %{s | calls: calls}}
+               end
+             end) do
+          :legacy_badarg_marker -> raise ArgumentError, "argument error"
+          other -> other
+        end
+      end
+
+      def deregister_component(handle) do
+        Agent.update(__MODULE__, fn s ->
+          %{s | calls: [{:deregister_component, [handle]} | s.calls], freed: [handle | s.freed]}
+        end)
+
+        :ok
+      end
+    end
+
+    setup do
+      case start_supervised({Mob.ComponentRegistry, []}) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+
+      # Unlinked, fixed-name Agent (mirrors test/mob/renderer_test.exs's
+      # MockNIF) — reset rather than restarted, since a prior test in this
+      # module may have left it running.
+      case MockNIF.start_link() do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+
+      MockNIF.reset()
+      :ok
+    end
+
+    test ":no_render never calls the native pool and gets the sentinel handle" do
+      {:ok, pid} =
+        Mob.ComponentServer.start(
+          module: Recorder,
+          id: :norender,
+          screen_pid: self(),
+          props: %{},
+          platform: :no_render,
+          nif: MockNIF
+        )
+
+      assert Mob.ComponentServer.get_handle(pid) == -1
+      assert MockNIF.calls() == []
+
+      Process.exit(pid, :shutdown)
+      # terminate/2 runs asynchronously relative to exit; give it a beat.
+      Process.sleep(10)
+      assert MockNIF.calls() == []
+    end
+
+    test "slot 0 is a valid handle and is deregistered on terminate (no more leak)" do
+      {:ok, pid} =
+        Mob.ComponentServer.start(
+          module: Recorder,
+          id: :slot0,
+          screen_pid: self(),
+          props: %{},
+          platform: :ios,
+          nif: MockNIF
+        )
+
+      assert Mob.ComponentServer.get_handle(pid) == 0
+
+      Process.exit(pid, :shutdown)
+      Process.sleep(10)
+      assert {:deregister_component, [0]} in MockNIF.calls()
+    end
+
+    test "pool exhaustion fails only that component — process survives with the sentinel handle" do
+      MockNIF.set_result(:exhausted)
+
+      log =
+        capture_log(fn ->
+          {:ok, pid} =
+            Mob.ComponentServer.start(
+              module: Recorder,
+              id: :exhausted,
+              screen_pid: self(),
+              props: %{},
+              platform: :ios,
+              nif: MockNIF
+            )
+
+          assert Process.alive?(pid)
+          assert Mob.ComponentServer.get_handle(pid) == -1
+
+          # Still fully functional as an Elixir process — exhaustion only
+          # costs native rendering, not the component's own state/events.
+          send(pid, {:component_event, "tapped", "{}"})
+          assert_receive {:component_changed, :exhausted, Recorder}
+
+          Process.exit(pid, :shutdown)
+          Process.sleep(10)
+        end)
+
+      assert log =~ "component slot pool exhausted"
+      refute {:deregister_component, [-1]} in MockNIF.calls()
+    end
+
+    test "a pre-MOB-100 native binary's bare-int return degrades instead of crashing" do
+      MockNIF.set_result(:legacy_int)
+
+      log =
+        capture_log(fn ->
+          {:ok, pid} =
+            Mob.ComponentServer.start(
+              module: Recorder,
+              id: :legacy_int,
+              screen_pid: self(),
+              props: %{},
+              platform: :ios,
+              nif: MockNIF
+            )
+
+          assert Process.alive?(pid)
+          assert Mob.ComponentServer.get_handle(pid) == -1
+        end)
+
+      assert log =~ "unexpected register_component/1 return"
+    end
+
+    test "a pre-MOB-100 native binary raising badarg on exhaustion degrades instead of crashing" do
+      MockNIF.set_result(:legacy_badarg)
+
+      log =
+        capture_log(fn ->
+          {:ok, pid} =
+            Mob.ComponentServer.start(
+              module: Recorder,
+              id: :legacy_badarg,
+              screen_pid: self(),
+              props: %{},
+              platform: :ios,
+              nif: MockNIF
+            )
+
+          assert Process.alive?(pid)
+          assert Mob.ComponentServer.get_handle(pid) == -1
+        end)
+
+      assert log =~ "register_component/1 raised"
+    end
+
+    test "register/reconcile/register cycling does not leak slots (MOB-100 root cause)" do
+      # Exercises the REAL production stop path: Mob.ComponentRegistry.reconcile/2
+      # calls Process.exit(pid, :shutdown) directly (see lib/mob/component_registry.ex),
+      # not GenServer.stop. Before trap_exit was added to init/1, that signal
+      # terminated the process without ever running terminate/2 — so every
+      # screen navigation leaked a slot, independent of the slot-0 sentinel bug.
+      screen_pid = self()
+
+      for i <- 1..5 do
+        id = :"cycled_#{i}"
+
+        {:ok, pid} =
+          Mob.ComponentServer.start(
+            module: Recorder,
+            id: id,
+            screen_pid: screen_pid,
+            props: %{},
+            platform: :ios,
+            nif: MockNIF
+          )
+
+        # A real pool with a working freelist hands the same slot back out
+        # every time — proof there's no monotonic growth across cycles.
+        assert Mob.ComponentServer.get_handle(pid) == 0
+
+        Mob.ComponentRegistry.reconcile(screen_pid, MapSet.new())
+
+        # reconcile/2 exits the process; wait for it to actually be gone
+        # before the next cycle re-registers under the same {screen_pid, id}.
+        ref = Process.monitor(pid)
+        assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 500
+      end
+
+      assert Enum.count(MockNIF.calls(), &match?({:register_component, _}, &1)) == 5
+      assert Enum.count(MockNIF.calls(), &match?({:deregister_component, _}, &1)) == 5
     end
   end
 
