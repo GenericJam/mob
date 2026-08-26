@@ -8,6 +8,47 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.28] - 2026-08-26
+
+### Fixed
+- **Native component handle pool exhaustion crashed the screen process.**
+  A screen registering enough `Mob.UI.native_view`/`Mob.Component`
+  instances to fill the fixed pool (originally 64 slots) got the same
+  `badarg` as a malformed pid, which crashed `Mob.ComponentServer.init`
+  and, via the unmatched `{:error, _}` in `Mob.Component.ensure_started`,
+  the whole screen — every tap went dead until force-kill. Three
+  compounding defects, all fixed:
+  - A full pool now returns `{:error, :component_slots_exhausted}`
+    instead of `badarg`; `Mob.ComponentServer` logs and fails just that
+    one component, leaving the screen alive.
+  - Slot 0 (a legitimate pool index) was conflated with the `:no_render`
+    sentinel (also `0`), so `terminate/2` never deregistered it —
+    permanent leak. The sentinel is now `-1`.
+  - `Mob.ComponentServer` never trapped exits, so
+    `Mob.ComponentRegistry.reconcile/2`'s `Process.exit(pid, :shutdown)`
+    (the real production stop path) never ran `terminate/2` at all —
+    *every* component leaving a screen leaked its slot, not just the
+    slot-0 ones. This was the dominant leak, found while writing the
+    regression test against the real stop path. See
+    `decisions/2026-08-26-component-pool-trap-exit.md`.
+  - `MAX_COMPONENT_HANDLES` bumped 64 → 256 on both platforms as
+    headroom (still fixed-size; a growable pool is a longer-term
+    follow-up).
+  - Also hardened against version skew: a native binary predating this
+    fix (reachable via `mix mob.push` hot-deploying a newer BEAM without
+    a native rebuild) returns a bare int on success and raises on
+    exhaustion — `Mob.ComponentServer` now degrades to the sentinel
+    instead of crashing in that case too.
+  - **Sibling bug in the tap-handle pool.** `nif_register_tap` (both
+    platforms) had the identical crash-on-exhaustion bug for
+    `on_tap`/`on_change`/`on_focus`/etc — reachable by any screen with
+    more than 256 interactive elements (an unvirtualized long list or a
+    big form). Fixed with the same `-1`-sentinel approach; needed no
+    `Mob.Renderer` changes since every native sender already no-ops on
+    an out-of-range handle.
+  - Device-verified on a physical Android phone and the iOS simulator
+    for both pools. (MOB-100)
+
 ## [0.7.27] - 2026-08-26
 
 ### Fixed
