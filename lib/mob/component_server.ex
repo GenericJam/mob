@@ -6,6 +6,15 @@ defmodule Mob.ComponentServer do
   use GenServer
   require Logger
 
+  @default_nif :mob_nif
+
+  # Sentinel for "no native handle assigned" — used both when the platform
+  # doesn't render natively (:no_render, e.g. in tests) and when the native
+  # component slot pool is exhausted (MOB-100). Slot 0 is a legitimate pool
+  # index returned by :mob_nif.register_component/1, so it cannot double as
+  # this sentinel the way it used to (that conflation leaked slot 0 forever).
+  @no_handle -1
+
   @doc "Start a component process (not linked to the caller)."
   @spec start(keyword()) :: {:ok, pid()} | {:error, term()}
   def start(opts) do
@@ -32,11 +41,23 @@ defmodule Mob.ComponentServer do
 
   @impl GenServer
   def init(opts) do
+    # MOB-100: Mob.ComponentRegistry.reconcile/2 stops a component that has
+    # left the tree via Process.exit(pid, :shutdown). A GenServer that isn't
+    # trapping exits terminates immediately on that signal WITHOUT running
+    # terminate/2 — the native handle (and, before this fix, the registry
+    # entry) leaked on every single screen navigation, not just for slot 0.
+    # Trapping exits turns that signal into a regular {:EXIT, _, reason}
+    # message (handled below) that goes through the normal {:stop, ...}
+    # path instead, so terminate/2 — and its deregister_component call —
+    # actually runs.
+    Process.flag(:trap_exit, true)
+
     module = opts[:module]
     id = opts[:id]
     screen_pid = opts[:screen_pid]
     props = opts[:props]
     platform = opts[:platform]
+    nif = opts[:nif] || @default_nif
 
     socket = Mob.Socket.new(module, platform: platform)
 
@@ -44,17 +65,37 @@ defmodule Mob.ComponentServer do
       {:ok, socket} ->
         Mob.ComponentRegistry.register(screen_pid, id, module, self())
 
-        handle =
-          if platform != :no_render do
-            :mob_nif.register_component(self())
-          else
-            0
-          end
+        handle = register_native_handle(nif, platform, module, id)
 
-        {:ok, %{module: module, socket: socket, screen_pid: screen_pid, id: id, handle: handle}}
+        {:ok,
+         %{
+           module: module,
+           socket: socket,
+           screen_pid: screen_pid,
+           id: id,
+           handle: handle,
+           nif: nif
+         }}
 
       {:error, reason} ->
         {:stop, reason}
+    end
+  end
+
+  defp register_native_handle(_nif, :no_render, _module, _id), do: @no_handle
+
+  defp register_native_handle(nif, _platform, module, id) do
+    case nif.register_component(self()) do
+      {:ok, handle} ->
+        handle
+
+      {:error, :component_slots_exhausted} ->
+        Logger.error(
+          "[mob_component_server] native component slot pool exhausted — " <>
+            "#{inspect(module)} id=#{inspect(id)} will not receive native events"
+        )
+
+        @no_handle
     end
   end
 
@@ -95,6 +136,13 @@ defmodule Mob.ComponentServer do
     {:noreply, new_socket} = module.handle_event(event, payload, socket)
     send(screen_pid, {:component_changed, id, module})
     {:noreply, %{state | socket: new_socket}}
+  end
+
+  # Trapping exits (see init/1) turns Mob.ComponentRegistry.reconcile/2's
+  # Process.exit(pid, :shutdown) into this message instead of an untrappable
+  # kill — route it through the normal stop path so terminate/2 runs.
+  def handle_info({:EXIT, _from, reason}, state) do
+    {:stop, reason, state}
   end
 
   def handle_info(
@@ -162,10 +210,11 @@ defmodule Mob.ComponentServer do
         socket: socket,
         screen_pid: screen_pid,
         id: id,
-        handle: handle
+        handle: handle,
+        nif: nif
       }) do
     Mob.ComponentRegistry.deregister(screen_pid, id, module)
-    if handle != 0, do: :mob_nif.deregister_component(handle)
+    if handle >= 0, do: nif.deregister_component(handle)
     module.terminate(reason, socket)
   end
 end

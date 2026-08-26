@@ -32,6 +32,11 @@ public final class MobNativeViewRegistry {
               let factory = factories[name],
               let props = node.nativeViewProps as? [String: Any] else { return nil }
         let handle = node.nativeViewHandle
+        // -1 means the BEAM couldn't get a native component slot (pool
+        // exhausted — MOB-100). Render nothing rather than a view whose
+        // events would go nowhere; matches Android's MobNativeViewRegistry
+        // early-return for the same case.
+        guard handle >= 0 else { return nil }
         let send: MobNativeSend = { event, payload in
             if let data = try? JSONSerialization.data(withJSONObject: payload),
                let json = String(data: data, encoding: .utf8) {

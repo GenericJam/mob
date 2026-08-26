@@ -635,7 +635,7 @@ defmodule Mob.NativeComponentExamplesTest do
   @node String.to_atom(System.get_env("MOB_TEST_NODE", "mob_demo_ios@127.0.0.1"))
 
   describe "[on_device] ComponentServer lifecycle" do
-    test "register_component allocates a non-zero NIF handle" do
+    test "register_component allocates a valid NIF handle" do
       platform = :rpc.call(@node, Application, :get_env, [:mob, :platform, :ios])
 
       {:ok, pid} =
@@ -650,7 +650,9 @@ defmodule Mob.NativeComponentExamplesTest do
         ])
 
       handle = :rpc.call(@node, Mob.ComponentServer, :get_handle, [pid])
-      assert is_integer(handle) and handle != 0
+      # Slot 0 is a legitimate handle (MOB-100) — it's no longer the
+      # "not assigned" sentinel, so this only rules out the actual sentinel.
+      assert is_integer(handle) and handle >= 0
 
       :rpc.call(@node, Process, :exit, [pid, :shutdown])
     end

@@ -6139,7 +6139,12 @@ static ERL_NIF_TERM nif_webview_go_back(ErlNifEnv *env, int argc, const ERL_NIF_
 // register_component/1 allocates a slot; deregister_component/1 frees it.
 // mob_send_component_event is called from Swift when the native view fires an event.
 
-#define MAX_COMPONENT_HANDLES 64
+// MOB-100: bumped from 64 — a single screen legitimately rendering ~60
+// components (e.g. an icon catalog) plus a few leftover slots from prior
+// navigation could tip over the old cap. Keep in sync with the identical
+// constant in android/jni/mob_nif.zig. Still fixed-size: a growable pool
+// or component recycling is a longer-term follow-up, not this fix.
+#define MAX_COMPONENT_HANDLES 256
 
 typedef struct {
     ErlNifPid pid;
@@ -6149,6 +6154,12 @@ typedef struct {
 static ComponentHandle component_handles[MAX_COMPONENT_HANDLES];
 static ErlNifMutex *component_mutex = NULL;
 
+// Returns {ok, Handle} on success, {error, component_slots_exhausted} when
+// the pool is full — MOB-100: a full pool used to return the same
+// enif_make_badarg(env) as a malformed pid argument, which crashed
+// Mob.ComponentServer.init (and, via the unhandled {:error, _} tuple
+// unmatched in Mob.Component.ensure_started, the whole screen process)
+// instead of failing just the one component that couldn't get a slot.
 static ERL_NIF_TERM nif_register_component(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifPid pid;
     if (!enif_get_local_pid(env, argv[0], &pid))
@@ -6160,11 +6171,12 @@ static ERL_NIF_TERM nif_register_component(ErlNifEnv *env, int argc, const ERL_N
             component_handles[i].pid = pid;
             component_handles[i].active = 1;
             enif_mutex_unlock(component_mutex);
-            return enif_make_int(env, i);
+            return enif_make_tuple2(env, enif_make_atom(env, "ok"), enif_make_int(env, i));
         }
     }
     enif_mutex_unlock(component_mutex);
-    return enif_make_badarg(env);
+    return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                            enif_make_atom(env, "component_slots_exhausted"));
 }
 
 static ERL_NIF_TERM nif_deregister_component(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
