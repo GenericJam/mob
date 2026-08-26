@@ -37,6 +37,7 @@
         _fixedHeight = 0.0;
         _fillWidth = NO;
         _cornerRadius = 0.0;
+        _nativeViewHandle = -1; // -1 = no native component slot assigned (MOB-100)
         _videoAutoplay = NO;
         _videoLoop = NO;
         _videoControls = YES;
