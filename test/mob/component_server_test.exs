@@ -158,23 +158,41 @@ defmodule Mob.ComponentServerTest do
 
       # :allocate — a real freelist pool: reuse a freed slot before growing.
       # :exhausted — always report the pool full, like the real pool at capacity.
+      # :legacy_int / :legacy_badarg — simulate a native binary older than
+      # MOB-100 (mix mob.push can hot-deploy this BEAM onto native code that
+      # wasn't rebuilt with `mix mob.deploy --native`): the pre-fix contract
+      # returned a bare int on success and raised (enif_make_badarg) on
+      # exhaustion, neither of which matches {:ok, _} / {:error, _}.
       def set_result(result), do: Agent.update(__MODULE__, &%{&1 | result: result})
 
       def register_component(pid) do
-        Agent.get_and_update(__MODULE__, fn s ->
-          calls = [{:register_component, [pid]} | s.calls]
+        # :legacy_badarg must raise in the CALLING process (matching a real
+        # NIF's enif_make_badarg), not inside this Agent's own process —
+        # so the Agent only ever returns a marker; the raise happens below,
+        # back in the caller.
+        case Agent.get_and_update(__MODULE__, fn s ->
+               calls = [{:register_component, [pid]} | s.calls]
 
-          case s.result do
-            :allocate ->
-              case s.freed do
-                [handle | rest] -> {{:ok, handle}, %{s | calls: calls, freed: rest}}
-                [] -> {{:ok, s.next}, %{s | calls: calls, next: s.next + 1}}
-              end
+               case s.result do
+                 :allocate ->
+                   case s.freed do
+                     [handle | rest] -> {{:ok, handle}, %{s | calls: calls, freed: rest}}
+                     [] -> {{:ok, s.next}, %{s | calls: calls, next: s.next + 1}}
+                   end
 
-            :exhausted ->
-              {{:error, :component_slots_exhausted}, %{s | calls: calls}}
-          end
-        end)
+                 :exhausted ->
+                   {{:error, :component_slots_exhausted}, %{s | calls: calls}}
+
+                 :legacy_int ->
+                   {s.next, %{s | calls: calls, next: s.next + 1}}
+
+                 :legacy_badarg ->
+                   {:legacy_badarg_marker, %{s | calls: calls}}
+               end
+             end) do
+          :legacy_badarg_marker -> raise ArgumentError, "argument error"
+          other -> other
+        end
       end
 
       def deregister_component(handle) do
@@ -271,6 +289,50 @@ defmodule Mob.ComponentServerTest do
 
       assert log =~ "component slot pool exhausted"
       refute {:deregister_component, [-1]} in MockNIF.calls()
+    end
+
+    test "a pre-MOB-100 native binary's bare-int return degrades instead of crashing" do
+      MockNIF.set_result(:legacy_int)
+
+      log =
+        capture_log(fn ->
+          {:ok, pid} =
+            Mob.ComponentServer.start(
+              module: Recorder,
+              id: :legacy_int,
+              screen_pid: self(),
+              props: %{},
+              platform: :ios,
+              nif: MockNIF
+            )
+
+          assert Process.alive?(pid)
+          assert Mob.ComponentServer.get_handle(pid) == -1
+        end)
+
+      assert log =~ "unexpected register_component/1 return"
+    end
+
+    test "a pre-MOB-100 native binary raising badarg on exhaustion degrades instead of crashing" do
+      MockNIF.set_result(:legacy_badarg)
+
+      log =
+        capture_log(fn ->
+          {:ok, pid} =
+            Mob.ComponentServer.start(
+              module: Recorder,
+              id: :legacy_badarg,
+              screen_pid: self(),
+              props: %{},
+              platform: :ios,
+              nif: MockNIF
+            )
+
+          assert Process.alive?(pid)
+          assert Mob.ComponentServer.get_handle(pid) == -1
+        end)
+
+      assert log =~ "register_component/1 raised"
     end
 
     test "register/reconcile/register cycling does not leak slots (MOB-100 root cause)" do

@@ -2018,7 +2018,18 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
     enif_mutex_lock(tap_mutex);
     if (tap_build_count >= MAX_TAP_HANDLES) {
         enif_mutex_unlock(tap_mutex);
-        return enif_make_badarg(env);
+        // MOB-100 follow-up: this used to be enif_make_badarg(env), which
+        // crashed Mob.Renderer.render/3 (and the whole screen process) the
+        // same way a full component pool used to crash Mob.ComponentServer
+        // — an unvirtualized long list or big form with >MAX_TAP_HANDLES
+        // interactive elements would hit this on every render. Every
+        // mob_send_* sender already no-ops on an out-of-range handle (see
+        // mob_send_tap et al. above), so -1 is a safe "no handler wired up"
+        // sentinel here — the interactive prop silently does nothing
+        // instead of taking the screen down.
+        LOGE(@"register_tap: pool exhausted (cap=%d) — returning unhandled sentinel",
+             MAX_TAP_HANDLES);
+        return enif_make_int(env, -1);
     }
     TapHandle *build = tap_tables[1 - tap_active];
     int handle = tap_build_count++;
