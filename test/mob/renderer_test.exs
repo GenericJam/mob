@@ -10,10 +10,20 @@ defmodule Mob.RendererTest do
     # Use Agent.start (not start_link) so the Agent is not linked to the test
     # process and survives across test process boundaries. The setup resets state
     # rather than restarting the process, eliminating name-registry races.
-    def start_link, do: Agent.start(fn -> %{calls: [], tap_next: 0} end, name: __MODULE__)
+    def start_link,
+      do:
+        Agent.start(fn -> %{calls: [], tap_next: 0, tap_result: :allocate} end, name: __MODULE__)
 
     def calls, do: Agent.get(__MODULE__, & &1.calls)
-    def reset, do: Agent.update(__MODULE__, fn _ -> %{calls: [], tap_next: 0} end)
+
+    def reset,
+      do: Agent.update(__MODULE__, fn _ -> %{calls: [], tap_next: 0, tap_result: :allocate} end)
+
+    # :exhausted simulates a full MAX_TAP_HANDLES pool (MOB-100 follow-up) —
+    # both native sides now return the -1 "unhandled" sentinel instead of
+    # badarg when the pool is full, since every mob_send_* sender already
+    # no-ops on an out-of-range handle.
+    def set_tap_result(result), do: Agent.update(__MODULE__, &%{&1 | tap_result: result})
 
     def clear_taps do
       Agent.update(__MODULE__, fn s ->
@@ -30,9 +40,12 @@ defmodule Mob.RendererTest do
 
     def register_tap(pid_or_tagged) do
       Agent.get_and_update(__MODULE__, fn s ->
-        handle = s.tap_next
         calls = [{:register_tap, [pid_or_tagged]} | s.calls]
-        {handle, %{s | calls: calls, tap_next: handle + 1}}
+
+        case s.tap_result do
+          :allocate -> {s.tap_next, %{s | calls: calls, tap_next: s.tap_next + 1}}
+          :exhausted -> {-1, %{s | calls: calls}}
+        end
       end)
     end
 
@@ -148,6 +161,27 @@ defmodule Mob.RendererTest do
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
       decoded = :json.decode(json)
       assert is_integer(decoded["props"]["on_tap"])
+    end
+
+    test "an exhausted tap pool (-1 sentinel) renders instead of crashing (MOB-100 follow-up)" do
+      MockNIF.set_tap_result(:exhausted)
+
+      tree = %{
+        type: :column,
+        props: %{},
+        children: [
+          %{type: :button, props: %{text: "A", on_tap: self()}, children: []},
+          %{type: :text_field, props: %{id: "f", on_change: {self(), :changed}}, children: []}
+        ]
+      }
+
+      assert {:ok, :json_tree} = Renderer.render(tree, :android, MockNIF)
+
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      [button, field] = decoded["children"]
+      assert button["props"]["on_tap"] == -1
+      assert field["props"]["on_change"] == -1
     end
 
     test "register_tap is called for each on_tap pid" do

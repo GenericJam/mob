@@ -84,9 +84,18 @@ defmodule Mob.ComponentServer do
 
   defp register_native_handle(_nif, :no_render, _module, _id), do: @no_handle
 
+  # `mix mob.push` hot-deploys a new BEAM onto native code that wasn't
+  # rebuilt (`mix mob.deploy --native` is a separate, opt-in step) — so a
+  # native binary older than this fix can still be paired with this BEAM.
+  # That old binary returns a bare int on success and enif_make_badarg(env)
+  # (which raises ArgumentError at this call site) on pool exhaustion,
+  # neither of which matches the current {:ok, _} / {:error, _} contract.
+  # Degrade to no-handle instead of crashing the screen process over a
+  # version-skew mismatch — the exact failure class this fix exists to
+  # eliminate.
   defp register_native_handle(nif, _platform, module, id) do
     case nif.register_component(self()) do
-      {:ok, handle} ->
+      {:ok, handle} when is_integer(handle) ->
         handle
 
       {:error, :component_slots_exhausted} ->
@@ -96,7 +105,25 @@ defmodule Mob.ComponentServer do
         )
 
         @no_handle
+
+      other ->
+        Logger.error(
+          "[mob_component_server] unexpected register_component/1 return: " <>
+            "#{inspect(other)} — #{inspect(module)} id=#{inspect(id)} will not " <>
+            "receive native events (stale native binary? run mix mob.deploy --native)"
+        )
+
+        @no_handle
     end
+  rescue
+    ArgumentError ->
+      Logger.error(
+        "[mob_component_server] register_component/1 raised (stale native binary?) — " <>
+          "#{inspect(module)} id=#{inspect(id)} will not receive native events " <>
+          "(run mix mob.deploy --native to rebuild)"
+      )
+
+      @no_handle
   end
 
   @impl GenServer
