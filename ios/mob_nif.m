@@ -4015,6 +4015,116 @@ check_self:
     return nil;
 }
 
+// Single attempt: search every window in every connected scene for an
+// accessibility element at `pt`. No retry, no dispatch of its own — callers
+// run this from inside their own dispatch_sync (see mob_retry_main_thread_*
+// below), so a retry never has to re-derive "the" window independently of
+// where the element was actually found (MOB-99 review: a second, separate
+// window scan for post-processing could resolve a different window than
+// the one the element came from, e.g. with an overlapping keyboard window).
+static id find_a11y_at_point_in_current_windows(CGPoint pt, UIWindow *_Nullable *out_window) {
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]])
+            continue;
+        for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+            if (win.isHidden)
+                continue;
+            id elem = find_a11y_at_point(win, pt, 0);
+            if (elem) {
+                if (out_window)
+                    *out_window = win;
+                return elem;
+            }
+        }
+    }
+    return nil;
+}
+
+// Retry tuning for point-based accessibility lookups (MOB-99): SwiftUI's
+// accessibility tree can lag a layout/navigation pass by a run loop tick or
+// more — a synthetic tap issued the instant a screen mounts (the common
+// automated-test pattern) can race it, even though the element's *frame*
+// (tracked separately via MobFrameTracker's GeometryReader callback — see
+// mob_register_frame) is already correct by then. Unrelated to the ~500ms
+// settle delay mob_dev waits after activating VoiceOver post-connect
+// (CLAUDE.md) — that's a one-time per-session propagation wait; this is a
+// per-call retry ceiling, deliberately much shorter.
+static const int kA11yLookupMaxAttempts = 4;
+static const NSTimeInterval kA11yLookupRetryDelay = 0.05;
+
+typedef BOOL (^MobRetryBlock)(void);
+
+// Retries `attempt` on the main thread up to kA11yLookupMaxAttempts times,
+// kA11yLookupRetryDelay apart, stopping at the first YES. `attempt` must do
+// its own find-then-act atomically inside the one dispatch_sync call it
+// runs in — never split "find" and "act" across two separate dispatch_sync
+// calls (with a retry-sleep gap between them), or a later attempt can act
+// on a window/element resolved by an earlier, now-stale attempt.
+//
+// The retry sleep happens on the CALLING (NIF) thread between dispatch_sync
+// calls, never inside one: sleeping on the main thread blocks the run loop
+// SwiftUI needs to finish building the tree, guaranteeing the wait never
+// resolves.
+//
+// Use when "found" and "succeeded" are the same signal (tap_xy,
+// long_press_xy's atomic find+act-or-fallback). See
+// mob_retry_main_thread_found_action below when they need to be told apart
+// — e.g. ax_action_at_xy, where "found an element that doesn't support this
+// action" is a stable outcome that retrying won't change, unlike "nothing
+// at this point yet."
+static BOOL mob_retry_main_thread_bool(const char *label, MobRetryBlock attempt) {
+    for (int i = 0; i < kA11yLookupMaxAttempts; i++) {
+        if (i > 0)
+            [NSThread sleepForTimeInterval:kA11yLookupRetryDelay];
+
+        __block BOOL ok = NO;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          ok = attempt();
+        });
+        if (ok) {
+            if (i > 0)
+                LOGI(@"%s: succeeded on attempt %d/%d", label, i + 1, kA11yLookupMaxAttempts);
+            return YES;
+        }
+    }
+    LOGI(@"%s: nothing found after %d attempts (~%dms)", label, kA11yLookupMaxAttempts,
+         (int)((kA11yLookupMaxAttempts - 1) * kA11yLookupRetryDelay * 1000));
+    return NO;
+}
+
+typedef BOOL (^MobFoundActionBlock)(BOOL *found);
+
+// Same retry shape as mob_retry_main_thread_bool, but distinguishes "not
+// found yet" (worth retrying) from "found, but the requested action isn't
+// supported or failed" (a stable outcome, not a timing race — retrying
+// won't change whether accessibilityIncrement exists on this element).
+// Stops retrying as soon as *found is YES on an attempt, regardless of
+// that attempt's own action result; *out_found tells the caller which
+// terminal case it landed in.
+static BOOL mob_retry_main_thread_found_action(const char *label, BOOL *out_found,
+                                               MobFoundActionBlock attempt) {
+    for (int i = 0; i < kA11yLookupMaxAttempts; i++) {
+        if (i > 0)
+            [NSThread sleepForTimeInterval:kA11yLookupRetryDelay];
+
+        __block BOOL found = NO;
+        __block BOOL ok = NO;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          ok = attempt(&found);
+        });
+        if (found) {
+            if (i > 0)
+                LOGI(@"%s: found on attempt %d/%d", label, i + 1, kA11yLookupMaxAttempts);
+            *out_found = YES;
+            return ok;
+        }
+    }
+    LOGI(@"%s: nothing found after %d attempts (~%dms)", label, kA11yLookupMaxAttempts,
+         (int)((kA11yLookupMaxAttempts - 1) * kA11yLookupRetryDelay * 1000));
+    *out_found = NO;
+    return NO;
+}
+
 static id find_a11y_by_label(id obj, NSString *target, int depth) {
     if (!obj || depth > 30)
         return nil;
@@ -4271,44 +4381,40 @@ static ERL_NIF_TERM nif_ax_action_at_xy(ErlNifEnv *env, int argc, const ERL_NIF_
     NSString *action = [NSString stringWithUTF8String:action_buf];
 
     CGPoint pt = CGPointMake((CGFloat)x, (CGFloat)y);
-    __block id elem = nil;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-          if (![scene isKindOfClass:[UIWindowScene class]])
-              continue;
-          for (UIWindow *win in [(UIWindowScene *)scene windows]) {
-              if (win.isHidden)
-                  continue;
-              elem = find_a11y_at_point(win, pt, 0);
-              if (elem)
-                  return;
-          }
+
+    // Find-then-act atomically inside ONE dispatch_sync per attempt (see
+    // mob_retry_main_thread_found_action) — a separate find/act split with
+    // a retry-sleep gap between them let a UITableView/UICollectionView
+    // cell get recycled for a different row in that gap, silently firing
+    // the action on the wrong item while still returning :ok (MOB-98
+    // review). "Found but action unsupported" is a stable outcome — the
+    // helper only retries the "not found yet" case.
+    BOOL found = NO;
+    BOOL ok = mob_retry_main_thread_found_action("ax_action_at_xy", &found, ^BOOL(BOOL *out_found) {
+      id elem = find_a11y_at_point_in_current_windows(pt, NULL);
+      if (!elem) {
+          *out_found = NO;
+          return NO;
       }
-    });
+      *out_found = YES;
 
-    if (!elem)
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                enif_make_atom(env, "no_element_at_point"));
-
-    __block BOOL ok = NO;
-    dispatch_sync(dispatch_get_main_queue(), ^{
       if ([action isEqualToString:@"increment"]) {
           if ([elem respondsToSelector:@selector(accessibilityIncrement)]) {
               [elem accessibilityIncrement];
-              ok = YES;
+              return YES;
           }
       } else if ([action isEqualToString:@"decrement"]) {
           if ([elem respondsToSelector:@selector(accessibilityDecrement)]) {
               [elem accessibilityDecrement];
-              ok = YES;
+              return YES;
           }
       } else if ([action isEqualToString:@"activate"]) {
           if ([elem respondsToSelector:@selector(accessibilityActivate)]) {
-              ok = [elem accessibilityActivate];
+              return [elem accessibilityActivate];
           }
       } else if ([action isEqualToString:@"escape"]) {
           if ([elem respondsToSelector:@selector(accessibilityPerformEscape)]) {
-              ok = [elem accessibilityPerformEscape];
+              return [elem accessibilityPerformEscape];
           }
       } else if ([action hasPrefix:@"scroll_"]) {
           NSString *dir_str = [action substringFromIndex:7];
@@ -4322,11 +4428,15 @@ static ERL_NIF_TERM nif_ax_action_at_xy(ErlNifEnv *env, int argc, const ERL_NIF_
           else if ([dir_str isEqualToString:@"right"])
               dir = UIAccessibilityScrollDirectionRight;
           if (dir && [elem respondsToSelector:@selector(accessibilityScroll:)]) {
-              ok = [elem accessibilityScroll:dir];
+              return [elem accessibilityScroll:dir];
           }
       }
+      return NO;
     });
 
+    if (!found)
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "no_element_at_point"));
     if (ok)
         return enif_make_atom(env, "ok");
     return enif_make_tuple2(env, enif_make_atom(env, "error"),
@@ -4846,40 +4956,36 @@ static ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     // proper event system backing. Accessibility activation is the reliable path
     // for the simulator; for scroll views and custom GRs that lack accessibility,
     // a simulator-specific event injection mechanism would be needed.
-    __block BOOL activated = NO;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-          if (![scene isKindOfClass:[UIWindowScene class]])
-              continue;
-          for (UIWindow *win in [(UIWindowScene *)scene windows]) {
-              if (win.isHidden)
-                  continue;
-              id elem = find_a11y_at_point(win, pt, 0);
-              if (elem) {
-                  LOGI(@"tap_xy(sim): accessibilityActivate on %@ frame=%@",
-                       NSStringFromClass(object_getClass(elem)),
-                       NSStringFromCGRect([elem accessibilityFrame]));
-                  [elem accessibilityActivate];
-                  // For text fields: accessibilityActivate on UITextFieldLabel
-                  // (the hint label inside UITextField) doesn't focus the
-                  // field. Walk the responder chain up from the hit view to
-                  // find the first UITextField/UITextView and focus it.
-                  UIView *hv = [win hitTest:pt withEvent:nil];
-                  UIResponder *r = hv;
-                  while (r) {
-                      if ([r isKindOfClass:[UITextField class]] ||
-                          [r isKindOfClass:[UITextView class]]) {
-                          [(UIView *)r becomeFirstResponder];
-                          break;
-                      }
-                      r = r.nextResponder;
-                  }
-                  activated = YES;
-                  return;
-              }
+    // Find-then-act atomically inside ONE dispatch_sync per attempt (see
+    // mob_retry_main_thread_bool) — using the SAME window the element was
+    // found in for the text-field focus walk below, not a second,
+    // independently-resolved window (MOB-99 review: with an overlapping
+    // keyboard window, an independent re-scan could land on the wrong one).
+    BOOL activated = mob_retry_main_thread_bool("tap_xy(sim)", ^BOOL {
+      UIWindow *win = nil;
+      id elem = find_a11y_at_point_in_current_windows(pt, &win);
+      if (!elem)
+          return NO;
+
+      LOGI(@"tap_xy(sim): accessibilityActivate on %@ frame=%@",
+           NSStringFromClass(object_getClass(elem)), NSStringFromCGRect([elem accessibilityFrame]));
+      [elem accessibilityActivate];
+      // For text fields: accessibilityActivate on UITextFieldLabel (the hint
+      // label inside UITextField) doesn't focus the field. Walk the
+      // responder chain up from the hit view to find the first
+      // UITextField/UITextView and focus it.
+      UIView *hv = [win hitTest:pt withEvent:nil];
+      UIResponder *r = hv;
+      while (r) {
+          if ([r isKindOfClass:[UITextField class]] || [r isKindOfClass:[UITextView class]]) {
+              [(UIView *)r becomeFirstResponder];
+              break;
           }
+          r = r.nextResponder;
       }
+      return YES;
     });
+
     if (activated)
         return enif_make_atom(env, "ok");
     return enif_make_tuple2(env, enif_make_atom(env, "error"),
@@ -5116,8 +5222,12 @@ static ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TE
     CGPoint pt = CGPointMake((CGFloat)x, (CGFloat)y);
 
 #if TARGET_OS_SIMULATOR
-    __block BOOL fired = NO;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    // Already atomic (hitTest, GR search, and the accessibility fallback all
+    // ran inside one dispatch_sync pre-MOB-99) — the gap this closes is that
+    // it never retried, so the exact "screen just mounted, tree/GR list not
+    // settled yet" race this whole file works around elsewhere could still
+    // produce a false no_long_press_recognizer here.
+    BOOL fired = mob_retry_main_thread_bool("long_press_xy(sim)", ^BOOL {
       UIView *hitView = nil;
       for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
           if (![scene isKindOfClass:[UIWindowScene class]])
@@ -5135,12 +5245,11 @@ static ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TE
               break;
       }
       if (!hitView)
-          return;
+          return NO;
 
       // Walk up the responder chain looking for any UILongPressGestureRecognizer
       SEL setStateSel = NSSelectorFromString(@"_setState:");
-      UIView *v = hitView;
-      while (v && !fired) {
+      for (UIView *v = hitView; v; v = v.superview) {
           for (UIGestureRecognizer *gr in v.gestureRecognizers) {
               if (![gr isKindOfClass:[UILongPressGestureRecognizer class]])
                   continue;
@@ -5151,23 +5260,20 @@ static ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TE
               LOGI(@"long_press_xy(sim): firing LPGR on %@", NSStringFromClass([v class]));
               setState(gr, setStateSel, UIGestureRecognizerStateBegan);
               setState(gr, setStateSel, UIGestureRecognizerStateEnded);
-              fired = YES;
-              break;
+              return YES;
           }
-          v = v.superview;
       }
 
       // SwiftUI onLongPressGesture may also surface as an accessibility custom action.
       // Try accessibilityActivate as a fallback — limited but better than nothing.
-      if (!fired) {
-          id elem = find_a11y_at_point(hitView, pt, 0);
-          if (elem && [elem respondsToSelector:@selector(accessibilityActivate)]) {
-              LOGI(@"long_press_xy(sim): fallback to accessibilityActivate on %@",
-                   NSStringFromClass(object_getClass(elem)));
-              [elem accessibilityActivate];
-              fired = YES;
-          }
+      id elem = find_a11y_at_point(hitView, pt, 0);
+      if (elem && [elem respondsToSelector:@selector(accessibilityActivate)]) {
+          LOGI(@"long_press_xy(sim): fallback to accessibilityActivate on %@",
+               NSStringFromClass(object_getClass(elem)));
+          [elem accessibilityActivate];
+          return YES;
       }
+      return NO;
     });
 
     if (fired)
