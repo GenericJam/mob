@@ -944,7 +944,12 @@ export fn nif_swipe_xy(
 // mob_nif_init_state (called from mob_nif.c's nif_load BEAM callback).
 
 const MAX_TAP_HANDLES: usize = 256;
-const MAX_COMPONENT_HANDLES: usize = 64;
+// MOB-100: bumped from 64 — a single screen legitimately rendering ~60
+// components (e.g. an icon catalog) plus a few leftover slots from prior
+// navigation could tip over the old cap. Keep in sync with the identical
+// constant in ios/mob_nif.m. Still fixed-size: a growable pool or component
+// recycling is a longer-term follow-up, not this fix.
+const MAX_COMPONENT_HANDLES: usize = 256;
 
 /// Per-tap slot: the registered pid, an optional caller-supplied tag, and
 /// the throttle state for high-frequency events. tag_env is non-null while
@@ -1644,8 +1649,14 @@ export fn nif_set_transition(
 }
 
 // nif_register_component/1 — allocate a persistent component handle for
-// a Native View pid. Linear scan through MAX_COMPONENT_HANDLES slots;
-// fails when all are in use.
+// a Native View pid. Linear scan through MAX_COMPONENT_HANDLES slots.
+//
+// Returns {ok, Handle} on success, {error, component_slots_exhausted} when
+// the pool is full — MOB-100: a full pool used to return the same
+// erts.badarg(env) as a malformed pid argument, which crashed
+// Mob.ComponentServer.init (and, via the unhandled {:error, _} tuple
+// unmatched in Mob.Component.ensure_started, the whole screen process)
+// instead of failing just the one component that couldn't get a slot.
 export fn nif_register_component(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -1662,10 +1673,10 @@ export fn nif_register_component(
         if (component_handles[i].active == 0) {
             component_handles[i].pid = pid;
             component_handles[i].active = 1;
-            return erts.enif_make_int(env, @intCast(i));
+            return erts.makeTuple(env, .{ erts.atom(env, "ok"), erts.enif_make_int(env, @intCast(i)) });
         }
     }
-    return erts.badarg(env);
+    return erts.errorTuple(env, erts.atom(env, "component_slots_exhausted"));
 }
 
 // nif_deregister_component/1 — release a component handle. Slot becomes
