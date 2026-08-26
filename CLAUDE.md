@@ -353,7 +353,10 @@ No per-session setup required.
 ## iOS accessibility activation
 
 SwiftUI lazily populates its accessibility tree only when an accessibility service is
-active. Run this once per simulator session before calling `ui_tree`:
+active. `mix mob.connect` runs this automatically for every iOS simulator target
+(`MobDev.Discovery.IOS.enable_accessibility/1`, called from `MobDev.Connector.connect_all/1`
+before waiting for nodes, with a 500ms settle delay after — MOB-99). Manual invocation
+(e.g. driving a sim without going through `mix mob.connect`) still needs it run by hand:
 
 ```bash
 UDID=<booted-simulator-udid>
@@ -363,7 +366,15 @@ xcrun simctl spawn $UDID notifyutil -p com.apple.accessibility.voiceover.status.
 
 Wait ~500ms for propagation. Survives app restarts within the same simulator session.
 
-**TODO:** `mix mob.connect` should run this automatically for iOS simulator targets.
+Even with accessibility active, `Mob.Test.tap_id/2` (which walks the accessibility
+tree by point — see `find_a11y_at_point` in `ios/mob_nif.m`) can still race a very
+recent layout/navigation: the element's *frame* (tracked separately via
+`MobFrameTracker`'s GeometryReader callback) can be ready before SwiftUI has
+finished rebuilding the accessibility tree itself. `nif_tap_xy` and
+`nif_ax_action_at_xy` retry the point lookup a few times with a short delay
+before giving up with `:no_element_at_point` — if you still hit it, the gap
+is likely wider than that retry window, worth its own investigation before
+assuming ordinary touch interaction is broken.
 
 ---
 
