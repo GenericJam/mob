@@ -8,6 +8,39 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.27] - 2026-08-26
+
+### Fixed
+- **Native component events (`Mob.UI.native_view`/`Mob.Component`) arrived
+  as Erlang charlists, not binaries.** Both native bridges
+  (`android/jni/mob_nif.zig`, `ios/mob_nif.m`) built the event name and
+  JSON payload via `enif_make_string`. `Mob.ComponentServer` decodes the
+  payload with `:json.decode/1`, which requires a binary — the component
+  process crashed before `handle_event/3` ever ran. Both bridges now emit
+  UTF-8 binaries; `Mob.ComponentServer` also normalizes at the boundary
+  (accepts either shape, for a hot-deployed newer BEAM landing on an
+  older native shell) and no longer crashes on a malformed or
+  unexpected-shape event/payload — falls back safely and logs instead.
+  (MOB-98)
+- **iOS accessibility-tree hit-testing (`Mob.Test.tap_id/2`,
+  `ax_action_at_xy/2`, `long_press_xy/2`) could race a very recent
+  layout or navigation.** SwiftUI populates its accessibility tree
+  lazily; a synthetic tap issued the instant a screen mounts (the
+  common automated-test pattern) could return `:no_element_at_point`
+  even though the element's tracked *frame* was already correct — the
+  two mechanisms settle on different timelines. The point-based lookup
+  now retries a few times with a short delay before giving up, with
+  find-then-act happening atomically per attempt (an earlier, separate
+  find/act split risked acting on a stale window or a recycled
+  table/collection-view cell). (MOB-99)
+- **`mix test` was intermittently flaky**: `test/mob/component_test.exs`'s
+  `Mob.ComponentRegistry` describe block used `start_supervised!/1`-style
+  strict matching against a fixed-name GenServer that
+  `test/mob/component_server_test.exs` (added for MOB-98) can legitimately
+  start first under `async: true` — the second file to run raised on
+  `{:already_started, _}` instead of tolerating it. Now matches the
+  tolerance MOB-98 already added on the other side.
+
 ## [0.7.26] - 2026-08-25
 
 ### Fixed

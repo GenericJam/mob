@@ -123,11 +123,19 @@ defmodule Mob.ComponentTest do
 
   describe "Mob.ComponentRegistry" do
     setup do
-      # Start a temporary registry for each test to avoid global state
-      {:ok, reg} = start_supervised({Mob.ComponentRegistry, []})
-      # Override the global name for this test via process dict workaround is complex;
-      # instead test via the ETS table directly after start.
-      # The registry GenServer creates the named ETS table — we use it directly.
+      # Mob.ComponentRegistry registers under a fixed global name. Another
+      # async test file (component_server_test.exs) may have already started
+      # it — start_supervised/1 returns {:error, {:already_started, _}} in
+      # that case rather than raising, so tolerate either order instead of
+      # racing to be first (MOB-98: this is the shared-name race that fix
+      # already covers on that file's side; this file needed the same
+      # tolerance).
+      reg =
+        case start_supervised({Mob.ComponentRegistry, []}) do
+          {:ok, pid} -> pid
+          {:error, {:already_started, pid}} -> pid
+        end
+
       {:ok, reg: reg}
     end
 
