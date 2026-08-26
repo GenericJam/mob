@@ -361,10 +361,16 @@ inline fn detachIfAttached(attached: c_int) void {
 // ── Binary / string helpers ──────────────────────────────────────────────
 
 /// Make an `ErlNifBinary` from a C-style {ptr, len} pair and wrap it as a
-/// term. BEAM owns the allocated bytes after make_binary returns.
+/// term. BEAM owns the allocated bytes after make_binary returns. Falls
+/// back to `:nil` on allocation failure — the same sentinel this file's
+/// call sites already use for "absent" (see the empty-label/value guards
+/// above), so a caller that already tolerates `:nil` doesn't need a new
+/// error shape.
 fn cstrToBin(env: ?*erts.ErlNifEnv, src: [*]const u8, len: usize) erts.ERL_NIF_TERM {
     var bin: erts.ErlNifBinary = undefined;
-    _ = erts.enif_alloc_binary(len, &bin);
+    if (erts.enif_alloc_binary(len, &bin) == 0) {
+        return erts.atom(env, "nil");
+    }
     @memcpy(bin.data[0..len], src[0..len]);
     return erts.enif_make_binary(env, &bin);
 }
@@ -1458,10 +1464,12 @@ pub export fn mob_send_component_event(
 
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
+    // Binaries, not charlists (enif_make_string) — Mob.ComponentServer decodes
+    // payload_json with :json.decode/1, which requires a binary.
     const msg = erts.makeTuple(env, .{
         erts.enif_make_atom(env, "component_event"),
-        erts.enif_make_string(env, event, erts.ERL_NIF_LATIN1),
-        erts.enif_make_string(env, payload_json, erts.ERL_NIF_LATIN1),
+        cstrToBin(env, event, std.mem.span(event).len),
+        cstrToBin(env, payload_json, std.mem.span(payload_json).len),
     });
     var pid = pid_copy;
     _ = erts.enif_send(null, &pid, env, msg);
