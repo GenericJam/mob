@@ -9,7 +9,8 @@ defmodule Mob.PluginsTest do
     nifs: [:p_nif],
     composites: [],
     styles: [%{name: :mob_theme_x, theme: ThemeX}],
-    default_style: nil
+    default_style: nil,
+    default_font: nil
   }
 
   describe "read_path/1" do
@@ -28,13 +29,26 @@ defmodule Mob.PluginsTest do
                  nifs: [],
                  composites: [],
                  styles: [],
-                 default_style: nil
+                 default_style: nil,
+                 default_font: nil
                }
     end
 
     test "returns the empty set (never crashes) on a malformed file" do
       path = write_manifest("%{screens: [,,]}")
       assert Mob.Plugins.read_path(path).screens == []
+    end
+
+    test "logs the rescued exception instead of failing silently" do
+      path = write_manifest("%{screens: [,,]}")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          Mob.Plugins.read_path(path)
+        end)
+
+      assert log =~ "failed to evaluate"
+      assert log =~ path
     end
 
     test "fills in missing sections from the empty set" do
@@ -189,6 +203,57 @@ defmodule Mob.PluginsTest do
         end)
 
       assert log =~ "failed to apply"
+    end
+  end
+
+  describe "apply_default_font/0" do
+    setup do
+      before = Mob.Theme.current()
+      on_exit(fn -> Mob.Theme.set(before) end)
+      :ok
+    end
+
+    test "sets fonts[:default] from the plugin's suggested spec" do
+      Mob.Plugins.install(%{
+        default_font: %{ios: "PluginFont-Regular", android: "pluginfont_regular"}
+      })
+
+      assert :ok = Mob.Plugins.apply_default_font()
+
+      assert Mob.Theme.current().fonts.default == %{
+               ios: "PluginFont-Regular",
+               android: "pluginfont_regular"
+             }
+    end
+
+    test "no plugin default is a no-op" do
+      Mob.Plugins.install(%{default_font: nil})
+      assert :ok = Mob.Plugins.apply_default_font()
+      refute Map.has_key?(Mob.Theme.current().fonts, :default)
+    end
+
+    test "does not override a default already set (e.g. by the host or a style package)" do
+      Mob.Theme.set(fonts: %{default: %{ios: "HostFont", android: "hostfont"}})
+
+      Mob.Plugins.install(%{
+        default_font: %{ios: "PluginFont-Regular", android: "pluginfont_regular"}
+      })
+
+      assert :ok = Mob.Plugins.apply_default_font()
+      assert Mob.Theme.current().fonts.default == %{ios: "HostFont", android: "hostfont"}
+    end
+
+    test "preserves the rest of the active theme (only fonts[:default] changes)" do
+      Mob.Theme.set(primary: :emerald_500)
+
+      Mob.Plugins.install(%{
+        default_font: %{ios: "PluginFont-Regular", android: "pluginfont_regular"}
+      })
+
+      assert :ok = Mob.Plugins.apply_default_font()
+      theme = Mob.Theme.current()
+      assert theme.primary == :emerald_500
+      assert theme.fonts.default == %{ios: "PluginFont-Regular", android: "pluginfont_regular"}
     end
   end
 

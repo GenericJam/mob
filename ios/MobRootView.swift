@@ -32,6 +32,11 @@ public final class MobNativeViewRegistry {
               let factory = factories[name],
               let props = node.nativeViewProps as? [String: Any] else { return nil }
         let handle = node.nativeViewHandle
+        // -1 means the BEAM couldn't get a native component slot (pool
+        // exhausted — MOB-100). Render nothing rather than a view whose
+        // events would go nowhere; matches Android's MobNativeViewRegistry
+        // early-return for the same case.
+        guard handle >= 0 else { return nil }
         let send: MobNativeSend = { event, payload in
             if let data = try? JSONSerialization.data(withJSONObject: payload),
                let json = String(data: data, encoding: .utf8) {
@@ -175,14 +180,37 @@ extension MobNode {
             }
         }()
         var font: Font
-        if let family = fontFamily, !family.isEmpty {
-            font = Font.custom(family, size: size)
+        if let resolvedName = MobNode.resolveFontName(primary: fontFamily) {
+            font = Font.custom(resolvedName, size: size)
         } else {
             font = .system(size: size)
         }
         font = font.weight(weight)
         if italic { font = font.italic() }
         return font
+    }
+
+    /// Walks `[primary, ...fallback]` (fallback from the last `Mob.Theme.set/1`
+    /// via `mob_font_fallback()`) and returns the first name `UIFont` can
+    /// actually load. `Font.custom` itself has no "did this resolve?" signal —
+    /// it silently substitutes the system font — so this uses `UIFont(name:)`
+    /// purely as a resolvability probe. `nil` means "use the system font",
+    /// same as today's no-font-set behavior. Logs when the primary choice
+    /// misses so a missing/misnamed font is diagnosable instead of just
+    /// looking like the wrong font. See MOB_FONTS.md.
+    static func resolveFontName(primary: String?) -> String? {
+        let candidates = ([primary].compactMap { $0 } + mob_font_fallback()).filter { !$0.isEmpty }
+        guard !candidates.isEmpty else { return nil }
+
+        for (index, name) in candidates.enumerated() where UIFont(name: name, size: 12) != nil {
+            if index > 0 {
+                NSLog("[mob/font] \"%@\" not found — fell back to \"%@\"", candidates[0], name)
+            }
+            return name
+        }
+
+        NSLog("[mob/font] none of %@ resolved — using system font", candidates)
+        return nil
     }
 
     var textAlignEnum: TextAlignment {
@@ -478,6 +506,9 @@ struct MobNodeView: View {
                     .ifLet(node.fixedHeight > 0 ? node.fixedHeight : nil) { v, h in v.frame(height: CGFloat(h)) }
                     .padding(node.paddingEdgeInsets)
 
+            case .sheet:
+                MobSheetView(node: node)
+
             @unknown default:
                 EmptyView()
             }
@@ -497,24 +528,106 @@ struct MobNodeView: View {
 // identifier and report the element's global frame (logical points) to the C
 // registry as it lays out / moves. Untagged nodes pass through untouched, so
 // there's no cost unless a dev opts an element in by giving it an :id.
+// Per-tracker bookkeeping, deliberately a reference type held by @State rather
+// than @State scalars. Two reasons: mutating it never invalidates the view (the
+// writes happen inside a GeometryReader's layout-driven callback, once per
+// display frame per element during a transition — the classic "modifying state
+// during view update" shape), and the values stay readable during the same
+// transaction that tears the view down, which is exactly when .onDisappear
+// needs the seq.
+private final class MobFrameBox {
+    var seq: UInt64 = 0
+    var generation: UInt64 = 0
+}
+
 private struct MobFrameTracker: ViewModifier {
     let node: MobNode
 
+    @State private var box = MobFrameBox()
+
     func body(content: Content) -> some View {
-        if let id = node.nativeViewId {
+        // A sheet's own switch-case view is a zero-size anchor used only to
+        // attach `.sheet(isPresented:)` — its real, visible content is
+        // presented in a detached overlay that this GeometryReader can't
+        // see. Reporting the anchor's frame would silently report 0x0
+        // instead of the sheet's actual on-screen bounds, so tracking is
+        // skipped entirely rather than publishing a frame known to be wrong.
+        if let id = node.nativeViewId, node.nodeType != .sheet {
             content
                 .accessibilityIdentifier(id)
                 .background(
                     GeometryReader { geo in
-                        Color.clear.onChange(of: geo.frame(in: .global), initial: true) { _, frame in
-                            mob_register_frame(
-                                id, Double(frame.minX), Double(frame.minY),
-                                Double(frame.width), Double(frame.height))
-                        }
+                        Color.clear
+                            // Registration must not depend on onChange alone.
+                            // onChange fires on frame *value* changes, so an
+                            // element that reappears at the position it left
+                            // (a tab switched back to, a row scrolled back into
+                            // range) would never re-register after the
+                            // .onDisappear below removed it — and `initial:` is
+                            // not guaranteed to re-run when SwiftUI preserved
+                            // the view identity across that disappearance.
+                            // Registering on appear makes every
+                            // disappear/reappear cycle self-healing.
+                            .onAppear {
+                                box.generation = mob_frame_generation()
+                                record(id, geo.frame(in: .global))
+                            }
+                            .onChange(of: geo.frame(in: .global), initial: true) { _, frame in
+                                record(id, frame)
+                            }
+                            // Every ForEach in this file keys children by index
+                            // (`id: \.offset`) while the registry is keyed by
+                            // :id, so a tracker is NOT bound to one id for its
+                            // lifetime — delete an item and every later id
+                            // shifts down a position under a tracker that keeps
+                            // its identity. Its frame value may be unchanged
+                            // (equal-height rows), so nothing else here would
+                            // fire and the id we just took over would keep the
+                            // previous occupant's entry — or lose it entirely to
+                            // the departing tracker's .onDisappear.
+                            .onChange(of: id) { _, newId in
+                                record(newId, geo.frame(in: .global))
+                            }
+                            // Being in the BEAM tree isn't the same as being on
+                            // screen: a LazyVStack row scrolled out of range, an
+                            // inactive tab's subtree, or a dismissed sheet's
+                            // content all stay in the tree (so nif_set_root's
+                            // purge keeps them) while SwiftUI stops laying them
+                            // out — and onChange won't fire for them again.
+                            // Without this their last frame is reported forever
+                            // and Mob.Test.tap_id taps whatever is there now.
+                            .onDisappear { mob_unregister_frame(id, box.seq) }
                     }
                 )
         } else {
             content
+        }
+    }
+
+    private func record(_ id: String, _ frame: CGRect) {
+        // Capture lazily as well as in onAppear: the ordering of onAppear
+        // against onChange(initial: true) isn't contractual, and a write
+        // stamped 0 is accepted rather than refused as stale.
+        if box.generation == 0 {
+            box.generation = mob_frame_generation()
+        }
+        let written = mob_register_frame(
+            id, box.generation, Double(frame.minX), Double(frame.minY),
+            Double(frame.width), Double(frame.height))
+
+        // Keep the last SUCCESSFUL seq. A refused write returns 0, and
+        // overwriting the token with 0 would make this tracker's .onDisappear
+        // a permanent no-op (mob_unregister_frame ignores seq 0) — it could
+        // then never clean up the entry it still owns. That bites when an
+        // outgoing screen's `.move` writes are refused by the generation gate
+        // and the incoming screen's element with the same :id isn't laid out
+        // (a lazy row below the fold): the id stays in the tree so the purge
+        // keeps it, nothing deletes it, and tap_id taps the old screen's
+        // coordinates. Retaining the token is strictly safe — the
+        // compare-and-delete still refuses to delete whenever an incoming
+        // tracker has claimed the id since.
+        if written != 0 {
+            box.seq = written
         }
     }
 }
@@ -1290,6 +1403,100 @@ private struct MobSlider: View {
                     break
                 }
             }
+    }
+}
+
+// MobSheetView — native modal bottom sheet. Presentation is owned by this
+// view's own @State, not by the transient MobNode the BEAM rebuilds fresh
+// every render — SwiftUI preserves @State across re-renders that keep the
+// same view identity (same tree position, same case in MobNodeView's
+// switch), exactly like MobToggle/MobSlider preserve user-driven state
+// against a BEAM-pushed node above. That's what makes "content updates
+// without dismissing/re-presenting" and "removing the node dismisses it"
+// both fall out for free: a rerender with the sheet still present reuses
+// this state; a rerender without it tears the view (and its presentation)
+// down entirely.
+private struct MobSheetView: View {
+    let node: MobNode
+    @State private var isPresented = true
+    @State private var dismissSent = false
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .sheet(isPresented: $isPresented, onDismiss: sendDismissOnce) {
+                sheetContent
+            }
+    }
+
+    private func sendDismissOnce() {
+        guard !dismissSent else { return }
+        dismissSent = true
+        node.onDismiss?()
+    }
+
+    @ViewBuilder
+    private var sheetContent: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
+                MobNodeView(node: child)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(node.paddingEdgeInsets)
+        // Screen readers should treat the sheet as a self-contained modal —
+        // VoiceOver focus stays inside it until dismissed, matching
+        // .presentationDetents/.sheet's own system-modal behavior.
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isModal)
+        .ifLet(node.backgroundColor) { view, bg in
+            view.presentationBackground(Color(bg))
+        }
+        // sheetCornerRadius has its own -1-means-unset sentinel (see
+        // MobNode.h) so an explicit corner_radius: 0 (square corners) is
+        // distinguishable from "not set" (system default radius).
+        .ifLet(node.sheetCornerRadius >= 0 ? node.sheetCornerRadius : nil) { view, radius in
+            view.presentationCornerRadius(radius)
+        }
+        .presentationDetents(detentSet)
+        .ifLet(hasCustomIndicator ? () : nil) { view, _ in
+            view.presentationDragIndicator(.hidden)
+        }
+        .overlay(alignment: .top) {
+            if hasCustomIndicator {
+                customIndicator
+            }
+        }
+    }
+
+    private var detentSet: Set<PresentationDetent> {
+        let requested = node.sheetDetents ?? ["medium", "large"]
+        var resolved: Set<PresentationDetent> = []
+        if requested.contains("medium") { resolved.insert(.medium) }
+        if requested.contains("large") { resolved.insert(.large) }
+        // Mob.UI.sheet/2 already validates :detents is a nonempty subset of
+        // [:medium, :large] — this fallback only matters for a hand-built
+        // node map that skipped that validation (e.g. `~MOB` sigil literal).
+        return resolved.isEmpty ? [.medium, .large] : resolved
+    }
+
+    // Mob.UI.sheet/2 requires all four custom-indicator props together or
+    // none — checking one non-sentinel value is enough once that contract
+    // holds, but check all four defensively for the same hand-built-node
+    // reason as detentSet above.
+    private var hasCustomIndicator: Bool {
+        node.dragIndicatorColor != nil
+            && node.dragIndicatorWidth >= 0
+            && node.dragIndicatorHeight >= 0
+            && node.dragIndicatorRailHeight >= 0
+    }
+
+    private var customIndicator: some View {
+        Capsule()
+            .fill(node.dragIndicatorColor.map { Color($0) } ?? Color.secondary)
+            .frame(width: node.dragIndicatorWidth, height: node.dragIndicatorHeight)
+            .frame(height: node.dragIndicatorRailHeight)
+            .padding(.top, 6)
     }
 }
 

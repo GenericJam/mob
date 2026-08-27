@@ -30,6 +30,11 @@ extern void *dlsym(void *handle, const char *symbol) __attribute__((weak));
 extern char *dlerror(void) __attribute__((weak));
 #import "MobApp-Swift.h"
 #import "MobNode.h"
+// The prototypes Swift sees for every mob_* bridge function. Imported here so
+// the compiler diagnoses a definition drifting from its declaration — C has no
+// name mangling, so without this a changed signature links fine and Swift reads
+// whatever happens to be in the return register.
+#import "MobDemo-Bridging-Header.h"
 #include "erl_nif.h"
 #import <AVFoundation/AVFoundation.h>
 #import <Accelerate/Accelerate.h>
@@ -224,6 +229,9 @@ static void mob_send_submit(int handle) {
 }
 static void mob_send_select(int handle) {
     mob_send_event(handle, "select");
+}
+static void mob_send_dismiss(int handle) {
+    mob_send_event(handle, "dismiss");
 }
 
 // IME composition. Sends {compose, tag, %{text: ..., phase: ...}} where
@@ -646,6 +654,8 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         node.nodeType = MobNodeTypeCanvas;
     else if ([type isEqualToString:@"gpu_view"])
         node.nodeType = MobNodeTypeGpuView;
+    else if ([type isEqualToString:@"sheet"])
+        node.nodeType = MobNodeTypeSheet;
 
     NSDictionary *props = dict[@"props"];
     if ([props isKindOfClass:[NSDictionary class]]) {
@@ -1127,6 +1137,49 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             if ([uniforms isKindOfClass:[NSArray class]] ||
                 [uniforms isKindOfClass:[NSDictionary class]])
                 node.gpuUniforms = uniforms;
+        }
+
+        // sheet props. background is read generically above (shared prop
+        // name across every node type) — MobSheetView reuses
+        // node.backgroundColor directly for the sheet's own container
+        // background, see MobRootView.swift. corner_radius is read a
+        // second time here into the dedicated sheetCornerRadius (-1 =
+        // unset) instead: node.cornerRadius is a plain CGFloat with a 0
+        // default, so by the time Swift sees it, an explicit
+        // `corner_radius: 0` is indistinguishable from "never set" — a
+        // sheet's corners are visibly square-vs-rounded, so that ambiguity
+        // needs its own sentinel here (unlike other node types, where 0 and
+        // unset render identically).
+        if (node.nodeType == MobNodeTypeSheet) {
+            id sheetCornerRadius = props[@"corner_radius"];
+            if (sheetCornerRadius)
+                node.sheetCornerRadius = [sheetCornerRadius doubleValue];
+
+            id detents = props[@"detents"];
+            if ([detents isKindOfClass:[NSArray class]])
+                node.sheetDetents = detents;
+
+            id indicatorColor = props[@"drag_indicator_color"];
+            if (indicatorColor)
+                node.dragIndicatorColor = color_from_argb((long)[indicatorColor longLongValue]);
+
+            id indicatorWidth = props[@"drag_indicator_width"];
+            if (indicatorWidth)
+                node.dragIndicatorWidth = [indicatorWidth doubleValue];
+            id indicatorHeight = props[@"drag_indicator_height"];
+            if (indicatorHeight)
+                node.dragIndicatorHeight = [indicatorHeight doubleValue];
+            id indicatorRailHeight = props[@"drag_indicator_rail_height"];
+            if (indicatorRailHeight)
+                node.dragIndicatorRailHeight = [indicatorRailHeight doubleValue];
+
+            id onDismiss = props[@"on_dismiss"];
+            if (onDismiss && [onDismiss isKindOfClass:[NSNumber class]]) {
+                int handle = [onDismiss intValue];
+                node.onDismiss = ^{
+                  mob_send_dismiss(handle);
+                };
+            }
         }
 
         // webview props
@@ -1827,10 +1880,19 @@ static ERL_NIF_TERM nif_device_keep_awake(ErlNifEnv *env, int argc, const ERL_NI
 // ── NIF: safe_area/0 ─────────────────────────────────────────────────────────
 // Returns {Top, Right, Bottom, Left} in logical points (not pixels).
 // Must read UIWindow.safeAreaInsets on the main thread.
-
+//
+// Called from Mob.Screen.init/1 — i.e. on the boot path, before the first
+// screen ever mounts. A plain dispatch_sync here is a deadlock risk: if the
+// main thread hasn't reached an idle run-loop tick yet (observed during
+// scene-attachment on iPad, including the compatibility-mode window an
+// iPhone-only app runs in there), this blocks the BEAM boot thread forever —
+// the app never finishes launching. Bound the wait and fall back to zero
+// insets on timeout: a screen with wrong insets once is a far smaller bug
+// than an app that never boots.
 static ERL_NIF_TERM nif_safe_area(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     __block UIEdgeInsets insets = UIEdgeInsetsZero;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
       UIWindow *window = nil;
       for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
           if ([scene isKindOfClass:[UIWindowScene class]]) {
@@ -1841,7 +1903,10 @@ static ERL_NIF_TERM nif_safe_area(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
       }
       if (window)
           insets = window.safeAreaInsets;
+      dispatch_semaphore_signal(done);
     });
+    dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC));
+    dispatch_semaphore_wait(done, deadline);
     return enif_make_tuple4(
         env, enif_make_double(env, insets.top), enif_make_double(env, insets.right),
         enif_make_double(env, insets.bottom), enif_make_double(env, insets.left));
@@ -1898,30 +1963,70 @@ static ERL_NIF_TERM nif_set_transition(ErlNifEnv *env, int argc, const ERL_NIF_T
 // SwiftUI view model. Runs on the BEAM thread — MobViewModel dispatches to main.
 
 // nif_set_theme/1 — accept the resolved theme palette (as JSON) from
-// Mob.Theme.set/1 and push it to the SwiftUI side. iOS doesn't use system
-// chrome whose appearance depends on a global theme (we render every
-// surface via mob's primitives with explicit color props), so the iOS
-// implementation is a no-op that just confirms receipt. Kept here for
+// Mob.Theme.set/1. iOS doesn't use system chrome whose appearance depends
+// on a global theme (we render every surface via mob's primitives with
+// explicit color props), so the palette itself is unused here — kept for
 // symmetry with the Android implementation, which needs it to drive
 // Material 3's NavigationBar / Button colour scheme.
+//
+// `_font_fallback` IS read: it's the ordered list of font names
+// MobRootView.swift's `resolvedFont` walks when a node's own font can't be
+// loaded (see mob_font_fallback() below and MOB_FONTS.md).
+static NSArray<NSString *> *g_font_fallback = nil;
+
 static ERL_NIF_TERM nif_set_theme(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     (void)argc;
-    (void)argv;
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, argv[0], &bin) &&
+        !enif_inspect_iolist_as_binary(env, argv[0], &bin))
+        return enif_make_badarg(env);
+
+    NSData *data = [NSData dataWithBytes:bin.data length:bin.size];
+    NSError *err = nil;
+    id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&err];
+    if (err || ![json isKindOfClass:[NSDictionary class]]) {
+        return enif_make_atom(env, "ok");
+    }
+
+    id fallback = json[@"_font_fallback"];
+    if ([fallback isKindOfClass:[NSArray class]]) {
+        NSMutableArray<NSString *> *names = [NSMutableArray array];
+        for (id name in (NSArray *)fallback) {
+            if ([name isKindOfClass:[NSString class]])
+                [names addObject:name];
+        }
+        NSArray<NSString *> *resolved = [names copy];
+        // g_font_fallback is read from mob_font_fallback() on the main thread
+        // during SwiftUI render. This NIF runs on the BEAM's calling thread —
+        // an unsynchronized cross-thread write/read on a plain ARC global can
+        // release the old array out from under a concurrent reader. Hop the
+        // write onto the main thread (same pattern every other NIF here uses
+        // for state the main thread touches) so both sides only ever run
+        // there, serialized.
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          g_font_fallback = resolved;
+        });
+    }
+
     return enif_make_atom(env, "ok");
 }
 
-static NSMutableDictionary *mob_frame_registry(void); // both defined with the
-static void mob_clear_frames(void);                   // element frame registry below
+// Read from MobRootView.swift's resolvedFont — see nif_set_theme above.
+// Never nil; empty when no theme has set a font_fallback (the default).
+NSArray<NSString *> *mob_font_fallback(void) {
+    return g_font_fallback ?: @[];
+}
+
+static NSMutableDictionary *mob_frame_registry(void); // all defined with the
+static void mob_adopt_frame_ids(NSSet<NSString *> *); // element frame registry below
+static NSSet<NSString *> *mob_collect_frame_ids(MobNode *);
+static void mob_bump_frame_generation(void);
 
 static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifBinary bin;
     if (!enif_inspect_binary(env, argv[0], &bin) &&
         !enif_inspect_iolist_as_binary(env, argv[0], &bin))
         return enif_make_badarg(env);
-
-    // New render tree — drop stale element frames; MobFrameTracker repopulates
-    // on the next layout pass.
-    mob_clear_frames();
 
     NSData *data = [NSData dataWithBytes:bin.data length:bin.size];
     NSError *err = nil;
@@ -1934,6 +2039,23 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     MobNode *node = mob_node_from_dict((NSDictionary *)json);
     if (!node)
         return enif_make_atom(env, "error");
+
+    // Purge only the ids absent from this tree, rather than wiping the whole
+    // registry and relying on MobFrameTracker to repopulate every surviving
+    // element. A wipe-then-repopulate design raced SwiftUI's own teardown:
+    // an element being removed can still get one more GeometryReader layout
+    // pass as part of that removal, so a repopulation trigger tied to "did I
+    // just get (re)rendered" fires for outgoing views too, right as they're
+    // disappearing, and their stale frame survives. Purging by id instead
+    // never touches a surviving element's existing entry (nothing to race),
+    // and correctly drops one that's genuinely gone from the new tree.
+    //
+    // The retained id set also gates mob_register_frame, so the outgoing
+    // screen can't re-register itself while it animates away (setRoot below
+    // is dispatched to the main thread async — the teardown animation
+    // outlives this call). Elements that stay in the tree but stop being
+    // laid out are handled separately, via mob_unregister_frame.
+    mob_adopt_frame_ids(mob_collect_frame_ids(node));
 
     // Snapshot and reset the transition
     enif_mutex_lock(tap_mutex);
@@ -1948,6 +2070,18 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     tap_handles = tap_tables[tap_active];
     tap_handle_next = tap_build_count;
     enif_mutex_unlock(tap_mutex);
+
+    // A non-"none" transition is what makes MobViewModel bump navVersion, and
+    // MobRootView keys the whole tree on `.id(currentNavVersion)` — so every
+    // view identity is destroyed and rebuilt. Bump the frame generation in
+    // lockstep: trackers belonging to the outgoing tree captured the old
+    // generation and are refused from here on, which is the only thing that
+    // stops them re-registering at mid-animation coordinates while they slide
+    // away. (`.move` transitions change their global frames continuously, so
+    // they keep firing onChange the whole way out; tree membership alone can't
+    // reject them when both screens tag the same :id.)
+    if (strcmp(transition, "none") != 0)
+        mob_bump_frame_generation();
 
     NSString *transitionStr = [NSString stringWithUTF8String:transition];
     [[MobViewModel shared] setRoot:node transition:transitionStr];
@@ -1976,7 +2110,18 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
     enif_mutex_lock(tap_mutex);
     if (tap_build_count >= MAX_TAP_HANDLES) {
         enif_mutex_unlock(tap_mutex);
-        return enif_make_badarg(env);
+        // MOB-100 follow-up: this used to be enif_make_badarg(env), which
+        // crashed Mob.Renderer.render/3 (and the whole screen process) the
+        // same way a full component pool used to crash Mob.ComponentServer
+        // — an unvirtualized long list or big form with >MAX_TAP_HANDLES
+        // interactive elements would hit this on every render. Every
+        // mob_send_* sender already no-ops on an out-of-range handle (see
+        // mob_send_tap et al. above), so -1 is a safe "no handler wired up"
+        // sentinel here — the interactive prop silently does nothing
+        // instead of taking the screen down.
+        LOGE(@"register_tap: pool exhausted (cap=%d) — returning unhandled sentinel",
+             MAX_TAP_HANDLES);
+        return enif_make_int(env, -1);
     }
     TapHandle *build = tap_tables[1 - tap_active];
     int handle = tap_build_count++;
@@ -3973,6 +4118,116 @@ check_self:
     return nil;
 }
 
+// Single attempt: search every window in every connected scene for an
+// accessibility element at `pt`. No retry, no dispatch of its own — callers
+// run this from inside their own dispatch_sync (see mob_retry_main_thread_*
+// below), so a retry never has to re-derive "the" window independently of
+// where the element was actually found (MOB-99 review: a second, separate
+// window scan for post-processing could resolve a different window than
+// the one the element came from, e.g. with an overlapping keyboard window).
+static id find_a11y_at_point_in_current_windows(CGPoint pt, UIWindow *_Nullable *out_window) {
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]])
+            continue;
+        for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+            if (win.isHidden)
+                continue;
+            id elem = find_a11y_at_point(win, pt, 0);
+            if (elem) {
+                if (out_window)
+                    *out_window = win;
+                return elem;
+            }
+        }
+    }
+    return nil;
+}
+
+// Retry tuning for point-based accessibility lookups (MOB-99): SwiftUI's
+// accessibility tree can lag a layout/navigation pass by a run loop tick or
+// more — a synthetic tap issued the instant a screen mounts (the common
+// automated-test pattern) can race it, even though the element's *frame*
+// (tracked separately via MobFrameTracker's GeometryReader callback — see
+// mob_register_frame) is already correct by then. Unrelated to the ~500ms
+// settle delay mob_dev waits after activating VoiceOver post-connect
+// (CLAUDE.md) — that's a one-time per-session propagation wait; this is a
+// per-call retry ceiling, deliberately much shorter.
+static const int kA11yLookupMaxAttempts = 4;
+static const NSTimeInterval kA11yLookupRetryDelay = 0.05;
+
+typedef BOOL (^MobRetryBlock)(void);
+
+// Retries `attempt` on the main thread up to kA11yLookupMaxAttempts times,
+// kA11yLookupRetryDelay apart, stopping at the first YES. `attempt` must do
+// its own find-then-act atomically inside the one dispatch_sync call it
+// runs in — never split "find" and "act" across two separate dispatch_sync
+// calls (with a retry-sleep gap between them), or a later attempt can act
+// on a window/element resolved by an earlier, now-stale attempt.
+//
+// The retry sleep happens on the CALLING (NIF) thread between dispatch_sync
+// calls, never inside one: sleeping on the main thread blocks the run loop
+// SwiftUI needs to finish building the tree, guaranteeing the wait never
+// resolves.
+//
+// Use when "found" and "succeeded" are the same signal (tap_xy,
+// long_press_xy's atomic find+act-or-fallback). See
+// mob_retry_main_thread_found_action below when they need to be told apart
+// — e.g. ax_action_at_xy, where "found an element that doesn't support this
+// action" is a stable outcome that retrying won't change, unlike "nothing
+// at this point yet."
+static BOOL mob_retry_main_thread_bool(const char *label, MobRetryBlock attempt) {
+    for (int i = 0; i < kA11yLookupMaxAttempts; i++) {
+        if (i > 0)
+            [NSThread sleepForTimeInterval:kA11yLookupRetryDelay];
+
+        __block BOOL ok = NO;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          ok = attempt();
+        });
+        if (ok) {
+            if (i > 0)
+                LOGI(@"%s: succeeded on attempt %d/%d", label, i + 1, kA11yLookupMaxAttempts);
+            return YES;
+        }
+    }
+    LOGI(@"%s: nothing found after %d attempts (~%dms)", label, kA11yLookupMaxAttempts,
+         (int)((kA11yLookupMaxAttempts - 1) * kA11yLookupRetryDelay * 1000));
+    return NO;
+}
+
+typedef BOOL (^MobFoundActionBlock)(BOOL *found);
+
+// Same retry shape as mob_retry_main_thread_bool, but distinguishes "not
+// found yet" (worth retrying) from "found, but the requested action isn't
+// supported or failed" (a stable outcome, not a timing race — retrying
+// won't change whether accessibilityIncrement exists on this element).
+// Stops retrying as soon as *found is YES on an attempt, regardless of
+// that attempt's own action result; *out_found tells the caller which
+// terminal case it landed in.
+static BOOL mob_retry_main_thread_found_action(const char *label, BOOL *out_found,
+                                               MobFoundActionBlock attempt) {
+    for (int i = 0; i < kA11yLookupMaxAttempts; i++) {
+        if (i > 0)
+            [NSThread sleepForTimeInterval:kA11yLookupRetryDelay];
+
+        __block BOOL found = NO;
+        __block BOOL ok = NO;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          ok = attempt(&found);
+        });
+        if (found) {
+            if (i > 0)
+                LOGI(@"%s: found on attempt %d/%d", label, i + 1, kA11yLookupMaxAttempts);
+            *out_found = YES;
+            return ok;
+        }
+    }
+    LOGI(@"%s: nothing found after %d attempts (~%dms)", label, kA11yLookupMaxAttempts,
+         (int)((kA11yLookupMaxAttempts - 1) * kA11yLookupRetryDelay * 1000));
+    *out_found = NO;
+    return NO;
+}
+
 static id find_a11y_by_label(id obj, NSString *target, int depth) {
     if (!obj || depth > 30)
         return nil;
@@ -4229,44 +4484,40 @@ static ERL_NIF_TERM nif_ax_action_at_xy(ErlNifEnv *env, int argc, const ERL_NIF_
     NSString *action = [NSString stringWithUTF8String:action_buf];
 
     CGPoint pt = CGPointMake((CGFloat)x, (CGFloat)y);
-    __block id elem = nil;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-          if (![scene isKindOfClass:[UIWindowScene class]])
-              continue;
-          for (UIWindow *win in [(UIWindowScene *)scene windows]) {
-              if (win.isHidden)
-                  continue;
-              elem = find_a11y_at_point(win, pt, 0);
-              if (elem)
-                  return;
-          }
+
+    // Find-then-act atomically inside ONE dispatch_sync per attempt (see
+    // mob_retry_main_thread_found_action) — a separate find/act split with
+    // a retry-sleep gap between them let a UITableView/UICollectionView
+    // cell get recycled for a different row in that gap, silently firing
+    // the action on the wrong item while still returning :ok (MOB-98
+    // review). "Found but action unsupported" is a stable outcome — the
+    // helper only retries the "not found yet" case.
+    BOOL found = NO;
+    BOOL ok = mob_retry_main_thread_found_action("ax_action_at_xy", &found, ^BOOL(BOOL *out_found) {
+      id elem = find_a11y_at_point_in_current_windows(pt, NULL);
+      if (!elem) {
+          *out_found = NO;
+          return NO;
       }
-    });
+      *out_found = YES;
 
-    if (!elem)
-        return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                                enif_make_atom(env, "no_element_at_point"));
-
-    __block BOOL ok = NO;
-    dispatch_sync(dispatch_get_main_queue(), ^{
       if ([action isEqualToString:@"increment"]) {
           if ([elem respondsToSelector:@selector(accessibilityIncrement)]) {
               [elem accessibilityIncrement];
-              ok = YES;
+              return YES;
           }
       } else if ([action isEqualToString:@"decrement"]) {
           if ([elem respondsToSelector:@selector(accessibilityDecrement)]) {
               [elem accessibilityDecrement];
-              ok = YES;
+              return YES;
           }
       } else if ([action isEqualToString:@"activate"]) {
           if ([elem respondsToSelector:@selector(accessibilityActivate)]) {
-              ok = [elem accessibilityActivate];
+              return [elem accessibilityActivate];
           }
       } else if ([action isEqualToString:@"escape"]) {
           if ([elem respondsToSelector:@selector(accessibilityPerformEscape)]) {
-              ok = [elem accessibilityPerformEscape];
+              return [elem accessibilityPerformEscape];
           }
       } else if ([action hasPrefix:@"scroll_"]) {
           NSString *dir_str = [action substringFromIndex:7];
@@ -4280,11 +4531,15 @@ static ERL_NIF_TERM nif_ax_action_at_xy(ErlNifEnv *env, int argc, const ERL_NIF_
           else if ([dir_str isEqualToString:@"right"])
               dir = UIAccessibilityScrollDirectionRight;
           if (dir && [elem respondsToSelector:@selector(accessibilityScroll:)]) {
-              ok = [elem accessibilityScroll:dir];
+              return [elem accessibilityScroll:dir];
           }
       }
+      return NO;
     });
 
+    if (!found)
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "no_element_at_point"));
     if (ok)
         return enif_make_atom(env, "ok");
     return enif_make_tuple2(env, enif_make_atom(env, "error"),
@@ -4804,40 +5059,36 @@ static ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     // proper event system backing. Accessibility activation is the reliable path
     // for the simulator; for scroll views and custom GRs that lack accessibility,
     // a simulator-specific event injection mechanism would be needed.
-    __block BOOL activated = NO;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-          if (![scene isKindOfClass:[UIWindowScene class]])
-              continue;
-          for (UIWindow *win in [(UIWindowScene *)scene windows]) {
-              if (win.isHidden)
-                  continue;
-              id elem = find_a11y_at_point(win, pt, 0);
-              if (elem) {
-                  LOGI(@"tap_xy(sim): accessibilityActivate on %@ frame=%@",
-                       NSStringFromClass(object_getClass(elem)),
-                       NSStringFromCGRect([elem accessibilityFrame]));
-                  [elem accessibilityActivate];
-                  // For text fields: accessibilityActivate on UITextFieldLabel
-                  // (the hint label inside UITextField) doesn't focus the
-                  // field. Walk the responder chain up from the hit view to
-                  // find the first UITextField/UITextView and focus it.
-                  UIView *hv = [win hitTest:pt withEvent:nil];
-                  UIResponder *r = hv;
-                  while (r) {
-                      if ([r isKindOfClass:[UITextField class]] ||
-                          [r isKindOfClass:[UITextView class]]) {
-                          [(UIView *)r becomeFirstResponder];
-                          break;
-                      }
-                      r = r.nextResponder;
-                  }
-                  activated = YES;
-                  return;
-              }
+    // Find-then-act atomically inside ONE dispatch_sync per attempt (see
+    // mob_retry_main_thread_bool) — using the SAME window the element was
+    // found in for the text-field focus walk below, not a second,
+    // independently-resolved window (MOB-99 review: with an overlapping
+    // keyboard window, an independent re-scan could land on the wrong one).
+    BOOL activated = mob_retry_main_thread_bool("tap_xy(sim)", ^BOOL {
+      UIWindow *win = nil;
+      id elem = find_a11y_at_point_in_current_windows(pt, &win);
+      if (!elem)
+          return NO;
+
+      LOGI(@"tap_xy(sim): accessibilityActivate on %@ frame=%@",
+           NSStringFromClass(object_getClass(elem)), NSStringFromCGRect([elem accessibilityFrame]));
+      [elem accessibilityActivate];
+      // For text fields: accessibilityActivate on UITextFieldLabel (the hint
+      // label inside UITextField) doesn't focus the field. Walk the
+      // responder chain up from the hit view to find the first
+      // UITextField/UITextView and focus it.
+      UIView *hv = [win hitTest:pt withEvent:nil];
+      UIResponder *r = hv;
+      while (r) {
+          if ([r isKindOfClass:[UITextField class]] || [r isKindOfClass:[UITextView class]]) {
+              [(UIView *)r becomeFirstResponder];
+              break;
           }
+          r = r.nextResponder;
       }
+      return YES;
     });
+
     if (activated)
         return enif_make_atom(env, "ok");
     return enif_make_tuple2(env, enif_make_atom(env, "error"),
@@ -5074,8 +5325,12 @@ static ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TE
     CGPoint pt = CGPointMake((CGFloat)x, (CGFloat)y);
 
 #if TARGET_OS_SIMULATOR
-    __block BOOL fired = NO;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    // Already atomic (hitTest, GR search, and the accessibility fallback all
+    // ran inside one dispatch_sync pre-MOB-99) — the gap this closes is that
+    // it never retried, so the exact "screen just mounted, tree/GR list not
+    // settled yet" race this whole file works around elsewhere could still
+    // produce a false no_long_press_recognizer here.
+    BOOL fired = mob_retry_main_thread_bool("long_press_xy(sim)", ^BOOL {
       UIView *hitView = nil;
       for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
           if (![scene isKindOfClass:[UIWindowScene class]])
@@ -5093,12 +5348,11 @@ static ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TE
               break;
       }
       if (!hitView)
-          return;
+          return NO;
 
       // Walk up the responder chain looking for any UILongPressGestureRecognizer
       SEL setStateSel = NSSelectorFromString(@"_setState:");
-      UIView *v = hitView;
-      while (v && !fired) {
+      for (UIView *v = hitView; v; v = v.superview) {
           for (UIGestureRecognizer *gr in v.gestureRecognizers) {
               if (![gr isKindOfClass:[UILongPressGestureRecognizer class]])
                   continue;
@@ -5109,23 +5363,20 @@ static ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TE
               LOGI(@"long_press_xy(sim): firing LPGR on %@", NSStringFromClass([v class]));
               setState(gr, setStateSel, UIGestureRecognizerStateBegan);
               setState(gr, setStateSel, UIGestureRecognizerStateEnded);
-              fired = YES;
-              break;
+              return YES;
           }
-          v = v.superview;
       }
 
       // SwiftUI onLongPressGesture may also surface as an accessibility custom action.
       // Try accessibilityActivate as a fallback — limited but better than nothing.
-      if (!fired) {
-          id elem = find_a11y_at_point(hitView, pt, 0);
-          if (elem && [elem respondsToSelector:@selector(accessibilityActivate)]) {
-              LOGI(@"long_press_xy(sim): fallback to accessibilityActivate on %@",
-                   NSStringFromClass(object_getClass(elem)));
-              [elem accessibilityActivate];
-              fired = YES;
-          }
+      id elem = find_a11y_at_point(hitView, pt, 0);
+      if (elem && [elem respondsToSelector:@selector(accessibilityActivate)]) {
+          LOGI(@"long_press_xy(sim): fallback to accessibilityActivate on %@",
+               NSStringFromClass(object_getClass(elem)));
+          [elem accessibilityActivate];
+          return YES;
       }
+      return NO;
     });
 
     if (fired)
@@ -5555,10 +5806,17 @@ static ERL_NIF_TERM nif_scroll_to(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 // (logical points). Recorded by MobFrameTracker; see mob_register_frame.
 static ERL_NIF_TERM nif_element_frames(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     NSMutableDictionary *reg = mob_frame_registry();
-    NSData *jsonData = nil;
+    // Snapshot under the lock, serialize outside it. The main thread takes this
+    // same lock on every frame write — once per tracked element per display
+    // frame during a transition — and the docs tell callers to poll this NIF
+    // until a frame settles, so holding it across a JSON encode of the whole
+    // registry from a dirty scheduler would stall UI layout on a thread with no
+    // QoS relationship to it.
+    NSDictionary *snapshot = nil;
     @synchronized(reg) {
-        jsonData = [NSJSONSerialization dataWithJSONObject:reg options:0 error:nil];
+        snapshot = [reg copy];
     }
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:snapshot options:0 error:nil];
     if (!jsonData)
         return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                 enif_make_atom(env, "encode_failed"));
@@ -5991,7 +6249,12 @@ static ERL_NIF_TERM nif_webview_go_back(ErlNifEnv *env, int argc, const ERL_NIF_
 // register_component/1 allocates a slot; deregister_component/1 frees it.
 // mob_send_component_event is called from Swift when the native view fires an event.
 
-#define MAX_COMPONENT_HANDLES 64
+// MOB-100: bumped from 64 — a single screen legitimately rendering ~60
+// components (e.g. an icon catalog) plus a few leftover slots from prior
+// navigation could tip over the old cap. Keep in sync with the identical
+// constant in android/jni/mob_nif.zig. Still fixed-size: a growable pool
+// or component recycling is a longer-term follow-up, not this fix.
+#define MAX_COMPONENT_HANDLES 256
 
 typedef struct {
     ErlNifPid pid;
@@ -6001,6 +6264,12 @@ typedef struct {
 static ComponentHandle component_handles[MAX_COMPONENT_HANDLES];
 static ErlNifMutex *component_mutex = NULL;
 
+// Returns {ok, Handle} on success, {error, component_slots_exhausted} when
+// the pool is full — MOB-100: a full pool used to return the same
+// enif_make_badarg(env) as a malformed pid argument, which crashed
+// Mob.ComponentServer.init (and, via the unhandled {:error, _} tuple
+// unmatched in Mob.Component.ensure_started, the whole screen process)
+// instead of failing just the one component that couldn't get a slot.
 static ERL_NIF_TERM nif_register_component(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifPid pid;
     if (!enif_get_local_pid(env, argv[0], &pid))
@@ -6012,11 +6281,12 @@ static ERL_NIF_TERM nif_register_component(ErlNifEnv *env, int argc, const ERL_N
             component_handles[i].pid = pid;
             component_handles[i].active = 1;
             enif_mutex_unlock(component_mutex);
-            return enif_make_int(env, i);
+            return enif_make_tuple2(env, enif_make_atom(env, "ok"), enif_make_int(env, i));
         }
     }
     enif_mutex_unlock(component_mutex);
-    return enif_make_badarg(env);
+    return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                            enif_make_atom(env, "component_slots_exhausted"));
 }
 
 static ERL_NIF_TERM nif_deregister_component(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
@@ -6133,9 +6403,26 @@ void mob_send_component_event(int handle, const char *event, const char *payload
     enif_mutex_unlock(component_mutex);
 
     ErlNifEnv *env = enif_alloc_env();
-    ERL_NIF_TERM msg = enif_make_tuple3(env, enif_make_atom(env, "component_event"),
-                                        enif_make_string(env, event, ERL_NIF_LATIN1),
-                                        enif_make_string(env, payload_json, ERL_NIF_LATIN1));
+    // Binaries, not charlists (enif_make_string) — Mob.ComponentServer decodes
+    // payload_json with :json.decode/1, which requires a binary.
+    size_t event_len = strlen(event);
+    size_t payload_len = strlen(payload_json);
+    ErlNifBinary event_bin, payload_bin;
+    if (!enif_alloc_binary(event_len, &event_bin)) {
+        enif_free_env(env);
+        return;
+    }
+    memcpy(event_bin.data, event, event_len);
+    if (!enif_alloc_binary(payload_len, &payload_bin)) {
+        enif_release_binary(&event_bin);
+        enif_free_env(env);
+        return;
+    }
+    memcpy(payload_bin.data, payload_json, payload_len);
+
+    ERL_NIF_TERM msg =
+        enif_make_tuple3(env, enif_make_atom(env, "component_event"),
+                         enif_make_binary(env, &event_bin), enif_make_binary(env, &payload_bin));
     enif_send(NULL, &pid, env, msg);
     enif_free_env(env);
 }
@@ -6147,32 +6434,150 @@ void mob_send_component_event(int handle, const char *event, const char *payload
 // thread. Both use only public APIs, so this is compiled unconditionally (the
 // reading NIF is still debug-gated). @synchronized guards the shared dictionary.
 static NSMutableDictionary<NSString *, NSArray<NSNumber *> *> *g_element_frames = nil;
+
+// Side table: id -> the seq of the write that produced g_element_frames[id].
+// Kept separate from g_element_frames so nif_element_frames can go on
+// JSON-encoding that dictionary directly and the {"id":[x,y,w,h]} wire shape
+// stays unchanged.
+static NSMutableDictionary<NSString *, NSNumber *> *g_element_frame_seqs = nil;
+static uint64_t g_frame_write_seq = 0;
+
+// The id set from the most recent nif_set_root; nil until the first render.
+// Guarded by the same lock as the registry.
+static NSSet<NSString *> *g_live_frame_ids = nil;
+
+// Bumped by nif_set_root on any identity-destroying (non-"none") transition,
+// in lockstep with MobViewModel's navVersion. A tracker captures the value
+// current when it appeared; writes stamped with an older one are refused, so
+// an outgoing screen can't keep reporting itself as it animates away. Starts
+// at 1 so 0 can mean "not captured yet".
+static uint64_t g_frame_generation = 1;
+
 static dispatch_once_t g_element_frames_once;
 
 static NSMutableDictionary *mob_frame_registry(void) {
     dispatch_once(&g_element_frames_once, ^{
       g_element_frames = [NSMutableDictionary dictionary];
+      g_element_frame_seqs = [NSMutableDictionary dictionary];
     });
     return g_element_frames;
 }
 
-void mob_register_frame(const char *id, double x, double y, double w, double h) {
+// Read the current generation so a tracker can stamp its writes with the one
+// that was current when it appeared.
+uint64_t mob_frame_generation(void) {
+    NSMutableDictionary *reg = mob_frame_registry();
+    @synchronized(reg) {
+        return g_frame_generation;
+    }
+}
+
+static void mob_bump_frame_generation(void) {
+    NSMutableDictionary *reg = mob_frame_registry();
+    @synchronized(reg) {
+        g_frame_generation++;
+    }
+}
+
+uint64_t mob_register_frame(const char *id, uint64_t generation, double x, double y, double w,
+                            double h) {
     if (!id)
+        return 0;
+    NSString *key = [NSString stringWithUTF8String:id];
+    if (!key)
+        return 0;
+    NSMutableDictionary *reg = mob_frame_registry();
+    @synchronized(reg) {
+        // Refuse a tracker from a superseded tree. Tree membership alone can't
+        // do this: when the outgoing and incoming screens both tag an element
+        // with the same :id, that id IS in the new tree, so the outgoing
+        // screen's mid-animation writes would sail through the check below and
+        // clobber the incoming element's frame with coordinates from halfway
+        // off the screen. `generation == 0` means "not captured yet" and is
+        // allowed through, so a tracker that registers before its onAppear
+        // runs still records something.
+        if (generation && generation < g_frame_generation)
+            return 0;
+
+        // Ignore writes for an id that isn't in the tree BEAM most recently
+        // sent. MobViewModel.setRoot dispatches to the main thread
+        // asynchronously, so a screen being animated out is still sliding
+        // offscreen well after nif_set_root purged it.
+        if (g_live_frame_ids && ![g_live_frame_ids containsObject:key])
+            return 0;
+
+        reg[key] = @[ @(x), @(y), @(w), @(h) ];
+        uint64_t seq = ++g_frame_write_seq;
+        g_element_frame_seqs[key] = @(seq);
+        return seq;
+    }
+}
+
+// Drop a tracked element's frame when it stops being laid out while its :id is
+// still in the tree — a lazy-list row scrolled out of range (LazyVStack
+// discards it), an inactive tab's subtree (TabView keeps every tab in the tree
+// at once), a dismissed sheet's content (the sheet node stays mounted). Purging
+// by id alone can't see any of these: the id is still present, so
+// mob_adopt_frame_ids never drops it, and MobFrameTracker's onChange won't fire
+// for it again. Its last on-screen frame would otherwise be reported forever,
+// and Mob.Test.tap_id would tap whatever occupies those coordinates now.
+//
+// Compare-and-delete on `seq`: remove only if this caller's write is still the
+// current one. An outgoing screen's .onDisappear therefore can't delete an
+// entry an incoming screen just claimed under the same :id.
+void mob_unregister_frame(const char *id, uint64_t seq) {
+    if (!id || seq == 0)
         return;
     NSString *key = [NSString stringWithUTF8String:id];
     if (!key)
         return;
     NSMutableDictionary *reg = mob_frame_registry();
     @synchronized(reg) {
-        reg[key] = @[ @(x), @(y), @(w), @(h) ];
+        NSNumber *owner = g_element_frame_seqs[key];
+        if (!owner || owner.unsignedLongLongValue != seq)
+            return;
+        [reg removeObjectForKey:key];
+        [g_element_frame_seqs removeObjectForKey:key];
     }
 }
 
-// Drop stale frames when the render tree changes (called from nif_set_root).
-static void mob_clear_frames(void) {
+// Recursively collect every :id present in a freshly-parsed tree, so
+// nif_set_root can purge just the registry entries that fell out of the new
+// tree instead of wiping everything (see mob_adopt_frame_ids below for
+// why: a wipe-everything + MobFrameTracker-repopulates design races
+// SwiftUI's own removal pass for an outgoing element).
+static void mob_collect_frame_ids_into(MobNode *node, NSMutableSet<NSString *> *ids) {
+    if (node.nativeViewId)
+        [ids addObject:node.nativeViewId];
+    for (MobNode *child in node.children)
+        mob_collect_frame_ids_into(child, ids);
+}
+
+static NSSet<NSString *> *mob_collect_frame_ids(MobNode *root) {
+    NSMutableSet<NSString *> *ids = [NSMutableSet set];
+    mob_collect_frame_ids_into(root, ids);
+    return ids;
+}
+
+// Adopt the incoming tree's id set (called from nif_set_root): drop every
+// registered frame whose id fell out of the tree, and retain the set so
+// mob_register_frame can reject writes from views that are no longer in it.
+// A surviving element's entry is never touched here — no race, no dependency
+// on it re-registering itself — only genuinely-removed ids are dropped.
+//
+// Being in the tree is necessary but not sufficient for a frame to be live:
+// see mob_unregister_frame for the elements that stay in the tree but stop
+// being laid out.
+static void mob_adopt_frame_ids(NSSet<NSString *> *liveIds) {
     NSMutableDictionary *reg = mob_frame_registry();
     @synchronized(reg) {
-        [reg removeAllObjects];
+        NSMutableArray<NSString *> *stale = [NSMutableArray array];
+        for (NSString *key in reg)
+            if (![liveIds containsObject:key])
+                [stale addObject:key];
+        [reg removeObjectsForKeys:stale];
+        [g_element_frame_seqs removeObjectsForKeys:stale];
+        g_live_frame_ids = [liveIds copy];
     }
 }
 
@@ -6327,7 +6732,7 @@ static ErlNifFunc nif_funcs[] = {
     {"register_tap", 1, nif_register_tap, 0},
     {"clear_taps", 0, nif_clear_taps, 0},
     {"exit_app", 0, nif_exit_app, 0},
-    {"safe_area", 0, nif_safe_area, 0},
+    {"safe_area", 0, nif_safe_area, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"haptic", 1, nif_haptic, 0},
     {"torch", 1, nif_torch, 0},
     {"clipboard_put", 1, nif_clipboard_put, 0},

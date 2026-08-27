@@ -22,6 +22,50 @@ sequenced plan; phase ownership lives there.
 
 ---
 
+## Issue tracking — status lives in Linear
+
+We use **Linear** (team `MOB`) as the single live status board across `mob`,
+`mob_dev`, and `mob_new`. It answers "what's in flight, blocked, or next" — the
+thing that used to be scattered across branches, PRs, and decision docs. Each
+layer now has **one job**, so they don't compete:
+
+- **Linear (`MOB`)** — live status + worklist. One issue per thread/feature.
+- **`decisions/`** — durable rationale (ADRs). Link it from the issue; don't copy it in.
+- **`AGENTS.md` / `CLAUDE.md` / `~/.claude` memory** — conventions + agent recall.
+- **PRs / git** — the code. Reference the issue id.
+
+### Access
+
+GraphQL only, `https://api.linear.app/graphql`. The API key is in `~/code/mob/.env`
+as `LINEAR_API_KEY` (gitignored — **never commit it**; sibling repos `source
+~/code/mob/.env`). The auth header is the key **raw, with no `Bearer` prefix**
+(that prefix is for OAuth tokens only — the usual first tripwire). Team `MOB` =
+`07dd0939-c66d-44f2-8da5-e3a4a243e953`. No Linear MCP is wired in; use the API.
+
+### The discipline (keep it light)
+
+- **Start of a non-trivial task** → search Linear for the matching `MOB-N` issue;
+  create one if none exists. Trivial one-off edits don't need an issue.
+- Put `MOB-N` in the **branch name, PR title, and commits** so code ↔ issue link
+  both ways.
+- Keep the issue **state** current: In Progress when you start, Blocked (+ why) when
+  stuck, Done when merged **and** verified. Drop a one-line progress comment at real
+  checkpoints (blocked, device-verified, shipped) — not a running narration.
+- **Cross-repo work is ONE issue, not three.** A change spanning `mob` + `mob_new`
+  (e.g. a NIF + its template) is a single `MOB-N` with both PRs linked.
+- **Link `decisions/` docs and PRs from the issue; don't duplicate their content.**
+
+Minimal create (needs the team UUID above):
+
+```bash
+set -a; source ~/code/mob/.env; set +a
+curl -s https://api.linear.app/graphql -H "Content-Type: application/json" \
+  -H "Authorization: $LINEAR_API_KEY" \
+  -d '{"query":"mutation($t:String!,$ti:String!){issueCreate(input:{teamId:$t,title:$ti}){success issue{identifier url}}}","variables":{"t":"07dd0939-c66d-44f2-8da5-e3a4a243e953","ti":"Your title"}}'
+```
+
+---
+
 ## Worktrees
 
 **Default assumption: work happens in a git worktree.** The user runs
@@ -105,6 +149,15 @@ See [`RELEASE.md`](RELEASE.md) for the canonical release process —
 trigger model (mix.exs is the source of truth), version-bump rules
 (patch default, always ask, never auto-bump), CHANGELOG conventions,
 local preflight, and the per-step idempotency of `release.yml`.
+
+> **Review gate is on by default.** Everything that landed since the
+> last published version gets a code review *before* you publish —
+> scoped at `v<last-published>..HEAD`, not per-PR, because the diff a
+> user pulls from Hex is rarely the shape of any one PR — plus the
+> version-sanity checks (is this version already published? did
+> anything merge after the bump commit and therefore miss the
+> release?). Skip only if the user says so. See RELEASE.md →
+> "Review gate". This governs `mob`, `mob_dev`, and `mob_new` alike.
 
 **Pre-push hook**: `.githooks/pre-push` runs `mix format
 --check-formatted`, `mix credo --strict`, and `mix compile
@@ -309,7 +362,10 @@ No per-session setup required.
 ## iOS accessibility activation
 
 SwiftUI lazily populates its accessibility tree only when an accessibility service is
-active. Run this once per simulator session before calling `ui_tree`:
+active. `mix mob.connect` runs this automatically for every iOS simulator target
+(`MobDev.Discovery.IOS.enable_accessibility/1`, called from `MobDev.Connector.connect_all/1`
+before waiting for nodes, with a 500ms settle delay after — MOB-99). Manual invocation
+(e.g. driving a sim without going through `mix mob.connect`) still needs it run by hand:
 
 ```bash
 UDID=<booted-simulator-udid>
@@ -319,7 +375,15 @@ xcrun simctl spawn $UDID notifyutil -p com.apple.accessibility.voiceover.status.
 
 Wait ~500ms for propagation. Survives app restarts within the same simulator session.
 
-**TODO:** `mix mob.connect` should run this automatically for iOS simulator targets.
+Even with accessibility active, `Mob.Test.tap_id/2` (which walks the accessibility
+tree by point — see `find_a11y_at_point` in `ios/mob_nif.m`) can still race a very
+recent layout/navigation: the element's *frame* (tracked separately via
+`MobFrameTracker`'s GeometryReader callback) can be ready before SwiftUI has
+finished rebuilding the accessibility tree itself. `nif_tap_xy` and
+`nif_ax_action_at_xy` retry the point lookup a few times with a short delay
+before giving up with `:no_element_at_point` — if you still hit it, the gap
+is likely wider than that retry window, worth its own investigation before
+assuming ordinary touch interaction is broken.
 
 ---
 

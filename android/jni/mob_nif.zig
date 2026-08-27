@@ -361,10 +361,16 @@ inline fn detachIfAttached(attached: c_int) void {
 // ── Binary / string helpers ──────────────────────────────────────────────
 
 /// Make an `ErlNifBinary` from a C-style {ptr, len} pair and wrap it as a
-/// term. BEAM owns the allocated bytes after make_binary returns.
+/// term. BEAM owns the allocated bytes after make_binary returns. Falls
+/// back to `:nil` on allocation failure — the same sentinel this file's
+/// call sites already use for "absent" (see the empty-label/value guards
+/// above), so a caller that already tolerates `:nil` doesn't need a new
+/// error shape.
 fn cstrToBin(env: ?*erts.ErlNifEnv, src: [*]const u8, len: usize) erts.ERL_NIF_TERM {
     var bin: erts.ErlNifBinary = undefined;
-    _ = erts.enif_alloc_binary(len, &bin);
+    if (erts.enif_alloc_binary(len, &bin) == 0) {
+        return erts.atom(env, "nil");
+    }
     @memcpy(bin.data[0..len], src[0..len]);
     return erts.enif_make_binary(env, &bin);
 }
@@ -938,7 +944,12 @@ export fn nif_swipe_xy(
 // mob_nif_init_state (called from mob_nif.c's nif_load BEAM callback).
 
 const MAX_TAP_HANDLES: usize = 256;
-const MAX_COMPONENT_HANDLES: usize = 64;
+// MOB-100: bumped from 64 — a single screen legitimately rendering ~60
+// components (e.g. an icon catalog) plus a few leftover slots from prior
+// navigation could tip over the old cap. Keep in sync with the identical
+// constant in ios/mob_nif.m. Still fixed-size: a growable pool or component
+// recycling is a longer-term follow-up, not this fix.
+const MAX_COMPONENT_HANDLES: usize = 256;
 
 /// Per-tap slot: the registered pid, an optional caller-supplied tag, and
 /// the throttle state for high-frequency events. tag_env is non-null while
@@ -1061,6 +1072,20 @@ fn sendChange(handle: c_int, value_term: erts.ERL_NIF_TERM) void {
 /// to the pid registered for `handle`.
 pub export fn mob_send_tap(handle: c_int) callconv(.c) void {
     sendEvent(handle, "tap");
+}
+
+/// Called from beam_jni.c's `nativeSendDismiss` JNI stub. Sends
+/// `{:dismiss, tag}` — the shape `Mob.UI.sheet/2` documents for `:on_dismiss`
+/// and the one iOS has always delivered (`mob_send_dismiss` in ios/mob_nif.m).
+///
+/// Android had no dismiss sender at all, so the generated sheet renderer fell
+/// back to `nativeSendTap` and delivered `{:tap, tag}`. A screen written to the
+/// documented contract never matched it: `Mob.Screen` forwards the unmatched
+/// message to `handle_info`, which raises `FunctionClauseError` and takes the
+/// screen down — or silently drops it if the screen has a catch-all, in which
+/// case the BEAM never learns the sheet closed and can't re-present it (MOB-104).
+pub export fn mob_send_dismiss(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "dismiss");
 }
 
 pub export fn mob_send_change_str(handle: c_int, utf8: [*:0]const u8) callconv(.c) void {
@@ -1458,10 +1483,12 @@ pub export fn mob_send_component_event(
 
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
+    // Binaries, not charlists (enif_make_string) — Mob.ComponentServer decodes
+    // payload_json with :json.decode/1, which requires a binary.
     const msg = erts.makeTuple(env, .{
         erts.enif_make_atom(env, "component_event"),
-        erts.enif_make_string(env, event, erts.ERL_NIF_LATIN1),
-        erts.enif_make_string(env, payload_json, erts.ERL_NIF_LATIN1),
+        cstrToBin(env, event, std.mem.span(event).len),
+        cstrToBin(env, payload_json, std.mem.span(payload_json).len),
     });
     var pid = pid_copy;
     _ = erts.enif_send(null, &pid, env, msg);
@@ -1569,7 +1596,19 @@ export fn nif_register_tap(
 
     erts.enif_mutex_lock(tap_mutex);
     defer erts.enif_mutex_unlock(tap_mutex);
-    if (tap_build_count >= @as(c_int, @intCast(MAX_TAP_HANDLES))) return erts.badarg(env);
+    if (tap_build_count >= @as(c_int, @intCast(MAX_TAP_HANDLES))) {
+        // MOB-100 follow-up: this used to be erts.badarg(env), which
+        // crashed Mob.Renderer.render/3 (and the whole screen process) the
+        // same way a full component pool used to crash Mob.ComponentServer
+        // — an unvirtualized long list or big form with >MAX_TAP_HANDLES
+        // interactive elements would hit this on every render. Every
+        // sender goes through snapTap/sendEvent/sendChange, which already
+        // no-op on an out-of-range handle, so -1 is a safe "no handler
+        // wired up" sentinel here — the interactive prop silently does
+        // nothing instead of taking the screen down.
+        loge_nif("register_tap: pool exhausted (cap={d}) — returning unhandled sentinel", .{MAX_TAP_HANDLES});
+        return erts.enif_make_int(env, -1);
+    }
 
     const handle: c_int = tap_build_count;
     tap_build_count += 1;
@@ -1636,8 +1675,14 @@ export fn nif_set_transition(
 }
 
 // nif_register_component/1 — allocate a persistent component handle for
-// a Native View pid. Linear scan through MAX_COMPONENT_HANDLES slots;
-// fails when all are in use.
+// a Native View pid. Linear scan through MAX_COMPONENT_HANDLES slots.
+//
+// Returns {ok, Handle} on success, {error, component_slots_exhausted} when
+// the pool is full — MOB-100: a full pool used to return the same
+// erts.badarg(env) as a malformed pid argument, which crashed
+// Mob.ComponentServer.init (and, via the unhandled {:error, _} tuple
+// unmatched in Mob.Component.ensure_started, the whole screen process)
+// instead of failing just the one component that couldn't get a slot.
 export fn nif_register_component(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -1654,10 +1699,10 @@ export fn nif_register_component(
         if (component_handles[i].active == 0) {
             component_handles[i].pid = pid;
             component_handles[i].active = 1;
-            return erts.enif_make_int(env, @intCast(i));
+            return erts.makeTuple(env, .{ erts.atom(env, "ok"), erts.enif_make_int(env, @intCast(i)) });
         }
     }
-    return erts.badarg(env);
+    return erts.errorTuple(env, erts.atom(env, "component_slots_exhausted"));
 }
 
 // nif_deregister_component/1 — release a component handle. Slot becomes
@@ -3212,7 +3257,30 @@ pub export fn mob_send_color_scheme_changed(scheme: ?[*:0]const u8) callconv(.c)
 // Last-known interface orientation, updated by mob_send_orientation_changed.
 // device_orientation/0 returns this (a partial getter, like the other Android
 // device queries — accurate after the first onConfigurationChanged).
-var g_last_orientation: [*:0]const u8 = "portrait";
+// Cached as an int code, NOT the incoming string pointer: the JNI string from
+// beam_jni.c is released as soon as the trampoline returns (mirrors the
+// network-connectivity fix below), so storing that pointer would dangle and
+// the query would read freed memory. The atom is always derived from a
+// static literal.
+// 0 portrait, 1 landscape_left, 2 landscape_right, 3 portrait_upside_down.
+var g_last_orientation = std.atomic.Value(c_int).init(0);
+
+fn orientationCode(name: [*:0]const u8) c_int {
+    const s = std.mem.sliceTo(name, 0);
+    if (std.mem.eql(u8, s, "landscape_left")) return 1;
+    if (std.mem.eql(u8, s, "landscape_right")) return 2;
+    if (std.mem.eql(u8, s, "portrait_upside_down")) return 3;
+    return 0;
+}
+
+fn orientationAtomName(code: c_int) [*:0]const u8 {
+    return switch (code) {
+        1 => "landscape_left",
+        2 => "landscape_right",
+        3 => "portrait_upside_down",
+        else => "portrait",
+    };
+}
 
 /// Called from beam_jni.c's `Java_..._MobBridge_nativeNotifyOrientation` when
 /// MainActivity.onConfigurationChanged sees an orientation flip. `orient` is
@@ -3220,7 +3288,7 @@ var g_last_orientation: [*:0]const u8 = "portrait";
 /// "portrait_upside_down". (Companion hook ships in the mob_new template.)
 pub export fn mob_send_orientation_changed(orient: ?[*:0]const u8) callconv(.c) void {
     const o = orient orelse return;
-    g_last_orientation = o;
+    g_last_orientation.store(orientationCode(o), .monotonic);
     deviceSendAtomPayload("mob_device", "orientation_changed", o);
 }
 
@@ -3475,7 +3543,7 @@ export fn nif_device_orientation(
     _ = argv;
     // Partial getter (like the other Android device queries): returns the last
     // orientation reported via onConfigurationChanged; "portrait" until then.
-    return erts.enif_make_atom(env, g_last_orientation);
+    return erts.enif_make_atom(env, orientationAtomName(g_last_orientation.load(.monotonic)));
 }
 
 export fn nif_device_lock_orientation(

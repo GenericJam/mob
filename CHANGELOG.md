@@ -8,6 +8,313 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+## [0.7.31] - 2026-08-27
+
+### Added
+- **`mob_send_dismiss` (Android)** — sends `{:dismiss, tag}` to the process
+  registered for a handle, the shape `Mob.UI.sheet/2` documents for
+  `:on_dismiss` and the one iOS has always delivered. Android had no dismiss
+  sender at all, so generated sheet renderers fell back to the tap sender and
+  delivered `{:tap, tag}`; a screen written to the documented contract never
+  matched it and died with `FunctionClauseError` (or silently dropped the
+  dismissal and could never re-present the sheet). Pairs with mob_new 0.4.24,
+  which adds the `nativeSendDismiss` extern and JNI thunk — **generated Android
+  apps need both halves**, and `mix mob.doctor` (mob_dev) now warns about a
+  project still carrying the old wiring (MOB-104).
+
+  **Behaviour change for Android:** if you worked around the old bug by
+  matching `handle_info({:tap, tag}, ...)` for a sheet dismissal, that clause
+  is now dead — switch it to `{:dismiss, tag}`. iOS callers are unaffected;
+  they always received `{:dismiss, tag}`.
+
+### Fixed
+- iOS: a frame tracker whose write was refused (an outgoing screen mid-nav)
+  no longer loses its ownership token. It kept the last returned value even
+  when that was the "refused" sentinel, which silently disabled its own
+  cleanup — so if the incoming screen's element with the same `:id` wasn't
+  laid out (a lazy row below the fold), the old screen's entry survived and
+  `Mob.Test.tap_id/2` tapped its coordinates.
+
+### Changed
+- `Mob.Test.element_frames/1` docs now say plainly that the drop-when-not-laid-out
+  behaviour is **iOS only**. Android clears frames wholesale on a navigation
+  transition and never per element, so a scrolled-away row still reports a
+  position there — the previous wording read as cross-platform.
+
+---
+
+## [0.7.30] - 2026-08-27
+
+### Fixed
+- **`Mob.Test.element_frames/1` no longer reports elements that are in the
+  render tree but not on screen.** 0.7.29 shipped a fix (MOB-102) that stopped
+  wiping the frame registry on every render and instead dropped only ids
+  absent from the incoming tree. That fixed static elements vanishing, but
+  "in the tree" is not "on screen": a `lazy_list` row scrolled out of range,
+  an inactive tab's subtree, and a dismissed sheet's content all stay in the
+  tree, so their last on-screen frame was reported indefinitely — and
+  `Mob.Test.tap_id/2` would tap whatever now occupied those coordinates. It
+  now returns `{:error, :not_found}` for them again, as it did before 0.7.29.
+  Tracked elements drop their own entry when the platform stops laying them
+  out, via a compare-and-delete so an outgoing screen can't remove an entry an
+  incoming screen just claimed under the same `:id` (MOB-103).
+- **A screen animating out of a nav transition no longer re-registers itself
+  at mid-animation coordinates.** `set_root` applies the new tree
+  asynchronously on the main thread, so an outgoing screen kept reporting
+  frames after its ids had already been purged — including when both screens
+  tagged an element with the same `:id`, which tree membership alone can't
+  reject. Writes are now refused for ids absent from the current tree, and for
+  any tracker belonging to a superseded navigation (MOB-103).
+- **A list delete no longer loses the frame of the element below it.** Every
+  `ForEach` keys children by index while the registry is keyed by `:id`, so
+  removing an item shifts each later id onto a different tracker; with
+  same-height rows nothing re-registered and the surviving element went
+  missing. Trackers now re-register when the `:id` beneath them changes, and
+  on appearance (MOB-103).
+
+### Changed
+- `Mob.Test.element_frames/1`'s docs now state what counts as rendered, and
+  that a frame is a last-known position recorded at layout — poll until it
+  settles rather than trusting the first read after a change.
+
+---
+
+## [0.7.29] - 2026-08-27
+
+### Added
+- **`Mob.UI.sheet/2`** — a native modal bottom sheet (iOS `.sheet`,
+  Android Material 3 `ModalBottomSheet`) that composes ordinary Mob
+  nodes as content. `:detents` (`[:medium, :large]` subset), `:on_dismiss`
+  (delivered as `{:dismiss, tag}`, exactly once), `:background`, `:scrim`,
+  `:corner_radius`, and a custom drag indicator (`:drag_indicator_color`/
+  `_width`/`_height`/`_rail_height`, all four required together or omit
+  all four). Per-platform `:ios`/`:android` style overrides via the
+  existing platform-block mechanism. See
+  `decisions/2026-08-26-native-sheet-primitive.md` for the presentation-
+  state-via-identity design, the background/corner_radius
+  double-application avoidance on both platforms, and the documented iOS
+  scrim-opacity limitation (native `.sheet` doesn't expose dimming-layer
+  opacity — Android applies `:scrim` exactly, iOS stays system-black).
+
+### Fixed
+- Drag-indicator completeness validation (all four geometry props
+  together or none) is now checked against `:ios`/`:android` overrides
+  merged with the base props, not just the base props alone — a partial
+  override no longer silently passes validation and renders the system
+  default indicator instead of the requested one.
+- Color props that resolve to neither the active theme nor the base
+  palette now log a warning instead of silently passing an unresolved
+  atom through to native (previously a likely typo'd theme token would
+  render as an invisible, fully-transparent color with no signal at all).
+- iOS: sheet content now receives its `:padding` (was dropped).
+- iOS: `corner_radius: 0` on a sheet is no longer indistinguishable from
+  "not set" — square corners are now representable and distinct from the
+  system default.
+- iOS: a sheet's `:id` no longer reports a 0x0 frame via
+  `Mob.Test`/`element_frames` — its switch-case view is an invisible
+  presentation anchor, not the sheet's real on-screen content, so frame
+  tracking is skipped there rather than publishing a value known to be
+  wrong.
+- iOS: `Mob.Test.element_frames/1` no longer drops a still-visible element
+  that didn't move. The registry was cleared on every render on the
+  assumption that frame tracking would repopulate it, but tracking only
+  fires when an element's frame *changes*, so anything that stayed put
+  went missing until something moved it. Only ids absent from the incoming
+  tree are dropped now (MOB-102). See
+  `decisions/2026-08-27-frame-registry-purge-by-id.md` — and note the 0.7.31
+  entry above, which corrects the converse case this introduced.
+  *(Documented after the fact: this shipped in 0.7.29 but was omitted from
+  its notes, so it is not in the published 0.7.29 changelog.)*
+
+## [0.7.28] - 2026-08-26
+
+### Fixed
+- **Native component handle pool exhaustion crashed the screen process.**
+  A screen registering enough `Mob.UI.native_view`/`Mob.Component`
+  instances to fill the fixed pool (originally 64 slots) got the same
+  `badarg` as a malformed pid, which crashed `Mob.ComponentServer.init`
+  and, via the unmatched `{:error, _}` in `Mob.Component.ensure_started`,
+  the whole screen — every tap went dead until force-kill. Three
+  compounding defects, all fixed:
+  - A full pool now returns `{:error, :component_slots_exhausted}`
+    instead of `badarg`; `Mob.ComponentServer` logs and fails just that
+    one component, leaving the screen alive.
+  - Slot 0 (a legitimate pool index) was conflated with the `:no_render`
+    sentinel (also `0`), so `terminate/2` never deregistered it —
+    permanent leak. The sentinel is now `-1`.
+  - `Mob.ComponentServer` never trapped exits, so
+    `Mob.ComponentRegistry.reconcile/2`'s `Process.exit(pid, :shutdown)`
+    (the real production stop path) never ran `terminate/2` at all —
+    *every* component leaving a screen leaked its slot, not just the
+    slot-0 ones. This was the dominant leak, found while writing the
+    regression test against the real stop path. See
+    `decisions/2026-08-26-component-pool-trap-exit.md`.
+  - `MAX_COMPONENT_HANDLES` bumped 64 → 256 on both platforms as
+    headroom (still fixed-size; a growable pool is a longer-term
+    follow-up).
+  - Also hardened against version skew: a native binary predating this
+    fix (reachable via `mix mob.push` hot-deploying a newer BEAM without
+    a native rebuild) returns a bare int on success and raises on
+    exhaustion — `Mob.ComponentServer` now degrades to the sentinel
+    instead of crashing in that case too.
+  - **Sibling bug in the tap-handle pool.** `nif_register_tap` (both
+    platforms) had the identical crash-on-exhaustion bug for
+    `on_tap`/`on_change`/`on_focus`/etc — reachable by any screen with
+    more than 256 interactive elements (an unvirtualized long list or a
+    big form). Fixed with the same `-1`-sentinel approach; needed no
+    `Mob.Renderer` changes since every native sender already no-ops on
+    an out-of-range handle.
+  - Device-verified on a physical Android phone and the iOS simulator
+    for both pools. (MOB-100)
+
+## [0.7.27] - 2026-08-26
+
+### Fixed
+- **Native component events (`Mob.UI.native_view`/`Mob.Component`) arrived
+  as Erlang charlists, not binaries.** Both native bridges
+  (`android/jni/mob_nif.zig`, `ios/mob_nif.m`) built the event name and
+  JSON payload via `enif_make_string`. `Mob.ComponentServer` decodes the
+  payload with `:json.decode/1`, which requires a binary — the component
+  process crashed before `handle_event/3` ever ran. Both bridges now emit
+  UTF-8 binaries; `Mob.ComponentServer` also normalizes at the boundary
+  (accepts either shape, for a hot-deployed newer BEAM landing on an
+  older native shell) and no longer crashes on a malformed or
+  unexpected-shape event/payload — falls back safely and logs instead.
+  (MOB-98)
+- **iOS accessibility-tree hit-testing (`Mob.Test.tap_id/2`,
+  `ax_action_at_xy/2`, `long_press_xy/2`) could race a very recent
+  layout or navigation.** SwiftUI populates its accessibility tree
+  lazily; a synthetic tap issued the instant a screen mounts (the
+  common automated-test pattern) could return `:no_element_at_point`
+  even though the element's tracked *frame* was already correct — the
+  two mechanisms settle on different timelines. The point-based lookup
+  now retries a few times with a short delay before giving up, with
+  find-then-act happening atomically per attempt (an earlier, separate
+  find/act split risked acting on a stale window or a recycled
+  table/collection-view cell). (MOB-99)
+- **`mix test` was intermittently flaky**: `test/mob/component_test.exs`'s
+  `Mob.ComponentRegistry` describe block used `start_supervised!/1`-style
+  strict matching against a fixed-name GenServer that
+  `test/mob/component_server_test.exs` (added for MOB-98) can legitimately
+  start first under `async: true` — the second file to run raised on
+  `{:already_started, _}` instead of tolerating it. Now matches the
+  tolerance MOB-98 already added on the other side.
+
+## [0.7.26] - 2026-08-25
+
+### Fixed
+- **`Mob.Plugins.read_path/1` silently swallowed a malformed manifest.** A
+  syntax error or raised exception while evaluating `priv/mob_plugins.exs`
+  was rescued straight to the empty manifest with no log line — "this app
+  has no plugins" looked identical to "the manifest evaluated cleanly to
+  nothing." The exception is now logged before falling back, matching
+  every other rescue in this module (`invoke_handler/3`,
+  `notification_match?/3`).
+
+### Documentation
+- **`MOB_PLUGINS.md`'s schema reference now explicitly states that theming
+  doesn't ride this manifest.** `styles:` / `default_style:` belong to a
+  separate file (`priv/mob_style.exs`, see `MOB_STYLES.md`) validated by a
+  separate module. The two manifests share enough vocabulary ("manifest")
+  and shape to invite declaring one in the wrong file, where it validates
+  cleanly and then goes nowhere — nothing warned about this before.
+
+Both found via a real report from someone building a style plugin
+against this system.
+
+## [0.7.25] - 2026-08-25
+
+### Added
+- **Custom fonts: named tokens, app-wide/plugin defaults, and a fallback
+  chain — see [`MOB_FONTS.md`](MOB_FONTS.md) for the full design.**
+  - `Mob.Theme.font/2` builds a `%{ios:, android:}` font spec from an iOS
+    PostScript name + `from_file:`, computing the Android resource name via
+    the same helper the build-time bundler uses (`Mob.Font.android_resource_name/1`),
+    so the two names can't drift apart.
+  - `Mob.Theme` gained `fonts` (a name → spec map, referenced from a node's
+    `font:` prop the same way `:primary`/`:on_surface` reference the color
+    map) and `font_fallback` (an ordered list of specs tried, in order, on
+    either platform when a node's own font name doesn't resolve).
+    `Mob.Theme.fonts_map/1` and `font_fallback_list/1` are the accessors.
+  - Any node that doesn't set its own `font:` prop picks up the theme's
+    `fonts[:default]` automatically (`Mob.Renderer.inject_font_default/2`) —
+    set an app-wide default font once, no per-node wiring.
+  - A capability plugin can declare its own default font via
+    `default_font: %{family:, file:}` in `priv/mob_plugin.exs`
+    (`Mob.Plugins.apply_default_font/0`, run at boot right after the host's
+    own style/font setup, so a host-set default always wins over a
+    plugin's).
+  - Both platforms honor the fallback chain natively: Android walks
+    `[primary] + font_fallback` via `Typeface.create`, skipping any name
+    that resolves to `Typeface.DEFAULT` (Android's silent signal that a
+    name wasn't found — see Fixed, mob_new); iOS walks the same list via
+    `UIFont(name:size:)`, which correctly returns `nil` for an unknown name.
+  - `Mob.Theme.set/1`'s native push (`notify_native/1`) now also ships
+    `_font_fallback` to both platforms alongside the existing color palette.
+
+### Fixed
+- **Data race on `g_font_fallback` in `ios/mob_nif.m`.** The fallback list
+  was a plain `static NSArray *` written from the BEAM's calling thread in
+  `nif_set_theme` and read from the main thread in `mob_font_fallback()`
+  during SwiftUI render, with no synchronization. Under ARC, the
+  unsynchronized write releases the old array while a concurrent reader may
+  have just loaded that pointer — a rare but real use-after-release crash.
+  The write now hops onto the main thread via `dispatch_sync`, matching
+  every other NIF in the file that mutates state the main thread reads.
+  Found in code review immediately after this feature's own device
+  verification; Android's equivalent (`MobBridge.kt`'s `fontFallback`) had
+  always had this covered via `@Volatile`. (MOB-94)
+
+## [0.7.24] - 2026-08-20
+
+### Fixed
+- **Android `Mob.Device.orientation/0` could read freed memory.**
+  `mob_send_orientation_changed` stored the raw JNI string pointer handed to it
+  by the trampoline in `android/jni/beam_jni.c.eex`, which releases that buffer
+  as soon as the call returns (`GetStringUTFChars` / `ReleaseStringUTFChars`).
+  Any later `Mob.Device.orientation/0` call built its return atom from that
+  dangling pointer. The sibling network-connectivity code hit the identical
+  hazard earlier and fixed it by caching an int code instead of the string;
+  orientation now does the same (`orientationCode/1` / `orientationAtomName/1`,
+  mirroring `transportCode/1` / `transportAtomName/1`). Device-verified across
+  all four orientations on a physical Moto G Power. (MOB-46, from the 2026-07
+  mob ecosystem audit)
+
+## [0.7.23] - 2026-08-19
+
+### Fixed
+- **Docs: dropped the "60 of Mishka Chelekom's 70+" component-count claim.**
+  That subset framing implied a clean 1:1 mapping between the web library's
+  components and the Mob port that doesn't hold up — several web `*_field`
+  variants collapse into Mob's own `:text_field` primitive plus one shared
+  Field wrapper, some web components map to Mob's core built-in node types
+  rather than Mishka-specific ports, and a few (Device Mockup) are web-only
+  concepts with no mobile equivalent. `guides/packages.md`, `guides/styling.md`,
+  and `guides/theming.md` now describe the web library's 70+ components and
+  the Mob port's growing set independently, without a false-precision fraction.
+
+## [0.7.22] - 2026-08-19
+
+### Fixed
+- **Docs: Mishka Chelekom's component count was understated.** The 0.7.21
+  guides said "60+ ported components" without noting the source library is
+  actually 70+ components strong on the web (only 60 ported to Mob so far).
+  Corrected in `guides/packages.md`, `guides/styling.md`, and
+  `guides/theming.md`.
+
+## [0.7.21] - 2026-08-19
+
+### Added
+- **Docs: point to Mishka Chelekom from the packages, styling, and theming
+  guides.** New "Component kits" section in `guides/packages.md` covering
+  Mishka Chelekom's 60+ ported components (native SwiftUI/Compose, driven by
+  Mob's theme tokens), with cross-references from `guides/styling.md` and
+  `guides/theming.md`. Also documents the Linear (team MOB) issue-tracking
+  convention in `CLAUDE.md` and fixes a malformed `.gitignore` line that had
+  silently disabled `.DS_Store`/`.playwright-mcp/` ignoring.
+
 ## [0.7.20] - 2026-07-11
 
 ### Changed

@@ -26,7 +26,8 @@ defmodule Mob.Plugins do
     nifs: [],
     composites: [],
     styles: [],
-    default_style: nil
+    default_style: nil,
+    default_font: nil
   }
   @pt_key {__MODULE__, :manifest}
   @pt_asset_root {__MODULE__, :asset_root}
@@ -82,6 +83,7 @@ defmodule Mob.Plugins do
     register_screens()
     register_composites()
     apply_default_style()
+    apply_default_font()
     :ok
   end
 
@@ -397,6 +399,44 @@ defmodule Mob.Plugins do
   end
 
   @doc """
+  The activated capability plugin's suggested default font (`%{ios:,
+  android:}`, or `nil`) — `RuntimeManifest` already resolved it to an
+  on-device spec and guaranteed at most one survives (two plugins
+  suggesting one is a build-time conflict, not a runtime pick). See
+  `MOB_FONTS.md`.
+  """
+  @spec default_font() :: Mob.Theme.font_spec() | nil
+  def default_font, do: Map.get(manifest(), :default_font, nil)
+
+  @doc """
+  Applies a plugin's suggested default font at boot — called after
+  `apply_default_style/0` so it sees the cumulative effect of the host's
+  `use Mob.App, theme:` and any activated style package first. Only sets
+  `fonts[:default]` when nothing above already set one; a host's own later
+  `Mob.Theme.set/1` call (in `on_start/0`, which runs after this) still
+  outranks it, same as `apply_default_style/0`. No-op when no plugin
+  suggested one, or something already claimed `:default`.
+  """
+  @spec apply_default_font() :: :ok
+  def apply_default_font do
+    with spec when not is_nil(spec) <- default_font(),
+         theme <- Mob.Theme.current(),
+         false <- Map.has_key?(theme.fonts, :default) do
+      try do
+        Mob.Theme.set(%{theme | fonts: Map.put(theme.fonts, :default, spec)})
+      rescue
+        e ->
+          Logger.error(
+            "[mob_plugins] default font #{inspect(spec)} failed to apply: " <>
+              Exception.format(:error, e, __STACKTRACE__)
+          )
+      end
+    end
+
+    :ok
+  end
+
+  @doc """
   Resolves a `plugin://<plugin>/<file>` image reference to its on-device bundle
   path (`assets/plugin/<plugin>/<file>`), the convention `native_build` copies
   plugin images to. The renderer calls this when an image `src` uses the
@@ -450,6 +490,15 @@ defmodule Mob.Plugins do
       @empty
     end
   rescue
-    _ -> @empty
+    e ->
+      # A malformed manifest must never crash boot (see @doc above), but
+      # silently downgrading it to "this app has no plugins" hid real
+      # authoring errors (a typo, a missing `end`) as if nothing were wrong.
+      Logger.error(
+        "[mob_plugins] #{path} failed to evaluate, using empty manifest: " <>
+          Exception.format(:error, e, __STACKTRACE__)
+      )
+
+      @empty
   end
 end

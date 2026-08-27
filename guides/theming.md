@@ -252,3 +252,10 @@ content — no special "glass" primitive required:
 ```
 
 Use raw integers sparingly. Semantic tokens give you free dark-mode and theme switching.
+
+## Pre-styled components on top of tokens
+
+[Mishka Chelekom](packages.md#component-kits) has 70+ components on the web,
+with a growing set already ported to Mob (sliders, dialogs, avatars, menus,
+and more), all reading these same tokens, so a `Mob.Theme.set/1` call
+re-skins them along with the rest of your app — no per-component restyling.

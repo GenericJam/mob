@@ -62,7 +62,7 @@ On both platforms, background is applied **before** padding so the color fills t
 | `text_align` | `.multilineTextAlignment()` + `.frame(alignment:)` | `textAlign =` | `"left"` / `"center"` / `"right"` (default: `"left"`) |
 | `letter_spacing` | `.tracking(_:)` | `letterSpacing =` | Float (sp/pt) |
 | `line_height` | `.lineSpacing(_:)` (derived as `(multiplier - 1.0) × size`) | `lineHeight =` | Float multiplier (e.g. `1.5` = 150%) |
-| `font` | `Font.custom(name, size:)` | `FontFamily` loaded from assets | PostScript name on iOS; lowercase+underscore filename on Android. Falls back to system font if not found. |
+| `font` | `Font.custom(name, size:)` | `FontFamily` loaded from assets | A `Mob.Theme` font token (`:heading`) or a raw platform-specific name string. Walks `Mob.Theme.font_fallback`, then the system font, if the resolved name can't be loaded — see "Custom fonts" below. |
 
 iOS font reference: [Font (SwiftUI)](https://developer.apple.com/documentation/swiftui/font)
 Android font reference: [Typography (Compose)](https://developer.android.com/develop/ui/compose/designsystems/custom#typography)
@@ -73,13 +73,48 @@ SwiftUI's `.lineSpacing` adds *extra space between lines*, not total line height
 
 ### Custom fonts
 
-Drop `.ttf` / `.otf` files into `priv/fonts/` in your Mix project. `mix mob.deploy --native` copies them into the correct platform directories and patches `Info.plist` for iOS. Reference them by PostScript name:
+Drop `.ttf` / `.otf` files into `priv/fonts/` in your Mix project (or a
+plugin's `assets: %{fonts: [...]}`). `mix mob.deploy --native` copies them
+into the correct platform directories and patches `Info.plist` for iOS.
+
+The **recommended way to reference a font** is a named token on `Mob.Theme`,
+resolved by the renderer exactly like a color token (`text_color: :primary`):
 
 ```elixir
-%{type: :text, props: %{text: "Hello", font: "Inter-Regular", text_size: :base}, children: []}
+Mob.Theme.set(
+  fonts: %{
+    default: Mob.Theme.font("Inter-Regular", from_file: "priv/fonts/Inter-Regular.ttf"),
+    heading: Mob.Theme.font("Inter-Bold", from_file: "priv/fonts/Inter-Bold.ttf")
+  }
+)
 ```
 
-iOS requires the PostScript name (visible in Font Book → ⌘I). Android derives the resource name automatically from the filename (`Inter-Regular.ttf` → `inter_regular`), but Mob normalises the name before sending it to the NIF so you can use the same string on both platforms.
+```elixir
+%{type: :text, props: %{text: "Section", font: :heading}, children: []}
+%{type: :text, props: %{text: "Body copy"}, children: []}   # no font: -> :default applies automatically
+```
+
+`Mob.Theme.font/2` takes the iOS PostScript name (visible in Font Book →
+⌘I — it can't be derived from the filename, since it's embedded in the
+font file's own metadata) and computes the Android resource name from the
+file you point it at, so the two can never drift apart. Setting
+`fonts[:default]` is also what makes "one custom font, everywhere" work:
+any node that doesn't specify its own `font:` picks it up automatically.
+
+A plugin can suggest its own default the same way, without touching the
+whole theme — see `default_font:` in `MOB_PLUGINS.md`.
+
+**Escape hatch:** `font: "Some-Family"` (a raw string, not a theme token)
+still works and is sent to each platform as-is — but then it's on you to
+make sure that exact string is valid on both platforms; there's no
+automatic normalisation for a literal string the way there is for a
+`Mob.Theme.font/2`-built token.
+
+**Fallback:** set `Mob.Theme.font_fallback` (same value shape as a `fonts`
+entry) to an ordered list of names tried when the resolved font can't be
+loaded on-device. Empty by default — the platform's own system font is
+still the final fallback either way. See `MOB_FONTS.md` for the full
+design (named tokens, plugin defaults, precedence, fallback).
 
 ---
 
@@ -258,3 +293,11 @@ For design decisions not covered here, refer to the platform design systems dire
 
 - [Apple Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines/)
 - [Material Design 3](https://m3.material.io/)
+
+## Don't want to style from scratch?
+
+[Mishka Chelekom](packages.md#component-kits) is 70+ components strong on the
+web, with a growing set already ported — sliders, dialogs, avatars, menus,
+pickers, and more — to the
+native widgets in the table above, all theme-token driven (see
+[Theming](theming.md)).
