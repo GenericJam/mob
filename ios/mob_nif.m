@@ -225,6 +225,9 @@ static void mob_send_submit(int handle) {
 static void mob_send_select(int handle) {
     mob_send_event(handle, "select");
 }
+static void mob_send_dismiss(int handle) {
+    mob_send_event(handle, "dismiss");
+}
 
 // IME composition. Sends {compose, tag, %{text: ..., phase: ...}} where
 // phase is one of began/updating/committed/cancelled. Called from the
@@ -646,6 +649,8 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         node.nodeType = MobNodeTypeCanvas;
     else if ([type isEqualToString:@"gpu_view"])
         node.nodeType = MobNodeTypeGpuView;
+    else if ([type isEqualToString:@"sheet"])
+        node.nodeType = MobNodeTypeSheet;
 
     NSDictionary *props = dict[@"props"];
     if ([props isKindOfClass:[NSDictionary class]]) {
@@ -1127,6 +1132,49 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             if ([uniforms isKindOfClass:[NSArray class]] ||
                 [uniforms isKindOfClass:[NSDictionary class]])
                 node.gpuUniforms = uniforms;
+        }
+
+        // sheet props. background is read generically above (shared prop
+        // name across every node type) — MobSheetView reuses
+        // node.backgroundColor directly for the sheet's own container
+        // background, see MobRootView.swift. corner_radius is read a
+        // second time here into the dedicated sheetCornerRadius (-1 =
+        // unset) instead: node.cornerRadius is a plain CGFloat with a 0
+        // default, so by the time Swift sees it, an explicit
+        // `corner_radius: 0` is indistinguishable from "never set" — a
+        // sheet's corners are visibly square-vs-rounded, so that ambiguity
+        // needs its own sentinel here (unlike other node types, where 0 and
+        // unset render identically).
+        if (node.nodeType == MobNodeTypeSheet) {
+            id sheetCornerRadius = props[@"corner_radius"];
+            if (sheetCornerRadius)
+                node.sheetCornerRadius = [sheetCornerRadius doubleValue];
+
+            id detents = props[@"detents"];
+            if ([detents isKindOfClass:[NSArray class]])
+                node.sheetDetents = detents;
+
+            id indicatorColor = props[@"drag_indicator_color"];
+            if (indicatorColor)
+                node.dragIndicatorColor = color_from_argb((long)[indicatorColor longLongValue]);
+
+            id indicatorWidth = props[@"drag_indicator_width"];
+            if (indicatorWidth)
+                node.dragIndicatorWidth = [indicatorWidth doubleValue];
+            id indicatorHeight = props[@"drag_indicator_height"];
+            if (indicatorHeight)
+                node.dragIndicatorHeight = [indicatorHeight doubleValue];
+            id indicatorRailHeight = props[@"drag_indicator_rail_height"];
+            if (indicatorRailHeight)
+                node.dragIndicatorRailHeight = [indicatorRailHeight doubleValue];
+
+            id onDismiss = props[@"on_dismiss"];
+            if (onDismiss && [onDismiss isKindOfClass:[NSNumber class]]) {
+                int handle = [onDismiss intValue];
+                node.onDismiss = ^{
+                  mob_send_dismiss(handle);
+                };
+            }
         }
 
         // webview props

@@ -495,6 +495,9 @@ struct MobNodeView: View {
                     .ifLet(node.fixedHeight > 0 ? node.fixedHeight : nil) { v, h in v.frame(height: CGFloat(h)) }
                     .padding(node.paddingEdgeInsets)
 
+            case .sheet:
+                MobSheetView(node: node)
+
             @unknown default:
                 EmptyView()
             }
@@ -518,7 +521,13 @@ private struct MobFrameTracker: ViewModifier {
     let node: MobNode
 
     func body(content: Content) -> some View {
-        if let id = node.nativeViewId {
+        // A sheet's own switch-case view is a zero-size anchor used only to
+        // attach `.sheet(isPresented:)` — its real, visible content is
+        // presented in a detached overlay that this GeometryReader can't
+        // see. Reporting the anchor's frame would silently report 0x0
+        // instead of the sheet's actual on-screen bounds, so tracking is
+        // skipped entirely rather than publishing a frame known to be wrong.
+        if let id = node.nativeViewId, node.nodeType != .sheet {
             content
                 .accessibilityIdentifier(id)
                 .background(
@@ -1294,6 +1303,100 @@ private struct MobSlider: View {
                     break
                 }
             }
+    }
+}
+
+// MobSheetView — native modal bottom sheet. Presentation is owned by this
+// view's own @State, not by the transient MobNode the BEAM rebuilds fresh
+// every render — SwiftUI preserves @State across re-renders that keep the
+// same view identity (same tree position, same case in MobNodeView's
+// switch), exactly like MobToggle/MobSlider preserve user-driven state
+// against a BEAM-pushed node above. That's what makes "content updates
+// without dismissing/re-presenting" and "removing the node dismisses it"
+// both fall out for free: a rerender with the sheet still present reuses
+// this state; a rerender without it tears the view (and its presentation)
+// down entirely.
+private struct MobSheetView: View {
+    let node: MobNode
+    @State private var isPresented = true
+    @State private var dismissSent = false
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .sheet(isPresented: $isPresented, onDismiss: sendDismissOnce) {
+                sheetContent
+            }
+    }
+
+    private func sendDismissOnce() {
+        guard !dismissSent else { return }
+        dismissSent = true
+        node.onDismiss?()
+    }
+
+    @ViewBuilder
+    private var sheetContent: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
+                MobNodeView(node: child)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(node.paddingEdgeInsets)
+        // Screen readers should treat the sheet as a self-contained modal —
+        // VoiceOver focus stays inside it until dismissed, matching
+        // .presentationDetents/.sheet's own system-modal behavior.
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isModal)
+        .ifLet(node.backgroundColor) { view, bg in
+            view.presentationBackground(Color(bg))
+        }
+        // sheetCornerRadius has its own -1-means-unset sentinel (see
+        // MobNode.h) so an explicit corner_radius: 0 (square corners) is
+        // distinguishable from "not set" (system default radius).
+        .ifLet(node.sheetCornerRadius >= 0 ? node.sheetCornerRadius : nil) { view, radius in
+            view.presentationCornerRadius(radius)
+        }
+        .presentationDetents(detentSet)
+        .ifLet(hasCustomIndicator ? () : nil) { view, _ in
+            view.presentationDragIndicator(.hidden)
+        }
+        .overlay(alignment: .top) {
+            if hasCustomIndicator {
+                customIndicator
+            }
+        }
+    }
+
+    private var detentSet: Set<PresentationDetent> {
+        let requested = node.sheetDetents ?? ["medium", "large"]
+        var resolved: Set<PresentationDetent> = []
+        if requested.contains("medium") { resolved.insert(.medium) }
+        if requested.contains("large") { resolved.insert(.large) }
+        // Mob.UI.sheet/2 already validates :detents is a nonempty subset of
+        // [:medium, :large] — this fallback only matters for a hand-built
+        // node map that skipped that validation (e.g. `~MOB` sigil literal).
+        return resolved.isEmpty ? [.medium, .large] : resolved
+    }
+
+    // Mob.UI.sheet/2 requires all four custom-indicator props together or
+    // none — checking one non-sentinel value is enough once that contract
+    // holds, but check all four defensively for the same hand-built-node
+    // reason as detentSet above.
+    private var hasCustomIndicator: Bool {
+        node.dragIndicatorColor != nil
+            && node.dragIndicatorWidth >= 0
+            && node.dragIndicatorHeight >= 0
+            && node.dragIndicatorRailHeight >= 0
+    }
+
+    private var customIndicator: some View {
+        Capsule()
+            .fill(node.dragIndicatorColor.map { Color($0) } ?? Color.secondary)
+            .frame(width: node.dragIndicatorWidth, height: node.dragIndicatorHeight)
+            .frame(height: node.dragIndicatorRailHeight)
+            .padding(.top, 6)
     }
 }
 
