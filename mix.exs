@@ -77,18 +77,51 @@ defmodule Mob.MixProject do
     <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
     <script>
       document.addEventListener("DOMContentLoaded", function () {
-        mermaid.initialize({ startOnLoad: false });
-        let id = 0;
-        for (const codeEl of document.querySelectorAll("pre code.mermaid")) {
-          const preEl = codeEl.closest("pre");
-          const graphEl = document.createElement("div");
-          const graphId = "mermaid-graph-" + id++;
-          mermaid.render(graphId, codeEl.textContent).then(({ svg, bindFunctions }) => {
-            graphEl.innerHTML = svg;
-            if (bindFunctions) bindFunctions(graphEl);
-            preEl.replaceWith(graphEl);
-          });
+        // ex_doc marks dark mode by toggling `dark` on <body> (its stylesheet
+        // is written against `body.dark`). Reading the class rather than
+        // prefers-color-scheme covers all three of ex_doc's settings —
+        // light, dark, and system — because ex_doc re-toggles the class
+        // itself when the OS scheme changes under "system".
+        const isDark = () => document.body.classList.contains("dark");
+
+        // Capture each diagram's source BEFORE the first render replaces the
+        // <pre>, otherwise a later theme switch has nothing to re-render from.
+        const diagrams = [];
+        document.querySelectorAll("pre code.mermaid").forEach((codeEl, i) => {
+          const host = document.createElement("div");
+          host.className = "mermaid-diagram";
+          codeEl.closest("pre").replaceWith(host);
+          diagrams.push({ host: host, source: codeEl.textContent, id: "mermaid-graph-" + i });
+        });
+
+        if (diagrams.length === 0) return;
+
+        // Renders are async, so a fast light→dark→light toggle can land its
+        // results out of order. Stamp each pass and drop stale ones.
+        let pass = 0;
+        function renderAll() {
+          const token = ++pass;
+          mermaid.initialize({ startOnLoad: false, theme: isDark() ? "dark" : "default" });
+          for (const d of diagrams) {
+            // mermaid requires a unique graph id per render call.
+            mermaid.render(d.id + "-" + token, d.source).then(({ svg, bindFunctions }) => {
+              if (token !== pass) return;
+              d.host.innerHTML = svg;
+              if (bindFunctions) bindFunctions(d.host);
+            });
+          }
         }
+
+        renderAll();
+
+        // <body>'s class list also churns for search focus and sticky scroll,
+        // so only re-render when the theme itself actually flipped.
+        let wasDark = isDark();
+        new MutationObserver(function () {
+          if (isDark() === wasDark) return;
+          wasDark = isDark();
+          renderAll();
+        }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
       });
     </script>
     """
