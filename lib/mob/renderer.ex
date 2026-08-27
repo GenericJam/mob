@@ -290,8 +290,13 @@ defmodule Mob.Renderer do
   # A node is "surface-style" if it has a `background:` set — that's what
   # the user perceives as a card / sheet. Other nodes (text, scroll, etc.)
   # pass through untouched.
+  #
+  # `put_new`, not `put`: the theme supplies a *default*, so an explicit
+  # `glass:` on the node wins. That's the escape hatch a glass theme needs —
+  # `glass: false` keeps a solid fill on the one box (a selected row, a
+  # warning banner) where translucency would cost legibility.
   defp inject_theme_flags(:box, props, %{flags: %{glass: true}}) do
-    if Map.has_key?(props, :background), do: Map.put(props, :glass, true), else: props
+    if Map.has_key?(props, :background), do: Map.put_new(props, :glass, true), else: props
   end
 
   defp inject_theme_flags(_type, props, _ctx), do: props

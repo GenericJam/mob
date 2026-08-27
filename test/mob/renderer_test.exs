@@ -1134,6 +1134,49 @@ defmodule Mob.RendererTest do
       tree = set_root_json()
       assert tree["props"]["glass"] == true
     end
+
+    test "a glassy Box still ships its background colour" do
+      # The iOS side tints the glass with this colour. If the flag ever
+      # displaced the fill on the wire, every glassy box would render as the
+      # same untinted grey and selected/semantic states would be invisible.
+      Mob.Theme.set(glass: true)
+
+      Renderer.render(
+        %{type: :box, props: %{background: 0xFF112233}, children: []},
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      assert tree["props"]["glass"] == true
+      assert tree["props"]["background"] == 0xFF112233
+    end
+
+    test "explicit glass: false on a Box survives a glass theme" do
+      Mob.Theme.set(glass: true)
+
+      Renderer.render(
+        %{type: :box, props: %{background: :surface, glass: false}, children: []},
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      assert tree["props"]["glass"] == false
+    end
+
+    test "explicit glass: true opts one Box in without a glass theme" do
+      Mob.Theme.set(%Mob.Theme{})
+
+      Renderer.render(
+        %{type: :box, props: %{background: :surface, glass: true}, children: []},
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      assert tree["props"]["glass"] == true
+    end
   end
 
   describe "font token resolution" do

@@ -278,7 +278,18 @@ struct MobNodeView: View {
                 // Flex Spacers inside then have nothing to expand into and
                 // centering tricks (spacer / content / spacer) collapse.
                 // Honors `fill_width: true` to match Android's row behaviour.
-                .ifLet(node.fillWidth ? () : nil) { view, _ in view.frame(maxWidth: .infinity) }
+                //
+                // `alignment: .leading` is load-bearing: .frame defaults to
+                // .center, so a fill_width row whose children don't span the
+                // full width floated to the middle on iOS while Compose's
+                // Row (horizontalArrangement = Start) left-aligned it. Every
+                // row-based component drifted — headers, checkbox and radio
+                // rows each centred independently and read as ragged. The
+                // column case above already passes .topLeading for the same
+                // reason.
+                .ifLet(node.fillWidth ? () : nil) { view, _ in
+                    view.frame(maxWidth: .infinity, alignment: .leading)
+                }
                 .padding(node.paddingEdgeInsets)
                 .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
                 .ifLet(node.onTap) { view, tap in
@@ -693,25 +704,38 @@ private extension View {
             radius > 0
             ? AnyShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
             : AnyShape(Rectangle())
+        let fill = node.backgroundColor.map { Color($0) }
 
         if node.useGlass {
-            // Liquid Glass on iOS 26+; otherwise the closest visual approximation
-            // that ships in older system SDKs.
+            // The glass surface must still carry the node's `background:`. The BEAM
+            // only sets `useGlass` on boxes that asked for a background, so dropping
+            // the colour here made every glassy box collapse to the same neutral
+            // grey: selected/active chips became indistinguishable from unselected
+            // siblings, and semantic fills (warning, accent, avatar variants) all
+            // rendered identically. Android ignores `glass:` and keeps its solid
+            // fill, so the same app stayed legible there and not here.
             //
             // `Glass.clear` (vs `Glass.regular`) — the surface is noticeably
             // more transparent; what's behind shows through. Card-style
             // surfaces look "floating" rather than "frosted". Switch to
             // `.regular` if a tinted, opaque-leaning glass is wanted.
             if #available(iOS 26.0, *) {
-                self.glassEffect(.clear, in: shape)
+                // `Glass.tint` takes an Optional, so a box whose background failed
+                // to resolve still gets plain untinted clear glass.
+                self.glassEffect(.clear.tint(fill), in: shape)
             } else {
+                // Pre-26 approximation. A material blurs whatever is behind it, so
+                // the fill goes *behind* the material (a later `.background` sits
+                // further back) and reads as frosted colour rather than being
+                // painted over by the grey.
                 self.background(.ultraThinMaterial, in: shape)
+                    .background(fill ?? Color.clear, in: shape)
             }
         } else {
             // `in: shape` so the solid fill is clipped to the corner radius — without
             // it the fill is a plain rectangle and only the (separately-stroked)
             // border looks rounded, leaving square fill corners on non-glass boxes.
-            self.background(node.backgroundColor.map { Color($0) } ?? Color.clear, in: shape)
+            self.background(fill ?? Color.clear, in: shape)
         }
     }
 }
