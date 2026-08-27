@@ -8,6 +8,43 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.7.29] - 2026-08-27
+
+### Added
+- **`Mob.UI.sheet/2`** — a native modal bottom sheet (iOS `.sheet`,
+  Android Material 3 `ModalBottomSheet`) that composes ordinary Mob
+  nodes as content. `:detents` (`[:medium, :large]` subset), `:on_dismiss`
+  (delivered as `{:dismiss, tag}`, exactly once), `:background`, `:scrim`,
+  `:corner_radius`, and a custom drag indicator (`:drag_indicator_color`/
+  `_width`/`_height`/`_rail_height`, all four required together or omit
+  all four). Per-platform `:ios`/`:android` style overrides via the
+  existing platform-block mechanism. See
+  `decisions/2026-08-26-native-sheet-primitive.md` for the presentation-
+  state-via-identity design, the background/corner_radius
+  double-application avoidance on both platforms, and the documented iOS
+  scrim-opacity limitation (native `.sheet` doesn't expose dimming-layer
+  opacity — Android applies `:scrim` exactly, iOS stays system-black).
+
+### Fixed
+- Drag-indicator completeness validation (all four geometry props
+  together or none) is now checked against `:ios`/`:android` overrides
+  merged with the base props, not just the base props alone — a partial
+  override no longer silently passes validation and renders the system
+  default indicator instead of the requested one.
+- Color props that resolve to neither the active theme nor the base
+  palette now log a warning instead of silently passing an unresolved
+  atom through to native (previously a likely typo'd theme token would
+  render as an invisible, fully-transparent color with no signal at all).
+- iOS: sheet content now receives its `:padding` (was dropped).
+- iOS: `corner_radius: 0` on a sheet is no longer indistinguishable from
+  "not set" — square corners are now representable and distinct from the
+  system default.
+- iOS: a sheet's `:id` no longer reports a 0x0 frame via
+  `Mob.Test`/`element_frames` — its switch-case view is an invisible
+  presentation anchor, not the sheet's real on-screen content, so frame
+  tracking is skipped there rather than publishing a value known to be
+  wrong.
+
 ## [0.7.28] - 2026-08-26
 
 ### Fixed
