@@ -1127,8 +1127,7 @@ defmodule Mob.Test do
   scrolled-away `lazy_list` row still reports a position there, and `tap_id/2`
   will happily tap it — so on Android, treat a frame for content that may have
   scrolled or switched tabs as unverified, and confirm against `render_tree/1`
-  or a screenshot before acting on it. Bringing Android to parity is tracked
-  separately.
+  or a screenshot before acting on it. Bringing Android to parity is MOB-105.
 
   A frame is a *last known* position, not a synchronous read: it's recorded as
   the element lays out. After a render that moves an element, there's a brief

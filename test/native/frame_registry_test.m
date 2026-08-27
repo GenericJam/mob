@@ -161,12 +161,17 @@ int main(void) {
 
         // 4. The shared-:id nav case — the one tree membership alone can't
         //    reject, because the id IS in the new tree. The outgoing screen's
-        //    generation is superseded, so its slide-out writes are refused and
-        //    its .onDisappear (seq 0) is a no-op.
+        //    generation is superseded, so its slide-out writes are refused.
+        //
+        //    Note what protects the incoming entry here: the tracker RETAINS
+        //    its last successful seq rather than storing the refusal (see
+        //    MobFrameTracker.record — `if written != 0`), so its teardown
+        //    calls unregister with that old token, which loses the
+        //    compare-and-delete against the incoming screen's newer seq.
         reset();
         mob_adopt_frame_ids([NSSet setWithArray:@[ @"save" ]]);
         uint64_t oldGen = mob_frame_generation();
-        mob_register_frame("save", oldGen, 24, 720, 327, 48);
+        uint64_t outgoingSeq = mob_register_frame("save", oldGen, 24, 720, 327, 48);
         mob_bump_frame_generation();  // nav push: non-"none" transition
         uint64_t newGen = mob_frame_generation();
         mob_adopt_frame_ids([NSSet setWithArray:@[ @"save" ]]);  // still present
@@ -175,8 +180,40 @@ int main(void) {
         uint64_t lateSeq = mob_register_frame("save", oldGen, -393, 720, 327, 48);
         check(lateSeq == 0, "MOB-103: outgoing screen's slide-out write is refused (shared id)");
         check(yOf("save") == 640.0, "the incoming screen's frame survives the animation");
-        mob_unregister_frame("save", lateSeq);  // lateSeq == 0 → no-op
-        check(present("save"), "MOB-103: refused write leaves seq 0, so disappear can't delete");
+        mob_unregister_frame("save", outgoingSeq);  // retained token, not the refusal
+        check(present("save"), "MOB-103: stale token loses the compare-and-delete");
+        check(yOf("save") == 640.0, "...and the incoming frame is untouched");
+
+        // 4b. The case the retained-token fix actually exists for: the
+        //     outgoing screen's writes are refused AND the incoming screen's
+        //     element with the same :id never lays out (a lazy row below the
+        //     fold), so nothing ever claims the id with a newer seq. Storing
+        //     the refusal (seq 0) here would make the tracker's own teardown a
+        //     no-op — mob_unregister_frame ignores 0 — and the id stays in the
+        //     tree so the purge keeps it too. The old screen's frame would
+        //     survive forever and tap_id would tap its coordinates.
+        //
+        //     This is the check that fails if MobFrameTracker.record goes back
+        //     to assigning box.seq unconditionally.
+        reset();
+        mob_adopt_frame_ids([NSSet setWithArray:@[ @"save" ]]);
+        uint64_t g4b = mob_frame_generation();
+        uint64_t heldSeq = mob_register_frame("save", g4b, 24, 720, 327, 48);
+        mob_bump_frame_generation();
+        mob_adopt_frame_ids([NSSet setWithArray:@[ @"save" ]]);  // id still in tree
+        check(mob_register_frame("save", g4b, -393, 720, 327, 48) == 0,
+              "outgoing slide-out write refused (nothing else claimed the id)");
+        //     Both caller behaviours are modelled side by side, because the
+        //     difference lives in Swift (MobFrameTracker.record) and this
+        //     harness only has the C half: the pre-fix caller stored the
+        //     refusal and passed 0, the fixed one passes its retained token.
+        mob_unregister_frame("save", 0);  // pre-fix caller: stored the refusal
+        check(present("save"),
+              "pre-fix caller: refusal token disables cleanup — entry survives (the bug)");
+
+        mob_unregister_frame("save", heldSeq);  // fixed caller: retained token
+        check(!present("save"),
+              "MOB-103: retained token still deletes when no one else claimed the id");
 
         // 5. MOB-102 must not regress: a static, unmoved element survives an
         //    unrelated re-render without re-registering. An ordinary re-render
