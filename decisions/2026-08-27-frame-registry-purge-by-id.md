@@ -1,7 +1,10 @@
 # iOS element_frames registry: purge-by-id, not wipe-and-repopulate
 
 - Date: 2026-08-27
-- Status: accepted
+- Status: accepted; extended by `2026-08-27-frame-registry-liveness.md`
+  (the decision below stands, but its "nothing to race" claim is overstated —
+  see that file for the teardown case it misses, and for the tree-present
+  but not-laid-out elements purge-by-id can't see)
 
 ## Context
 
