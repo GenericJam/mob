@@ -97,9 +97,63 @@ judgement (a test asserting `1 + 1 == 2` technically exists, an
 empty `@doc ""` technically has docs). But they're table stakes for
 any commit that warrants a version bump.
 
+## Review gate — on by default
+
+**Every release gets a code review of everything that landed since the
+last published version, before you publish.** Applies to `mob`,
+`mob_dev`, and `mob_new`. Skip it only when the user explicitly says
+to — not because the changes look small, not because each PR was
+already reviewed on its way in.
+
+The unit is the **release**, not the PR. What a user pulls from Hex is
+the accumulated diff since the last published version, and that diff
+is rarely the same shape as any individual PR that went into it.
+Per-PR review misses exactly the things that only show up at the seam:
+a fix that lands on top of an earlier one and partly undoes it, two
+PRs that are each fine but interact badly, and — the one that actually
+bit us — work that merges *after* a version bump and therefore isn't
+in the release the bump produced.
+
+Scope the review at the diff that's shipping:
+
+```bash
+# what a user gets, vs. what's currently published
+git diff v<last-published>..HEAD
+git log --oneline v<last-published>..HEAD
+```
+
+Findings block the release unless they're explicitly accepted; record
+an accepted one in `decisions/` rather than leaving it in a review
+thread nobody re-reads.
+
+### Version sanity — check before you bump
+
+Two failures this gate exists to catch, both observed:
+
+1. **The version you're about to publish is already published.**
+   `mix hex.info <pkg>` shows the latest release. If it already equals
+   the version in `mix.exs`, the bump never happened for whatever
+   landed since — bump again.
+2. **Work merged after the bump commit isn't in that release.** A
+   version bump captures the tree at that commit. Anything merged on
+   top ships in the *next* release, not the one the bump triggered.
+   Confirm with `git log --oneline <bump-commit>..HEAD` that nothing
+   you intend to ship is sitting there unreleased.
+
+Cross-repo releases have a third: `mob` and `mob_new` ship in
+lockstep for anything spanning a runtime change and its generator
+template. Publishing one without the other leaves generated apps
+mismatched against the library they depend on.
+
 ## Step-by-step
 
-### 1. Update `CHANGELOG.md`
+### 1. Review what's shipping
+
+Run the review gate above against `v<last-published>..HEAD`, and the
+version-sanity checks. Everything below assumes that came back clean
+or with findings explicitly accepted.
+
+### 2. Update `CHANGELOG.md`
 
 Add a new `## [X.Y.Z]` section at the top (below the `---`
 separator), with `### Added` / `### Changed` / `### Fixed` /
@@ -107,12 +161,12 @@ separator), with `### Added` / `### Changed` / `### Fixed` /
 this section verbatim into the GitHub Release body, so write it for a
 reader who hasn't been in the room.
 
-### 2. Bump `mix.exs`
+### 3. Bump `mix.exs`
 
 Edit the `version: "X.Y.Z"` line in the `project/0` keyword list.
 Nothing else moves the workflow trigger.
 
-### 3. Run the local preflight
+### 4. Run the local preflight
 
 ```bash
 mix format --check-formatted
@@ -137,7 +191,7 @@ Per-repo extras:
   when running from a worktree; the path resolver looks for `mob`
   alongside the project.
 
-### 4. Commit + push
+### 5. Commit + push
 
 One commit per release. The commit message convention:
 
@@ -150,7 +204,7 @@ Bump to X.Y.Z — <one-line description>
 Push to `master`. The release workflow fires automatically because
 `mix.exs` changed.
 
-### 5. Watch the workflow
+### 6. Watch the workflow
 
 ```bash
 gh run watch -R GenericJam/<repo>

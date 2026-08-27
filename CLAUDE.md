@@ -150,6 +150,15 @@ trigger model (mix.exs is the source of truth), version-bump rules
 (patch default, always ask, never auto-bump), CHANGELOG conventions,
 local preflight, and the per-step idempotency of `release.yml`.
 
+> **Review gate is on by default.** Everything that landed since the
+> last published version gets a code review *before* you publish —
+> scoped at `v<last-published>..HEAD`, not per-PR, because the diff a
+> user pulls from Hex is rarely the shape of any one PR — plus the
+> version-sanity checks (is this version already published? did
+> anything merge after the bump commit and therefore miss the
+> release?). Skip only if the user says so. See RELEASE.md →
+> "Review gate". This governs `mob`, `mob_dev`, and `mob_new` alike.
+
 **Pre-push hook**: `.githooks/pre-push` runs `mix format
 --check-formatted`, `mix credo --strict`, and `mix compile
 --warnings-as-errors` on every push (~5-10 s). When the push touches
