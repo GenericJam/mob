@@ -683,10 +683,22 @@ private struct MobBox: View {
                         lineWidth: node.borderWidth)
                 .allowsHitTesting(false)
         )
-        .ifLet(node.onTap) { view, tap in
+        .ifLet(node.disabled ? nil : node.onTap) { view, tap in
             view.contentShape(Rectangle()).onTapGesture { tap() }
         }
         .mobGestures(node)
+        .ifLet(node.accessibilityLabel) { view, label in
+            view
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(label)
+        }
+        .ifLet(node.accessibilityRole == "button" ? () : nil) { view, _ in
+            view.accessibilityAddTraits(.isButton)
+        }
+        .ifLet(node.disabled ? () : nil) { view, _ in
+            view.accessibilityAddTraits(.isNotEnabled)
+        }
+        .allowsHitTesting(!node.disabled)
         // (offset is applied uniformly by MobNodeView's body; not here)
     }
 }
@@ -1416,10 +1428,31 @@ private struct MobSlider: View {
 // both fall out for free: a rerender with the sheet still present reuses
 // this state; a rerender without it tears the view (and its presentation)
 // down entirely.
+private struct MobSheetContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 1
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private struct MobAvailableSheetHeightKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 1
+}
+
+private extension EnvironmentValues {
+    var mobAvailableSheetHeight: CGFloat {
+        get { self[MobAvailableSheetHeightKey.self] }
+        set { self[MobAvailableSheetHeightKey.self] = newValue }
+    }
+}
+
 private struct MobSheetView: View {
     let node: MobNode
+    @Environment(\.mobAvailableSheetHeight) private var availableHeight
     @State private var isPresented = true
     @State private var dismissSent = false
+    @State private var intrinsicContentHeight: CGFloat = 1
 
     var body: some View {
         Color.clear
@@ -1435,8 +1468,23 @@ private struct MobSheetView: View {
         node.onDismiss?()
     }
 
-    @ViewBuilder
-    private var sheetContent: some View {
+    private var contentDetent: [String: Any]? {
+        node.sheetDetents?.compactMap { $0 as? [String: Any] }
+            .first { $0["type"] as? String == "content" }
+    }
+
+    private var maximumHeight: CGFloat {
+        guard let configured = contentDetent?["max_height"] as? NSNumber else {
+            return availableHeight
+        }
+        return min(CGFloat(truncating: configured), availableHeight)
+    }
+
+    private var limitedContentHeight: CGFloat {
+        max(1, min(intrinsicContentHeight, maximumHeight))
+    }
+
+    private var sheetBody: some View {
         VStack(spacing: 0) {
             ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
                 MobNodeView(node: child)
@@ -1444,6 +1492,35 @@ private struct MobSheetView: View {
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(node.paddingEdgeInsets)
+    }
+
+    @ViewBuilder
+    private var sheetContent: some View {
+        Group {
+            if contentDetent != nil {
+                ScrollView(.vertical) {
+                    sheetBody
+                        .fixedSize(horizontal: false, vertical: true)
+                        .background {
+                            GeometryReader { geometry in
+                                Color.clear.preference(
+                                    key: MobSheetContentHeightKey.self,
+                                    value: geometry.size.height
+                                )
+                            }
+                        }
+                }
+                .frame(maxHeight: maximumHeight)
+                .onPreferenceChange(MobSheetContentHeightKey.self) { measuredHeight in
+                    let intrinsicHeight = max(1, measuredHeight)
+                    if abs(intrinsicHeight - intrinsicContentHeight) > 0.5 {
+                        intrinsicContentHeight = intrinsicHeight
+                    }
+                }
+            } else {
+                sheetBody
+            }
+        }
         // Screen readers should treat the sheet as a self-contained modal —
         // VoiceOver focus stays inside it until dismissed, matching
         // .presentationDetents/.sheet's own system-modal behavior.
@@ -1470,10 +1547,14 @@ private struct MobSheetView: View {
     }
 
     private var detentSet: Set<PresentationDetent> {
-        let requested = node.sheetDetents ?? ["medium", "large"]
+        if contentDetent != nil {
+            return [.height(limitedContentHeight)]
+        }
+
+        let builtInDetents = node.sheetDetents?.compactMap { $0 as? String } ?? []
         var resolved: Set<PresentationDetent> = []
-        if requested.contains("medium") { resolved.insert(.medium) }
-        if requested.contains("large") { resolved.insert(.large) }
+        if builtInDetents.contains("medium") { resolved.insert(.medium) }
+        if builtInDetents.contains("large") { resolved.insert(.large) }
         // Mob.UI.sheet/2 already validates :detents is a nonempty subset of
         // [:medium, :large] — this fallback only matters for a hand-built
         // node map that skipped that validation (e.g. `~MOB` sigil literal).
@@ -1555,6 +1636,7 @@ public struct MobRootView: View {
     // SwiftUI observation, which doesn't carry the animation context and
     // produces a default crossfade instead of the .move transition).
     @State private var currentNavVersion: Int = 0
+    @State private var availableSheetHeight: CGFloat = 1
 
     public init() {}
 
@@ -1601,6 +1683,14 @@ public struct MobRootView: View {
                 .transition(.opacity)
             }
         }
+        .background {
+            GeometryReader { geometry in
+                Color.clear.onChange(of: geometry.size.height, initial: true) { _, height in
+                    availableSheetHeight = max(1, height * 0.9)
+                }
+            }
+        }
+        .environment(\.mobAvailableSheetHeight, availableSheetHeight)
         .ignoresSafeArea(.container, edges: [.bottom, .horizontal])
         .onChange(of: model.rootVersion) {
             let t = model.transition

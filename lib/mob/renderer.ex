@@ -72,7 +72,7 @@ defmodule Mob.Renderer do
 
   require Logger
 
-  alias Mob.{Style, Theme}
+  alias Mob.{Style, Theme, UI}
 
   @default_nif :mob_nif
 
@@ -370,6 +370,12 @@ defmodule Mob.Renderer do
       {:on_dismiss, {pid, tag}} when is_pid(pid) ->
         [{"on_dismiss", nif.register_tap({pid, tag})}]
 
+      {:detents, detents} ->
+        encoded_detents =
+          detents |> UI.normalize_sheet_detents!() |> Enum.map(&encode_sheet_detent/1)
+
+        [{"detents", encoded_detents}]
+
       # IME composition — fires for languages with multi-stage input (CJK,
       # Korean, Vietnamese, accent input). Phase atom is :began | :updating
       # | :committed | :cancelled. Apps that need commit-only behaviour
@@ -661,6 +667,9 @@ defmodule Mob.Renderer do
     do: Atom.to_string(v)
 
   defp encode_native_value(v), do: v
+
+  defp encode_sheet_detent(%{} = detent), do: encode_native_config(detent)
+  defp encode_sheet_detent(detent) when is_atom(detent), do: Atom.to_string(detent)
 
   # Encode one Mob.Canvas op map for the wire. The `:op` atom becomes a
   # string ("line"/"circle"/...) so the native dispatch is a string switch.
