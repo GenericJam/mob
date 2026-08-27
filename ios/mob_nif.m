@@ -2000,18 +2000,15 @@ NSArray<NSString *> *mob_font_fallback(void) {
     return g_font_fallback ?: @[];
 }
 
-static NSMutableDictionary *mob_frame_registry(void); // both defined with the
-static void mob_clear_frames(void);                   // element frame registry below
+static NSMutableDictionary *mob_frame_registry(void);     // both defined with the
+static void mob_purge_frames_except(NSSet<NSString *> *); // element frame registry below
+static NSSet<NSString *> *mob_collect_frame_ids(MobNode *);
 
 static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifBinary bin;
     if (!enif_inspect_binary(env, argv[0], &bin) &&
         !enif_inspect_iolist_as_binary(env, argv[0], &bin))
         return enif_make_badarg(env);
-
-    // New render tree — drop stale element frames; MobFrameTracker repopulates
-    // on the next layout pass.
-    mob_clear_frames();
 
     NSData *data = [NSData dataWithBytes:bin.data length:bin.size];
     NSError *err = nil;
@@ -2024,6 +2021,17 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     MobNode *node = mob_node_from_dict((NSDictionary *)json);
     if (!node)
         return enif_make_atom(env, "error");
+
+    // Purge only the ids absent from this tree, rather than wiping the whole
+    // registry and relying on MobFrameTracker to repopulate every surviving
+    // element. A wipe-then-repopulate design raced SwiftUI's own teardown:
+    // an element being removed can still get one more GeometryReader layout
+    // pass as part of that removal, so a repopulation trigger tied to "did I
+    // just get (re)rendered" fires for outgoing views too, right as they're
+    // disappearing, and their stale frame survives. Purging by id instead
+    // never touches a surviving element's existing entry (nothing to race),
+    // and correctly drops one that's genuinely gone from the new tree.
+    mob_purge_frames_except(mob_collect_frame_ids(node));
 
     // Snapshot and reset the transition
     enif_mutex_lock(tap_mutex);
@@ -6404,11 +6412,36 @@ void mob_register_frame(const char *id, double x, double y, double w, double h) 
     }
 }
 
-// Drop stale frames when the render tree changes (called from nif_set_root).
-static void mob_clear_frames(void) {
+// Recursively collect every :id present in a freshly-parsed tree, so
+// nif_set_root can purge just the registry entries that fell out of the new
+// tree instead of wiping everything (see mob_purge_frames_except below for
+// why: a wipe-everything + MobFrameTracker-repopulates design races
+// SwiftUI's own removal pass for an outgoing element).
+static void mob_collect_frame_ids_into(MobNode *node, NSMutableSet<NSString *> *ids) {
+    if (node.nativeViewId)
+        [ids addObject:node.nativeViewId];
+    for (MobNode *child in node.children)
+        mob_collect_frame_ids_into(child, ids);
+}
+
+static NSSet<NSString *> *mob_collect_frame_ids(MobNode *root) {
+    NSMutableSet<NSString *> *ids = [NSMutableSet set];
+    mob_collect_frame_ids_into(root, ids);
+    return ids;
+}
+
+// Remove any registered frame whose id isn't in the incoming tree (called
+// from nif_set_root with that tree's live id set). A surviving element's
+// entry is never touched here — no race, no dependency on it re-registering
+// itself — only genuinely-removed ids are dropped.
+static void mob_purge_frames_except(NSSet<NSString *> *liveIds) {
     NSMutableDictionary *reg = mob_frame_registry();
     @synchronized(reg) {
-        [reg removeAllObjects];
+        NSMutableArray<NSString *> *stale = [NSMutableArray array];
+        for (NSString *key in reg)
+            if (![liveIds containsObject:key])
+                [stale addObject:key];
+        [reg removeObjectsForKeys:stale];
     }
 }
 
