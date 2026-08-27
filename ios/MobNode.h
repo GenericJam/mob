@@ -41,6 +41,7 @@ typedef NS_ENUM(NSInteger, MobNodeType) {
     MobNodeTypeIcon,
     MobNodeTypeCanvas,
     MobNodeTypeGpuView,
+    MobNodeTypeSheet,
 };
 
 NS_ASSUME_NONNULL_BEGIN
@@ -260,6 +261,23 @@ NS_ASSUME_NONNULL_BEGIN
 // (legacy — iteration order undefined). See MobGpuView.swift for the
 // expected packing semantics per element.
 @property(nonatomic, strong, nullable) id gpuUniforms;
+
+// Sheet — native modal bottom sheet. `backgroundColor` and `cornerRadius`
+// (declared above, shared by every node type) double as the sheet's own
+// container background / top-corner radius, matching how every other prop
+// name is shared across types. `sheetDetents` is the raw "medium"/"large"
+// string list from Mob.Renderer — mapped to PresentationDetent by
+// MobSheetView (see MobRootView.swift), not here, so this header stays
+// framework-agnostic. Indicator geometry defaults to -1 (unset — use the
+// system default indicator); Mob.UI.sheet's validation guarantees all four
+// arrive together or not at all, so checking any one for >= 0 is enough to
+// know whether a complete custom indicator was supplied.
+@property(nonatomic, strong, nullable) NSArray<NSString *> *sheetDetents;
+@property(nonatomic, strong, nullable) UIColor *dragIndicatorColor;
+@property(nonatomic) CGFloat dragIndicatorWidth;
+@property(nonatomic) CGFloat dragIndicatorHeight;
+@property(nonatomic) CGFloat dragIndicatorRailHeight;
+@property(nonatomic, copy, nullable) void (^onDismiss)(void);
 
 // Children
 @property(nonatomic, strong, nonnull) NSMutableArray<MobNode *> *children;

@@ -173,7 +173,7 @@ defmodule Mob.Renderer do
   }
 
   # Props whose atom values are resolved as colors
-  @color_props ~w(background text_color border_color color placeholder_color)a
+  @color_props ~w(background text_color border_color color placeholder_color scrim drag_indicator_color)a
   # Props whose atom values are resolved as spacing or radius tokens
   @spacing_props ~w(padding padding_top padding_right padding_bottom padding_left gap)a
   @radius_props ~w(corner_radius)a
@@ -352,6 +352,12 @@ defmodule Mob.Renderer do
 
       {:on_submit, {pid, tag}} when is_pid(pid) ->
         [{"on_submit", nif.register_tap({pid, tag})}]
+
+      # Sheet dismissal — swipe-down, back gesture, or outside tap. Native
+      # fires this exactly once per presentation (see ios/MobRootView.swift
+      # and mob_new's generated MobSheet composable).
+      {:on_dismiss, {pid, tag}} when is_pid(pid) ->
+        [{"on_dismiss", nif.register_tap({pid, tag})}]
 
       # IME composition — fires for languages with multi-stage input (CJK,
       # Korean, Vietnamese, accent input). Phase atom is :began | :updating

@@ -225,6 +225,9 @@ static void mob_send_submit(int handle) {
 static void mob_send_select(int handle) {
     mob_send_event(handle, "select");
 }
+static void mob_send_dismiss(int handle) {
+    mob_send_event(handle, "dismiss");
+}
 
 // IME composition. Sends {compose, tag, %{text: ..., phase: ...}} where
 // phase is one of began/updating/committed/cancelled. Called from the
@@ -646,6 +649,8 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         node.nodeType = MobNodeTypeCanvas;
     else if ([type isEqualToString:@"gpu_view"])
         node.nodeType = MobNodeTypeGpuView;
+    else if ([type isEqualToString:@"sheet"])
+        node.nodeType = MobNodeTypeSheet;
 
     NSDictionary *props = dict[@"props"];
     if ([props isKindOfClass:[NSDictionary class]]) {
@@ -1127,6 +1132,38 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             if ([uniforms isKindOfClass:[NSArray class]] ||
                 [uniforms isKindOfClass:[NSDictionary class]])
                 node.gpuUniforms = uniforms;
+        }
+
+        // sheet props. background/corner_radius are read generically above
+        // (shared prop names across every node type) — MobSheetView reuses
+        // node.backgroundColor/node.cornerRadius directly for the sheet's
+        // own container styling, see MobRootView.swift.
+        if (node.nodeType == MobNodeTypeSheet) {
+            id detents = props[@"detents"];
+            if ([detents isKindOfClass:[NSArray class]])
+                node.sheetDetents = detents;
+
+            id indicatorColor = props[@"drag_indicator_color"];
+            if (indicatorColor)
+                node.dragIndicatorColor = color_from_argb((long)[indicatorColor longLongValue]);
+
+            id indicatorWidth = props[@"drag_indicator_width"];
+            if (indicatorWidth)
+                node.dragIndicatorWidth = [indicatorWidth doubleValue];
+            id indicatorHeight = props[@"drag_indicator_height"];
+            if (indicatorHeight)
+                node.dragIndicatorHeight = [indicatorHeight doubleValue];
+            id indicatorRailHeight = props[@"drag_indicator_rail_height"];
+            if (indicatorRailHeight)
+                node.dragIndicatorRailHeight = [indicatorRailHeight doubleValue];
+
+            id onDismiss = props[@"on_dismiss"];
+            if (onDismiss && [onDismiss isKindOfClass:[NSNumber class]]) {
+                int handle = [onDismiss intValue];
+                node.onDismiss = ^{
+                  mob_send_dismiss(handle);
+                };
+            }
         }
 
         // webview props
