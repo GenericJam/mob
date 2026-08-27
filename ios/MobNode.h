@@ -235,8 +235,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, nullable)
     NSDictionary *nativeViewProps; // full props dict forwarded to the factory
 
-// Accessibility — set from the tap tag atom name; read by XCTest / ui_describe_all
+// Accessibility — identifiers support test addressing; labels and disabled
+// state describe composite controls such as tappable boxes.
 @property(nonatomic, copy, nullable) NSString *accessibilityId;
+@property(nonatomic, copy, nullable) NSString *accessibilityLabel;
+@property(nonatomic, copy, nullable) NSString *accessibilityRole;
+@property(nonatomic) BOOL disabled;
 
 // Icon — logical name resolved to an SF Symbol on iOS / Material Symbol
 // on Android. textSize and textColor control glyph sizing + tint.
@@ -271,7 +275,7 @@ NS_ASSUME_NONNULL_BEGIN
 // system-default box in practice), but a sheet's corners are visibly
 // square-vs-rounded, so `sheetCornerRadius` gets its own -1 sentinel
 // (unset — use the system default) instead. `sheetDetents` is the raw
-// "medium"/"large" string list from Mob.Renderer — mapped to
+// built-in strings or content-detent dictionaries from Mob.Renderer — mapped to
 // PresentationDetent by MobSheetView (see MobRootView.swift), not here, so
 // this header stays framework-agnostic. Indicator geometry defaults to -1
 // (unset — use the system default indicator); Mob.UI.sheet's validation
@@ -279,7 +283,7 @@ NS_ASSUME_NONNULL_BEGIN
 // for >= 0 is enough to know whether a complete custom indicator was
 // supplied.
 @property(nonatomic) CGFloat sheetCornerRadius;
-@property(nonatomic, strong, nullable) NSArray<NSString *> *sheetDetents;
+@property(nonatomic, strong, nullable) NSArray *sheetDetents;
 @property(nonatomic, strong, nullable) UIColor *dragIndicatorColor;
 @property(nonatomic) CGFloat dragIndicatorWidth;
 @property(nonatomic) CGFloat dragIndicatorHeight;

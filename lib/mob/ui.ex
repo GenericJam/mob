@@ -281,9 +281,12 @@ defmodule Mob.UI do
 
   ## Props
 
-    * `:detents` — nonempty, duplicate-free subset of `[:medium, :large]`.
-      Defaults to `[:medium, :large]`. `:medium` alone rejects expansion
-      to full height; `:large` alone skips the half-height stop.
+    * `:detents` — nonempty, duplicate-free subset of `[:medium, :large]`,
+      or the exclusive content-height detent `[:content]` /
+      `[{:content, max_height: number}]`. Defaults to `[:medium, :large]`.
+      `:medium` alone rejects expansion to full height; `:large` alone skips
+      the half-height stop. A content detent wraps intrinsic content and caps
+      overflow in an internally scrolling body.
     * `:on_dismiss` — `{pid, tag}`, delivered as `handle_info({:dismiss, tag}, socket)`
       exactly once when the sheet is dismissed (swipe-down, back gesture,
       or outside tap) — the same `{atom, tag}` wire shape as `on_focus`,
@@ -337,8 +340,7 @@ defmodule Mob.UI do
   def sheet(children, opts) when is_list(opts), do: sheet(children, Map.new(opts))
 
   def sheet(children, %{} = opts) do
-    detents = Map.get(opts, :detents, @sheet_detents)
-    validate_detents!(detents)
+    detents = opts |> Map.get(:detents, @sheet_detents) |> normalize_sheet_detents!()
     validate_on_dismiss!(Map.get(opts, :on_dismiss))
     validate_style!(opts)
     validate_platform_override!(opts, :ios)
@@ -352,22 +354,46 @@ defmodule Mob.UI do
     }
   end
 
-  defp validate_detents!(detents) do
-    unless is_list(detents) and detents != [] do
-      raise ArgumentError,
-            "Mob.UI.sheet :detents must be a nonempty list, got: #{inspect(detents)}"
-    end
+  @doc false
+  @spec normalize_sheet_detents!(term()) :: [atom() | map()]
+  def normalize_sheet_detents!([:content]), do: [%{type: :content}]
 
-    unless Enum.uniq(detents) == detents do
-      raise ArgumentError,
-            "Mob.UI.sheet :detents must not contain duplicates, got: #{inspect(detents)}"
-    end
+  def normalize_sheet_detents!([{:content, options}]) when is_list(options) do
+    if Keyword.keyword?(options) do
+      case Keyword.fetch(options, :max_height) do
+        {:ok, maximum} when is_number(maximum) and maximum > 0 and length(options) == 1 ->
+          [%{type: :content, max_height: maximum}]
 
-    unless Enum.all?(detents, &(&1 in @sheet_detents)) do
-      raise ArgumentError,
-            "Mob.UI.sheet :detents must be a subset of #{inspect(@sheet_detents)}, " <>
-              "got: #{inspect(detents)}"
+        _other ->
+          invalid_sheet_detents!()
+      end
+    else
+      invalid_sheet_detents!()
     end
+  end
+
+  def normalize_sheet_detents!([%{type: :content} = detent]) when map_size(detent) == 1,
+    do: [detent]
+
+  def normalize_sheet_detents!([%{type: :content, max_height: maximum} = detent])
+      when map_size(detent) == 2 and is_number(maximum) and maximum > 0,
+      do: [detent]
+
+  def normalize_sheet_detents!(detents) when is_list(detents) and detents != [] do
+    if Enum.all?(detents, &(&1 in @sheet_detents)) and
+         length(detents) == length(Enum.uniq(detents)) do
+      detents
+    else
+      invalid_sheet_detents!()
+    end
+  end
+
+  def normalize_sheet_detents!(_detents), do: invalid_sheet_detents!()
+
+  defp invalid_sheet_detents! do
+    raise ArgumentError,
+          "Mob.UI.sheet :detents must be unique :medium/:large values or one " <>
+            ":content detent with an optional positive :max_height"
   end
 
   defp validate_on_dismiss!(nil), do: :ok
