@@ -255,4 +255,238 @@ defmodule Mob.UI do
       children: []
     }
   end
+
+  @sheet_detents [:medium, :large]
+  @sheet_color_props [:background, :scrim, :drag_indicator_color]
+  @sheet_dimension_props [
+    :drag_indicator_width,
+    :drag_indicator_height,
+    :drag_indicator_rail_height
+  ]
+  @sheet_indicator_props [:drag_indicator_color | @sheet_dimension_props]
+  @sheet_style_props [:corner_radius | @sheet_color_props ++ @sheet_dimension_props]
+
+  @doc """
+  Returns a `:sheet` node — a native modal bottom sheet (iOS `.sheet`,
+  Android Material 3 `ModalBottomSheet`) that composes ordinary Mob nodes
+  as its content.
+
+  `children` is one child node or a list of them.
+
+  ## Props
+
+    * `:detents` — nonempty, duplicate-free subset of `[:medium, :large]`.
+      Defaults to `[:medium, :large]`. `:medium` alone rejects expansion
+      to full height; `:large` alone skips the half-height stop.
+    * `:on_dismiss` — `{pid, tag}`, delivered as `handle_info({:tap, tag}, socket)`
+      exactly once when the sheet is dismissed (swipe-down, back gesture,
+      or outside tap), matching the tap-event convention used elsewhere
+      in `Mob.UI`.
+    * `:background` — container color: a theme token atom or a
+      `0x00000000..0xFFFFFFFF` ARGB integer.
+    * `:scrim` — dimming-layer color, same value shape as `:background`.
+      **iOS cannot honor this exactly** — see the note below.
+    * `:corner_radius` — top-corner radius: a theme radius token atom or
+      a non-negative number.
+    * `:drag_indicator_color`, `:drag_indicator_width`,
+      `:drag_indicator_height`, `:drag_indicator_rail_height` — a custom
+      drag-indicator capsule. All four are required together, or omit
+      all four for the platform default indicator. Width and height must
+      be positive; rail height must be at least the indicator height (the
+      rail is the invisible touch target the visible capsule sits inside).
+    * `:ios` / `:android` — per-platform overrides. Each accepts only the
+      style keys above (not `:detents` or `:on_dismiss`); see `Mob.Renderer`'s
+      "Platform blocks" section for the general override mechanism.
+
+  ## Example
+
+      Mob.UI.sheet(
+        Mob.UI.text(text: "Hello from the sheet"),
+        detents: [:medium, :large],
+        on_dismiss: {self(), :dismiss_sheet},
+        background: :surface,
+        scrim: 0x33000000,
+        corner_radius: 10,
+        drag_indicator_color: :muted,
+        drag_indicator_width: 36,
+        drag_indicator_height: 5,
+        drag_indicator_rail_height: 22,
+        ios: %{corner_radius: 10},
+        android: %{corner_radius: 28}
+      )
+
+  ## Platform limitation: scrim opacity on iOS
+
+  Android applies `:scrim` exactly — the sheet's dimming layer is drawn
+  with the requested color, alpha included. iOS's `.sheet` presentation
+  owns its dimming layer and does not expose an API to configure its
+  opacity; supported SwiftUI APIs leave it system-black at a fixed,
+  non-configurable alpha. There is no workaround that doesn't involve
+  private view-hierarchy manipulation, which this framework does not do.
+  If your design depends on exact scrim opacity, treat it as
+  Android-only and expect iOS to look slightly different.
+  """
+  @spec sheet(map() | [map()], keyword() | map()) :: map()
+  def sheet(children, opts \\ [])
+  def sheet(children, opts) when is_list(opts), do: sheet(children, Map.new(opts))
+
+  def sheet(children, %{} = opts) do
+    detents = Map.get(opts, :detents, @sheet_detents)
+    validate_detents!(detents)
+    validate_on_dismiss!(Map.get(opts, :on_dismiss))
+    validate_style!(opts)
+    validate_platform_override!(opts, :ios)
+    validate_platform_override!(opts, :android)
+    validate_indicator_completeness!(opts)
+
+    %{
+      type: :sheet,
+      props: Map.put(opts, :detents, detents),
+      children: List.wrap(children)
+    }
+  end
+
+  defp validate_detents!(detents) do
+    unless is_list(detents) and detents != [] do
+      raise ArgumentError,
+            "Mob.UI.sheet :detents must be a nonempty list, got: #{inspect(detents)}"
+    end
+
+    unless Enum.uniq(detents) == detents do
+      raise ArgumentError,
+            "Mob.UI.sheet :detents must not contain duplicates, got: #{inspect(detents)}"
+    end
+
+    unless Enum.all?(detents, &(&1 in @sheet_detents)) do
+      raise ArgumentError,
+            "Mob.UI.sheet :detents must be a subset of #{inspect(@sheet_detents)}, " <>
+              "got: #{inspect(detents)}"
+    end
+  end
+
+  defp validate_on_dismiss!(nil), do: :ok
+  defp validate_on_dismiss!({pid, tag}) when is_pid(pid) and is_atom(tag), do: :ok
+
+  defp validate_on_dismiss!(other) do
+    raise ArgumentError, "Mob.UI.sheet :on_dismiss must be {pid, atom}, got: #{inspect(other)}"
+  end
+
+  defp validate_style!(opts) do
+    Enum.each(@sheet_style_props, fn key ->
+      if Map.has_key?(opts, key), do: validate_style_value!(key, Map.fetch!(opts, key))
+    end)
+  end
+
+  defp validate_style_value!(:corner_radius, value), do: validate_radius!(:corner_radius, value)
+
+  defp validate_style_value!(key, value) when key in @sheet_color_props,
+    do: validate_color!(key, value)
+
+  defp validate_style_value!(key, value) when key in @sheet_dimension_props,
+    do: validate_dimension!(key, value)
+
+  # Colors accept a theme-token atom or an unsigned ARGB integer. `nil`,
+  # `true`, and `false` are atoms too — excluded explicitly so they don't
+  # silently pass through to native code that expects a real color and
+  # crashes trying to read one (the iOS NSNull.longLongValue failure mode
+  # this validation exists to prevent).
+  defp validate_color!(_key, value) when is_atom(value) and value not in [nil, true, false],
+    do: :ok
+
+  defp validate_color!(_key, value) when is_integer(value) and value in 0..0xFFFFFFFF, do: :ok
+
+  defp validate_color!(key, value) do
+    raise ArgumentError,
+          "Mob.UI.sheet #{inspect(key)} must be a theme-token atom or a " <>
+            "0x00000000..0xFFFFFFFF ARGB integer, got: #{inspect(value)}"
+  end
+
+  defp validate_radius!(_key, value) when is_atom(value) and value not in [nil, true, false],
+    do: :ok
+
+  defp validate_radius!(_key, value) when is_number(value) and value >= 0, do: :ok
+
+  defp validate_radius!(key, value) do
+    raise ArgumentError,
+          "Mob.UI.sheet #{inspect(key)} must be a radius token atom or a non-negative number, " <>
+            "got: #{inspect(value)}"
+  end
+
+  defp validate_dimension!(_key, value) when is_number(value) and value >= 0, do: :ok
+
+  defp validate_dimension!(key, value) do
+    raise ArgumentError,
+          "Mob.UI.sheet #{inspect(key)} must be a non-negative number, got: #{inspect(value)}"
+  end
+
+  defp validate_platform_override!(opts, platform_key) do
+    case Map.get(opts, platform_key) do
+      nil ->
+        :ok
+
+      %{} = override ->
+        invalid = Map.keys(override) -- @sheet_style_props
+
+        unless invalid == [] do
+          raise ArgumentError,
+                "Mob.UI.sheet #{inspect(platform_key)} override contains unsupported keys: " <>
+                  "#{inspect(invalid)} (supported: #{inspect(@sheet_style_props)})"
+        end
+
+        Enum.each(override, fn {key, value} -> validate_style_value!(key, value) end)
+
+      other ->
+        raise ArgumentError,
+              "Mob.UI.sheet #{inspect(platform_key)} must be a map, got: #{inspect(other)}"
+    end
+  end
+
+  # If any custom drag-indicator prop is supplied, all four are required —
+  # a partial override has no sensible native default to fall back to for
+  # the missing geometry. validate_style! already ran by the time this is
+  # called, so width/height/rail_height are confirmed numeric here; the
+  # ordering matters because Elixir's structural `>` never raises across
+  # types (an atom silently compares greater than any number), so the
+  # positivity/rail-height checks below would rubber-stamp a bad value
+  # instead of catching it if type-checking hadn't already happened.
+  defp validate_indicator_completeness!(opts) do
+    present = Enum.filter(@sheet_indicator_props, &Map.has_key?(opts, &1))
+
+    cond do
+      present == [] ->
+        :ok
+
+      length(present) == length(@sheet_indicator_props) ->
+        validate_indicator_geometry!(opts)
+
+      true ->
+        missing = @sheet_indicator_props -- present
+
+        raise ArgumentError,
+              "Mob.UI.sheet: a custom drag indicator requires all of " <>
+                "#{inspect(@sheet_indicator_props)}, missing: #{inspect(missing)}"
+    end
+  end
+
+  defp validate_indicator_geometry!(opts) do
+    width = Map.fetch!(opts, :drag_indicator_width)
+    height = Map.fetch!(opts, :drag_indicator_height)
+    rail = Map.fetch!(opts, :drag_indicator_rail_height)
+
+    unless width > 0 do
+      raise ArgumentError,
+            "Mob.UI.sheet :drag_indicator_width must be positive, got: #{inspect(width)}"
+    end
+
+    unless height > 0 do
+      raise ArgumentError,
+            "Mob.UI.sheet :drag_indicator_height must be positive, got: #{inspect(height)}"
+    end
+
+    unless rail >= height do
+      raise ArgumentError,
+            "Mob.UI.sheet :drag_indicator_rail_height (#{inspect(rail)}) must be >= " <>
+              ":drag_indicator_height (#{inspect(height)})"
+    end
+  end
 end
