@@ -37,7 +37,11 @@
         _fixedHeight = 0.0;
         _fillWidth = NO;
         _cornerRadius = 0.0;
-        _nativeViewHandle = -1; // -1 = no native component slot assigned (MOB-100)
+        _nativeViewHandle = -1;     // -1 = no native component slot assigned (MOB-100)
+        _sheetCornerRadius = -1.0;  // -1 = unset — use the system default sheet corner radius
+        _dragIndicatorWidth = -1.0; // -1 = no custom indicator supplied — use system default
+        _dragIndicatorHeight = -1.0;
+        _dragIndicatorRailHeight = -1.0;
         _videoAutoplay = NO;
         _videoLoop = NO;
         _videoControls = YES;

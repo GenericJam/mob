@@ -1206,4 +1206,142 @@ defmodule Mob.RendererTest do
       refute Map.has_key?(set_root_json()["props"], "font")
     end
   end
+
+  describe "sheet serialization" do
+    setup do
+      on_exit(fn -> Application.delete_env(:mob, :theme) end)
+      :ok
+    end
+
+    # Builds the raw node map directly rather than going through Mob.UI.sheet/2
+    # — Renderer serialization is tested independently of Mob.UI's validation
+    # layer (which has its own test coverage in test/mob/ui_test.exs), so a
+    # deliberately-incomplete prop set here (e.g. one indicator prop without
+    # the other three) isn't rejected before reaching the code under test.
+    defp sheet_tree(props, children \\ [%{type: :text, props: %{text: "hi"}, children: []}]) do
+      %{type: :sheet, props: props, children: children}
+    end
+
+    test "type serializes as the string \"sheet\"" do
+      Renderer.render(sheet_tree(%{}), :android, MockNIF)
+      assert set_root_json()["type"] == "sheet"
+    end
+
+    test "children serialize recursively like normal children" do
+      children = [
+        %{type: :text, props: %{text: "a"}, children: []},
+        %{type: :text, props: %{text: "b"}, children: []}
+      ]
+
+      Renderer.render(sheet_tree(%{}, children), :android, MockNIF)
+      decoded_children = set_root_json()["children"]
+
+      assert length(decoded_children) == 2
+      assert Enum.at(decoded_children, 0)["props"]["text"] == "a"
+      assert Enum.at(decoded_children, 1)["props"]["text"] == "b"
+    end
+
+    test "detents serialize as a list of strings" do
+      Renderer.render(sheet_tree(%{detents: [:medium]}), :android, MockNIF)
+      assert set_root_json()["props"]["detents"] == ["medium"]
+    end
+
+    test "on_dismiss registers through the tap registry and serializes as an integer handle" do
+      tag = {self(), :dismissed}
+      Renderer.render(sheet_tree(%{on_dismiss: tag}), :android, MockNIF)
+
+      assert is_integer(set_root_json()["props"]["on_dismiss"])
+      assert Enum.any?(MockNIF.calls(), fn {f, args} -> f == :register_tap and args == [tag] end)
+    end
+
+    test "scrim is a color-token prop — resolves through the theme like :background" do
+      Mob.Theme.set(muted: :black)
+      Renderer.render(sheet_tree(%{scrim: :muted}), :android, MockNIF)
+      assert set_root_json()["props"]["scrim"] == 0xFF000000
+    end
+
+    test "scrim passes through a raw ARGB integer unresolved" do
+      Renderer.render(sheet_tree(%{scrim: 0x33000000}), :android, MockNIF)
+      assert set_root_json()["props"]["scrim"] == 0x33000000
+    end
+
+    test "drag_indicator_color is a color-token prop" do
+      Mob.Theme.set(muted: :gray_500)
+      Renderer.render(sheet_tree(%{drag_indicator_color: :muted}), :android, MockNIF)
+      resolved = set_root_json()["props"]["drag_indicator_color"]
+      assert is_integer(resolved)
+    end
+
+    test "an unresolvable scrim color token logs a warning and passes through unchanged" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          Renderer.render(sheet_tree(%{scrim: :not_a_real_token}), :android, MockNIF)
+        end)
+
+      assert log =~ "not_a_real_token"
+      assert set_root_json()["props"]["scrim"] == "not_a_real_token"
+    end
+
+    test "corner_radius resolves through radius tokens" do
+      Mob.Theme.set(radius_md: 20)
+      Renderer.render(sheet_tree(%{corner_radius: :radius_md}), :android, MockNIF)
+      assert set_root_json()["props"]["corner_radius"] == 20
+    end
+
+    test "corner_radius passes a raw number through unresolved" do
+      Renderer.render(sheet_tree(%{corner_radius: 10}), :android, MockNIF)
+      assert set_root_json()["props"]["corner_radius"] == 10
+    end
+
+    test "drag_indicator_width/height/rail_height pass through as plain numbers" do
+      Renderer.render(
+        sheet_tree(%{
+          drag_indicator_color: :muted,
+          drag_indicator_width: 36,
+          drag_indicator_height: 5,
+          drag_indicator_rail_height: 22
+        }),
+        :android,
+        MockNIF
+      )
+
+      props = set_root_json()["props"]
+      assert props["drag_indicator_width"] == 36
+      assert props["drag_indicator_height"] == 5
+      assert props["drag_indicator_rail_height"] == 22
+    end
+
+    test "ios override flattens on ios platform, stripped from serialised JSON" do
+      Renderer.render(
+        sheet_tree(%{corner_radius: 10, ios: %{corner_radius: 4}}),
+        :ios,
+        MockNIF
+      )
+
+      props = set_root_json()["props"]
+      assert props["corner_radius"] == 4
+      refute Map.has_key?(props, "ios")
+      refute Map.has_key?(props, "android")
+    end
+
+    test "android override flattens on android platform, ios override ignored" do
+      Renderer.render(
+        sheet_tree(%{corner_radius: 10, ios: %{corner_radius: 4}, android: %{corner_radius: 28}}),
+        :android,
+        MockNIF
+      )
+
+      assert set_root_json()["props"]["corner_radius"] == 28
+    end
+
+    test "base value used when the active platform has no override" do
+      Renderer.render(
+        sheet_tree(%{corner_radius: 10, ios: %{corner_radius: 4}}),
+        :android,
+        MockNIF
+      )
+
+      assert set_root_json()["props"]["corner_radius"] == 10
+    end
+  end
 end
