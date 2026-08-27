@@ -1074,6 +1074,20 @@ pub export fn mob_send_tap(handle: c_int) callconv(.c) void {
     sendEvent(handle, "tap");
 }
 
+/// Called from beam_jni.c's `nativeSendDismiss` JNI stub. Sends
+/// `{:dismiss, tag}` — the shape `Mob.UI.sheet/2` documents for `:on_dismiss`
+/// and the one iOS has always delivered (`mob_send_dismiss` in ios/mob_nif.m).
+///
+/// Android had no dismiss sender at all, so the generated sheet renderer fell
+/// back to `nativeSendTap` and delivered `{:tap, tag}`. A screen written to the
+/// documented contract never matched it: `Mob.Screen` forwards the unmatched
+/// message to `handle_info`, which raises `FunctionClauseError` and takes the
+/// screen down — or silently drops it if the screen has a catch-all, in which
+/// case the BEAM never learns the sheet closed and can't re-present it (MOB-104).
+pub export fn mob_send_dismiss(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "dismiss");
+}
+
 pub export fn mob_send_change_str(handle: c_int, utf8: [*:0]const u8) callconv(.c) void {
     const tmp = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(tmp);
