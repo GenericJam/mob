@@ -76,6 +76,14 @@ jobs:
             ios/mob_nif.m \
             android/jni/mob_beam.h
 
+      - name: Native harness (frame registry — MOB-102/MOB-103)
+        # The only automated guard on the element-frame registry's ownership,
+        # generation-gating and purge rules. It reproduces the algorithm rather
+        # than linking ios/mob_nif.m (which needs UIKit + the swiftc-generated
+        # header), so it can drift — running it in CI is what keeps the copy
+        # honest. Same toolchain the clang-format step above already uses.
+        run: make -C test/native run
+
       - name: Install swiftlint
         run: brew install swiftlint
 
