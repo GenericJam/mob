@@ -8,7 +8,25 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.7.31] - 2026-08-27
+
+### Fixed
+- iOS: a frame tracker whose write was refused (an outgoing screen mid-nav)
+  no longer loses its ownership token. It kept the last returned value even
+  when that was the "refused" sentinel, which silently disabled its own
+  cleanup — so if the incoming screen's element with the same `:id` wasn't
+  laid out (a lazy row below the fold), the old screen's entry survived and
+  `Mob.Test.tap_id/2` tapped its coordinates.
+
+### Changed
+- `Mob.Test.element_frames/1` docs now say plainly that the drop-when-not-laid-out
+  behaviour is **iOS only**. Android clears frames wholesale on a navigation
+  transition and never per element, so a scrolled-away row still reports a
+  position there — the previous wording read as cross-platform.
+
+---
+
+## [0.7.30] - 2026-08-27
 
 ### Fixed
 - **`Mob.Test.element_frames/1` no longer reports elements that are in the
