@@ -25,10 +25,30 @@ defmodule Mob.NativeBoxAccessibilityTest do
 
     assert source =~ ".accessibilityElement(children: .ignore)"
     assert source =~ "view.accessibilityLabel(label)"
-    assert source =~ ~s|node.accessibilityRole == "button"|
-    assert source =~ ".accessibilityAddTraits(.isButton)"
-    assert source =~ ".accessibilityAddTraits(.isNotEnabled)"
-    assert source =~ ".allowsHitTesting(!node.disabled)"
-    assert source =~ ".ifLet(node.disabled ? nil : node.onTap)"
+
+    # Collapse to one element for a label OR an explicit button role. Traits
+    # added without collapsing land on every descendant, so a role-only box
+    # would announce each nested Text as its own button.
+    assert source =~ "node.accessibilityLabel != nil || node.accessibilityRole == \"button\""
+    assert source =~ "isAccessibilityControl ? () : nil"
+
+    # Traits stay unconditional OptionSet modifiers. Branching on `disabled`
+    # would make it a _ConditionalContent boundary and tear down the subtree
+    # on every toggle, losing a wrapped TextField's text and focus.
+    assert source =~
+             ~s|.accessibilityAddTraits(node.accessibilityRole == "button" ? .isButton : [])|
+
+    assert source =~ ".accessibilityAddTraits(node.disabled ? .isNotEnabled : [])"
+
+    # .disabled, not .allowsHitTesting: the latter makes the box transparent
+    # to touches, so a disabled backdrop would pass taps through to the
+    # content it is meant to be shielding.
+    assert source =~ ".disabled(node.disabled)"
+    refute source =~ ".allowsHitTesting(!node.disabled)"
+
+    # Tap wiring branches on handler presence only; the disabled check is
+    # inside the closure so toggling it is not a structural change.
+    assert source =~ ".ifLet(node.onTap)"
+    assert source =~ "if !node.disabled { tap() }"
   end
 end

@@ -287,6 +287,21 @@ defmodule Mob.UI do
       `:medium` alone rejects expansion to full height; `:large` alone skips
       the half-height stop. A content detent wraps intrinsic content and caps
       overflow in an internally scrolling body.
+
+      Two things to know about content detents. They size from the content's
+      *intrinsic* height, so a scrollable child (`scroll`, `lazy_list`) reports
+      its full content height rather than a viewport height — it will expand
+      inside the sheet and the sheet's own scroll takes the gesture, instead of
+      the child scrolling independently. Use `:medium`/`:large` when the sheet's
+      body is itself scrollable. And the sheet only knows its content height
+      once it is on screen, so it presents at `:medium` for the first frame and
+      resizes to the measured height immediately after.
+
+      Invalid `:detents` raise. `Mob.Renderer` re-validates at the encode
+      boundary through `normalize_sheet_detents!/1`, so a hand-built or `~MOB`
+      sigil node cannot bypass this by skipping `sheet/2` — such a node now
+      raises during render rather than silently degrading to
+      `[:medium, :large]` on the native side.
     * `:on_dismiss` — `{pid, tag}`, delivered as `handle_info({:dismiss, tag}, socket)`
       exactly once when the sheet is dismissed (swipe-down, back gesture,
       or outside tap) — the same `{atom, tag}` wire shape as `on_focus`,
@@ -358,17 +373,20 @@ defmodule Mob.UI do
   @spec normalize_sheet_detents!(term()) :: [atom() | map()]
   def normalize_sheet_detents!([:content]), do: [%{type: :content}]
 
-  def normalize_sheet_detents!([{:content, options}]) when is_list(options) do
+  def normalize_sheet_detents!([{:content, options}] = detents) when is_list(options) do
     if Keyword.keyword?(options) do
       case Keyword.fetch(options, :max_height) do
         {:ok, maximum} when is_number(maximum) and maximum > 0 and length(options) == 1 ->
           [%{type: :content, max_height: maximum}]
 
         _other ->
-          invalid_sheet_detents!()
+          invalid_sheet_detents!(
+            detents,
+            "a :content detent takes exactly one option, :max_height, and it must be a positive number"
+          )
       end
     else
-      invalid_sheet_detents!()
+      invalid_sheet_detents!(detents, "a :content detent's options must be a keyword list")
     end
   end
 
@@ -379,21 +397,43 @@ defmodule Mob.UI do
       when map_size(detent) == 2 and is_number(maximum) and maximum > 0,
       do: [detent]
 
+  # An already-normalized content map that matched neither valid shape above:
+  # extra keys, or a non-positive/non-numeric :max_height. Caught here so the
+  # error names the actual problem instead of falling through to the
+  # built-in-subset branch and claiming it should have been :medium/:large.
+  def normalize_sheet_detents!([%{type: :content}] = detents),
+    do:
+      invalid_sheet_detents!(
+        detents,
+        "a :content detent accepts only :type and an optional positive :max_height"
+      )
+
   def normalize_sheet_detents!(detents) when is_list(detents) and detents != [] do
-    if Enum.all?(detents, &(&1 in @sheet_detents)) and
-         length(detents) == length(Enum.uniq(detents)) do
-      detents
-    else
-      invalid_sheet_detents!()
+    cond do
+      not Enum.all?(detents, &(&1 in @sheet_detents)) ->
+        invalid_sheet_detents!(
+          detents,
+          "must be a subset of #{inspect(@sheet_detents)}, or a single exclusive " <>
+            ":content detent"
+        )
+
+      length(detents) != length(Enum.uniq(detents)) ->
+        invalid_sheet_detents!(detents, "must not contain duplicates")
+
+      true ->
+        detents
     end
   end
 
-  def normalize_sheet_detents!(_detents), do: invalid_sheet_detents!()
+  def normalize_sheet_detents!(detents),
+    do: invalid_sheet_detents!(detents, "must be a nonempty list")
 
-  defp invalid_sheet_detents! do
-    raise ArgumentError,
-          "Mob.UI.sheet :detents must be unique :medium/:large values or one " <>
-            ":content detent with an optional positive :max_height"
+  # Each failure names the rule it broke and echoes the offending value. A
+  # single catch-all message reads fine to whoever wrote the validation and
+  # badly to whoever tripped it — `[:medium, :medium]` should say
+  # "duplicates", not restate the whole grammar.
+  defp invalid_sheet_detents!(detents, reason) do
+    raise ArgumentError, "Mob.UI.sheet :detents #{reason}, got: #{inspect(detents)}"
   end
 
   defp validate_on_dismiss!(nil), do: :ok
