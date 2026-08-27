@@ -1134,11 +1134,22 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
                 node.gpuUniforms = uniforms;
         }
 
-        // sheet props. background/corner_radius are read generically above
-        // (shared prop names across every node type) — MobSheetView reuses
-        // node.backgroundColor/node.cornerRadius directly for the sheet's
-        // own container styling, see MobRootView.swift.
+        // sheet props. background is read generically above (shared prop
+        // name across every node type) — MobSheetView reuses
+        // node.backgroundColor directly for the sheet's own container
+        // background, see MobRootView.swift. corner_radius is read a
+        // second time here into the dedicated sheetCornerRadius (-1 =
+        // unset) instead: node.cornerRadius is a plain CGFloat with a 0
+        // default, so by the time Swift sees it, an explicit
+        // `corner_radius: 0` is indistinguishable from "never set" — a
+        // sheet's corners are visibly square-vs-rounded, so that ambiguity
+        // needs its own sentinel here (unlike other node types, where 0 and
+        // unset render identically).
         if (node.nodeType == MobNodeTypeSheet) {
+            id sheetCornerRadius = props[@"corner_radius"];
+            if (sheetCornerRadius)
+                node.sheetCornerRadius = [sheetCornerRadius doubleValue];
+
             id detents = props[@"detents"];
             if ([detents isKindOfClass:[NSArray class]])
                 node.sheetDetents = detents;

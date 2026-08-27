@@ -266,6 +266,12 @@ defmodule Mob.UI do
   @sheet_indicator_props [:drag_indicator_color | @sheet_dimension_props]
   @sheet_style_props [:corner_radius | @sheet_color_props ++ @sheet_dimension_props]
 
+  # `nil`, `true`, and `false` are atoms too — excluded explicitly so a
+  # theme-token prop doesn't silently pass one through to native code that
+  # expects a real color/radius and crashes trying to read one (the iOS
+  # NSNull.longLongValue failure mode this guard exists to prevent).
+  defguardp is_theme_token(value) when is_atom(value) and value not in [nil, true, false]
+
   @doc """
   Returns a `:sheet` node — a native modal bottom sheet (iOS `.sheet`,
   Android Material 3 `ModalBottomSheet`) that composes ordinary Mob nodes
@@ -278,10 +284,10 @@ defmodule Mob.UI do
     * `:detents` — nonempty, duplicate-free subset of `[:medium, :large]`.
       Defaults to `[:medium, :large]`. `:medium` alone rejects expansion
       to full height; `:large` alone skips the half-height stop.
-    * `:on_dismiss` — `{pid, tag}`, delivered as `handle_info({:tap, tag}, socket)`
+    * `:on_dismiss` — `{pid, tag}`, delivered as `handle_info({:dismiss, tag}, socket)`
       exactly once when the sheet is dismissed (swipe-down, back gesture,
-      or outside tap), matching the tap-event convention used elsewhere
-      in `Mob.UI`.
+      or outside tap) — the same `{atom, tag}` wire shape as `on_focus`,
+      `on_blur`, `on_submit`, and `on_select` elsewhere in `Mob.UI`.
     * `:background` — container color: a theme token atom or a
       `0x00000000..0xFFFFFFFF` ARGB integer.
     * `:scrim` — dimming-layer color, same value shape as `:background`.
@@ -385,14 +391,7 @@ defmodule Mob.UI do
   defp validate_style_value!(key, value) when key in @sheet_dimension_props,
     do: validate_dimension!(key, value)
 
-  # Colors accept a theme-token atom or an unsigned ARGB integer. `nil`,
-  # `true`, and `false` are atoms too — excluded explicitly so they don't
-  # silently pass through to native code that expects a real color and
-  # crashes trying to read one (the iOS NSNull.longLongValue failure mode
-  # this validation exists to prevent).
-  defp validate_color!(_key, value) when is_atom(value) and value not in [nil, true, false],
-    do: :ok
-
+  defp validate_color!(_key, value) when is_theme_token(value), do: :ok
   defp validate_color!(_key, value) when is_integer(value) and value in 0..0xFFFFFFFF, do: :ok
 
   defp validate_color!(key, value) do
@@ -401,9 +400,7 @@ defmodule Mob.UI do
             "0x00000000..0xFFFFFFFF ARGB integer, got: #{inspect(value)}"
   end
 
-  defp validate_radius!(_key, value) when is_atom(value) and value not in [nil, true, false],
-    do: :ok
-
+  defp validate_radius!(_key, value) when is_theme_token(value), do: :ok
   defp validate_radius!(_key, value) when is_number(value) and value >= 0, do: :ok
 
   defp validate_radius!(key, value) do
@@ -443,28 +440,56 @@ defmodule Mob.UI do
 
   # If any custom drag-indicator prop is supplied, all four are required —
   # a partial override has no sensible native default to fall back to for
-  # the missing geometry. validate_style! already ran by the time this is
-  # called, so width/height/rail_height are confirmed numeric here; the
-  # ordering matters because Elixir's structural `>` never raises across
-  # types (an atom silently compares greater than any number), so the
+  # the missing geometry. Checked against the base opts AND against the
+  # base merged with each platform override, since `Mob.Renderer`'s
+  # platform-block flattening (`ios:`/`android:`) composes an override on
+  # top of the base at render time — a base with zero indicator props plus
+  # an `ios: %{drag_indicator_color: ...}` override would otherwise pass
+  # validation here but flatten to an incomplete set on iOS, which native
+  # silently treats as "no custom indicator" instead of erroring.
+  # validate_style! already ran by the time this is called, so
+  # width/height/rail_height are confirmed numeric here; the ordering
+  # matters because Elixir's structural `>` never raises across types (an
+  # atom silently compares greater than any number), so the
   # positivity/rail-height checks below would rubber-stamp a bad value
   # instead of catching it if type-checking hadn't already happened.
   defp validate_indicator_completeness!(opts) do
-    present = Enum.filter(@sheet_indicator_props, &Map.has_key?(opts, &1))
+    validate_merged_indicator_completeness!(opts, "base props")
+
+    case Map.get(opts, :ios) do
+      %{} = override ->
+        validate_merged_indicator_completeness!(Map.merge(opts, override), ":ios override")
+
+      _ ->
+        :ok
+    end
+
+    case Map.get(opts, :android) do
+      %{} = override ->
+        validate_merged_indicator_completeness!(Map.merge(opts, override), ":android override")
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp validate_merged_indicator_completeness!(merged, context) do
+    present = Enum.filter(@sheet_indicator_props, &Map.has_key?(merged, &1))
 
     cond do
       present == [] ->
         :ok
 
       length(present) == length(@sheet_indicator_props) ->
-        validate_indicator_geometry!(opts)
+        validate_indicator_geometry!(merged)
 
       true ->
         missing = @sheet_indicator_props -- present
 
         raise ArgumentError,
               "Mob.UI.sheet: a custom drag indicator requires all of " <>
-                "#{inspect(@sheet_indicator_props)}, missing: #{inspect(missing)}"
+                "#{inspect(@sheet_indicator_props)} (checking #{context}), " <>
+                "missing: #{inspect(missing)}"
     end
   end
 
