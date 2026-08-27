@@ -1272,6 +1272,16 @@ defmodule Mob.RendererTest do
       assert is_integer(resolved)
     end
 
+    test "an unresolvable scrim color token logs a warning and passes through unchanged" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          Renderer.render(sheet_tree(%{scrim: :not_a_real_token}), :android, MockNIF)
+        end)
+
+      assert log =~ "not_a_real_token"
+      assert set_root_json()["props"]["scrim"] == "not_a_real_token"
+    end
+
     test "corner_radius resolves through radius tokens" do
       Mob.Theme.set(radius_md: 20)
       Renderer.render(sheet_tree(%{corner_radius: :radius_md}), :android, MockNIF)

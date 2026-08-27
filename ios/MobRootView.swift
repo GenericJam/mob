@@ -521,7 +521,13 @@ private struct MobFrameTracker: ViewModifier {
     let node: MobNode
 
     func body(content: Content) -> some View {
-        if let id = node.nativeViewId {
+        // A sheet's own switch-case view is a zero-size anchor used only to
+        // attach `.sheet(isPresented:)` — its real, visible content is
+        // presented in a detached overlay that this GeometryReader can't
+        // see. Reporting the anchor's frame would silently report 0x0
+        // instead of the sheet's actual on-screen bounds, so tracking is
+        // skipped entirely rather than publishing a frame known to be wrong.
+        if let id = node.nativeViewId, node.nodeType != .sheet {
             content
                 .accessibilityIdentifier(id)
                 .background(
@@ -1337,6 +1343,7 @@ private struct MobSheetView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(node.paddingEdgeInsets)
         // Screen readers should treat the sheet as a self-contained modal —
         // VoiceOver focus stays inside it until dismissed, matching
         // .presentationDetents/.sheet's own system-modal behavior.
@@ -1345,11 +1352,10 @@ private struct MobSheetView: View {
         .ifLet(node.backgroundColor) { view, bg in
             view.presentationBackground(Color(bg))
         }
-        // 0 and "unset" are indistinguishable on this shared property (see
-        // MobNode.h) — same limitation every other node type already has
-        // for corner_radius, not new here. Skip the modifier for 0 so the
-        // system's own default sheet corner radius applies.
-        .ifLet(node.cornerRadius > 0 ? node.cornerRadius : nil) { view, radius in
+        // sheetCornerRadius has its own -1-means-unset sentinel (see
+        // MobNode.h) so an explicit corner_radius: 0 (square corners) is
+        // distinguishable from "not set" (system default radius).
+        .ifLet(node.sheetCornerRadius >= 0 ? node.sheetCornerRadius : nil) { view, radius in
             view.presentationCornerRadius(radius)
         }
         .presentationDetents(detentSet)

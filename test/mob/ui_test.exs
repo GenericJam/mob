@@ -241,6 +241,17 @@ defmodule Mob.UITest do
       node = UI.sheet(UI.text(text: "hi"))
       assert Map.keys(node) |> Enum.sort() == [:children, :props, :type]
     end
+
+    test "every prop sheet/2 validates as a color is one Mob.Renderer also resolves as a color" do
+      sheet_color_props = [:background, :scrim, :drag_indicator_color]
+
+      for key <- sheet_color_props do
+        assert key in Mob.Renderer.color_props(),
+               "#{inspect(key)} is validated as a color by Mob.UI.sheet/2 but is missing " <>
+                 "from Mob.Renderer.color_props/0 — it would pass validation but never " <>
+                 "resolve a theme token at render time"
+      end
+    end
   end
 
   describe "sheet/2 detents" do

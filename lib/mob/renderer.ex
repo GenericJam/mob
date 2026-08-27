@@ -70,6 +70,8 @@ defmodule Mob.Renderer do
       Mob.Renderer.render(tree, :android, MockNIF)
   """
 
+  require Logger
+
   alias Mob.{Style, Theme}
 
   @default_nif :mob_nif
@@ -259,6 +261,10 @@ defmodule Mob.Renderer do
   @doc "Return the text-size scale map (token → float sp)."
   @spec text_sizes() :: %{atom() => float()}
   def text_sizes, do: @text_sizes
+
+  @doc "Return the set of prop keys resolved as colors (theme token or ARGB integer)."
+  @spec color_props() :: [atom()]
+  def color_props, do: @color_props
 
   # ── Tree preparation ──────────────────────────────────────────────────────
 
@@ -566,10 +572,16 @@ defmodule Mob.Renderer do
   defp resolve_color(value, theme_colors) when is_atom(value) do
     case Map.get(theme_colors, value) do
       nil ->
-        Map.get(@colors, value, value)
+        case Map.fetch(@colors, value) do
+          {:ok, resolved} -> resolved
+          :error -> warn_unresolved_color(value)
+        end
 
       palette_atom when is_atom(palette_atom) ->
-        Map.get(@colors, palette_atom, palette_atom)
+        case Map.fetch(@colors, palette_atom) do
+          {:ok, resolved} -> resolved
+          :error -> warn_unresolved_color(palette_atom)
+        end
 
       raw_int when is_integer(raw_int) ->
         raw_int
@@ -577,6 +589,24 @@ defmodule Mob.Renderer do
   end
 
   defp resolve_color(value, _theme_colors), do: value
+
+  # An atom that resolves through neither the active theme nor the base
+  # palette serializes as a bare string to native, which then fails to
+  # parse it as a color (silently — e.g. iOS's NSString.longLongValue on a
+  # non-numeric string returns 0, an invisible fully-transparent color).
+  # Logging here turns that into a loud signal instead of a silent
+  # wrong-render, without changing pass-through behavior (theme tokens are
+  # app-defined and open-ended, so rejecting outright would be a false
+  # positive for any token this module doesn't know about).
+  defp warn_unresolved_color(atom) do
+    Logger.warning(
+      "Mob.Renderer: color token #{inspect(atom)} did not resolve against the active " <>
+        "theme or the base palette — passing it through unresolved to native, which " <>
+        "will fail to parse it as a color. Likely a typo'd theme token."
+    )
+
+    atom
+  end
 
   # Font token resolution: theme fonts map → the value for the CURRENT
   # platform only. Unlike colors (which resolve to one value used by both
