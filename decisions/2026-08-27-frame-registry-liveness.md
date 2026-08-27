@@ -153,12 +153,27 @@ animations in every list), so it wants its own change and its own device pass.
     animation, and restored exactly on pop. Neither deleted nor left at
     mid-animation coordinates.
   - *Backgrounding.* A background/foreground cycle leaves the registry intact.
-- **Still unverified: `MobTabView`.** A tab switching away keeps its subtree in
-  the tree, and `TabView` preserves view identity across switches, so whether
-  `.onAppear` re-fires on re-selection is not settled by the lazy-list result
-  (which destroys and rebuilds instead). The probe couldn't reach that path —
-  `tab_bar/1` navigation didn't render a tab bar in the generated app — so it
-  wants its own pass before anything relies on tab element frames.
+  - *`MobTabView`.* This is the case the lazy-list result does **not** settle:
+    a tab switching away keeps its subtree in the tree, and `TabView` preserves
+    view identity across switches, so `.onAppear` re-firing on re-selection was
+    an open question. Verified on the simulator with a real `tab_bar` render
+    node: with tab A active only `tab_a_marker` is registered; switching to B
+    drops it and registers `tab_b_marker`; switching back restores
+    `tab_a_marker` — repeatably, in both directions. So `.onAppear` does
+    re-fire on re-selection and a tab round trip is not permanently
+    unreportable.
+
+    Note the reachable path is the `tab_bar` **render node** (`props.tabs` +
+    `props.active`), not `Mob.App.tab_bar/1` navigation. Also worth recording:
+    `Mob.Renderer` has no `on_tab_select` handler, so that prop reaches native
+    as a raw `{pid, tag}` tuple and kills the screen process on serialize —
+    tab selection has to be driven from Elixir through `active`. That's a
+    separate bug, not this change's.
+- Only the `MobTabView` case was left simulator-only; the physical iPhone had
+  rebound dist to its USB link-local address (`169.254.1.100`), which dist
+  can't route to, and clearing that needs the cable physically unplugged. Every
+  other scenario ran on both targets and agreed exactly, and the mechanism
+  under test is SwiftUI behaviour rather than anything device-specific.
 - `Mob.Test.element_frames/1`'s docstring now states the liveness rule, the
   settle caveat (a frame is a last-known position, not a synchronous read), and
   the reorder gap.
