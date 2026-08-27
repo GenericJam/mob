@@ -1126,6 +1126,12 @@ defmodule Mob.Test do
   window before the next layout pass where the previous frame is still what's
   reported. If you've just triggered a change and are about to act on the
   result, poll until the frame settles rather than trusting the first read.
+
+  On iOS a frame is refreshed when the element appears, when the `:id` at that
+  position changes, or when the element's own frame *value* changes — so a
+  rearrangement that moves ids between same-sized slots without moving any slot
+  can briefly report a stale position. For list content where that's a risk,
+  confirm against `render_tree/1` or a screenshot before acting on coordinates.
   """
   @spec element_frames(node()) ::
           %{optional(String.t()) => {float(), float(), float(), float()}} | {:error, term()}

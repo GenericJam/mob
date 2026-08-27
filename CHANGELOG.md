@@ -26,8 +26,16 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 - **A screen animating out of a nav transition no longer re-registers itself
   at mid-animation coordinates.** `set_root` applies the new tree
   asynchronously on the main thread, so an outgoing screen kept reporting
-  frames after its ids had already been purged. Writes for ids absent from the
-  current tree are now ignored (MOB-103).
+  frames after its ids had already been purged — including when both screens
+  tagged an element with the same `:id`, which tree membership alone can't
+  reject. Writes are now refused for ids absent from the current tree, and for
+  any tracker belonging to a superseded navigation (MOB-103).
+- **A list delete no longer loses the frame of the element below it.** Every
+  `ForEach` keys children by index while the registry is keyed by `:id`, so
+  removing an item shifts each later id onto a different tracker; with
+  same-height rows nothing re-registered and the surviving element went
+  missing. Trackers now re-register when the `:id` beneath them changes, and
+  on appearance (MOB-103).
 
 ### Changed
 - `Mob.Test.element_frames/1`'s docs now state what counts as rendered, and
@@ -80,6 +88,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   tree are dropped now (MOB-102). See
   `decisions/2026-08-27-frame-registry-purge-by-id.md` — and note the
   Unreleased entry above, which corrects the converse case this introduced.
+  *(Documented after the fact: this shipped in 0.7.29 but was omitted from
+  its notes, so it is not in the published 0.7.29 changelog.)*
 
 ## [0.7.28] - 2026-08-26
 

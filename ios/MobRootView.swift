@@ -517,14 +517,22 @@ struct MobNodeView: View {
 // identifier and report the element's global frame (logical points) to the C
 // registry as it lays out / moves. Untagged nodes pass through untouched, so
 // there's no cost unless a dev opts an element in by giving it an :id.
+// Per-tracker bookkeeping, deliberately a reference type held by @State rather
+// than @State scalars. Two reasons: mutating it never invalidates the view (the
+// writes happen inside a GeometryReader's layout-driven callback, once per
+// display frame per element during a transition — the classic "modifying state
+// during view update" shape), and the values stay readable during the same
+// transaction that tears the view down, which is exactly when .onDisappear
+// needs the seq.
+private final class MobFrameBox {
+    var seq: UInt64 = 0
+    var generation: UInt64 = 0
+}
+
 private struct MobFrameTracker: ViewModifier {
     let node: MobNode
 
-    // Seq returned by this tracker's own most recent mob_register_frame write.
-    // Passed back on .onDisappear so the removal is a compare-and-delete: if an
-    // incoming screen has since claimed the same :id, its write wins and this
-    // tracker's teardown leaves the new entry alone.
-    @State private var lastSeq: UInt64 = 0
+    @State private var box = MobFrameBox()
 
     func body(content: Content) -> some View {
         // A sheet's own switch-case view is a zero-size anchor used only to
@@ -539,10 +547,35 @@ private struct MobFrameTracker: ViewModifier {
                 .background(
                     GeometryReader { geo in
                         Color.clear
+                            // Registration must not depend on onChange alone.
+                            // onChange fires on frame *value* changes, so an
+                            // element that reappears at the position it left
+                            // (a tab switched back to, a row scrolled back into
+                            // range) would never re-register after the
+                            // .onDisappear below removed it — and `initial:` is
+                            // not guaranteed to re-run when SwiftUI preserved
+                            // the view identity across that disappearance.
+                            // Registering on appear makes every
+                            // disappear/reappear cycle self-healing.
+                            .onAppear {
+                                box.generation = mob_frame_generation()
+                                record(id, geo.frame(in: .global))
+                            }
                             .onChange(of: geo.frame(in: .global), initial: true) { _, frame in
-                                lastSeq = mob_register_frame(
-                                    id, Double(frame.minX), Double(frame.minY),
-                                    Double(frame.width), Double(frame.height))
+                                record(id, frame)
+                            }
+                            // Every ForEach in this file keys children by index
+                            // (`id: \.offset`) while the registry is keyed by
+                            // :id, so a tracker is NOT bound to one id for its
+                            // lifetime — delete an item and every later id
+                            // shifts down a position under a tracker that keeps
+                            // its identity. Its frame value may be unchanged
+                            // (equal-height rows), so nothing else here would
+                            // fire and the id we just took over would keep the
+                            // previous occupant's entry — or lose it entirely to
+                            // the departing tracker's .onDisappear.
+                            .onChange(of: id) { _, newId in
+                                record(newId, geo.frame(in: .global))
                             }
                             // Being in the BEAM tree isn't the same as being on
                             // screen: a LazyVStack row scrolled out of range, an
@@ -552,12 +585,24 @@ private struct MobFrameTracker: ViewModifier {
                             // out — and onChange won't fire for them again.
                             // Without this their last frame is reported forever
                             // and Mob.Test.tap_id taps whatever is there now.
-                            .onDisappear { mob_unregister_frame(id, lastSeq) }
+                            .onDisappear { mob_unregister_frame(id, box.seq) }
                     }
                 )
         } else {
             content
         }
+    }
+
+    private func record(_ id: String, _ frame: CGRect) {
+        // Capture lazily as well as in onAppear: the ordering of onAppear
+        // against onChange(initial: true) isn't contractual, and a write
+        // stamped 0 is accepted rather than refused as stale.
+        if box.generation == 0 {
+            box.generation = mob_frame_generation()
+        }
+        box.seq = mob_register_frame(
+            id, box.generation, Double(frame.minX), Double(frame.minY),
+            Double(frame.width), Double(frame.height))
     }
 }
 

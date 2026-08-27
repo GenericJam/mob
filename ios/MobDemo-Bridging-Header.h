@@ -29,10 +29,21 @@ void mob_notify_color_scheme(const char *scheme);
 // the element_frames NIF so an agent can locate/drive elements without a
 // screenshot. Implemented in mob_nif.m.
 //
+// `generation` is the value mob_frame_generation() returned when the caller
+// appeared; writes stamped with a superseded generation are refused, so a
+// screen animating out of a nav transition stops reporting itself. Pass 0 if
+// it hasn't been captured yet and the write will be accepted.
+//
 // Returns a monotonic write sequence number the caller keeps so it can pair
 // this write with mob_unregister_frame below; 0 means the write was rejected
-// (unknown id, or an id absent from the tree BEAM most recently sent).
-uint64_t mob_register_frame(const char *id, double x, double y, double w, double h);
+// (unknown id, a superseded generation, or an id absent from the tree BEAM
+// most recently sent).
+uint64_t mob_register_frame(const char *id, uint64_t generation, double x, double y, double w,
+                            double h);
+
+// Current frame generation — bumped on every identity-destroying navigation.
+// MobFrameTracker captures this on appear and stamps its writes with it.
+uint64_t mob_frame_generation(void);
 
 // Called from MobFrameTracker's .onDisappear when a tracked element stops being
 // laid out — a lazy-list row scrolled out of range, an inactive tab's subtree —
