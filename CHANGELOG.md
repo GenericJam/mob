@@ -10,6 +10,43 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.7.31] - 2026-08-27
+
+### Added
+- **`mob_send_dismiss` (Android)** — sends `{:dismiss, tag}` to the process
+  registered for a handle, the shape `Mob.UI.sheet/2` documents for
+  `:on_dismiss` and the one iOS has always delivered. Android had no dismiss
+  sender at all, so generated sheet renderers fell back to the tap sender and
+  delivered `{:tap, tag}`; a screen written to the documented contract never
+  matched it and died with `FunctionClauseError` (or silently dropped the
+  dismissal and could never re-present the sheet). Pairs with mob_new 0.4.24,
+  which adds the `nativeSendDismiss` extern and JNI thunk — **generated Android
+  apps need both halves**, and `mix mob.doctor` (mob_dev) now warns about a
+  project still carrying the old wiring (MOB-104).
+
+  **Behaviour change for Android:** if you worked around the old bug by
+  matching `handle_info({:tap, tag}, ...)` for a sheet dismissal, that clause
+  is now dead — switch it to `{:dismiss, tag}`. iOS callers are unaffected;
+  they always received `{:dismiss, tag}`.
+
+### Fixed
+- iOS: a frame tracker whose write was refused (an outgoing screen mid-nav)
+  no longer loses its ownership token. It kept the last returned value even
+  when that was the "refused" sentinel, which silently disabled its own
+  cleanup — so if the incoming screen's element with the same `:id` wasn't
+  laid out (a lazy row below the fold), the old screen's entry survived and
+  `Mob.Test.tap_id/2` tapped its coordinates.
+
+### Changed
+- `Mob.Test.element_frames/1` docs now say plainly that the drop-when-not-laid-out
+  behaviour is **iOS only**. Android clears frames wholesale on a navigation
+  transition and never per element, so a scrolled-away row still reports a
+  position there — the previous wording read as cross-platform.
+
+---
+
+## [0.7.30] - 2026-08-27
+
 ### Fixed
 - **`Mob.Test.element_frames/1` no longer reports elements that are in the
   render tree but not on screen.** 0.7.29 shipped a fix (MOB-102) that stopped
@@ -86,8 +123,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   fires when an element's frame *changes*, so anything that stayed put
   went missing until something moved it. Only ids absent from the incoming
   tree are dropped now (MOB-102). See
-  `decisions/2026-08-27-frame-registry-purge-by-id.md` — and note the
-  Unreleased entry above, which corrects the converse case this introduced.
+  `decisions/2026-08-27-frame-registry-purge-by-id.md` — and note the 0.7.31
+  entry above, which corrects the converse case this introduced.
   *(Documented after the fact: this shipped in 0.7.29 but was omitted from
   its notes, so it is not in the published 0.7.29 changelog.)*
 

@@ -16,6 +16,11 @@ void mob_ui_cache_class(JNIEnv *env, const char *bridge_class);
 // Called from the app's Java_..._MobBridge_nativeSendTap JNI stub.
 void mob_send_tap(int handle);
 
+// Send a {:dismiss, tag} event — the shape Mob.UI.sheet/2 documents for
+// :on_dismiss, matching iOS. Called from the app's
+// Java_..._MobBridge_nativeSendDismiss JNI stub.
+void mob_send_dismiss(int handle);
+
 // Send a {:change, tag, value} event.  Called from the app's
 // Java_..._MobBridge_nativeSendChange* JNI stubs.
 void mob_send_change_str(int handle, const char *utf8);

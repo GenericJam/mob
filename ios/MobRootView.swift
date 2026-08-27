@@ -600,9 +600,24 @@ private struct MobFrameTracker: ViewModifier {
         if box.generation == 0 {
             box.generation = mob_frame_generation()
         }
-        box.seq = mob_register_frame(
+        let written = mob_register_frame(
             id, box.generation, Double(frame.minX), Double(frame.minY),
             Double(frame.width), Double(frame.height))
+
+        // Keep the last SUCCESSFUL seq. A refused write returns 0, and
+        // overwriting the token with 0 would make this tracker's .onDisappear
+        // a permanent no-op (mob_unregister_frame ignores seq 0) — it could
+        // then never clean up the entry it still owns. That bites when an
+        // outgoing screen's `.move` writes are refused by the generation gate
+        // and the incoming screen's element with the same :id isn't laid out
+        // (a lazy row below the fold): the id stays in the tree so the purge
+        // keeps it, nothing deletes it, and tap_id taps the old screen's
+        // coordinates. Retaining the token is strictly safe — the
+        // compare-and-delete still refuses to delete whenever an incoming
+        // tracker has claimed the id since.
+        if written != 0 {
+            box.seq = written
+        }
     }
 }
 
