@@ -644,6 +644,15 @@ private struct MobFrameTracker: ViewModifier {
 private struct MobBox: View {
     let node: MobNode
 
+    /// True when the box is standing in for a control rather than plain
+    /// layout — it carries a label, or the caller asked for a button role.
+    /// Only then is it right to collapse the subtree into one accessibility
+    /// element; a passive box with labelled children must keep them visible
+    /// to VoiceOver.
+    private var isAccessibilityControl: Bool {
+        node.accessibilityLabel != nil || node.accessibilityRole == "button"
+    }
+
     var body: some View {
         let alignment: Alignment = boxAlignmentFromString(node.boxAlign)
 
@@ -683,22 +692,39 @@ private struct MobBox: View {
                         lineWidth: node.borderWidth)
                 .allowsHitTesting(false)
         )
-        .ifLet(node.disabled ? nil : node.onTap) { view, tap in
-            view.contentShape(Rectangle()).onTapGesture { tap() }
+        // Branch on `onTap` presence only, never on `disabled`. `ifLet` is
+        // @ViewBuilder if/else, i.e. _ConditionalContent — flipping the branch
+        // gives SwiftUI a structurally different view and tears the subtree
+        // down. `disabled` is a routinely toggled prop, so branching on it
+        // would drop a wrapped TextField's in-flight text and focus, and
+        // re-present a wrapped Sheet. The disabled check moves inside the
+        // closure, where it costs nothing structurally.
+        .ifLet(node.onTap) { view, tap in
+            view.contentShape(Rectangle()).onTapGesture {
+                if !node.disabled { tap() }
+            }
         }
         .mobGestures(node)
+        // Collapse to a single accessibility element whenever this box is
+        // acting as a control — a label OR an explicit button role. Traits
+        // added without collapsing land on every descendant instead, so a
+        // role-only box would announce each nested Text as its own button.
+        .ifLet(isAccessibilityControl ? () : nil) { view, _ in
+            view.accessibilityElement(children: .ignore)
+        }
         .ifLet(node.accessibilityLabel) { view, label in
-            view
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(label)
+            view.accessibilityLabel(label)
         }
-        .ifLet(node.accessibilityRole == "button" ? () : nil) { view, _ in
-            view.accessibilityAddTraits(.isButton)
-        }
-        .ifLet(node.disabled ? () : nil) { view, _ in
-            view.accessibilityAddTraits(.isNotEnabled)
-        }
-        .allowsHitTesting(!node.disabled)
+        // OptionSet-valued, so these stay unconditional modifiers and add no
+        // _ConditionalContent branch on `disabled`.
+        .accessibilityAddTraits(node.accessibilityRole == "button" ? .isButton : [])
+        .accessibilityAddTraits(node.disabled ? .isNotEnabled : [])
+        // .disabled, not .allowsHitTesting: allowsHitTesting(false) makes the
+        // view transparent to touches, so a disabled box used as a blocking
+        // overlay or dimmed backdrop would pass taps through to whatever sits
+        // behind it. .disabled blocks interaction in the subtree while still
+        // consuming the touch.
+        .disabled(node.disabled)
         // (offset is applied uniformly by MobNodeView's body; not here)
     }
 }
@@ -1428,16 +1454,33 @@ private struct MobSlider: View {
 // both fall out for free: a rerender with the sheet still present reuses
 // this state; a rerender without it tears the view (and its presentation)
 // down entirely.
-private struct MobSheetContentHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 1
+// Measured intrinsic content height plus the bottom safe-area inset that
+// applies *inside* the sheet. `.presentationDetents(.height(x))` sets the
+// sheet's TOTAL height, but the content region is inset by the home indicator,
+// so a detent of exactly the content height leaves the last rows under it and
+// makes a sheet that should fit exactly scroll instead.
+private struct MobSheetContentMetrics: Equatable {
+    var height: CGFloat = 0
+    var bottomInset: CGFloat = 0
+}
 
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
+private struct MobSheetContentHeightKey: PreferenceKey {
+    static var defaultValue = MobSheetContentMetrics()
+
+    static func reduce(value: inout MobSheetContentMetrics, nextValue: () -> MobSheetContentMetrics) {
+        let next = nextValue()
+        value = MobSheetContentMetrics(
+            height: max(value.height, next.height),
+            bottomInset: max(value.bottomInset, next.bottomInset)
+        )
     }
 }
 
+// 0 means "root geometry not read yet". Distinguishing unknown from a real
+// measurement matters: defaulting to a small number collapsed the first
+// presentation of every content sheet to a hairline.
 private struct MobAvailableSheetHeightKey: EnvironmentKey {
-    static let defaultValue: CGFloat = 1
+    static let defaultValue: CGFloat = 0
 }
 
 private extension EnvironmentValues {
@@ -1452,7 +1495,11 @@ private struct MobSheetView: View {
     @Environment(\.mobAvailableSheetHeight) private var availableHeight
     @State private var isPresented = true
     @State private var dismissSent = false
-    @State private var intrinsicContentHeight: CGFloat = 1
+    // nil until the content has actually been measured. A numeric sentinel
+    // here is what produced a 1pt sheet on first presentation: content can
+    // only be measured after the sheet is up, so the first detent was
+    // computed from the sentinel.
+    @State private var contentMetrics: MobSheetContentMetrics?
 
     var body: some View {
         Color.clear
@@ -1473,15 +1520,25 @@ private struct MobSheetView: View {
             .first { $0["type"] as? String == "content" }
     }
 
+    /// Ceiling for the sheet. `availableHeight` is 0 until the root has
+    /// reported geometry; treat that as "no ceiling known yet" rather than
+    /// clamping to it, so an unmeasured root can never collapse the sheet.
     private var maximumHeight: CGFloat {
-        guard let configured = contentDetent?["max_height"] as? NSNumber else {
-            return availableHeight
+        let configured = (contentDetent?["max_height"] as? NSNumber).map { CGFloat(truncating: $0) }
+
+        switch (configured, availableHeight > 0) {
+        case let (.some(limit), true): return min(limit, availableHeight)
+        case let (.some(limit), false): return limit
+        case (.none, true): return availableHeight
+        case (.none, false): return .greatestFiniteMagnitude
         }
-        return min(CGFloat(truncating: configured), availableHeight)
     }
 
-    private var limitedContentHeight: CGFloat {
-        max(1, min(intrinsicContentHeight, maximumHeight))
+    /// Total sheet height for the detent: measured content plus the sheet's
+    /// own bottom safe-area inset, capped. nil while unmeasured.
+    private var limitedContentHeight: CGFloat? {
+        guard let metrics = contentMetrics, metrics.height > 0 else { return nil }
+        return max(1, min(metrics.height + metrics.bottomInset, maximumHeight))
     }
 
     private var sheetBody: some View {
@@ -1505,16 +1562,27 @@ private struct MobSheetView: View {
                             GeometryReader { geometry in
                                 Color.clear.preference(
                                     key: MobSheetContentHeightKey.self,
-                                    value: geometry.size.height
+                                    value: MobSheetContentMetrics(
+                                        height: geometry.size.height,
+                                        bottomInset: geometry.safeAreaInsets.bottom
+                                    )
                                 )
                             }
                         }
                 }
                 .frame(maxHeight: maximumHeight)
-                .onPreferenceChange(MobSheetContentHeightKey.self) { measuredHeight in
-                    let intrinsicHeight = max(1, measuredHeight)
-                    if abs(intrinsicHeight - intrinsicContentHeight) > 0.5 {
-                        intrinsicContentHeight = intrinsicHeight
+                .onPreferenceChange(MobSheetContentHeightKey.self) { measured in
+                    // Ignore sub-point churn so a measurement that feeds the
+                    // detent, which resizes the sheet, which re-measures,
+                    // settles instead of oscillating.
+                    let changed =
+                        contentMetrics.map {
+                            abs(measured.height - $0.height) > 0.5
+                                || abs(measured.bottomInset - $0.bottomInset) > 0.5
+                        } ?? true
+
+                    if changed, measured.height > 0 {
+                        contentMetrics = measured
                     }
                 }
             } else {
@@ -1548,16 +1616,24 @@ private struct MobSheetView: View {
 
     private var detentSet: Set<PresentationDetent> {
         if contentDetent != nil {
-            return [.height(limitedContentHeight)]
+            // Content can only be measured once the sheet is on screen, so the
+            // first evaluation has nothing to size against. Present at .medium
+            // for that one frame and switch to the exact height as soon as the
+            // measurement lands — the previous sentinel-based version resolved
+            // to .height(1) and flashed a hairline on every presentation.
+            guard let height = limitedContentHeight else { return [.medium] }
+            return [.height(height)]
         }
 
         let builtInDetents = node.sheetDetents?.compactMap { $0 as? String } ?? []
         var resolved: Set<PresentationDetent> = []
         if builtInDetents.contains("medium") { resolved.insert(.medium) }
         if builtInDetents.contains("large") { resolved.insert(.large) }
-        // Mob.UI.sheet/2 already validates :detents is a nonempty subset of
-        // [:medium, :large] — this fallback only matters for a hand-built
-        // node map that skipped that validation (e.g. `~MOB` sigil literal).
+        // Mob.Renderer normalizes :detents through Mob.UI.normalize_sheet_detents!/1
+        // at the encode boundary, so an invalid list now raises before it ever
+        // reaches here rather than arriving as an unknown string. This fallback
+        // is therefore only reachable for a node whose detents key is absent
+        // entirely.
         return resolved.isEmpty ? [.medium, .large] : resolved
     }
 
@@ -1638,6 +1714,11 @@ public struct MobRootView: View {
     @State private var currentNavVersion: Int = 0
     @State private var availableSheetHeight: CGFloat = 1
 
+    /// Share of the root's height a content-detent sheet may occupy at most.
+    /// Keeps a tall sheet visibly a sheet — parent still showing behind it —
+    /// rather than an unrecognisable full-screen cover.
+    private static let sheetHeightCeilingFraction: CGFloat = 0.9
+
     public init() {}
 
     public var body: some View {
@@ -1683,10 +1764,20 @@ public struct MobRootView: View {
                 .transition(.opacity)
             }
         }
+        // Live root height, published so a content-detent sheet can cap itself
+        // against real geometry rather than a guess. Read in a `.background`
+        // so it costs no layout, and `initial: true` so the first value lands
+        // without waiting for a resize. Re-fires on rotation, split view and
+        // Stage Manager resizes, which is what re-clamps a presented sheet.
+        //
+        // The ceiling is a fraction of the root rather than the whole thing:
+        // a content sheet that measures taller than the screen should still
+        // leave the parent visible behind it, the way .large does, instead of
+        // becoming an indistinguishable full-screen cover.
         .background {
             GeometryReader { geometry in
                 Color.clear.onChange(of: geometry.size.height, initial: true) { _, height in
-                    availableSheetHeight = max(1, height * 0.9)
+                    availableSheetHeight = max(1, height * Self.sheetHeightCeilingFraction)
                 }
             }
         }

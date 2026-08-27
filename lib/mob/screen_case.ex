@@ -93,6 +93,11 @@ defmodule Mob.ScreenCase do
   # PascalCase tag per line, converted to the snake_case `:type` atom the same
   # way the sigil does). Plus `:native_view`, the runtime-only escape hatch that
   # plugin / custom components serialize to and which has no template tag.
+  # Same compile-time-read caveat as Mob.Sigil's @known_tags: declare the
+  # manifests external resources or a tag addition won't recompile this module.
+  @external_resource Application.app_dir(:mob, "priv/tags/ios.txt")
+  @external_resource Application.app_dir(:mob, "priv/tags/android.txt")
+
   @renderable_types (
                       read = fn name ->
                         path = Application.app_dir(:mob, "priv/tags/#{name}")
