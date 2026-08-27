@@ -8,6 +8,34 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- **`Mob.Test.element_frames/1` no longer reports elements that are in the
+  render tree but not on screen.** 0.7.29 shipped a fix (MOB-102) that stopped
+  wiping the frame registry on every render and instead dropped only ids
+  absent from the incoming tree. That fixed static elements vanishing, but
+  "in the tree" is not "on screen": a `lazy_list` row scrolled out of range,
+  an inactive tab's subtree, and a dismissed sheet's content all stay in the
+  tree, so their last on-screen frame was reported indefinitely — and
+  `Mob.Test.tap_id/2` would tap whatever now occupied those coordinates. It
+  now returns `{:error, :not_found}` for them again, as it did before 0.7.29.
+  Tracked elements drop their own entry when the platform stops laying them
+  out, via a compare-and-delete so an outgoing screen can't remove an entry an
+  incoming screen just claimed under the same `:id` (MOB-103).
+- **A screen animating out of a nav transition no longer re-registers itself
+  at mid-animation coordinates.** `set_root` applies the new tree
+  asynchronously on the main thread, so an outgoing screen kept reporting
+  frames after its ids had already been purged. Writes for ids absent from the
+  current tree are now ignored (MOB-103).
+
+### Changed
+- `Mob.Test.element_frames/1`'s docs now state what counts as rendered, and
+  that a frame is a last-known position recorded at layout — poll until it
+  settles rather than trusting the first read after a change.
+
+---
+
 ## [0.7.29] - 2026-08-27
 
 ### Added
@@ -44,6 +72,14 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   presentation anchor, not the sheet's real on-screen content, so frame
   tracking is skipped there rather than publishing a value known to be
   wrong.
+- iOS: `Mob.Test.element_frames/1` no longer drops a still-visible element
+  that didn't move. The registry was cleared on every render on the
+  assumption that frame tracking would repopulate it, but tracking only
+  fires when an element's frame *changes*, so anything that stayed put
+  went missing until something moved it. Only ids absent from the incoming
+  tree are dropped now (MOB-102). See
+  `decisions/2026-08-27-frame-registry-purge-by-id.md` — and note the
+  Unreleased entry above, which corrects the converse case this introduced.
 
 ## [0.7.28] - 2026-08-26
 

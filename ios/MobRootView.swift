@@ -520,6 +520,12 @@ struct MobNodeView: View {
 private struct MobFrameTracker: ViewModifier {
     let node: MobNode
 
+    // Seq returned by this tracker's own most recent mob_register_frame write.
+    // Passed back on .onDisappear so the removal is a compare-and-delete: if an
+    // incoming screen has since claimed the same :id, its write wins and this
+    // tracker's teardown leaves the new entry alone.
+    @State private var lastSeq: UInt64 = 0
+
     func body(content: Content) -> some View {
         // A sheet's own switch-case view is a zero-size anchor used only to
         // attach `.sheet(isPresented:)` — its real, visible content is
@@ -532,11 +538,21 @@ private struct MobFrameTracker: ViewModifier {
                 .accessibilityIdentifier(id)
                 .background(
                     GeometryReader { geo in
-                        Color.clear.onChange(of: geo.frame(in: .global), initial: true) { _, frame in
-                            mob_register_frame(
-                                id, Double(frame.minX), Double(frame.minY),
-                                Double(frame.width), Double(frame.height))
-                        }
+                        Color.clear
+                            .onChange(of: geo.frame(in: .global), initial: true) { _, frame in
+                                lastSeq = mob_register_frame(
+                                    id, Double(frame.minX), Double(frame.minY),
+                                    Double(frame.width), Double(frame.height))
+                            }
+                            // Being in the BEAM tree isn't the same as being on
+                            // screen: a LazyVStack row scrolled out of range, an
+                            // inactive tab's subtree, or a dismissed sheet's
+                            // content all stay in the tree (so nif_set_root's
+                            // purge keeps them) while SwiftUI stops laying them
+                            // out — and onChange won't fire for them again.
+                            // Without this their last frame is reported forever
+                            // and Mob.Test.tap_id taps whatever is there now.
+                            .onDisappear { mob_unregister_frame(id, lastSeq) }
                     }
                 )
         } else {

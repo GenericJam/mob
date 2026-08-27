@@ -2000,8 +2000,8 @@ NSArray<NSString *> *mob_font_fallback(void) {
     return g_font_fallback ?: @[];
 }
 
-static NSMutableDictionary *mob_frame_registry(void);     // both defined with the
-static void mob_purge_frames_except(NSSet<NSString *> *); // element frame registry below
+static NSMutableDictionary *mob_frame_registry(void);  // both defined with the
+static void mob_adopt_frame_ids(NSSet<NSString *> *);  // element frame registry below
 static NSSet<NSString *> *mob_collect_frame_ids(MobNode *);
 
 static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
@@ -2031,7 +2031,13 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     // disappearing, and their stale frame survives. Purging by id instead
     // never touches a surviving element's existing entry (nothing to race),
     // and correctly drops one that's genuinely gone from the new tree.
-    mob_purge_frames_except(mob_collect_frame_ids(node));
+    //
+    // The retained id set also gates mob_register_frame, so the outgoing
+    // screen can't re-register itself while it animates away (setRoot below
+    // is dispatched to the main thread async — the teardown animation
+    // outlives this call). Elements that stay in the tree but stop being
+    // laid out are handled separately, via mob_unregister_frame.
+    mob_adopt_frame_ids(mob_collect_frame_ids(node));
 
     // Snapshot and reset the transition
     enif_mutex_lock(tap_mutex);
@@ -6391,30 +6397,83 @@ void mob_send_component_event(int handle, const char *event, const char *payload
 // thread. Both use only public APIs, so this is compiled unconditionally (the
 // reading NIF is still debug-gated). @synchronized guards the shared dictionary.
 static NSMutableDictionary<NSString *, NSArray<NSNumber *> *> *g_element_frames = nil;
+
+// Side table: id -> the seq of the write that produced g_element_frames[id].
+// Kept separate from g_element_frames so nif_element_frames can go on
+// JSON-encoding that dictionary directly and the {"id":[x,y,w,h]} wire shape
+// stays unchanged.
+static NSMutableDictionary<NSString *, NSNumber *> *g_element_frame_seqs = nil;
+static uint64_t g_frame_write_seq = 0;
+
+// The id set from the most recent nif_set_root; nil until the first render.
+// Guarded by the same lock as the registry.
+static NSSet<NSString *> *g_live_frame_ids = nil;
+
 static dispatch_once_t g_element_frames_once;
 
 static NSMutableDictionary *mob_frame_registry(void) {
     dispatch_once(&g_element_frames_once, ^{
       g_element_frames = [NSMutableDictionary dictionary];
+      g_element_frame_seqs = [NSMutableDictionary dictionary];
     });
     return g_element_frames;
 }
 
-void mob_register_frame(const char *id, double x, double y, double w, double h) {
+uint64_t mob_register_frame(const char *id, double x, double y, double w, double h) {
     if (!id)
+        return 0;
+    NSString *key = [NSString stringWithUTF8String:id];
+    if (!key)
+        return 0;
+    NSMutableDictionary *reg = mob_frame_registry();
+    @synchronized(reg) {
+        // Ignore writes for an id that isn't in the tree BEAM most recently
+        // sent. MobViewModel.setRoot dispatches to the main thread
+        // asynchronously, so a screen being animated out by a nav transition
+        // is still sliding offscreen well after nif_set_root purged it — and
+        // its GeometryReader keeps firing onChange the whole way down. Without
+        // this guard it re-registers itself at mid-animation coordinates.
+        if (g_live_frame_ids && ![g_live_frame_ids containsObject:key])
+            return 0;
+
+        reg[key] = @[ @(x), @(y), @(w), @(h) ];
+        uint64_t seq = ++g_frame_write_seq;
+        g_element_frame_seqs[key] = @(seq);
+        return seq;
+    }
+}
+
+// Drop a tracked element's frame when it stops being laid out while its :id is
+// still in the tree — a lazy-list row scrolled out of range (LazyVStack
+// discards it), an inactive tab's subtree (TabView keeps every tab in the tree
+// at once), a dismissed sheet's content (the sheet node stays mounted). Purging
+// by id alone can't see any of these: the id is still present, so
+// mob_adopt_frame_ids never drops it, and MobFrameTracker's onChange won't fire
+// for it again. Its last on-screen frame would otherwise be reported forever,
+// and Mob.Test.tap_id would tap whatever occupies those coordinates now.
+//
+// Compare-and-delete on `seq`: remove only if this caller's write is still the
+// current one. An outgoing screen's .onDisappear therefore can't delete an
+// entry an incoming screen just claimed under the same :id.
+void mob_unregister_frame(const char *id, uint64_t seq) {
+    if (!id || seq == 0)
         return;
     NSString *key = [NSString stringWithUTF8String:id];
     if (!key)
         return;
     NSMutableDictionary *reg = mob_frame_registry();
     @synchronized(reg) {
-        reg[key] = @[ @(x), @(y), @(w), @(h) ];
+        NSNumber *owner = g_element_frame_seqs[key];
+        if (!owner || owner.unsignedLongLongValue != seq)
+            return;
+        [reg removeObjectForKey:key];
+        [g_element_frame_seqs removeObjectForKey:key];
     }
 }
 
 // Recursively collect every :id present in a freshly-parsed tree, so
 // nif_set_root can purge just the registry entries that fell out of the new
-// tree instead of wiping everything (see mob_purge_frames_except below for
+// tree instead of wiping everything (see mob_adopt_frame_ids below for
 // why: a wipe-everything + MobFrameTracker-repopulates design races
 // SwiftUI's own removal pass for an outgoing element).
 static void mob_collect_frame_ids_into(MobNode *node, NSMutableSet<NSString *> *ids) {
@@ -6430,11 +6489,16 @@ static NSSet<NSString *> *mob_collect_frame_ids(MobNode *root) {
     return ids;
 }
 
-// Remove any registered frame whose id isn't in the incoming tree (called
-// from nif_set_root with that tree's live id set). A surviving element's
-// entry is never touched here — no race, no dependency on it re-registering
-// itself — only genuinely-removed ids are dropped.
-static void mob_purge_frames_except(NSSet<NSString *> *liveIds) {
+// Adopt the incoming tree's id set (called from nif_set_root): drop every
+// registered frame whose id fell out of the tree, and retain the set so
+// mob_register_frame can reject writes from views that are no longer in it.
+// A surviving element's entry is never touched here — no race, no dependency
+// on it re-registering itself — only genuinely-removed ids are dropped.
+//
+// Being in the tree is necessary but not sufficient for a frame to be live:
+// see mob_unregister_frame for the elements that stay in the tree but stop
+// being laid out.
+static void mob_adopt_frame_ids(NSSet<NSString *> *liveIds) {
     NSMutableDictionary *reg = mob_frame_registry();
     @synchronized(reg) {
         NSMutableArray<NSString *> *stale = [NSMutableArray array];
@@ -6442,6 +6506,8 @@ static void mob_purge_frames_except(NSSet<NSString *> *liveIds) {
             if (![liveIds containsObject:key])
                 [stale addObject:key];
         [reg removeObjectsForKeys:stale];
+        [g_element_frame_seqs removeObjectsForKeys:stale];
+        g_live_frame_ids = [liveIds copy];
     }
 }
 

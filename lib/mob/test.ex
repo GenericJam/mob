@@ -1112,6 +1112,20 @@ defmodule Mob.Test do
 
       Mob.Test.element_frames(node)
       #=> %{"save" => {24.0, 720.0, 327.0, 48.0}, "row_3" => {0.0, 300.0, 393.0, 56.0}}
+
+  ## What counts as "rendered"
+
+  An element appears here once it has laid out, and is dropped when it leaves
+  the tree *or* stops being laid out — a lazy-list row scrolled out of range,
+  a tab that isn't the active one, a dismissed sheet's content. Those all stay
+  in the render tree while off screen, so tree membership alone would report
+  them; they're dropped on the platform's own disappear signal instead.
+
+  A frame is a *last known* position, not a synchronous read: it's recorded as
+  the element lays out. After a render that moves an element, there's a brief
+  window before the next layout pass where the previous frame is still what's
+  reported. If you've just triggered a change and are about to act on the
+  result, poll until the frame settles rather than trusting the first read.
   """
   @spec element_frames(node()) ::
           %{optional(String.t()) => {float(), float(), float(), float()}} | {:error, term()}
