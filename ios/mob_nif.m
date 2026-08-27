@@ -1880,10 +1880,19 @@ static ERL_NIF_TERM nif_device_keep_awake(ErlNifEnv *env, int argc, const ERL_NI
 // ── NIF: safe_area/0 ─────────────────────────────────────────────────────────
 // Returns {Top, Right, Bottom, Left} in logical points (not pixels).
 // Must read UIWindow.safeAreaInsets on the main thread.
-
+//
+// Called from Mob.Screen.init/1 — i.e. on the boot path, before the first
+// screen ever mounts. A plain dispatch_sync here is a deadlock risk: if the
+// main thread hasn't reached an idle run-loop tick yet (observed during
+// scene-attachment on iPad, including the compatibility-mode window an
+// iPhone-only app runs in there), this blocks the BEAM boot thread forever —
+// the app never finishes launching. Bound the wait and fall back to zero
+// insets on timeout: a screen with wrong insets once is a far smaller bug
+// than an app that never boots.
 static ERL_NIF_TERM nif_safe_area(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     __block UIEdgeInsets insets = UIEdgeInsetsZero;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
       UIWindow *window = nil;
       for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
           if ([scene isKindOfClass:[UIWindowScene class]]) {
@@ -1894,7 +1903,10 @@ static ERL_NIF_TERM nif_safe_area(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
       }
       if (window)
           insets = window.safeAreaInsets;
+      dispatch_semaphore_signal(done);
     });
+    dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC));
+    dispatch_semaphore_wait(done, deadline);
     return enif_make_tuple4(
         env, enif_make_double(env, insets.top), enif_make_double(env, insets.right),
         enif_make_double(env, insets.bottom), enif_make_double(env, insets.left));
@@ -6720,7 +6732,7 @@ static ErlNifFunc nif_funcs[] = {
     {"register_tap", 1, nif_register_tap, 0},
     {"clear_taps", 0, nif_clear_taps, 0},
     {"exit_app", 0, nif_exit_app, 0},
-    {"safe_area", 0, nif_safe_area, 0},
+    {"safe_area", 0, nif_safe_area, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"haptic", 1, nif_haptic, 0},
     {"torch", 1, nif_torch, 0},
     {"clipboard_put", 1, nif_clipboard_put, 0},
