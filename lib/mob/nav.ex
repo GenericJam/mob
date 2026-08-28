@@ -130,6 +130,17 @@ defmodule Mob.Nav do
   @spec active(t()) :: stack_name() | nil
   def active(%__MODULE__{active: active}), do: active
 
+  @doc """
+  A stable identifier for the active stack, for addressing renders.
+
+  Falls back to `:__mob_single__` when the app declared no layout, so the sender
+  always has a concrete screen to compare against rather than a `nil` that would
+  match nothing.
+  """
+  @spec active_ref(t()) :: stack_name()
+  def active_ref(%__MODULE__{active: nil}), do: :__mob_single__
+  def active_ref(%__MODULE__{active: active}), do: active
+
   @doc "Declared stack names, in declaration order."
   @spec stacks(t()) :: [stack_name()]
   def stacks(%__MODULE__{order: order}), do: order
