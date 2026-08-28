@@ -233,6 +233,9 @@ defmodule Mob.Screen do
       Process.register(self(), :mob_screen)
       # Renders are casts, so a missing sender would blank the screen silently.
       Mob.Sender.ensure_started()
+      # Started before the first render: that render is what bakes the
+      # listener's pid into the native tap handles.
+      Mob.Listener.ensure_started()
     end
 
     socket =
