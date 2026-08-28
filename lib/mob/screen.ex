@@ -246,6 +246,12 @@ defmodule Mob.Screen do
         # inset from storage never wins over the live value.
         loaded_socket = maybe_load_state(screen_module, mounted_socket)
 
+        # Seed the stacks this app declared. The screen we just mounted becomes
+        # the active stack's current screen; every other declared stack stays
+        # unmounted until first visited. With no declaration (or no registry, as
+        # in tests) this is an empty single-stack state — the old behaviour.
+        nav = Mob.Nav.from_layout(Mob.Nav.Registry.layout(platform), screen_module)
+
         socket =
           if render_mode == :render do
             # Check for a notification that launched the app from a killed state.
@@ -256,18 +262,12 @@ defmodule Mob.Screen do
               json -> send(self(), {:mob_launch_notification, json})
             end
 
-            do_render(screen_module, loaded_socket)
+            do_render(screen_module, loaded_socket, nav)
           else
             loaded_socket
           end
 
         if screen_module.__mob_persist__(), do: schedule_state_sync()
-
-        # Seed the stacks this app declared. The screen we just mounted becomes
-        # the active stack's current screen; every other declared stack stays
-        # unmounted until first visited. With no declaration (or no registry, as
-        # in tests) this is an empty single-stack state — the old behaviour.
-        nav = Mob.Nav.from_layout(Mob.Nav.Registry.layout(platform), screen_module)
 
         {:ok, {screen_module, socket, nav, render_mode}}
 
@@ -285,7 +285,7 @@ defmodule Mob.Screen do
 
         new_socket =
           if render_mode == :render do
-            do_render(module, new_socket, transition)
+            do_render_sync(module, new_socket, nav, transition)
           else
             new_socket
           end
@@ -298,7 +298,7 @@ defmodule Mob.Screen do
 
         new_socket =
           if render_mode == :render do
-            do_render(module, new_socket, transition)
+            do_render_sync(module, new_socket, nav, transition)
           else
             new_socket
           end
@@ -327,7 +327,7 @@ defmodule Mob.Screen do
 
     new_socket =
       if render_mode == :render do
-        do_render(new_module, new_socket, transition)
+        do_render_sync(new_module, new_socket, new_nav, transition)
       else
         new_socket
       end
@@ -367,7 +367,7 @@ defmodule Mob.Screen do
   def handle_cast(:__mob_hot_reload__, {module, socket, nav, render_mode}) do
     new_socket =
       if render_mode == :render do
-        do_render(module, socket)
+        do_render(module, socket, nav)
       else
         socket
       end
@@ -474,7 +474,7 @@ defmodule Mob.Screen do
 
       new_socket =
         if render_mode == :render do
-          do_render(module, new_socket, transition)
+          do_render(module, new_socket, new_nav, transition)
         else
           new_socket
         end
@@ -494,7 +494,7 @@ defmodule Mob.Screen do
 
     new_socket =
       if render_mode == :render do
-        do_render(module, new_socket, transition)
+        do_render(module, new_socket, nav, transition)
       else
         new_socket
       end
@@ -506,7 +506,7 @@ defmodule Mob.Screen do
   def handle_info({:component_changed, _id, _module}, {module, socket, nav, render_mode}) do
     new_socket =
       if render_mode == :render do
-        do_render(module, socket)
+        do_render(module, socket, nav)
       else
         socket
       end
@@ -547,7 +547,7 @@ defmodule Mob.Screen do
 
     new_socket =
       if render_mode == :render do
-        do_render(module, new_socket, transition)
+        do_render(module, new_socket, nav, transition)
       else
         new_socket
       end
@@ -764,7 +764,7 @@ defmodule Mob.Screen do
 
   # ── Render pipeline ───────────────────────────────────────────────────────
 
-  defp do_render(module, socket, transition \\ :none) do
+  defp do_render(module, socket, nav, transition \\ :none) do
     platform = socket.__mob__.platform
     list_renderers = Map.get(socket.__mob__, :list_renderers, %{})
     socket = ensure_safe_area(socket, platform)
@@ -778,8 +778,29 @@ defmodule Mob.Screen do
       |> Mob.Component.expand(self(), platform)
 
     Mob.ComponentRegistry.reconcile(self(), active_component_keys)
-    {:ok, token} = Mob.Renderer.render(tree, platform, :mob_nif, transition)
-    Mob.Socket.put_root_view(socket, token)
+
+    # Every render NIF call goes through the sender — the native tap tables
+    # share one build cursor, so the clear/register/set_root sequence has to be
+    # serialised through a single process. See Mob.Sender.
+    #
+    # This process is still authoritative about which stack is active; MOB-113's
+    # router takes that over.
+    ref = Mob.Nav.active_ref(nav)
+    Mob.Sender.set_active(ref)
+    Mob.Sender.render(ref, tree, platform, :mob_nif, transition)
+
+    # The commit is asynchronous, so there is no token to wait for. Mob.Renderer
+    # has only ever returned this one constant.
+    Mob.Socket.put_root_view(socket, :json_tree)
+  end
+
+  # The synchronous call paths must not reply until the frame is committed —
+  # Mob.Test's navigation helpers document that guarantee. The handle_info paths
+  # stay fire-and-forget, which is what leaves the sender free to coalesce them.
+  defp do_render_sync(module, socket, nav, transition) do
+    rendered = do_render(module, socket, nav, transition)
+    Mob.Sender.sync()
+    rendered
   end
 
   defp ensure_safe_area(socket, platform) do

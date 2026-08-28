@@ -118,6 +118,14 @@ defmodule Mob.App do
           {:error, {:already_started, _}} -> :ok
         end
 
+        # The only process allowed to call the render NIFs. Must be up before
+        # on_start/0, which is where the app starts its root screen and the
+        # first render happens.
+        case Mob.Sender.start_link() do
+          {:ok, _} -> :ok
+          {:error, {:already_started, _}} -> :ok
+        end
+
         # Mob.Device dispatcher + platform fan-out modules. Order matters:
         # the IOS / Android modules must exist before Mob.Device starts,
         # because Mob.Device forwards platform-tagged messages to them.
