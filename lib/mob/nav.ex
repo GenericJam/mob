@@ -146,6 +146,27 @@ defmodule Mob.Nav do
   def stacks(%__MODULE__{order: order}), do: order
 
   @doc """
+  Apply `fun` to every parked entry — each inactive stack's current screen and
+  every entry in its history.
+
+  Entries are opaque to this module, so the caller decides what an entry is and
+  what replacing one means. `Mob.Screen` uses it to substitute a restarted
+  screen process wherever it was referenced.
+
+  The *active* stack's history is not covered: it lives in `history`, which the
+  caller already holds and can rewrite with `put_history/2`.
+  """
+  @spec map_parked(t(), (entry() -> entry())) :: t()
+  def map_parked(%__MODULE__{parked: parked} = nav, fun) when is_function(fun, 1) do
+    parked =
+      Map.new(parked, fn {name, %{current: current, history: history}} ->
+        {name, %{current: fun.(current), history: Enum.map(history, fun)}}
+      end)
+
+    %{nav | parked: parked}
+  end
+
+  @doc """
   Switch the active stack to `name`, parking `current_entry` under the stack it
   belongs to.
 
