@@ -133,44 +133,54 @@ These are the things we've burned ourselves on. Following them isn't optional.
    the app sits on the "Starting BEAM…" splash forever. The on_start callback
    should `{:ok, _} = Mob.Screen.start_root(...)` so failures crash loudly.
 
-3. **TDD discipline in mob_dev.** Every new public function gets a test.
+3. **Never call the render NIFs outside `Mob.Sender`.** `clear_taps`,
+   `register_tap`, `set_transition`, and `set_root` are one build-then-commit
+   sequence sharing a single global build cursor in the native tap tables
+   (`ios/mob_nif.m`, `android/jni/mob_nif.zig`). The double buffering there
+   protects concurrent *readers* — a drag event mid-render — and does nothing
+   for concurrent *writers*: two renders in flight interleave their handles into
+   the same building table and one screen's tree is never committed. Screens
+   build a tree and hand it to `Mob.Sender.render/5`; the sender is the only
+   caller. See `decisions/2026-08-28-sender-serialises-render.md`.
+
+4. **TDD discipline in mob_dev.** Every new public function gets a test.
    `mob_dev/CLAUDE.md` makes this explicit. Don't bypass — the tests are how we
    catch the multi-step regressions like the iOS-device deploy chain.
 
-4. **Format + credo before commit.** `mix format && mix credo --strict` from the
+5. **Format + credo before commit.** `mix format && mix credo --strict` from the
    relevant repo, every time. Both are clean across the codebase today; don't
    regress them.
 
-5. **Multi-repo changes batch together.** A user-visible fix in mob often needs
+6. **Multi-repo changes batch together.** A user-visible fix in mob often needs
    matching changes in mob_dev (build) and mob_new (template). Bumping versions
    without coordination produces ghost regressions. Check all three before
    declaring done.
 
-6. **iOS device sandbox blocks `fork()`.** The BEAM's `forker_start` and EPMD's
+7. **iOS device sandbox blocks `fork()`.** The BEAM's `forker_start` and EPMD's
    `run_daemon` both call fork; both are patched in our OTP cross-compile.
    Patches at `mob_dev/scripts/release/patches/`. Don't undo them.
 
-7. **iOS sim and iOS device are different build paths.** Sim → `ios/build.sh`
+8. **iOS sim and iOS device are different build paths.** Sim → `ios/build.sh`
    (`build_ios/1` in NativeBuild). Device → `ios/build_device.sh`
    (`build_ios_physical/2`). When `--device <udid>` is passed, mob_dev resolves
    it via `IOS.list_devices/0` to know which path to take. Don't shortcut.
 
-8. **LV port 4200 is global per device.** Two installed Mob LV apps + one
+9. **LV port 4200 is global per device.** Two installed Mob LV apps + one
    running = the second can't bind. Workaround for now: force-stop the squatter.
    Real fix tracked in `issues.md` #4 (hash bundle id into port).
 
-9. **Compile-time `~r//` literals are unsafe on OTP 28.** They bake a
+10. **Compile-time `~r//` literals are unsafe on OTP 28.** They bake a
    `:re_exported_pattern` and call `:re.import/1` at runtime; OTP 28.0 removed
    that function. Use `Regex.compile!("...", "flags")` to compile at runtime.
    71 literals across mob_dev were swept in 0.3.17.
 
-10. **`:mob_nif.log/1` for early startup logging, `Logger` after Mob.App.start.**
+11. **`:mob_nif.log/1` for early startup logging, `Logger` after Mob.App.start.**
     `Mob.NativeLogger.install()` runs as part of `Mob.App.start` and reroutes
     `Logger` to NSLog/logcat. Before that point (steps 1–4 in the Erlang
     bootstrap), `Logger` output goes to stderr and is invisible. Use
     `:mob_nif.log("message")` for diagnostics during early init.
 
-11. **NIFs on Android must be statically linked, not `dlopen`'d.** Android's
+12. **NIFs on Android must be statically linked, not `dlopen`'d.** Android's
     `System.loadLibrary` loads native libs `RTLD_LOCAL` by default — the
     parent's `enif_*` symbols are invisible to subsequently-`dlopen`'d
     children. The OTP-internal NIFs (`crypto`, `asn1rt_nif`) are built as
@@ -183,14 +193,14 @@ These are the things we've burned ourselves on. Following them isn't optional.
     tried `-Wl,--export-dynamic` and runtime `RTLD_GLOBAL` self-dlopen;
     neither works on Android).
 
-12. **`:crypto` on-device is real OpenSSL** (3.x, statically linked).
+13. **`:crypto` on-device is real OpenSSL** (3.x, statically linked).
     No more shim — old code that special-cased "no crypto on mobile"
     can be deleted. The deployer's `generate_crypto_shim/0` only fires
     when a cached OTP runtime *lacks* `lib/crypto-*/ebin/crypto.beam`;
     current tarballs have it. See `mob/crypto_plan.md` for the rebuild
     process when bumping OpenSSL.
 
-13. **Igniter-based tasks live in mob_dev, never in the mob_new archive.**
+14. **Igniter-based tasks live in mob_dev, never in the mob_new archive.**
     mob_new ships as a self-contained Mix archive; `ArchiveSelfContainedTest`
     pins that no hex-dep modules are reachable from archive code (an archive
     bundles only its own beams, so a call into a hex dep crashes every
