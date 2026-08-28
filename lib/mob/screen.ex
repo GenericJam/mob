@@ -229,7 +229,11 @@ defmodule Mob.Screen do
 
     # Register under :mob_screen so C-layer mob_handle_back() can find us.
     # Only in :render mode (production); tests use :no_render and run without a NIF.
-    if render_mode == :render, do: Process.register(self(), :mob_screen)
+    if render_mode == :render do
+      Process.register(self(), :mob_screen)
+      # Renders are casts, so a missing sender would blank the screen silently.
+      Mob.Sender.ensure_started()
+    end
 
     socket =
       if render_mode == :render do
@@ -251,6 +255,7 @@ defmodule Mob.Screen do
         # unmounted until first visited. With no declaration (or no registry, as
         # in tests) this is an empty single-stack state — the old behaviour.
         nav = Mob.Nav.from_layout(Mob.Nav.Registry.layout(platform), screen_module)
+        Mob.Sender.set_active(Mob.Nav.active_ref(nav))
 
         socket =
           if render_mode == :render do
@@ -634,9 +639,11 @@ defmodule Mob.Screen do
 
     case Mob.Nav.switch(nav, tab, current) do
       {:switched, new_nav, {target_module, target_socket}} ->
+        Mob.Sender.set_active(Mob.Nav.active_ref(new_nav))
         {target_module, target_socket, new_nav, :none}
 
       {:mount_root, new_nav, root_module} ->
+        Mob.Sender.set_active(Mob.Nav.active_ref(new_nav))
         {mounted_module, mounted} = mount_destination(root_module, %{}, socket)
         {mounted_module, mounted, new_nav, :none}
 
@@ -783,11 +790,12 @@ defmodule Mob.Screen do
     # share one build cursor, so the clear/register/set_root sequence has to be
     # serialised through a single process. See Mob.Sender.
     #
-    # This process is still authoritative about which stack is active; MOB-113's
-    # router takes that over.
-    ref = Mob.Nav.active_ref(nav)
-    Mob.Sender.set_active(ref)
-    Mob.Sender.render(ref, tree, platform, :mob_nif, transition)
+    # Which screen is active is declared by the navigation code (init and
+    # apply_switch_tab/4), not here. Announcing it on every render would let any
+    # screen promote itself simply by re-rendering — at MOB-112 a background
+    # screen's timer would then commit over the foreground one, disarming the
+    # drop-inactive mechanism this whole step exists to build.
+    Mob.Sender.render(Mob.Nav.active_ref(nav), tree, platform, :mob_nif, transition)
 
     # The commit is asynchronous, so there is no token to wait for. Mob.Renderer
     # has only ever returned this one constant.
@@ -799,7 +807,10 @@ defmodule Mob.Screen do
   # stay fire-and-forget, which is what leaves the sender free to coalesce them.
   defp do_render_sync(module, socket, nav, transition) do
     rendered = do_render(module, socket, nav, transition)
-    Mob.Sender.sync()
+    # No deadline: rendering was unbounded when it ran inline, and sync/1 is a
+    # call, so a default 5s timeout would turn a slow frame on a loaded device
+    # into a dead screen process.
+    Mob.Sender.sync(:infinity)
     rendered
   end
 

@@ -91,7 +91,7 @@ Start it explicitly after `ensure_all_started/1`:
 ```elixir
 {:ok, _} = Application.ensure_all_started(:lv_test)
 {:ok, _} = Mob.ComponentRegistry.start_link()
-Mob.Screen.start_root(LvTest.MobScreen)
+Mob.Screen.start_root(LvTest.MobScreen)   # starts Mob.Sender itself if needed
 ```
 
 ---
