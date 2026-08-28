@@ -1,6 +1,8 @@
 defmodule Mob.ListenerTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Mob.Listener
 
   setup do
@@ -14,8 +16,17 @@ defmodule Mob.ListenerTest do
 
   defp start_listener do
     {:ok, pid} = Listener.start_link([])
-    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+    on_exit(fn -> stop_safely(pid) end)
     pid
+  end
+
+  # `if Process.alive?, do: GenServer.stop` races: the process can exit between
+  # the check and the stop, and the :noproc exit then fails the test from inside
+  # the on_exit runner.
+  defp stop_safely(pid) do
+    GenServer.stop(pid)
+  catch
+    :exit, _ -> :ok
   end
 
   describe "handler/1 without a listener" do
@@ -102,6 +113,22 @@ defmodule Mob.ListenerTest do
       assert Process.alive?(listener)
     end
 
+    test "an unmodelled routed shape is logged, not silently dropped" do
+      # A native sender with an arity the listener does not model delivers
+      # nothing to the screen: the control just stops working, with no crash.
+      # The log line is the only way that becomes visible.
+      listener = start_listener()
+
+      log =
+        capture_log(fn ->
+          send(listener, {:change, {:mob_route, self(), :tag}, :extra, :unmodelled})
+          send(listener, {:tap, {:mob_route, self(), :ping}})
+          assert_receive {:tap, :ping}
+        end)
+
+      assert log =~ "unhandled routed event"
+    end
+
     test "an unrecognised message is ignored" do
       listener = start_listener()
       send(listener, :garbage)
@@ -128,11 +155,24 @@ defmodule Mob.ListenerTest do
         length(Agent.get(__MODULE__, & &1)) - 1
       end
 
-      # mob_send_tap: sends {event, tag} to the pid stored in the handle.
+      # mob_send_tap / mob_send_event / mob_send_scrolled_past: {event, tag}.
       def fire(handle, event) do
+        {pid, tag} = target(handle)
+        send(pid, {event, tag})
+      end
+
+      # mob_send_change / compose / swipe / scroll / drag / pinch / rotate /
+      # pointer_move: {event, tag, payload}. Modelling only the 2-tuple family
+      # is what let the missing 3-tuple clause pass review the first time.
+      def fire(handle, event, payload) do
+        {pid, tag} = target(handle)
+        send(pid, {event, tag, payload})
+      end
+
+      defp target(handle) do
         case Enum.at(registered(), handle) do
-          {pid, tag} -> send(pid, {event, tag})
-          pid when is_pid(pid) -> send(pid, {event, :ok})
+          {pid, tag} -> {pid, tag}
+          pid when is_pid(pid) -> {pid, :ok}
         end
       end
     end
@@ -174,21 +214,69 @@ defmodule Mob.ListenerTest do
       assert_receive {:tap, :save}
     end
 
-    test "other event kinds round trip too" do
+    test "a payload-free event round trips" do
+      start_listener()
+      screen = self()
+
+      tree = %{type: :text_field, props: %{on_submit: {screen, :submitted}}, children: []}
+      Mob.Renderer.render(tree, :ios, FakeNative, :none)
+
+      FakeNative.fire(0, :submit)
+      assert_receive {:submit, :submitted}
+    end
+
+    test "a value-carrying event round trips with its payload" do
+      # The regression this file missed: mob_send_change sends {change, tag,
+      # value}, so a listener that only unwraps {event, tag} drops every text
+      # field, toggle, slider and tab selection silently.
+      start_listener()
+      screen = self()
+
+      tree = %{type: :text_field, props: %{on_change: {screen, :email}}, children: []}
+      Mob.Renderer.render(tree, :ios, FakeNative, :none)
+
+      FakeNative.fire(0, :change, "hello@example.com")
+      assert_receive {:change, :email, "hello@example.com"}
+    end
+
+    test "every 3-tuple native sender round trips" do
       start_listener()
       screen = self()
 
       tree = %{
-        type: :text_field,
-        props: %{on_change: {screen, :changed}, on_submit: {screen, :submitted}},
+        type: :canvas,
+        props: %{
+          on_change: {screen, :changed},
+          on_compose: {screen, :composed},
+          on_swipe: {screen, :swiped},
+          on_scroll: {screen, :scrolled},
+          on_drag: {screen, :dragged},
+          on_pinch: {screen, :pinched},
+          on_rotate: {screen, :rotated},
+          on_pointer_move: {screen, :moved}
+        },
         children: []
       }
 
       Mob.Renderer.render(tree, :ios, FakeNative, :none)
 
-      for {handle, event, tag} <- [{0, :change, :changed}, {1, :submit, :submitted}] do
-        FakeNative.fire(handle, event)
-        assert_receive {^event, ^tag}
+      handles =
+        for {target, i} <- Enum.with_index(FakeNative.registered()),
+            into: %{},
+            do: {elem(elem(target, 1), 2), i}
+
+      for {event, tag} <- [
+            change: :changed,
+            compose: :composed,
+            swipe: :swiped,
+            scroll: :scrolled,
+            drag: :dragged,
+            pinch: :pinched,
+            rotate: :rotated,
+            pointer_move: :moved
+          ] do
+        FakeNative.fire(handles[tag], event, %{payload: tag})
+        assert_receive {^event, ^tag, %{payload: ^tag}}
       end
     end
   end
@@ -197,11 +285,14 @@ defmodule Mob.ListenerTest do
     test "starts the listener when missing and is a no-op when present" do
       refute Listener.running?()
       assert :ok = Listener.ensure_started()
+      # Registered before the assertions below, so a failure cannot leak a
+      # listener into unrelated test files.
+      on_exit(fn -> if pid = Process.whereis(Listener), do: stop_safely(pid) end)
+
       assert Listener.running?()
       pid = Process.whereis(Listener)
       assert :ok = Listener.ensure_started()
       assert Process.whereis(Listener) == pid
-      on_exit(fn -> if Listener.running?(), do: GenServer.stop(Listener) end)
     end
 
     test "does not link to the caller" do
@@ -216,12 +307,13 @@ defmodule Mob.ListenerTest do
 
       assert_receive :started
       listener = Process.whereis(Listener)
+      on_exit(fn -> stop_safely(listener) end)
+
       ref = Process.monitor(caller)
       send(caller, :die)
       assert_receive {:DOWN, ^ref, :process, ^caller, _}
 
       assert Process.alive?(listener)
-      on_exit(fn -> if Listener.running?(), do: GenServer.stop(Listener) end)
     end
   end
 end

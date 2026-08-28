@@ -29,12 +29,29 @@ forwards `{:tap, tag}` to the screen. The screen sees exactly the message it saw
 before. **No `.m`, `.zig` or generator-template change**, which was the epic's
 constraint.
 
-### One clause, not one per event
+### Two shapes, not one
 
-The envelope is unwrapped on the event atom, so `:tap`, `:change`, `:focus`,
-`:blur`, `:submit`, `:dismiss`, `:select`, `:scroll`, `:drag` and the rest are
-handled by a single `handle_info/2` clause. Adding a native event kind needs no
-listener change.
+The first cut of this change unwrapped a single shape, `{event, tag}`, on the
+assumption that every handle-addressed native event looked alike. It does not,
+and the cost of being wrong is invisible: an unmatched envelope reaches the
+screen as nothing at all, so the control simply stops working with no crash and
+no log.
+
+Native has two families, both reading a tap handle:
+
+* `{event, tag}` — `mob_send_tap`, `mob_send_event`, `mob_send_scrolled_past`:
+  `:tap`, `:focus`, `:blur`, `:submit`, `:dismiss`, `:select`.
+* `{event, tag, payload}` — `mob_send_change`, `mob_send_compose`,
+  `mob_send_swipe_with_direction`, `mob_send_scroll`, `mob_send_drag`,
+  `mob_send_pinch`, `mob_send_rotate`, `mob_send_pointer_move`: every text
+  field, toggle and slider `on_change`, tab selection (which is wired to
+  `mob_send_change_str`), and every gesture stream.
+
+Both are unwrapped on the event atom, so a new event *kind* needs no change
+here — but a new *arity* would, which is why anything else carrying a
+`{:mob_route, _, _}` is now logged at error rather than discarded. No sender
+uses a 4-tuple: every `enif_make_tuple4` in `ios/mob_nif.m` is a NIF return
+value, not a message.
 
 ### The envelope carries a pid, not a screen ref
 
@@ -84,6 +101,11 @@ needed no changes.
   by `Mob.Screen.init/1` — unlinked, for the same reason as `Mob.Sender`: the
   caller is a screen, and a screen crash must not take down the process every
   screen's events arrive through.
+- **The native double in the tests has to model both families.** The version
+  that modelled only `{event, tag}` produced a passing test asserting that
+  `on_change` worked while it was in fact being dropped — worse than no test.
+  `FakeNative.fire/3` now replays the 3-tuple senders, and every one of the
+  eight has a round-trip test.
 - Like the sender, it has no supervisor. Its death is less severe — `handler/1`
   falls back to direct registration on the *next* render — but handles already
   baked with the dead listener's pid go nowhere until then.

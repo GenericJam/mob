@@ -23,10 +23,22 @@ defmodule Mob.Listener do
   screens exist, and **no `.m`, `.zig` or generator-template change is
   required** to move the inbound path off a single hard-wired screen process.
 
-  Because the envelope is unwrapped generically on the event atom, every event
-  the native layer sends this way — `:tap`, `:change`, `:focus`, `:blur`,
-  `:submit`, `:dismiss`, `:select`, `:scroll`, `:drag`, and the rest — is
-  handled by one clause rather than one per event.
+  Native has **two** message shapes for handle-addressed events, and the
+  listener has to unwrap both:
+
+  * `{event, tag}` — `mob_send_tap`, `mob_send_event`, `mob_send_scrolled_past`.
+    Covers `:tap`, `:focus`, `:blur`, `:submit`, `:dismiss`, `:select` and the
+    other payload-free events.
+  * `{event, tag, payload}` — `mob_send_change`, `mob_send_compose`,
+    `mob_send_swipe_with_direction`, `mob_send_scroll`, `mob_send_drag`,
+    `mob_send_pinch`, `mob_send_rotate`, `mob_send_pointer_move`. This is
+    everything carrying a value: text-field and toggle and slider `on_change`,
+    tab selection, and every gesture stream.
+
+  Both are unwrapped on the event atom rather than one clause per event, so a
+  new event kind needs no change here — but a new *arity* would. Anything else
+  is logged rather than silently discarded, because an unmodelled shape is
+  invisible otherwise: the widget simply stops working.
 
   ## Why a hop at all
 
@@ -51,6 +63,8 @@ defmodule Mob.Listener do
   """
 
   use GenServer
+
+  require Logger
 
   @doc "Start the listener. Named, so there is exactly one."
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -93,9 +107,10 @@ defmodule Mob.Listener do
   """
   @spec handler(pid() | {pid(), term()}) :: pid() | {pid(), term()}
   def handler(target) do
-    case Process.whereis(__MODULE__) do
-      nil -> target
-      listener -> {listener, envelope(target)}
+    case {Process.whereis(__MODULE__), envelope(target)} do
+      {nil, _} -> target
+      {_listener, ^target} -> target
+      {listener, envelope} -> {listener, envelope}
     end
   end
 
@@ -103,6 +118,10 @@ defmodule Mob.Listener do
   # screen receives {:tap, :ok}. Preserved exactly.
   defp envelope(pid) when is_pid(pid), do: {:mob_route, pid, :ok}
   defp envelope({pid, tag}) when is_pid(pid), do: {:mob_route, pid, tag}
+  # Anything else passes through untouched, matching what the no-listener
+  # branch does. The two branches disagreeing would mean a shape that works
+  # without a listener and raises mid-render with one.
+  defp envelope(other), do: other
 
   # ── GenServer ─────────────────────────────────────────────────────────────
 
@@ -119,5 +138,26 @@ defmodule Mob.Listener do
     {:noreply, state}
   end
 
-  def handle_info(_message, state), do: {:noreply, state}
+  def handle_info({event, {:mob_route, pid, tag}, payload}, state) when is_atom(event) do
+    send(pid, {event, tag, payload})
+    {:noreply, state}
+  end
+
+  def handle_info(message, state) do
+    # An envelope shape we do not model reaches the screen as nothing at all —
+    # the control just stops responding, with no crash and no log. Say so.
+    if routed?(message) do
+      Logger.error("[mob] Mob.Listener received an unhandled routed event: #{inspect(message)}")
+    end
+
+    {:noreply, state}
+  end
+
+  defp routed?(message) when is_tuple(message) do
+    message
+    |> Tuple.to_list()
+    |> Enum.any?(&match?({:mob_route, _pid, _tag}, &1))
+  end
+
+  defp routed?(_message), do: false
 end
