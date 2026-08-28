@@ -126,6 +126,14 @@ defmodule Mob.App do
           {:error, {:already_started, _}} -> :ok
         end
 
+        # The single inbound entry point from native. Must also be up before the
+        # first render, because that render is what bakes the listener's pid
+        # into the native tap handles.
+        case Mob.Listener.start_link() do
+          {:ok, _} -> :ok
+          {:error, {:already_started, _}} -> :ok
+        end
+
         # Mob.Device dispatcher + platform fan-out modules. Order matters:
         # the IOS / Android modules must exist before Mob.Device starts,
         # because Mob.Device forwards platform-tagged messages to them.
