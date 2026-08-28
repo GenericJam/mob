@@ -454,11 +454,22 @@ defmodule Mob.Screen do
       {:noreply, {module, socket, nav, render_mode}}
     else
       {module, new_socket, new_nav, transition} =
-        if Mob.Nav.history(nav) == [] do
-          if render_mode == :render, do: :mob_nif.exit_app()
-          {module, socket, nav, :none}
-        else
-          apply_nav_action(module, Mob.Socket.put_mob(socket, :nav_action, {:pop}), nav)
+        case {Mob.Nav.history(nav), Mob.Nav.back_target(nav)} do
+          {[_ | _], _} ->
+            apply_nav_action(module, Mob.Socket.put_mob(socket, :nav_action, {:pop}), nav)
+
+          # Nothing left to pop on a secondary stack: fall back to the first one
+          # rather than exiting and discarding every parked stack.
+          {[], {:switch, target}} ->
+            apply_nav_action(
+              module,
+              Mob.Socket.put_mob(socket, :nav_action, {:switch_tab, target}),
+              nav
+            )
+
+          {[], :exit} ->
+            if render_mode == :render, do: :mob_nif.exit_app()
+            {module, socket, nav, :none}
         end
 
       new_socket =
@@ -518,7 +529,7 @@ defmodule Mob.Screen do
   # at every `{:notification, payload}`. A plugin whose `:match` matches handles
   # it and the host screen does not also see it; an unmatched notification falls
   # through to the screen's own `handle_info` like any other message.
-  def handle_info({:notification, payload} = message, {_module, _socket, _nh, _rm} = state)
+  def handle_info({:notification, payload} = message, {_module, _socket, _nav, _mode} = state)
       when is_map(payload) do
     case Mob.Plugins.dispatch_notification(payload) do
       :handled -> {:noreply, state}
