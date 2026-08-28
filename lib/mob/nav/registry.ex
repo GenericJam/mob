@@ -8,11 +8,26 @@ defmodule Mob.Nav.Registry do
 
   `register/2` is available for runtime additions: A/B testing, library screens,
   or dynamic feature flags.
+
+  ## Two things are recorded, not one
+
+  Walking `navigation/1` produces a flat **route table** (`name -> {module,
+  params}`) that backs `push_screen/2,3` and friends, and a per-platform
+  **layout** that preserves the declaration tree — which stacks a `tab_bar/1`
+  or `drawer/1` contains, and in what order.
+
+  The route table alone records only that a stack name exists. That was the
+  whole of what this module kept, which is why `Mob.App.tab_bar/1` could be
+  declared but not backed by the runtime: nothing downstream could tell that
+  `:home` and `:settings` were sibling stacks rather than two unrelated routes.
+  `Mob.Nav.from_layout/2` consumes the layout to build one independent stack per
+  branch. See `decisions/2026-08-27-screen-process-architecture.md`.
   """
 
   use GenServer
 
   @table __MODULE__
+  @layout_table Module.concat(__MODULE__, Layouts)
 
   @doc """
   Start the registry, seeding it from the given App module.
@@ -72,11 +87,34 @@ defmodule Mob.Nav.Registry do
     :ok
   end
 
+  @doc """
+  Return the navigation layout declared for `platform`, or `nil`.
+
+  The layout is the raw map returned by the app's `navigation/1` — a
+  `Mob.App.stack/2`, `tab_bar/1`, or `drawer/1` declaration. `nil` when the
+  registry has not been started (tests that drive a screen directly) or when
+  the app declared nothing for this platform.
+  """
+  @spec layout(atom()) :: map() | nil
+  def layout(platform) when is_atom(platform) do
+    case :ets.whereis(@layout_table) do
+      :undefined ->
+        nil
+
+      _tid ->
+        case :ets.lookup(@layout_table, platform) do
+          [{^platform, layout}] -> layout
+          [] -> nil
+        end
+    end
+  end
+
   # ── GenServer ──────────────────────────────────────────────────────────────
 
   @impl GenServer
   def init(app_module) do
     :ets.new(@table, [:named_table, :public, read_concurrency: true])
+    :ets.new(@layout_table, [:named_table, :public, read_concurrency: true])
     populate(app_module)
     {:ok, app_module}
   end
@@ -84,6 +122,7 @@ defmodule Mob.Nav.Registry do
   defp populate(app_module) do
     for platform <- [:android, :ios] do
       nav = app_module.navigation(platform)
+      :ets.insert(@layout_table, {platform, nav})
       register_nav(nav)
     end
 
