@@ -641,17 +641,64 @@ private struct MobFrameTracker: ViewModifier {
 // The fixed-width path is what makes circular ring cells possible without
 // a dedicated primitive — set width: N, height: N, corner_radius: N/2,
 // border_color + border_width and the box renders as a ring.
-private struct MobBox: View {
+// Tap wiring and accessibility semantics for a composite Box, kept out of
+// MobBox's main modifier chain so the Swift type checker can cope.
+private struct MobBoxSemantics: ViewModifier {
     let node: MobNode
 
-    /// True when the box is standing in for a control rather than plain
-    /// layout — it carries a label, or the caller asked for a button role.
-    /// Only then is it right to collapse the subtree into one accessibility
-    /// element; a passive box with labelled children must keep them visible
-    /// to VoiceOver.
+    /// True when the box stands in for a control rather than plain layout —
+    /// it carries a label, or the caller asked for a button role. Only then
+    /// is it right to collapse the subtree into one accessibility element; a
+    /// passive box with labelled children must keep them visible to VoiceOver.
     private var isAccessibilityControl: Bool {
         node.accessibilityLabel != nil || node.accessibilityRole == "button"
     }
+
+    // Only .isButton is set explicitly. SwiftUI's AccessibilityTraits has no
+    // .isNotEnabled member — the disabled trait is not something you add, it
+    // is what `.disabled(true)` below already publishes to VoiceOver. An
+    // explicit `.accessibilityAddTraits(.isNotEnabled)` does not compile.
+    private var traits: AccessibilityTraits {
+        node.accessibilityRole == "button" ? .isButton : []
+    }
+
+    func body(content: Content) -> some View {
+        content
+            // Branch on `onTap` presence only, never on `disabled`. `ifLet` is
+            // @ViewBuilder if/else, i.e. _ConditionalContent — flipping the
+            // branch gives SwiftUI a structurally different view and tears the
+            // subtree down. `disabled` is routinely toggled, so branching on it
+            // would drop a wrapped TextField's in-flight text and focus, and
+            // re-present a wrapped Sheet. The check moves inside the closure,
+            // where it costs nothing structurally.
+            .ifLet(node.onTap) { view, tap in
+                view.contentShape(Rectangle()).onTapGesture {
+                    if !node.disabled { tap() }
+                }
+            }
+            // Collapse to a single accessibility element whenever this box is
+            // acting as a control. Traits added without collapsing land on
+            // every descendant instead, so a role-only box would announce each
+            // nested Text as its own button.
+            .ifLet(isAccessibilityControl ? () : nil) { view, _ in
+                view.accessibilityElement(children: .ignore)
+            }
+            .ifLet(node.accessibilityLabel) { view, label in
+                view.accessibilityLabel(label)
+            }
+            // One OptionSet, so no _ConditionalContent branch on `disabled`.
+            .accessibilityAddTraits(traits)
+            // .disabled, not .allowsHitTesting: allowsHitTesting(false) makes
+            // the view transparent to touches, so a disabled box used as a
+            // blocking overlay or dimmed backdrop would pass taps through to
+            // whatever sits behind it. .disabled blocks interaction in the
+            // subtree while still consuming the touch.
+            .disabled(node.disabled)
+    }
+}
+
+private struct MobBox: View {
+    let node: MobNode
 
     var body: some View {
         let alignment: Alignment = boxAlignmentFromString(node.boxAlign)
@@ -692,39 +739,13 @@ private struct MobBox: View {
                         lineWidth: node.borderWidth)
                 .allowsHitTesting(false)
         )
-        // Branch on `onTap` presence only, never on `disabled`. `ifLet` is
-        // @ViewBuilder if/else, i.e. _ConditionalContent — flipping the branch
-        // gives SwiftUI a structurally different view and tears the subtree
-        // down. `disabled` is a routinely toggled prop, so branching on it
-        // would drop a wrapped TextField's in-flight text and focus, and
-        // re-present a wrapped Sheet. The disabled check moves inside the
-        // closure, where it costs nothing structurally.
-        .ifLet(node.onTap) { view, tap in
-            view.contentShape(Rectangle()).onTapGesture {
-                if !node.disabled { tap() }
-            }
-        }
         .mobGestures(node)
-        // Collapse to a single accessibility element whenever this box is
-        // acting as a control — a label OR an explicit button role. Traits
-        // added without collapsing land on every descendant instead, so a
-        // role-only box would announce each nested Text as its own button.
-        .ifLet(isAccessibilityControl ? () : nil) { view, _ in
-            view.accessibilityElement(children: .ignore)
-        }
-        .ifLet(node.accessibilityLabel) { view, label in
-            view.accessibilityLabel(label)
-        }
-        // OptionSet-valued, so these stay unconditional modifiers and add no
-        // _ConditionalContent branch on `disabled`.
-        .accessibilityAddTraits(node.accessibilityRole == "button" ? .isButton : [])
-        .accessibilityAddTraits(node.disabled ? .isNotEnabled : [])
-        // .disabled, not .allowsHitTesting: allowsHitTesting(false) makes the
-        // view transparent to touches, so a disabled box used as a blocking
-        // overlay or dimmed backdrop would pass taps through to whatever sits
-        // behind it. .disabled blocks interaction in the subtree while still
-        // consuming the touch.
-        .disabled(node.disabled)
+        // Interaction + accessibility live in their own ViewModifier: folding
+        // them into this chain inline pushed it past SwiftUI's type-inference
+        // budget and the Swift build failed outright ("unable to type-check
+        // this expression in reasonable time"). Same reason MobBox itself was
+        // extracted from MobNodeView.
+        .modifier(MobBoxSemantics(node: node))
         // (offset is applied uniformly by MobNodeView's body; not here)
     }
 }

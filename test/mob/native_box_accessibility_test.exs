@@ -30,15 +30,17 @@ defmodule Mob.NativeBoxAccessibilityTest do
     # added without collapsing land on every descendant, so a role-only box
     # would announce each nested Text as its own button.
     assert source =~ "node.accessibilityLabel != nil || node.accessibilityRole == \"button\""
+
+    # Kept in its own ViewModifier: inlining these into MobBox's chain pushed
+    # it past the Swift type-inference budget and failed the native build,
+    # which no Elixir-side check can catch.
+    assert source =~ "struct MobBoxSemantics: ViewModifier"
     assert source =~ "isAccessibilityControl ? () : nil"
 
-    # Traits stay unconditional OptionSet modifiers. Branching on `disabled`
-    # would make it a _ConditionalContent boundary and tear down the subtree
-    # on every toggle, losing a wrapped TextField's text and focus.
-    assert source =~
-             ~s|.accessibilityAddTraits(node.accessibilityRole == "button" ? .isButton : [])|
-
-    assert source =~ ".accessibilityAddTraits(node.disabled ? .isNotEnabled : [])"
+    # Traits go on as one unconditional OptionSet modifier. Branching on
+    # `disabled` would make it a _ConditionalContent boundary and tear down the
+    # subtree on every toggle, losing a wrapped TextField's text and focus.
+    assert source =~ ".accessibilityAddTraits(traits)"
 
     # .disabled, not .allowsHitTesting: the latter makes the box transparent
     # to touches, so a disabled backdrop would pass taps through to the
