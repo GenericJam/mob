@@ -254,6 +254,13 @@ defmodule Mob.Renderer do
     {:ok, :json_tree}
   end
 
+  # Every interactive prop registers through here rather than calling
+  # nif.register_tap/1 directly, so the inbound path can be moved off a single
+  # hard-wired screen process in one place instead of ~35. Mob.Listener.handler/1
+  # returns the target unchanged when no listener is running, which is what the
+  # renderer's own tests rely on. See Mob.Listener.
+  defp register_handler(nif, target), do: nif.register_tap(Mob.Listener.handler(target))
+
   @doc "Return the full color palette map (token → ARGB integer)."
   @spec colors() :: %{atom() => non_neg_integer()}
   def colors, do: @colors
@@ -344,31 +351,31 @@ defmodule Mob.Renderer do
     final
     |> Enum.flat_map(fn
       {:on_tap, pid} when is_pid(pid) ->
-        [{"on_tap", nif.register_tap(pid)}]
+        [{"on_tap", register_handler(nif, pid)}]
 
       {:on_tap, {pid, tag}} when is_pid(pid) and is_atom(tag) ->
-        [{"on_tap", nif.register_tap({pid, tag})}, {"accessibility_id", Atom.to_string(tag)}]
+        [{"on_tap", register_handler(nif, {pid, tag})}, {"accessibility_id", Atom.to_string(tag)}]
 
       {:on_tap, {pid, tag}} when is_pid(pid) ->
-        [{"on_tap", nif.register_tap({pid, tag})}]
+        [{"on_tap", register_handler(nif, {pid, tag})}]
 
       {:on_change, {pid, tag}} when is_pid(pid) ->
-        [{"on_change", nif.register_tap({pid, tag})}]
+        [{"on_change", register_handler(nif, {pid, tag})}]
 
       {:on_focus, {pid, tag}} when is_pid(pid) ->
-        [{"on_focus", nif.register_tap({pid, tag})}]
+        [{"on_focus", register_handler(nif, {pid, tag})}]
 
       {:on_blur, {pid, tag}} when is_pid(pid) ->
-        [{"on_blur", nif.register_tap({pid, tag})}]
+        [{"on_blur", register_handler(nif, {pid, tag})}]
 
       {:on_submit, {pid, tag}} when is_pid(pid) ->
-        [{"on_submit", nif.register_tap({pid, tag})}]
+        [{"on_submit", register_handler(nif, {pid, tag})}]
 
       # Sheet dismissal — swipe-down, back gesture, or outside tap. Native
       # fires this exactly once per presentation (see ios/MobRootView.swift
       # and mob_new's generated MobSheet composable).
       {:on_dismiss, {pid, tag}} when is_pid(pid) ->
-        [{"on_dismiss", nif.register_tap({pid, tag})}]
+        [{"on_dismiss", register_handler(nif, {pid, tag})}]
 
       {:detents, detents} ->
         encoded_detents =
@@ -382,19 +389,19 @@ defmodule Mob.Renderer do
       # combine on_change + on_compose: ignore on_change while a composition
       # is active, replace text on :committed.
       {:on_compose, {pid, tag}} when is_pid(pid) ->
-        [{"on_compose", nif.register_tap({pid, tag})}]
+        [{"on_compose", register_handler(nif, {pid, tag})}]
 
       {:on_end_reached, {pid, tag}} when is_pid(pid) ->
-        [{"on_end_reached", nif.register_tap({pid, tag})}]
+        [{"on_end_reached", register_handler(nif, {pid, tag})}]
 
       {:on_tab_select, {pid, tag}} when is_pid(pid) ->
-        [{"on_tab_select", nif.register_tap({pid, tag})}]
+        [{"on_tab_select", register_handler(nif, {pid, tag})}]
 
       # Generic selection event — used by pickers, menus, segmented controls.
       # Lists use a structured tag (see Mob.List) and emit on_tap; this is for
       # widgets where "selection" is the only meaningful interaction.
       {:on_select, {pid, tag}} when is_pid(pid) ->
-        [{"on_select", nif.register_tap({pid, tag})}]
+        [{"on_select", register_handler(nif, {pid, tag})}]
 
       # ── Gestures (Batch 4) ────────────────────────────────────────────────
       # Each maps to a UIGestureRecognizer (iOS) / GestureDetector (Android).
@@ -403,25 +410,25 @@ defmodule Mob.Renderer do
       # gesture overhead by default.
 
       {:on_long_press, {pid, tag}} when is_pid(pid) ->
-        [{"on_long_press", nif.register_tap({pid, tag})}]
+        [{"on_long_press", register_handler(nif, {pid, tag})}]
 
       {:on_double_tap, {pid, tag}} when is_pid(pid) ->
-        [{"on_double_tap", nif.register_tap({pid, tag})}]
+        [{"on_double_tap", register_handler(nif, {pid, tag})}]
 
       {:on_swipe, {pid, tag}} when is_pid(pid) ->
-        [{"on_swipe", nif.register_tap({pid, tag})}]
+        [{"on_swipe", register_handler(nif, {pid, tag})}]
 
       {:on_swipe_left, {pid, tag}} when is_pid(pid) ->
-        [{"on_swipe_left", nif.register_tap({pid, tag})}]
+        [{"on_swipe_left", register_handler(nif, {pid, tag})}]
 
       {:on_swipe_right, {pid, tag}} when is_pid(pid) ->
-        [{"on_swipe_right", nif.register_tap({pid, tag})}]
+        [{"on_swipe_right", register_handler(nif, {pid, tag})}]
 
       {:on_swipe_up, {pid, tag}} when is_pid(pid) ->
-        [{"on_swipe_up", nif.register_tap({pid, tag})}]
+        [{"on_swipe_up", register_handler(nif, {pid, tag})}]
 
       {:on_swipe_down, {pid, tag}} when is_pid(pid) ->
-        [{"on_swipe_down", nif.register_tap({pid, tag})}]
+        [{"on_swipe_down", register_handler(nif, {pid, tag})}]
 
       # ── Batch 5: high-frequency events ────────────────────────────────────
       # `on_scroll` is the prototype: native side throttles + delta-thresholds
@@ -435,63 +442,71 @@ defmodule Mob.Renderer do
       # which the native side reads alongside the registered handle.
 
       {:on_scroll, {pid, tag}} when is_pid(pid) ->
-        [{"on_scroll", nif.register_tap({pid, tag})}]
+        [{"on_scroll", register_handler(nif, {pid, tag})}]
 
       {:on_scroll, {pid, tag, opts}} when is_pid(pid) and is_list(opts) ->
         cfg = Mob.Event.Throttle.parse(:scroll, opts)
-        [{"on_scroll", nif.register_tap({pid, tag})}, {"scroll_config", encode_throttle(cfg)}]
+
+        [
+          {"on_scroll", register_handler(nif, {pid, tag})},
+          {"scroll_config", encode_throttle(cfg)}
+        ]
 
       {:on_drag, {pid, tag}} when is_pid(pid) ->
-        [{"on_drag", nif.register_tap({pid, tag})}]
+        [{"on_drag", register_handler(nif, {pid, tag})}]
 
       {:on_drag, {pid, tag, opts}} when is_pid(pid) and is_list(opts) ->
         cfg = Mob.Event.Throttle.parse(:drag, opts)
-        [{"on_drag", nif.register_tap({pid, tag})}, {"drag_config", encode_throttle(cfg)}]
+        [{"on_drag", register_handler(nif, {pid, tag})}, {"drag_config", encode_throttle(cfg)}]
 
       {:on_pinch, {pid, tag}} when is_pid(pid) ->
-        [{"on_pinch", nif.register_tap({pid, tag})}]
+        [{"on_pinch", register_handler(nif, {pid, tag})}]
 
       {:on_pinch, {pid, tag, opts}} when is_pid(pid) and is_list(opts) ->
         cfg = Mob.Event.Throttle.parse(:pinch, opts)
-        [{"on_pinch", nif.register_tap({pid, tag})}, {"pinch_config", encode_throttle(cfg)}]
+        [{"on_pinch", register_handler(nif, {pid, tag})}, {"pinch_config", encode_throttle(cfg)}]
 
       {:on_rotate, {pid, tag}} when is_pid(pid) ->
-        [{"on_rotate", nif.register_tap({pid, tag})}]
+        [{"on_rotate", register_handler(nif, {pid, tag})}]
 
       {:on_rotate, {pid, tag, opts}} when is_pid(pid) and is_list(opts) ->
         cfg = Mob.Event.Throttle.parse(:rotate, opts)
-        [{"on_rotate", nif.register_tap({pid, tag})}, {"rotate_config", encode_throttle(cfg)}]
+
+        [
+          {"on_rotate", register_handler(nif, {pid, tag})},
+          {"rotate_config", encode_throttle(cfg)}
+        ]
 
       {:on_pointer_move, {pid, tag}} when is_pid(pid) ->
-        [{"on_pointer_move", nif.register_tap({pid, tag})}]
+        [{"on_pointer_move", register_handler(nif, {pid, tag})}]
 
       {:on_pointer_move, {pid, tag, opts}} when is_pid(pid) and is_list(opts) ->
         cfg = Mob.Event.Throttle.parse(:pointer_move, opts)
 
         [
-          {"on_pointer_move", nif.register_tap({pid, tag})},
+          {"on_pointer_move", register_handler(nif, {pid, tag})},
           {"pointer_config", encode_throttle(cfg)}
         ]
 
       # ── Batch 5 Tier 2: semantic scroll events (single-fire, no payload) ──
       {:on_scroll_began, {pid, tag}} when is_pid(pid) ->
-        [{"on_scroll_began", nif.register_tap({pid, tag})}]
+        [{"on_scroll_began", register_handler(nif, {pid, tag})}]
 
       {:on_scroll_ended, {pid, tag}} when is_pid(pid) ->
-        [{"on_scroll_ended", nif.register_tap({pid, tag})}]
+        [{"on_scroll_ended", register_handler(nif, {pid, tag})}]
 
       {:on_scroll_settled, {pid, tag}} when is_pid(pid) ->
-        [{"on_scroll_settled", nif.register_tap({pid, tag})}]
+        [{"on_scroll_settled", register_handler(nif, {pid, tag})}]
 
       {:on_top_reached, {pid, tag}} when is_pid(pid) ->
-        [{"on_top_reached", nif.register_tap({pid, tag})}]
+        [{"on_top_reached", register_handler(nif, {pid, tag})}]
 
       # `on_scrolled_past` requires a threshold; native side fires once when
       # scroll y crosses the boundary (latched: re-emits only after going back
       # below and past again).
       {:on_scrolled_past, {pid, tag, threshold}} when is_pid(pid) and is_number(threshold) ->
         [
-          {"on_scrolled_past", nif.register_tap({pid, tag})},
+          {"on_scrolled_past", register_handler(nif, {pid, tag})},
           {"scrolled_past_threshold", threshold}
         ]
 
