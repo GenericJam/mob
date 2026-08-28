@@ -255,6 +255,17 @@ defmodule Mob.UITest do
   end
 
   describe "sheet/2 detents" do
+    test "normalizes content detents with an optional maximum height" do
+      assert UI.sheet(UI.text(text: "hi"), detents: [:content]).props.detents == [
+               %{type: :content}
+             ]
+
+      assert UI.sheet(UI.text(text: "hi"), detents: [{:content, max_height: 480}]).props.detents ==
+               [
+                 %{type: :content, max_height: 480}
+               ]
+    end
+
     test "accepts [:medium]" do
       assert UI.sheet(UI.text(text: "hi"), detents: [:medium]).props.detents == [:medium]
     end
@@ -270,27 +281,21 @@ defmodule Mob.UITest do
              ]
     end
 
-    test "rejects an empty list" do
-      assert_raise ArgumentError, ~r/nonempty/, fn ->
-        UI.sheet(UI.text(text: "hi"), detents: [])
-      end
-    end
-
-    test "rejects duplicates" do
-      assert_raise ArgumentError, ~r/duplicates/, fn ->
-        UI.sheet(UI.text(text: "hi"), detents: [:medium, :medium])
-      end
-    end
-
-    test "rejects a detent outside [:medium, :large]" do
-      assert_raise ArgumentError, ~r/subset/, fn ->
-        UI.sheet(UI.text(text: "hi"), detents: [:medium, :full])
-      end
-    end
-
-    test "rejects a non-list" do
-      assert_raise ArgumentError, ~r/nonempty list/, fn ->
-        UI.sheet(UI.text(text: "hi"), detents: :medium)
+    test "rejects invalid built-in and content detents" do
+      for detents <- [
+            [],
+            [:medium, :medium],
+            [:content, :medium],
+            [:full],
+            [{:content, max_height: 0}],
+            [{:content, max_height: "480"}],
+            [{:content, max_height: 480, unknown: true}],
+            [%{type: :content, unknown: true}],
+            :medium
+          ] do
+        assert_raise ArgumentError, ~r/:detents/, fn ->
+          UI.sheet(UI.text(text: "hi"), detents: detents)
+        end
       end
     end
   end
