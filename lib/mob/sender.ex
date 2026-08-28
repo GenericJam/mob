@@ -42,11 +42,18 @@ defmodule Mob.Sender do
   ## Ordering
 
   `render/5` is asynchronous, so a caller that needs the commit to have landed
-  calls `sync/1`. That works by mailbox ordering rather than by tracking work:
-  the flush is self-sent during the render cast, so it is already queued ahead
-  of any later `sync/1` call. `Mob.Screen` uses this to keep the guarantee
-  `Mob.Test` documents — that `tap/2` and `navigate/2` return only once the
-  re-render is complete.
+  calls `sync/1`, which performs the flush itself rather than waiting for the
+  self-sent one.
+
+  It has to. `send(self(), :flush)` during the render cast appends to the *back*
+  of the mailbox — behind a `sync/1` the caller has already queued — so a
+  `sync/1` that merely replied would return before the frame was committed.
+  Mailbox order is the wrong tool here, and it looks like the right one.
+
+  `Mob.Screen` uses `sync/1` on its `handle_call` paths to keep the guarantee
+  `Mob.Test` documents for the synchronous navigation helpers. Note the ordering
+  guarantee only covers renders cast by the *calling* process; the BEAM promises
+  nothing about the relative order of sends from different processes.
   """
 
   use GenServer
@@ -68,9 +75,34 @@ defmodule Mob.Sender do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @doc "Whether the sender is running. Renders are dropped when it is not."
+  @doc "Whether the sender is running. Renders are silently dropped when it is not."
   @spec running?() :: boolean()
   def running?, do: is_pid(Process.whereis(__MODULE__))
+
+  @doc """
+  Start the sender if it is not already running.
+
+  `Mob.App.start/0` starts it on the normal boot path, but a screen can be
+  started without going through `Mob.App` — `liveview_notes.md` documents
+  exactly that — and a missing sender fails in the worst possible way: renders
+  are casts, so they vanish silently and the app shows a blank screen with no
+  log, until the first synchronous render exits `:noproc`. `Mob.Screen` calls
+  this so no render path can reach that state.
+
+  Deliberately unlinked. The caller is usually a screen, and a screen crash must
+  not take down the process every other screen renders through.
+  """
+  @spec ensure_started() :: :ok
+  def ensure_started do
+    if running?() do
+      :ok
+    else
+      case GenServer.start(__MODULE__, [], name: __MODULE__) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+    end
+  end
 
   @doc """
   Declare which screen's trees may be committed.
@@ -95,6 +127,12 @@ defmodule Mob.Sender do
   @doc """
   Block until every render queued before this call has been committed or
   dropped.
+
+  "Queued before" means cast by the *calling* process — the BEAM orders sends
+  between a given pair of processes and says nothing about sends from different
+  ones. Committed *or dropped*: a return of `:ok` does not promise the caller's
+  own tree reached the screen, only that the sender has caught up. A tree for a
+  screen that is not active is dropped, and `sync/1` returns `:ok` all the same.
   """
   @spec sync(timeout()) :: :ok
   def sync(timeout \\ 5000), do: GenServer.call(__MODULE__, :sync, timeout)
@@ -111,11 +149,24 @@ defmodule Mob.Sender do
 
   def handle_cast({:render, ref, tree, platform, nif, transition}, state) do
     # Overwrite rather than append: a newer tree for the same screen supersedes
-    # the one waiting, which is the whole point of queueing here.
+    # the one waiting, which is the whole point of queueing here. The transition
+    # is the exception — it describes the navigation animation for this frame,
+    # not the frame's content, so a push superseded by an ordinary re-render
+    # still has to animate as a push or the transition is silently swallowed.
+    transition = carry_transition(state.pending, ref, transition)
     pending = Map.put(state.pending, ref, {tree, platform, nif, transition})
     send(self(), :flush)
     {:noreply, %{state | pending: pending}}
   end
+
+  defp carry_transition(pending, ref, :none) do
+    case Map.fetch(pending, ref) do
+      {:ok, {_tree, _platform, _nif, superseded}} -> superseded
+      :error -> :none
+    end
+  end
+
+  defp carry_transition(_pending, _ref, transition), do: transition
 
   @impl GenServer
   def handle_info(:flush, state), do: {:noreply, flush(state)}

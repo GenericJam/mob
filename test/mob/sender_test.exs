@@ -143,6 +143,85 @@ defmodule Mob.SenderTest do
     end
   end
 
+  describe "coalescing preserves the transition" do
+    test "a push superseded by an ordinary re-render still animates as a push" do
+      state = %Sender{active: :home}
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :home, tree("a"), :ios, RecordingNif, :push}, state)
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :home, tree("b"), :ios, RecordingNif, :none}, state)
+
+      {:noreply, _state} = Sender.handle_info(:flush, state)
+
+      assert {:set_transition, :push} in RecordingNif.calls()
+      assert [json] = committed_texts()
+      assert json =~ "b"
+    end
+
+    test "a newer transition wins over an older one" do
+      state = %Sender{active: :home}
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :home, tree("a"), :ios, RecordingNif, :push}, state)
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :home, tree("b"), :ios, RecordingNif, :pop}, state)
+
+      {:noreply, _state} = Sender.handle_info(:flush, state)
+
+      assert {:set_transition, :pop} in RecordingNif.calls()
+      refute {:set_transition, :push} in RecordingNif.calls()
+    end
+
+    test "a plain re-render with nothing pending stays :none" do
+      state = %Sender{active: :home}
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :home, tree("a"), :ios, RecordingNif, :none}, state)
+
+      {:noreply, _state} = Sender.handle_info(:flush, state)
+
+      assert {:set_transition, :none} in RecordingNif.calls()
+    end
+  end
+
+  describe "ensure_started/0" do
+    test "starts the sender when it is missing" do
+      refute Sender.running?()
+      assert :ok = Sender.ensure_started()
+      assert Sender.running?()
+      on_exit(fn -> if Sender.running?(), do: GenServer.stop(Sender) end)
+    end
+
+    test "is a no-op when one is already running" do
+      pid = start_sender(:home)
+      assert :ok = Sender.ensure_started()
+      assert Process.whereis(Sender) == pid
+    end
+
+    test "does not link to the caller — a screen crash must not take it down" do
+      test_pid = self()
+
+      caller =
+        spawn(fn ->
+          Sender.ensure_started()
+          send(test_pid, :started)
+          receive do: (:die -> exit(:boom))
+        end)
+
+      assert_receive :started
+      sender = Process.whereis(Sender)
+      ref = Process.monitor(caller)
+      send(caller, :die)
+      assert_receive {:DOWN, ^ref, :process, ^caller, _}
+
+      assert Process.alive?(sender)
+      on_exit(fn -> if Sender.running?(), do: GenServer.stop(Sender) end)
+    end
+  end
+
   describe "resilience" do
     test "a render that raises does not take the sender down" do
       pid = start_sender(:home)

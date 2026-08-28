@@ -170,9 +170,9 @@ These are the things we've burned ourselves on. Following them isn't optional.
    Real fix tracked in `issues.md` #4 (hash bundle id into port).
 
 10. **Compile-time `~r//` literals are unsafe on OTP 28.** They bake a
-   `:re_exported_pattern` and call `:re.import/1` at runtime; OTP 28.0 removed
-   that function. Use `Regex.compile!("...", "flags")` to compile at runtime.
-   71 literals across mob_dev were swept in 0.3.17.
+    `:re_exported_pattern` and call `:re.import/1` at runtime; OTP 28.0 removed
+    that function. Use `Regex.compile!("...", "flags")` to compile at runtime.
+    71 literals across mob_dev were swept in 0.3.17.
 
 11. **`:mob_nif.log/1` for early startup logging, `Logger` after Mob.App.start.**
     `Mob.NativeLogger.install()` runs as part of `Mob.App.start` and reroutes

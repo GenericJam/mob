@@ -66,6 +66,47 @@ helpers as synchronous. So `Mob.Screen` calls `Mob.Sender.sync/1` only in the
 the documented guarantee lives. The `handle_info` paths stay asynchronous, which
 is what leaves anything to coalesce.
 
+### `set_active/1` is a navigation fact, not a render fact
+
+The first cut announced the active screen on every render, which reads as
+harmless and is not. Every screen process runs the same `do_render/4`, so at
+MOB-112 a *background* screen whose timer fires would promote itself and commit
+over the foreground screen — disarming the exact mechanism this step exists to
+build. It also guaranteed a fight with MOB-113's router, both writing `active`
+with no ownership rule.
+
+`Mob.Sender.set_active/1` is now called only where navigation establishes the
+active stack: `Mob.Screen.init/1` and `apply_switch_tab/4`. The router takes
+those two call sites over unchanged.
+
+### No render path may run without a sender
+
+Renders are casts, and a cast to an unregistered name is `:ok`. A missing sender
+therefore fails in the worst available way: a blank screen, no log, no crash —
+until the first synchronous render exits `:noproc`. `Mob.App.start/0` is not the
+only boot path (`liveview_notes.md` documents skipping `Mob.App` entirely), so
+`Mob.Screen.init/1` calls `Mob.Sender.ensure_started/0` in `:render` mode.
+
+That start is deliberately unlinked. The caller is a screen, and a screen crash
+must not take down the process every other screen renders through.
+
+### Coalescing carries the transition forward
+
+Superseding a tree must not silently swallow a navigation animation. A `:push`
+rendered from `handle_info` — `forward_to_screen/2`, the back gesture, list
+select — could be superseded by an ordinary `:none` re-render from a timer tick
+or a component update, and the push would never reach native: correct content,
+no animation, intermittently. The transition describes the frame's animation
+rather than its content, so a pending non-`:none` transition survives being
+superseded; a newer explicit transition still wins.
+
+### `sync/1` gets no deadline from `Mob.Screen`
+
+Rendering was unbounded when it ran inline. `sync/1` is a `GenServer.call`, so
+the default 5s timeout would newly turn a slow frame — a large `Mob.List` tree,
+a dirty-CPU `set_root` on a loaded device — into a dead screen process.
+`Mob.Screen` passes `:infinity`, restoring the previous behaviour exactly.
+
 ### A failed render must not kill the sender
 
 `commit/1` rescues. Every screen renders through this one process, so letting it
@@ -87,6 +128,24 @@ error is logged with a stacktrace.
 - Coalescing is not observable in production yet: with one screen process, the
   synchronous call paths flush every render, and the asynchronous ones rarely
   queue two frames. It becomes load-bearing at MOB-112.
+- **`Mob.Test` gained `settle/2`.** `:sys.get_state(:mob_screen)` was a
+  documented sync point and is no longer sufficient on its own: the screen hands
+  its tree to the sender and returns, so a drained screen mailbox does not mean
+  the frame is on screen. This only affects the functions that read the *native*
+  side (`view_tree/1`, `screenshot/2`, `tap_id/2`, `element_frames/2`);
+  `tree/1` and `assigns/1` re-render in-process. `settle/2` drains both.
+- **Known gaps, carried into MOB-112 rather than fixed here.**
+  `Mob.ComponentRegistry.reconcile/2` still runs screen-side before the cast and
+  is destructive — it kills components absent from the new tree — so a tree that
+  is then dropped leaves the displayed frame holding handles to dead pids.
+  Narrow today; routine at MOB-112, where background renders are *supposed* to
+  be dropped, so reconcile has to move to the commit or become non-destructive.
+  The sender is also started with a bare `start_link` and no supervisor, matching
+  how `Mob.App.start/0` starts every other service, but it is the one process
+  whose death silently freezes the whole UI.
+- `Mob.Socket.put_root_view/2` is now written even when the commit was dropped
+  or raised. The field is read nowhere in `lib/` and predates this change; it
+  should be removed rather than made to lie, which is its own change.
 - If the sender is not running, renders are silently dropped — `GenServer.cast`
   to an unregistered name is a no-op. `Mob.App.start/0` starts it before
   `on_start/0`, so the only way to hit this is to bypass that entry point.

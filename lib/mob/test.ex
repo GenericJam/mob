@@ -58,13 +58,20 @@ defmodule Mob.Test do
   they block until the navigation and re-render complete. This makes them safe to
   follow immediately with `screen/1` or `assigns/1` to verify the result.
 
-  `back/1` and `send_message/2` are fire-and-forget (they send a message to the
-  screen process and return immediately). Use `:sys.get_state/1` as a sync point
+  `back/1`, `tap/2` and `send_message/2` are fire-and-forget (they send a message
+  to the screen process and return immediately). Use `settle/2` as a sync point
   if you need to wait before reading state:
 
       Mob.Test.send_message(node, {:permission, :camera, :granted})
-      :rpc.call(node, :sys, :get_state, [:mob_screen])  # flush mailbox
+      Mob.Test.settle(node)
       Mob.Test.assigns(node)
+
+  `:sys.get_state/1` on `:mob_screen` is no longer sufficient on its own: since
+  MOB-110 the screen hands its tree to `Mob.Sender` and returns, so a drained
+  screen mailbox does not mean the frame is on screen. That only matters for the
+  functions that read the *native* side — `view_tree/1`, `screenshot/2`,
+  `tap_id/2`, `element_frames/2`. `tree/1` and `assigns/1` re-render in-process
+  and are unaffected.
 
   ## Two layers of inspection: render tree vs native UI
 
@@ -205,7 +212,8 @@ defmodule Mob.Test do
   The tag comes from `on_tap: {self(), :tag_atom}` in the screen's `render/1`.
   Check the screen's render function to find available tags.
 
-  Fire-and-forget — does not wait for the screen to finish processing.
+  Fire-and-forget — does not wait for the screen to finish processing. Follow
+  with `settle/2` before reading the native side.
 
       Mob.Test.tap(node, :save)
       Mob.Test.tap(node, :open_detail)
@@ -216,13 +224,36 @@ defmodule Mob.Test do
     :ok
   end
 
+  @doc """
+  Block until the app has finished processing and the current frame is on
+  screen.
+
+  Drains the screen process's mailbox, then waits for `Mob.Sender` to commit.
+  Both halves are needed: the screen builds the tree and the sender commits it,
+  so a drained screen mailbox alone does not mean the frame has been rendered.
+
+  Use after any fire-and-forget call (`tap/2`, `back/1`, `send_message/2`)
+  before reading the native side with `view_tree/1`, `screenshot/2`, `tap_id/2`
+  or `element_frames/2`.
+
+      Mob.Test.tap(node, :save)
+      Mob.Test.settle(node)
+      Mob.Test.view_tree(node)
+  """
+  @spec settle(node(), timeout()) :: :ok
+  def settle(node, timeout \\ 5000) do
+    :rpc.call(node, :sys, :get_state, [:mob_screen])
+    :rpc.call(node, Mob.Sender, :sync, [timeout])
+    :ok
+  end
+
   # ── System gestures ───────────────────────────────────────────────────────────
 
   @doc """
   Simulate the system back gesture (Android hardware back / iOS edge-pan).
 
-  Fire-and-forget. The framework pops the navigation stack; if already at the
-  root, it exits the app. Prefer `pop/1` when you need to know that navigation
+  Fire-and-forget — follow with `settle/2` before reading the native side. The
+  framework pops the navigation stack; if already at the root, it exits the app. Prefer `pop/1` when you need to know that navigation
   has finished before reading state.
   """
   @spec back(node()) :: :ok
