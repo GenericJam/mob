@@ -262,7 +262,14 @@ defmodule Mob.Screen do
           end
 
         if screen_module.__mob_persist__(), do: schedule_state_sync()
-        {:ok, {screen_module, socket, [], render_mode}}
+
+        # Seed the stacks this app declared. The screen we just mounted becomes
+        # the active stack's current screen; every other declared stack stays
+        # unmounted until first visited. With no declaration (or no registry, as
+        # in tests) this is an empty single-stack state — the old behaviour.
+        nav = Mob.Nav.from_layout(Mob.Nav.Registry.layout(platform), screen_module)
+
+        {:ok, {screen_module, socket, nav, render_mode}}
 
       {:error, reason} ->
         {:stop, reason}
@@ -270,11 +277,11 @@ defmodule Mob.Screen do
   end
 
   @impl GenServer
-  def handle_call({:event, event, params}, _from, {module, socket, nav_history, render_mode}) do
+  def handle_call({:event, event, params}, _from, {module, socket, nav, render_mode}) do
     case module.handle_event(event, params, socket) do
       {:noreply, new_socket} ->
-        {module, new_socket, nav_history, transition} =
-          apply_nav_action(module, new_socket, nav_history)
+        {module, new_socket, nav, transition} =
+          apply_nav_action(module, new_socket, nav)
 
         new_socket =
           if render_mode == :render do
@@ -283,11 +290,11 @@ defmodule Mob.Screen do
             new_socket
           end
 
-        {:reply, :ok, {module, new_socket, nav_history, render_mode}}
+        {:reply, :ok, {module, new_socket, nav, render_mode}}
 
       {:reply, _response, new_socket} ->
-        {module, new_socket, nav_history, transition} =
-          apply_nav_action(module, new_socket, nav_history)
+        {module, new_socket, nav, transition} =
+          apply_nav_action(module, new_socket, nav)
 
         new_socket =
           if render_mode == :render do
@@ -296,7 +303,7 @@ defmodule Mob.Screen do
             new_socket
           end
 
-        {:reply, :ok, {module, new_socket, nav_history, render_mode}}
+        {:reply, :ok, {module, new_socket, nav, render_mode}}
     end
   end
 
@@ -312,11 +319,11 @@ defmodule Mob.Screen do
   - `{:pop_to_root}` — pop to the root of the current stack
   - `{:reset, dest, params}` — replace the entire nav stack
   """
-  def handle_call({:navigate, nav_action}, _from, {module, socket, nav_history, render_mode}) do
+  def handle_call({:navigate, nav_action}, _from, {module, socket, nav, render_mode}) do
     socket = Mob.Socket.put_mob(socket, :nav_action, nav_action)
 
-    {new_module, new_socket, new_history, transition} =
-      apply_nav_action(module, socket, nav_history)
+    {new_module, new_socket, new_nav, transition} =
+      apply_nav_action(module, socket, nav)
 
     new_socket =
       if render_mode == :render do
@@ -325,39 +332,39 @@ defmodule Mob.Screen do
         new_socket
       end
 
-    {:reply, :ok, {new_module, new_socket, new_history, render_mode}}
+    {:reply, :ok, {new_module, new_socket, new_nav, render_mode}}
   end
 
-  def handle_call(:get_socket, _from, {_module, socket, _nav_history, _mode} = state) do
+  def handle_call(:get_socket, _from, {_module, socket, _nav, _mode} = state) do
     {:reply, socket, state}
   end
 
-  def handle_call(:inspect, _from, {module, socket, nav_history, _mode} = state) do
+  def handle_call(:inspect, _from, {module, socket, nav, _mode} = state) do
     tree = module.render(socket.assigns)
 
     info = %{
       screen: module,
       assigns: socket.assigns,
-      nav_history: Enum.map(nav_history, fn {mod, _} -> mod end),
+      nav_history: Enum.map(Mob.Nav.history(nav), fn {mod, _} -> mod end),
       tree: tree
     }
 
     {:reply, info, state}
   end
 
-  def handle_call(:get_current_module, _from, {module, _socket, _nav_history, _mode} = state) do
+  def handle_call(:get_current_module, _from, {module, _socket, _nav, _mode} = state) do
     {:reply, module, state}
   end
 
-  def handle_call(:get_nav_history, _from, {_module, _socket, nav_history, _mode} = state) do
-    {:reply, nav_history, state}
+  def handle_call(:get_nav_history, _from, {_module, _socket, nav, _mode} = state) do
+    {:reply, Mob.Nav.history(nav), state}
   end
 
   # Notification that launched the app from a killed state.
   # Decoded from JSON and re-dispatched as the standard {:notification, map} message.
   # Hot-reload trigger sent by mob_dev after a dist push. Re-render with current code.
   @impl GenServer
-  def handle_cast(:__mob_hot_reload__, {module, socket, nav_history, render_mode}) do
+  def handle_cast(:__mob_hot_reload__, {module, socket, nav, render_mode}) do
     new_socket =
       if render_mode == :render do
         do_render(module, socket)
@@ -365,13 +372,13 @@ defmodule Mob.Screen do
         socket
       end
 
-    {:noreply, {module, new_socket, nav_history, render_mode}}
+    {:noreply, {module, new_socket, nav, render_mode}}
   end
 
   @impl GenServer
-  def handle_info({:mob_launch_notification, json}, {module, socket, nav_history, render_mode}) do
+  def handle_info({:mob_launch_notification, json}, {module, socket, nav, render_mode}) do
     notif = decode_notification_json(json)
-    handle_info({:notification, notif}, {module, socket, nav_history, render_mode})
+    handle_info({:notification, notif}, {module, socket, nav, render_mode})
   end
 
   # Android file/camera/photo/scan results arrive as {:mob_file_result, event, sub, json_binary}.
@@ -441,17 +448,17 @@ defmodule Mob.Screen do
   # navigation for free without implementing anything.
   # If a WebView is present and has internal history, navigate within it first
   # before popping the Mob nav stack.
-  def handle_info({:mob, :back}, {module, socket, nav_history, render_mode}) do
+  def handle_info({:mob, :back}, {module, socket, nav, render_mode}) do
     if render_mode == :render && :mob_nif.webview_can_go_back() do
       :mob_nif.webview_go_back()
-      {:noreply, {module, socket, nav_history, render_mode}}
+      {:noreply, {module, socket, nav, render_mode}}
     else
-      {module, new_socket, new_history, transition} =
-        if nav_history == [] do
+      {module, new_socket, new_nav, transition} =
+        if Mob.Nav.history(nav) == [] do
           if render_mode == :render, do: :mob_nif.exit_app()
-          {module, socket, [], :none}
+          {module, socket, nav, :none}
         else
-          apply_nav_action(module, Mob.Socket.put_mob(socket, :nav_action, {:pop}), nav_history)
+          apply_nav_action(module, Mob.Socket.put_mob(socket, :nav_action, {:pop}), nav)
         end
 
       new_socket =
@@ -461,18 +468,18 @@ defmodule Mob.Screen do
           new_socket
         end
 
-      {:noreply, {module, new_socket, new_history, render_mode}}
+      {:noreply, {module, new_socket, new_nav, render_mode}}
     end
   end
 
   # List row selected — intercept before the user's handle_info and convert to
   # a plain {:select, id, index} message so screens don't need to know about
   # the internal {:tap, {:list, ...}} tag format.
-  def handle_info({:tap, {:list, id, :select, index}}, {module, socket, nav_history, render_mode}) do
+  def handle_info({:tap, {:list, id, :select, index}}, {module, socket, nav, render_mode}) do
     {:noreply, new_socket} = module.handle_info({:select, id, index}, socket)
 
-    {module, new_socket, nav_history, transition} =
-      apply_nav_action(module, new_socket, nav_history)
+    {module, new_socket, nav, transition} =
+      apply_nav_action(module, new_socket, nav)
 
     new_socket =
       if render_mode == :render do
@@ -481,11 +488,11 @@ defmodule Mob.Screen do
         new_socket
       end
 
-    {:noreply, {module, new_socket, nav_history, render_mode}}
+    {:noreply, {module, new_socket, nav, render_mode}}
   end
 
   # A component's state changed — re-render so the native view gets fresh props.
-  def handle_info({:component_changed, _id, _module}, {module, socket, nav_history, render_mode}) do
+  def handle_info({:component_changed, _id, _module}, {module, socket, nav, render_mode}) do
     new_socket =
       if render_mode == :render do
         do_render(module, socket)
@@ -493,18 +500,18 @@ defmodule Mob.Screen do
         socket
       end
 
-    {:noreply, {module, new_socket, nav_history, render_mode}}
+    {:noreply, {module, new_socket, nav, render_mode}}
   end
 
   # Periodic state sync — intercepted before the user's handle_info so the
   # screen module never sees this internal message.
-  def handle_info(:__mob_sync_state__, {module, socket, nav_history, render_mode}) do
+  def handle_info(:__mob_sync_state__, {module, socket, nav, render_mode}) do
     if module.__mob_persist__() do
       Mob.ScreenState.dump(module, socket)
       schedule_state_sync()
     end
 
-    {:noreply, {module, socket, nav_history, render_mode}}
+    {:noreply, {module, socket, nav, render_mode}}
   end
 
   # Plugin notification routing: the activated plugins' handlers get first crack
@@ -521,11 +528,11 @@ defmodule Mob.Screen do
 
   def handle_info(message, state), do: forward_to_screen(message, state)
 
-  defp forward_to_screen(message, {module, socket, nav_history, render_mode}) do
+  defp forward_to_screen(message, {module, socket, nav, render_mode}) do
     {:noreply, new_socket} = module.handle_info(message, socket)
 
-    {module, new_socket, nav_history, transition} =
-      apply_nav_action(module, new_socket, nav_history)
+    {module, new_socket, nav, transition} =
+      apply_nav_action(module, new_socket, nav)
 
     new_socket =
       if render_mode == :render do
@@ -534,7 +541,7 @@ defmodule Mob.Screen do
         new_socket
       end
 
-    {:noreply, {module, new_socket, nav_history, render_mode}}
+    {:noreply, {module, new_socket, nav, render_mode}}
   end
 
   defp to_atom_safe(nil), do: :qr
@@ -542,7 +549,7 @@ defmodule Mob.Screen do
   defp to_atom_safe(a) when is_atom(a), do: a
 
   @impl GenServer
-  def terminate(reason, {module, socket, _nav_history, _render_mode}) do
+  def terminate(reason, {module, socket, _nav, _render_mode}) do
     if module.__mob_persist__(), do: Mob.ScreenState.dump(module, socket)
     module.terminate(reason, socket)
   end
@@ -550,68 +557,95 @@ defmodule Mob.Screen do
   # ── Navigation ────────────────────────────────────────────────────────────
 
   # Inspect the socket's nav_action and execute it, returning
-  # {new_module, new_socket, new_nav_history, transition}.
-  defp apply_nav_action(module, socket, nav_history) do
+  # {new_module, new_socket, new_nav, transition}.
+  defp apply_nav_action(module, socket, nav) do
+    history = Mob.Nav.history(nav)
+
     case socket.__mob__.nav_action do
       nil ->
-        {module, socket, nav_history, :none}
+        {module, socket, nav, :none}
 
       {:push, dest, params} ->
-        {new_module, route_params} = resolve_destination(dest)
-        platform = socket.__mob__.platform
-
-        new_base =
-          Mob.Socket.new(new_module, platform: platform)
-          |> Mob.Socket.assign(:safe_area, socket.assigns.safe_area)
-
-        {:ok, mounted} = new_module.mount(Map.merge(route_params, params), %{}, new_base)
+        {new_module, mounted} = mount_destination(dest, params, socket)
         saved = {module, clear_nav_action(socket)}
-        {new_module, mounted, [saved | nav_history], :push}
+        {new_module, mounted, Mob.Nav.put_history(nav, [saved | history]), :push}
 
       {:pop} ->
-        case nav_history do
+        case history do
           [{prev_module, prev_socket} | rest] ->
-            {prev_module, prev_socket, rest, :pop}
+            {prev_module, prev_socket, Mob.Nav.put_history(nav, rest), :pop}
 
           [] ->
-            {module, clear_nav_action(socket), [], :none}
+            {module, clear_nav_action(socket), nav, :none}
         end
 
       {:pop_to_root} ->
-        case Enum.reverse(nav_history) do
+        case Enum.reverse(history) do
           [{root_module, root_socket} | _] ->
-            {root_module, root_socket, [], :pop}
+            {root_module, root_socket, Mob.Nav.put_history(nav, []), :pop}
 
           [] ->
-            {module, clear_nav_action(socket), [], :none}
+            {module, clear_nav_action(socket), nav, :none}
         end
 
       {:pop_to, dest} ->
         target = resolve_module(dest)
 
-        case pop_to_module(nav_history, target) do
+        case pop_to_module(history, target) do
           {:found, prev_module, prev_socket, rest} ->
-            {prev_module, prev_socket, rest, :pop}
+            {prev_module, prev_socket, Mob.Nav.put_history(nav, rest), :pop}
 
           :not_found ->
-            {module, clear_nav_action(socket), nav_history, :none}
+            {module, clear_nav_action(socket), nav, :none}
         end
 
       {:reset, dest, params} ->
-        {new_module, route_params} = resolve_destination(dest)
-        platform = socket.__mob__.platform
+        {new_module, mounted} = mount_destination(dest, params, socket)
+        {new_module, mounted, Mob.Nav.put_history(nav, []), :reset}
 
-        new_base =
-          Mob.Socket.new(new_module, platform: platform)
-          |> Mob.Socket.assign(:safe_area, socket.assigns.safe_area)
-
-        {:ok, mounted} = new_module.mount(Map.merge(route_params, params), %{}, new_base)
-        {new_module, mounted, [], :reset}
-
-      {:switch_tab, _tab} ->
-        # Tab switching is handled renderer-side; clear the action.
-        {module, clear_nav_action(socket), nav_history, :none}
+      {:switch_tab, tab} ->
+        apply_switch_tab(module, socket, nav, tab)
     end
+  end
+
+  # Switching stacks parks the current screen — socket and history both — under
+  # the stack it belongs to, then makes the target stack current. A stack that
+  # has been visited before is restored without re-mounting, which is the whole
+  # point: an inactive tab keeps its state.
+  #
+  # The transition is `:none`, not `:push` or `:pop`. Those drive the native
+  # navigation animation, and a tab switch is a swap rather than a move along a
+  # stack — animating it as a push would slide the incoming tab in from the
+  # right on iOS. It also keeps `set_transition` to the atoms native already
+  # understands, so no `.m` or `.zig` change is needed.
+  defp apply_switch_tab(module, socket, nav, tab) do
+    current = {module, clear_nav_action(socket)}
+
+    case Mob.Nav.switch(nav, tab, current) do
+      {:switched, new_nav, {target_module, target_socket}} ->
+        {target_module, target_socket, new_nav, :none}
+
+      {:mount_root, new_nav, root_module} ->
+        {mounted_module, mounted} = mount_destination(root_module, %{}, socket)
+        {mounted_module, mounted, new_nav, :none}
+
+      :noop ->
+        {module, clear_nav_action(socket), nav, :none}
+    end
+  end
+
+  # Resolve a destination and mount it on a fresh socket, inheriting the current
+  # screen's safe-area inset.
+  defp mount_destination(dest, params, socket) do
+    {new_module, route_params} = resolve_destination(dest)
+    platform = socket.__mob__.platform
+
+    new_base =
+      Mob.Socket.new(new_module, platform: platform)
+      |> Mob.Socket.assign(:safe_area, socket.assigns.safe_area)
+
+    {:ok, mounted} = new_module.mount(Map.merge(route_params, params), %{}, new_base)
+    {new_module, mounted}
   end
 
   defp resolve_module(dest) when is_atom(dest) do
