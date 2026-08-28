@@ -215,6 +215,28 @@ defmodule Mob.Nav.MultiStackTest do
       assert length(Mob.Screen.get_nav_history(screen)) == 1
     end
 
+    test "back at a secondary stack's root returns to the first stack", %{screen: screen} do
+      # Not exit_app: that would discard every parked stack, which is the state
+      # this whole feature exists to keep.
+      Mob.Screen.dispatch(screen, "bump", %{})
+      Mob.Screen.dispatch(screen, "to_settings", %{})
+      assert Mob.Screen.get_nav_history(screen) == []
+
+      send(screen, {:mob, :back})
+      :sys.get_state(screen)
+
+      assert Mob.Screen.get_current_module(screen) == HomeScreen
+      assert Mob.Screen.get_socket(screen).assigns.count == 1
+    end
+
+    test "back at the first stack's root does not switch away", %{screen: screen} do
+      # :no_render mode means exit_app/0 is not called; the screen stays put.
+      send(screen, {:mob, :back})
+      :sys.get_state(screen)
+
+      assert Mob.Screen.get_current_module(screen) == HomeScreen
+    end
+
     test "the back gesture pops the active stack only", %{screen: screen} do
       Mob.Screen.dispatch(screen, "push_detail", %{})
       Mob.Screen.dispatch(screen, "to_settings", %{})

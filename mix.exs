@@ -154,7 +154,7 @@ defmodule Mob.MixProject do
           Mob.Theme.Dark,
           Mob.Theme.Adaptive
         ],
-        Navigation: [Mob.Nav.Registry],
+        Navigation: [Mob.Nav, Mob.Nav.Registry],
         Plugins: [Mob.Plugins, Mob.Plugins.Supervisor, Mob.Plugins.Lifecycle],
         "Device APIs": [
           Mob.Haptic,

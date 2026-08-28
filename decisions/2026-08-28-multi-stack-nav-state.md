@@ -52,18 +52,46 @@ move along a stack — rendering it as `:push` would slide the incoming tab in
 from the right on iOS. Using `:none` also keeps to atoms native already accepts,
 so this lands with no `.m`, `.zig`, or template change, as the epic requires.
 
-### An unmatched root falls back to the first declared stack
+### An unmatched root gets a private orphan stack
 
 `Mob.Nav.from_layout/2` makes active the stack whose `:root` is the mounted
-module. When no stack declares it — an app that calls `start_root/1` with a
-module that is not any stack's root — the first declared stack is used rather
-than leaving `active` as `nil`.
+module. When no stack declares it — `start_root/1` on a splash, login, or
+deep-link target — the screen goes under a reserved `:__mob_root__` stack that
+is absent from both `order` and `roots`.
 
-`nil` was the more honest answer and is worse in practice: with no active stack
-there is nowhere to park the running screen, so the first `switch_tab` would
-discard its socket and history outright. The fallback misattributes a label; the
-alternative loses user state. The screen is preserved either way, and the
-misattribution only occurs in a configuration that is already unusual.
+Two alternatives were rejected. Leaving `active` as `nil` means there is nowhere
+to park the running screen, so the first `switch_tab` discards its socket and
+history outright. Falling back to the *first declared stack* preserves the state
+but is worse in a way that is easy to miss: switching to the stack you are
+already on is a `:noop`, so the squatting screen makes that stack's real root
+permanently unreachable from the tab bar. An app declaring
+`tab_bar([stack(:home, root: HomeScreen), ...])` but booting on `SplashScreen`
+would never be able to reach `HomeScreen` again.
+
+The orphan stack preserves the screen's state *and* leaves every declared root
+reachable. It is not itself a switch target, which is correct: no tab
+corresponds to it.
+
+### Back at a secondary stack's root returns to the first stack
+
+`Mob.Nav.back_target/1` returns `{:switch, first}` when the active stack is a
+declared stack other than the first, and `:exit` otherwise.
+
+Once `history/1` means *the active stack's* history, the old back handler —
+"empty history, therefore exit the app" — would kill the app from the root of
+any tab, discarding every parked stack. That is both the Android convention
+violated (back returns to the first tab, and only then exits) and a direct
+contradiction of the feature: the parked state exists precisely so it survives.
+
+### An unrecognised `navigation/1` return is ignored, not a raise
+
+`from_layout/2` has a catch-all returning the empty state. `navigation/1` is
+app-supplied and unvalidated, and `Nav.Registry.register_nav/1` has always
+tolerated an unrecognised shape with `defp register_nav(_), do: :ok`. Since
+`from_layout/2` runs inside `Mob.Screen.init/1`, raising would turn a
+declaration the framework previously ignored (`def navigation(_), do: []` is the
+obvious spelling) into a failure to boot, with no supervision to absorb it until
+MOB-112 lands.
 
 ### Unknown stacks are a no-op, not a raise
 
@@ -86,5 +114,14 @@ until MOB-112 lands per-screen supervision, would take the whole app with it.
 - Pop, `pop_to_root`, and `pop_to` operate on the active stack only. Nothing
   can pop across a stack boundary, which is what makes the histories genuinely
   independent.
+- **Known gaps, filed against the epic rather than fixed here.** `reset_to/2`
+  still clears the active stack's history without re-deriving which stack the
+  destination belongs to, so resetting to another stack's root leaves two live
+  instances of that screen in two stacks. Parked screens receive neither
+  `terminate/2` nor `Mob.ScreenState` sync, so a `persist: true` screen on an
+  inactive tab loses its assigns on exit. Re-selecting the active tab is a
+  no-op rather than popping that stack to its root, which is what both
+  platforms do. All three want the per-screen processes of MOB-112 to fix
+  cleanly.
 - `Mob.Test.inspect/1`'s `:nav_history` key and `Mob.Screen.get_nav_history/1`
   both keep their shape, now reporting the *active* stack's history.

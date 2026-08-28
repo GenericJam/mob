@@ -43,11 +43,40 @@ defmodule Mob.NavTest do
       assert Nav.active(nav) == :settings
     end
 
-    test "falls back to the first declared stack when no root matches" do
-      # The running screen still has to belong somewhere, or switching away
-      # would have nowhere to park it and its state would be lost.
+    test "a screen that is no stack's root gets its own orphan stack" do
+      # It must belong somewhere or switching away would discard it, but it must
+      # not squat a declared stack's slot either.
       nav = Nav.from_layout(two_tabs(), StrayScreen)
-      assert Nav.active(nav) == :home
+      assert Nav.active(nav) == :__mob_root__
+      assert Nav.stacks(nav) == [:home, :settings]
+    end
+
+    test "an orphan screen does not make a declared root unreachable" do
+      # Squatting :home would make this a no-op and strand HomeScreen forever.
+      nav = Nav.from_layout(two_tabs(), StrayScreen)
+      assert {:mount_root, _nav, HomeScreen} = Nav.switch(nav, :home, entry(StrayScreen))
+    end
+
+    test "an orphan screen is still parked, not discarded" do
+      orphan = entry(StrayScreen)
+      nav = Nav.from_layout(two_tabs(), StrayScreen)
+      {:mount_root, nav, _} = Nav.switch(nav, :home, orphan)
+      assert nav.parked[:__mob_root__] == %{current: orphan, history: []}
+    end
+
+    test "the orphan stack is not a switch target" do
+      nav = Nav.from_layout(two_tabs(), StrayScreen)
+      {:mount_root, nav, _} = Nav.switch(nav, :home, entry(StrayScreen))
+      assert Nav.switch(nav, :__mob_root__, entry(HomeScreen)) == :noop
+    end
+
+    test "an unrecognised layout is ignored rather than raising" do
+      # navigation/1 is app-supplied and unvalidated, and this runs inside
+      # Mob.Screen.init/1 — raising would turn a shape Nav.Registry has always
+      # tolerated into a failure to boot.
+      assert Nav.from_layout([stack(:home, root: HomeScreen)], HomeScreen) == Nav.new()
+      assert Nav.from_layout(:nonsense, HomeScreen) == Nav.new()
+      assert Nav.from_layout(%{type: :unknown}, HomeScreen) == Nav.new()
     end
 
     test "a bare stack declaration yields one stack" do
@@ -76,6 +105,30 @@ defmodule Mob.NavTest do
     test "does not disturb the active stack name" do
       nav = Nav.from_layout(two_tabs(), HomeScreen) |> Nav.put_history([entry(ProfileScreen)])
       assert Nav.active(nav) == :home
+    end
+  end
+
+  describe "back_target/1" do
+    test "the first declared stack exits" do
+      assert Nav.back_target(Nav.from_layout(two_tabs(), HomeScreen)) == :exit
+    end
+
+    test "a secondary stack returns to the first" do
+      nav = Nav.from_layout(two_tabs(), SettingsScreen)
+      assert Nav.back_target(nav) == {:switch, :home}
+    end
+
+    test "an orphan screen exits — it is not a tab to back out of" do
+      assert Nav.back_target(Nav.from_layout(two_tabs(), StrayScreen)) == :exit
+    end
+
+    test "a single-stack app exits" do
+      nav = Nav.from_layout(stack(:only, root: HomeScreen), HomeScreen)
+      assert Nav.back_target(nav) == :exit
+    end
+
+    test "no declared layout exits" do
+      assert Nav.back_target(Nav.new()) == :exit
     end
   end
 

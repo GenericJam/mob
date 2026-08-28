@@ -54,6 +54,11 @@ defmodule Mob.Nav do
 
   defstruct active: nil, history: [], parked: %{}, order: [], roots: %{}
 
+  # Holds a screen that is not the root of any declared stack. It is deliberately
+  # absent from `order` and `roots`, so it is never a switch target — see
+  # `from_layout/2`.
+  @orphan_stack :__mob_root__
+
   @doc """
   An empty single-stack navigation state.
 
@@ -68,34 +73,43 @@ defmodule Mob.Nav do
   screen that is already mounted.
 
   `layout` is the map returned by `Mob.App.stack/2`, `tab_bar/1`, or `drawer/1`
-  (or `nil` when the app declares none). The active stack is the one whose root
-  is `current_module`; when no stack declares that module as its root the first
-  declared stack is used, so the running screen still belongs somewhere and is
-  preserved across a switch. Its state is never discarded — only its label is a
-  guess, and only in that fallback case.
+  (or `nil`/unrecognised when the app declares none).
+
+  The active stack is the one whose `:root` is `current_module`. When no stack
+  declares that module — `start_root/1` on a splash, login, or deep-link target
+  — the screen is filed under a private orphan stack rather than under the first
+  declared one. Its state is still parked and preserved across a switch, but it
+  does not occupy a declared stack's slot: squatting `:home` would leave the
+  real `HomeScreen` unreachable from the tab bar for the process lifetime, since
+  switching to the stack you are already on is a no-op. The orphan is not a
+  switch target, because no tab corresponds to it.
   """
   @spec from_layout(map() | nil, module()) :: t()
   def from_layout(nil, _current_module), do: new()
 
   def from_layout(layout, current_module) when is_map(layout) do
-    declared = declared_stacks(layout)
-
-    case declared do
+    case declared_stacks(layout) do
       [] ->
         new()
 
-      [{first_name, _} | _] ->
+      declared ->
         roots = Map.new(declared)
         order = Enum.map(declared, fn {name, _root} -> name end)
 
         active =
-          Enum.find_value(declared, first_name, fn {name, root} ->
+          Enum.find_value(declared, @orphan_stack, fn {name, root} ->
             if root == current_module, do: name
           end)
 
         %__MODULE__{active: active, history: [], parked: %{}, order: order, roots: roots}
     end
   end
+
+  # `navigation/1` is app-supplied and unvalidated. `Nav.Registry` has always
+  # tolerated a shape it doesn't recognise (`register_nav(_), do: :ok`), and this
+  # runs inside `Mob.Screen.init/1` — raising here would turn a declaration the
+  # framework previously ignored into a failure to boot.
+  def from_layout(_layout, _current_module), do: new()
 
   @doc "The active stack's history — head is the most recent entry."
   @spec history(t()) :: [entry()]
@@ -107,7 +121,12 @@ defmodule Mob.Nav do
     %{nav | history: history}
   end
 
-  @doc "Name of the active stack, or `nil` when no layout was declared."
+  @doc """
+  Name of the active stack.
+
+  `nil` when no layout was declared. `:__mob_root__` when the mounted screen is
+  not the root of any declared stack — see `from_layout/2`.
+  """
   @spec active(t()) :: stack_name() | nil
   def active(%__MODULE__{active: active}), do: active
 
@@ -153,6 +172,26 @@ defmodule Mob.Nav do
         end
     end
   end
+
+  @doc """
+  What the platform back gesture should do when the active stack has nothing
+  left to pop.
+
+  Returns `{:switch, name}` when the active stack is a declared stack other than
+  the first, and `:exit` otherwise. This is the Android convention: back at the
+  root of a secondary tab returns to the first tab, and only back at the root of
+  the *first* tab leaves the app.
+
+  Without this, back at the root of any tab would exit — discarding every parked
+  stack, which is exactly the state this module exists to keep.
+  """
+  @spec back_target(t()) :: {:switch, stack_name()} | :exit
+  def back_target(%__MODULE__{order: [first | _] = order, active: active})
+      when active != first do
+    if active in order, do: {:switch, first}, else: :exit
+  end
+
+  def back_target(%__MODULE__{}), do: :exit
 
   # An app with no declared layout has nowhere to park its screen. That state
   # belongs to no stack, so it is left where it is rather than filed under a
