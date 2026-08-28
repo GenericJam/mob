@@ -84,6 +84,14 @@ defmodule Mob.Sigil do
 
   # ── Whitelist ────────────────────────────────────────────────────────────────
 
+  # Read at compile time into a module attribute, so the manifests have to be
+  # declared external resources or editing them recompiles nothing. Without
+  # this, adding a tag leaves anyone with a warm _build — every path-dep
+  # consumer, which is the standard mob dev setup — with the sigil still
+  # rejecting the new tag until a manual `mix clean`.
+  @external_resource Application.app_dir(:mob, "priv/tags/ios.txt")
+  @external_resource Application.app_dir(:mob, "priv/tags/android.txt")
+
   @known_tags (
                 ios_file = Application.app_dir(:mob, "priv/tags/ios.txt")
                 android_file = Application.app_dir(:mob, "priv/tags/android.txt")

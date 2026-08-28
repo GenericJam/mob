@@ -242,6 +242,16 @@ defmodule Mob.SigilTest do
       node = ~MOB(<GpuView />)
       assert node.type == :gpu_view
     end
+
+    test "Sheet preserves a typed content detent expression" do
+      detents = [{:content, max_height: 480}]
+
+      node = ~MOB(<Sheet detents={detents}>
+  <Text text="Body" />
+</Sheet>)
+
+      assert node.props.detents == detents
+    end
   end
 
   # ── parity with raw maps ─────────────────────────────────────────────────────

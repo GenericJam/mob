@@ -1248,6 +1248,21 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         if ([accessibilityId isKindOfClass:[NSString class]]) {
             node.accessibilityId = accessibilityId;
         }
+
+        id accessibilityLabel = props[@"accessibility_label"];
+        if ([accessibilityLabel isKindOfClass:[NSString class]]) {
+            node.accessibilityLabel = accessibilityLabel;
+        }
+
+        id accessibilityRole = props[@"accessibility_role"];
+        if ([accessibilityRole isKindOfClass:[NSString class]]) {
+            node.accessibilityRole = accessibilityRole;
+        }
+
+        id disabled = props[@"disabled"];
+        if ([disabled isKindOfClass:[NSNumber class]]) {
+            node.disabled = [disabled boolValue];
+        }
     }
 
     NSArray *children = dict[@"children"];

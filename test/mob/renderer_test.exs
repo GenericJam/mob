@@ -104,6 +104,27 @@ defmodule Mob.RendererTest do
       assert decoded["props"]["text"] == "Hello"
     end
 
+    test "box accessibility and disabled props survive the renderer boundary" do
+      tree = %{
+        type: :box,
+        props: %{
+          accessibility_label: "Open Acme company",
+          accessibility_role: :button,
+          disabled: true
+        },
+        children: []
+      }
+
+      Renderer.render(tree, :ios, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      props = :json.decode(json)["props"]
+
+      assert props["accessibility_label"] == "Open Acme company"
+      assert props["accessibility_role"] == "button"
+      assert props["disabled"] == true
+      refute Map.has_key?(props, "on_tap")
+    end
+
     test "JSON contains nested children" do
       tree = %{
         type: :column,
@@ -1284,9 +1305,34 @@ defmodule Mob.RendererTest do
       assert Enum.at(decoded_children, 1)["props"]["text"] == "b"
     end
 
-    test "detents serialize as a list of strings" do
-      Renderer.render(sheet_tree(%{detents: [:medium]}), :android, MockNIF)
-      assert set_root_json()["props"]["detents"] == ["medium"]
+    test "detents serialize in canonical built-in and content forms" do
+      for {detents, expected} <- [
+            {[:medium], ["medium"]},
+            {[:large, :medium], ["large", "medium"]},
+            {[:content], [%{"type" => "content"}]},
+            {[{:content, max_height: 240}], [%{"type" => "content", "max_height" => 240}]},
+            {[%{type: :content}], [%{"type" => "content"}]},
+            {[%{type: :content, max_height: 320}], [%{"type" => "content", "max_height" => 320}]}
+          ] do
+        MockNIF.reset()
+        Renderer.render(sheet_tree(%{detents: detents}), :android, MockNIF)
+        assert set_root_json()["props"]["detents"] == expected
+      end
+    end
+
+    test "renderer rejects invalid raw detent nodes" do
+      for detents <- [
+            [:content, :medium],
+            [%{type: :content, max_height: -1}],
+            [%{type: :content, unknown: true}],
+            :content,
+            [{:content, :not_options}],
+            [%{type: :bogus}]
+          ] do
+        assert_raise ArgumentError, ~r/:detents/, fn ->
+          Renderer.render(sheet_tree(%{detents: detents}), :android, MockNIF)
+        end
+      end
     end
 
     test "on_dismiss registers through the tap registry and serializes as an integer handle" do
