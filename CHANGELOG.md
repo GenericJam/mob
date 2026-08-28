@@ -10,6 +10,57 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.7.32] - 2026-08-27
+
+### Added
+- **Intrinsic Sheet detents.** `Mob.UI.sheet/2` accepts `[:content]` and
+  `[{:content, max_height: n}]` alongside `[:medium, :large]`. A content detent
+  is exclusive of the built-ins; existing `:medium`/`:large` callers are
+  unaffected. Validation is canonical through
+  `Mob.UI.normalize_sheet_detents!/1` and re-applied at the renderer boundary,
+  so a hand-built or `~MOB` sigil node cannot bypass it — such a node now
+  raises during render rather than silently degrading. Content detents encode
+  as typed native configuration maps.
+- **iOS content measurement.** A content sheet measures its composed Mob
+  children, hugs short content, caps at the configured maximum and at live root
+  geometry, scrolls overflow internally, and re-clamps when the root or
+  container resizes (rotation, split view, Stage Manager). The detent accounts
+  for the sheet's own bottom safe-area inset, so content clears the home
+  indicator instead of sitting under it.
+- **Composite Box accessibility.** `accessibility_label`, an explicit
+  `accessibility_role: :button` that survives independently of whether an event
+  handle is present, and `disabled` semantics. A disabled interactive Box stays
+  a disabled button and does not dispatch; a passive labelled Box does not
+  become a button.
+- `Sheet` is now in both packaged platform tag manifests (`priv/tags/ios.txt`,
+  `priv/tags/android.txt`), so the `~MOB` sigil and `Mob.ScreenCase` accept it.
+
+### Fixed
+- **iOS launch deadlock (App Store rejection).** `Mob.Screen.init/1` calls
+  `safe_area()` before the first screen mounts, and its unbounded
+  `dispatch_sync` to the main queue could block the BEAM boot thread forever —
+  the app never finished launching. Root-caused from an App Store review
+  reporting an indefinite load on an iPad Air M3. Now a bounded wait (2s) that
+  falls back to zero insets, with the NIF marked
+  `ERL_NIF_DIRTY_JOB_IO_BOUND` so a slow main thread cannot stall a regular
+  scheduler either. A 15s boot watchdog turns a silent hang into a diagnosable
+  error rather than a blank screen.
+- iOS: glass surfaces tint with the node's own background, and `fill_width`
+  rows left-align rather than centring.
+- `@external_resource` on the platform tag manifests. They are read into module
+  attributes at compile time, so adding a tag previously recompiled nothing for
+  anyone with a warm `_build` — every path-dep consumer — leaving the sigil
+  rejecting the new tag until a manual `mix clean`.
+
+### Known limitations
+- A content detent sizes from *intrinsic* height, so a scrollable child
+  (`scroll`, `lazy_list`) reports its full content height and expands inside
+  the sheet rather than scrolling independently. Use `:medium`/`:large` when
+  the sheet body is itself scrollable.
+- A content sheet presents at `:medium` for the first frame and resizes once
+  its content has been measured, since content height is only knowable after
+  presentation.
+
 ## [0.7.31] - 2026-08-27
 
 ### Added
