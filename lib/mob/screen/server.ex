@@ -8,9 +8,9 @@ defmodule Mob.Screen.Server do
   navigation and every other screen with it — the isolation `Mob.Screen`'s
   moduledoc claimed and mob#76 had to write around.
 
-  Now `Mob.Screen` owns navigation and starts one of these per live screen. A
-  crash here kills this screen only; the owner sees the `:DOWN`, restarts it,
-  and re-renders.
+  `Mob.Router` owns navigation and starts one of these per live screen. A crash
+  here kills this screen only; the router sees the exit, restarts it, and
+  re-renders.
 
   ## `self()` means what users already assume
 
@@ -55,7 +55,7 @@ defmodule Mob.Screen.Server do
   """
   @type render_ref :: reference()
 
-  defstruct [:module, :socket, :render_mode, :ref, :owner]
+  defstruct [:module, :socket, :render_mode, :ref, :owner, :nif]
 
   @doc """
   Start a screen linked to the calling process.
@@ -63,7 +63,7 @@ defmodule Mob.Screen.Server do
   `:owner` receives nav actions and the exit signal. `:ref` identifies this
   screen to `Mob.Sender` and is unique per screen — see `t:render_ref/0`.
 
-  `Mob.Screen` links *and* traps exits. Linking alone would make the owner die
+  `Mob.Router` links *and* traps exits. Linking alone would make the owner die
   with any screen it stopped or that crashed; trapping alone would leave every
   screen orphaned when the owner died — and an orphaned persisted screen keeps
   dumping to `Mob.ScreenState` under the same key as its live replacement.
@@ -126,11 +126,14 @@ defmodule Mob.Screen.Server do
     module = Keyword.fetch!(opts, :module)
     render_mode = Keyword.get(opts, :render_mode, :no_render)
     platform = Keyword.get(opts, :platform, :android)
+    # Injectable for the same reason Mob.Renderer and Mob.Sender take it as a
+    # parameter: without it nothing can exercise the render path off-device.
+    nif = Keyword.get(opts, :nif, :mob_nif)
 
     socket =
       module
       |> Mob.Socket.new(platform: platform)
-      |> Mob.Socket.assign(:safe_area, initial_safe_area(render_mode))
+      |> Mob.Socket.assign(:safe_area, initial_safe_area(render_mode, nif))
 
     case module.mount(Keyword.get(opts, :params, %{}), %{}, socket) do
       {:ok, mounted} ->
@@ -144,7 +147,8 @@ defmodule Mob.Screen.Server do
            socket: socket,
            render_mode: render_mode,
            ref: Keyword.get(opts, :ref, :__mob_single__),
-           owner: Keyword.fetch!(opts, :owner)
+           owner: Keyword.fetch!(opts, :owner),
+           nif: nif
          }}
 
       {:error, reason} ->
@@ -205,7 +209,7 @@ defmodule Mob.Screen.Server do
   # Android file/camera/photo/scan results arrive JSON-encoded; decode and
   # re-dispatch as the user-facing event tuple.
   def handle_info({:mob_file_result, event, sub, json_binary}, state) do
-    handle_info(Mob.Screen.decode_file_result(event, sub, json_binary), state)
+    handle_info(decode_file_result(event, sub, json_binary), state)
   end
 
   # A few Peripheral.* events carry JSON-encoded device records; the
@@ -285,7 +289,7 @@ defmodule Mob.Screen.Server do
   defp paint(%{render_mode: :no_render} = state, _transition, _mode), do: state.socket
 
   defp paint(state, transition, mode) do
-    socket = ensure_safe_area(state.socket, state.socket.__mob__.platform)
+    socket = ensure_safe_area(state.socket, state.socket.__mob__.platform, state.nif)
     platform = socket.__mob__.platform
     list_renderers = Map.get(socket.__mob__, :list_renderers, %{})
 
@@ -298,26 +302,26 @@ defmodule Mob.Screen.Server do
       |> Mob.Component.expand(self(), platform)
 
     Mob.ComponentRegistry.reconcile(self(), active_component_keys)
-    Mob.Sender.render(state.ref, tree, platform, :mob_nif, transition)
+    Mob.Sender.render(state.ref, tree, platform, state.nif, transition)
     if mode == :sync, do: Mob.Sender.sync(:infinity)
 
     Mob.Socket.put_root_view(socket, :json_tree)
   end
 
-  defp initial_safe_area(:render) do
-    {t, r, b, l} = :mob_nif.safe_area()
+  defp initial_safe_area(:render, nif) do
+    {t, r, b, l} = nif.safe_area()
     %{top: t, right: r, bottom: b, left: l}
   end
 
-  defp initial_safe_area(_mode), do: %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+  defp initial_safe_area(_mode, _nif), do: %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
 
-  defp ensure_safe_area(socket, platform) do
+  defp ensure_safe_area(socket, platform, nif) do
     if Map.has_key?(socket.assigns, :safe_area) do
       socket
     else
       safe_area =
         if platform == :ios do
-          {t, r, b, l} = :mob_nif.safe_area()
+          {t, r, b, l} = nif.safe_area()
           %{top: t, right: r, bottom: b, left: l}
         else
           %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
@@ -344,6 +348,60 @@ defmodule Mob.Screen.Server do
       socket
     end
   end
+
+  # Android file/camera/photo/scan results arrive JSON-encoded from native.
+  defp decode_file_result(event, sub, json_binary) do
+    event_atom = String.to_atom(event)
+    sub_atom = String.to_atom(sub)
+
+    items =
+      case :json.decode(json_binary) do
+        list when is_list(list) ->
+          Enum.map(list, fn item when is_map(item) ->
+            Map.new(item, fn {k, v} -> {String.to_atom(k), v} end)
+          end)
+
+        _ ->
+          []
+      end
+
+    case {event_atom, sub_atom} do
+      {:camera, :photo} ->
+        {:camera, :photo, List.first(items) || %{}}
+
+      {:camera, :video} ->
+        {:camera, :video, List.first(items) || %{}}
+
+      {:camera, :cancelled} ->
+        {:camera, :cancelled}
+
+      {:photos, :picked} ->
+        {:photos, :picked, items}
+
+      {:files, :picked} ->
+        {:files, :picked, items}
+
+      {:audio, :recorded} ->
+        {:audio, :recorded, List.first(items) || %{}}
+
+      {:storage, :saved_to_library} ->
+        {:storage, :saved_to_library, (List.first(items) || %{})[:path]}
+
+      {:scan, :result} ->
+        scan_result(List.first(items) || %{})
+
+      _ ->
+        {event_atom, sub_atom, items}
+    end
+  end
+
+  defp scan_result(item) do
+    {:scan, :result, %{type: to_atom_safe(item[:type]), value: item[:value]}}
+  end
+
+  defp to_atom_safe(nil), do: :qr
+  defp to_atom_safe(s) when is_binary(s), do: String.to_atom(s)
+  defp to_atom_safe(a) when is_atom(a), do: a
 
   defp schedule_state_sync do
     Process.send_after(self(), :__mob_sync_state__, @state_sync_interval_ms)

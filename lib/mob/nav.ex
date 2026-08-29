@@ -15,16 +15,13 @@ defmodule Mob.Nav do
   ## Shape
 
   The *active* stack's current screen is deliberately **not** stored here. It
-  lives where it always did, in `Mob.Screen`'s `{module, socket}`, and this
-  struct holds only the active stack's `history` plus the fully parked state of
-  every inactive stack. Keeping the hot path untouched is the point: an ordinary
-  message to the active screen reads and writes the same two variables it did
-  before, and only `switch/3` moves state in or out of `parked`.
+  lives in `Mob.Router`'s `current`, and this struct holds only the active
+  stack's `history` plus the fully parked state of every inactive stack. Only
+  `switch/3` moves state in or out of `parked`.
 
   * `active` — name of the stack the current screen belongs to (`nil` when the
     app declares no stacks at all, i.e. a bare `start_root/1` with no layout)
-  * `history` — the active stack's history, head = most recent, exactly the list
-    `Mob.Screen` used to hold
+  * `history` — the active stack's history, head = most recent
   * `parked` — `%{name => %{current: entry, history: [entry]}}` for inactive
     stacks. Never contains `active`.
   * `order` — declared stack order, for tab-index mapping
@@ -41,7 +38,7 @@ defmodule Mob.Nav do
   @typedoc """
   Whatever the caller uses to identify a screen. Opaque here.
 
-  `Mob.Screen` puts `%{module:, pid:, params:, ref:}` in these slots since
+  `Mob.Router` puts `%{module:, pid:, params:, ref:}` in these slots since
   MOB-112 — this module never looks inside one.
   """
   @type entry :: term()
@@ -111,7 +108,7 @@ defmodule Mob.Nav do
 
   # `navigation/1` is app-supplied and unvalidated. `Nav.Registry` has always
   # tolerated a shape it doesn't recognise (`register_nav(_), do: :ok`), and this
-  # runs inside `Mob.Screen.init/1` — raising here would turn a declaration the
+  # runs inside `Mob.Router.init/1` — raising here would turn a declaration the
   # framework previously ignored into a failure to boot.
   def from_layout(_layout, _current_module), do: new()
 
@@ -143,7 +140,7 @@ defmodule Mob.Nav do
   every entry in its history.
 
   Entries are opaque to this module, so the caller decides what an entry is and
-  what replacing one means. `Mob.Screen` uses it to substitute a restarted
+  what replacing one means. `Mob.Router` uses it to substitute a restarted
   screen process wherever it was referenced.
 
   The *active* stack's history is not covered: it lives in `history`, which the
@@ -173,7 +170,7 @@ defmodule Mob.Nav do
   all is removed from `parked` entirely, so the next switch to it mounts its
   root fresh rather than restoring a screen that is gone.
 
-  `Mob.Screen` uses this when a screen crashes and cannot be re-mounted —
+  `Mob.Router` uses this when a screen crashes and cannot be re-mounted —
   leaving the dead entry in place would freeze that tab permanently, since
   switching to it would restore a corpse.
   """
