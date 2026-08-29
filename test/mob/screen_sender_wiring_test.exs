@@ -2,9 +2,9 @@ defmodule Mob.ScreenSenderWiringTest do
   @moduledoc """
   The seam between `Mob.Screen` and `Mob.Sender`.
 
-  Screens run `:no_render` here, so no tree is ever committed — but
-  `Mob.Sender.set_active/1` is a cast, so with a real sender running these
-  assertions pin *who* declares the active screen and *when*.
+  Screens run `:no_render` here, so no tree is ever committed — but with a real
+  sender running these assertions pin *who* declares the active screen and
+  *when*.
 
   Since MOB-112 the sender's key is per **screen**, not per stack. Every screen
   is a live process that repaints on any message it receives, including the ones
@@ -131,7 +131,7 @@ defmodule Mob.ScreenSenderWiringTest do
     Sender.sync()
     settings_ref = current_ref(screen)
 
-    # A screen re-rendering must not promote itself — this fails if set_active/1
+    # A screen re-rendering must not promote itself — this fails if activation
     # moves back into the render path.
     Mob.Screen.dispatch(screen, "bump", %{})
     Sender.sync()

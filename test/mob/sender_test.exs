@@ -144,6 +144,70 @@ defmodule Mob.SenderTest do
   end
 
   describe "coalescing preserves the transition" do
+    test "an immediate first paint cannot overtake its navigation transition" do
+      start_sender(:home)
+
+      assert :ok = Sender.activate(:details, :push)
+      Sender.render(:details, tree("mounted"), :android, RecordingNif, :none)
+      Sender.sync()
+
+      Sender.render(:details, tree("loaded"), :android, RecordingNif, :none)
+      Sender.sync()
+
+      transitions = for {:set_transition, transition} <- RecordingNif.calls(), do: transition
+
+      assert transitions == [:push, :none]
+
+      assert [mounted, loaded] = committed_texts()
+      assert mounted =~ "mounted"
+      assert loaded =~ "loaded"
+    end
+
+    test "an ordinary first paint consumes the activated navigation transition" do
+      state = %Sender{active: :home}
+
+      {:reply, :ok, state} = Sender.handle_call({:activate, :details, :push}, self(), state)
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :details, tree("first"), :ios, RecordingNif, :none}, state)
+
+      assert state.reserved_transition == nil
+      {:noreply, _state} = Sender.handle_info(:flush, state)
+
+      assert {:set_transition, :push} in RecordingNif.calls()
+    end
+
+    test "the activated transition survives a second ordinary paint before flush" do
+      state = %Sender{active: :home}
+
+      {:reply, :ok, state} = Sender.handle_call({:activate, :details, :push}, self(), state)
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :details, tree("first"), :ios, RecordingNif, :none}, state)
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :details, tree("latest"), :ios, RecordingNif, :none}, state)
+
+      {:noreply, _state} = Sender.handle_info(:flush, state)
+
+      assert {:set_transition, :push} in RecordingNif.calls()
+      assert [json] = committed_texts()
+      assert json =~ "latest"
+    end
+
+    test "activation without a transition leaves the first paint ordinary" do
+      state = %Sender{active: :home}
+
+      {:reply, :ok, state} = Sender.handle_call({:activate, :settings, :none}, self(), state)
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :settings, tree("first"), :ios, RecordingNif, :none}, state)
+
+      {:noreply, _state} = Sender.handle_info(:flush, state)
+
+      assert {:set_transition, :none} in RecordingNif.calls()
+    end
+
     test "a push superseded by an ordinary re-render still animates as a push" do
       state = %Sender{active: :home}
 
