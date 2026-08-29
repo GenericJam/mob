@@ -205,7 +205,8 @@ defmodule Mob.ScreenCase do
 
     * in-BEAM: the destination of the nav action recorded on the socket by
       `Mob.Socket.push_screen/3` and friends. Destination-bearing actions
-      (`{:push, Dest, _}`, `{:reset, Dest, _}`, `{:pop_to, Dest}`) return
+      (`{:push, Dest, _}`, `{:reset, Dest, _}`, `{:reset, Dest, _, _}`,
+      `{:pop_to, Dest}`) return
       `Dest`; destinationless ones (`{:pop}`, `{:pop_to_root}`,
       `{:switch_tab, tab}`) return the raw action unchanged.
     * on device: the screen currently showing (`Mob.Test.screen/1`).
@@ -215,6 +216,7 @@ defmodule Mob.ScreenCase do
     case Map.get(socket.__mob__, :nav_action) do
       {:push, dest, _params} -> dest
       {:reset, dest, _params} -> dest
+      {:reset, dest, _params, _transition} -> dest
       {:pop_to, dest} -> dest
       other -> other
     end

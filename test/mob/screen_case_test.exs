@@ -54,6 +54,14 @@ defmodule Mob.ScreenCaseTest do
       {:noreply, Mob.Socket.push_screen(socket, CounterScreen)}
     end
 
+    def handle_event("reset", _params, socket) do
+      {:noreply, Mob.Socket.reset_to(socket, CounterScreen)}
+    end
+
+    def handle_event("reset_push", _params, socket) do
+      {:noreply, Mob.Socket.reset_to(socket, CounterScreen, %{}, transition: :push)}
+    end
+
     def handle_info({:tap, :go}, socket) do
       {:noreply, Mob.Socket.push_screen(socket, CounterScreen)}
     end
@@ -164,6 +172,26 @@ defmodule Mob.ScreenCaseTest do
 
     test "records a push from a tap (handle_info) as the destination module" do
       view = NavScreen |> mount_screen() |> render_info({:tap, :go})
+      assert navigated_to(view) == CounterScreen
+    end
+
+    test "records a legacy three-element reset as the destination module" do
+      # Mob.Socket only emits the four-element form now, so this shape reaches
+      # navigated_to/1 only from a socket built before a hot code push. Built by
+      # hand because nothing in-repo produces it any more — without that the
+      # clause is dead code that a green suite would not notice.
+      view = NavScreen |> mount_screen() |> render_event("reset")
+      legacy = Mob.Socket.put_mob(view.socket, :nav_action, {:reset, CounterScreen, %{}})
+
+      assert navigated_to(%{view | socket: legacy}) == CounterScreen
+    end
+
+    test "records a reset carrying a transition as the destination module" do
+      # reset_to/4 grew a fourth element for the transition. Matching only the
+      # three-element shape here silently returned the raw action tuple, so
+      # `assert navigated_to(view) == SomeScreen` failed for every caller who
+      # passed a transition — in a helper whose whole job is that assertion.
+      view = NavScreen |> mount_screen() |> render_event("reset_push")
       assert navigated_to(view) == CounterScreen
     end
   end

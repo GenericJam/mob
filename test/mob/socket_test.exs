@@ -128,4 +128,48 @@ defmodule Mob.SocketTest do
       assert socket.__mob__.root_view == :some_ref
     end
   end
+
+  describe "reset_to/4" do
+    test "keeps the reset transition by default" do
+      socket = Socket.new(MyScreen) |> Socket.reset_to(OtherScreen, %{source: :login})
+
+      assert socket.__mob__.nav_action ==
+               {:reset, OtherScreen, %{source: :login}, :reset}
+    end
+
+    test "accepts a directional transition without changing the reset action" do
+      socket =
+        Socket.new(MyScreen)
+        |> Socket.reset_to(OtherScreen, %{tab: :portfolio}, transition: :push)
+
+      assert socket.__mob__.nav_action ==
+               {:reset, OtherScreen, %{tab: :portfolio}, :push}
+    end
+
+    test "rejects a transition the platform cannot render" do
+      # set_transition/1 accepts any atom and the platform falls back to no
+      # animation for one it does not recognise, so an unchecked typo would
+      # silently produce the wrong motion with nothing to point at.
+      assert_raise ArgumentError, ~r/invalid transition :puhs/, fn ->
+        Socket.new(MyScreen) |> Socket.reset_to(OtherScreen, %{}, transition: :puhs)
+      end
+    end
+
+    test "accepts the directional transitions and the default" do
+      for t <- [:push, :pop, :reset] do
+        socket = Socket.new(MyScreen) |> Socket.reset_to(OtherScreen, %{}, transition: t)
+        assert {:reset, OtherScreen, %{}, ^t} = socket.__mob__.nav_action
+      end
+    end
+
+    test "rejects :none, which would replace the stack without telling the platform" do
+      # :none suppresses the navigation-version bump, so SwiftUI diffs the
+      # incoming tree into the outgoing screen's view identities — a TextField
+      # at the same position keeps the old screen's text and focus across a
+      # stack that no longer exists.
+      assert_raise ArgumentError, ~r/invalid transition :none/, fn ->
+        Socket.new(MyScreen) |> Socket.reset_to(OtherScreen, %{}, transition: :none)
+      end
+    end
+  end
 end

@@ -337,9 +337,17 @@ defmodule Mob.Test do
   Replace the entire navigation stack with a new root screen. Synchronous.
 
   Use this to simulate auth transitions (e.g. login → home with no back button).
+
+  Pass `transition: :push` or `transition: :pop` to drive a directional reset,
+  matching `Mob.Socket.reset_to/4`.
   """
-  @spec reset_to(node(), module() | atom(), map()) :: :ok
-  def reset_to(node, dest, params \\ %{}), do: nav(node, {:reset, dest, params})
+  @spec reset_to(node(), module() | atom(), map(), [{:transition, atom()}]) :: :ok
+  def reset_to(node, dest, params \\ %{}, opts \\ []) do
+    case Keyword.get(opts, :transition) do
+      nil -> nav(node, {:reset, dest, params})
+      transition -> nav(node, {:reset, dest, params, transition})
+    end
+  end
 
   # ── Lists ─────────────────────────────────────────────────────────────────────
 

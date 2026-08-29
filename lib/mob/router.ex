@@ -627,9 +627,16 @@ defmodule Mob.Router do
     end
   end
 
+  # The three-element form predates the transition option. It still arrives from
+  # `Mob.Test.reset_to/3`, and from any socket built before a hot code push, so
+  # it keeps working and means what it always did.
   defp apply_nav_action({:reset, dest, params}, state, mode) do
+    apply_nav_action({:reset, dest, params, :reset}, state, mode)
+  end
+
+  defp apply_nav_action({:reset, dest, params, transition}, state, mode) do
     with {:ok, new_module, route_params} <- safe_resolve(dest, state) do
-      reset_resolved(new_module, Map.merge(route_params, params), state, mode)
+      reset_resolved(new_module, Map.merge(route_params, params), transition, state, mode)
     end
   end
 
@@ -658,6 +665,21 @@ defmodule Mob.Router do
     end
   end
 
+  # A shape this router does not know. Reachable during a hot code push, where
+  # module loading is not atomic: a screen already running new code can hand an
+  # action to a router still running old code. Unmatched, that is a
+  # FunctionClauseError in the owner — navigation and every live screen down,
+  # which is the failure safe_resolve/2 and safe_call/1 exist to prevent.
+  # Repaint and carry on instead.
+  defp apply_nav_action(action, state, mode) do
+    Logger.error(
+      "[mob] unrecognised navigation action #{inspect(action)} was ignored. " <>
+        "If this followed a hot code push, restart the app to clear it."
+    )
+
+    repaint_current(state, mode)
+  end
+
   defp push_resolved(new_module, mount_params, state, mode) do
     case start_screen(new_module, mount_params, state) do
       {:ok, entry, state} ->
@@ -671,13 +693,13 @@ defmodule Mob.Router do
     end
   end
 
-  defp reset_resolved(new_module, mount_params, state, mode) do
+  defp reset_resolved(new_module, mount_params, transition, state, mode) do
     case start_screen(new_module, mount_params, state) do
       {:ok, entry, state} ->
         discarded = [state.current | Mob.Nav.history(state.nav)]
         state = Enum.reduce(discarded, state, &stop_screen/2)
         state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, entry)
-        do_paint(entry, :reset, state, mode)
+        do_paint(entry, transition, state, mode)
         state
 
       {:error, _reason} ->
