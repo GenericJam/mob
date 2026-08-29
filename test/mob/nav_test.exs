@@ -72,7 +72,7 @@ defmodule Mob.NavTest do
 
     test "an unrecognised layout is ignored rather than raising" do
       # navigation/1 is app-supplied and unvalidated, and this runs inside
-      # Mob.Screen.init/1 — raising would turn a shape Nav.Registry has always
+      # Mob.Router.init/1 — raising would turn a shape Nav.Registry has always
       # tolerated into a failure to boot.
       assert Nav.from_layout([stack(:home, root: HomeScreen)], HomeScreen) == Nav.new()
       assert Nav.from_layout(:nonsense, HomeScreen) == Nav.new()

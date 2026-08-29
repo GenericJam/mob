@@ -33,10 +33,24 @@ events straight to the owning screen's pid, so a tap goes native → listener �
 screen → sender with the router uninvolved.
 
 What is new is that it is now **asserted rather than reasoned about**.
-`test/mob/router_hot_path_test.exs` traces `:receive` on the router across a
-tap, a value-carrying event, and a burst of fifty messages, and asserts the
-trace is empty. A negative control confirms it bites: making the screen notify
-the router on each message fails exactly those three tests.
+`test/mob/router_hot_path_test.exs` traces `:receive` on the router and asserts
+the trace is empty.
+
+It covers both halves of the path, which took a change to make possible. The
+callback half (`handle_info` into user code) runs under `:no_render`. The render
+half — tree expansion, `Mob.ComponentRegistry.reconcile/2`, the hand-off to
+`Mob.Sender` — is skipped entirely by `:no_render`, and `:render` needs a NIF.
+The first version of this test therefore proved nothing about the half where a
+hop is *most* likely to appear: an "am I still active?" check in the render body
+is the obvious shape of one. A router hop added to `paint/3` passed the whole
+suite.
+
+`Mob.Screen.Server` now takes its NIF module as an option, defaulting to
+`:mob_nif`. That is not test-only scaffolding — `Mob.Renderer` and `Mob.Sender`
+already take it as a parameter, and the screen was the outlier that hardcoded
+it. With a stub NIF the test drives real renders off-device, and negative
+controls confirm both halves bite: a hop in `forward/2` fails the callback
+tests, a hop in `paint/3` fails the render tests.
 
 This matters more than a tidy-up. An earlier costing of this architecture
 assumed a router in the loop and concluded per-screen processes could not escape

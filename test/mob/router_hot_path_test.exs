@@ -9,6 +9,14 @@ defmodule Mob.RouterHotPathTest do
 
   Asserted by tracing the router's mailbox rather than by reasoning about the
   code, so it keeps holding when someone adds a message.
+
+  Both halves of the path are covered. The callback half (`handle_info` ->
+  user code) runs under `:no_render`. The render half (tree expansion,
+  `Mob.ComponentRegistry.reconcile/2`, the hand-off to `Mob.Sender`) only runs
+  in `:render`, which needs a NIF — so those tests inject a stub one. Covering
+  only the callback half would leave the property unpinned exactly where it is
+  most likely to break: an "am I still active?" check added to the render body
+  is the obvious shape of a future router hop.
   """
   use ExUnit.Case, async: false
 
@@ -43,6 +51,17 @@ defmodule Mob.RouterHotPathTest do
     import Mob.App
     @home Mob.RouterHotPathTest.HomeScreen
     def navigation(_), do: stack(:home, root: @home)
+  end
+
+  # Enough of the NIF surface for a screen to mount and render off-device.
+  defmodule StubNif do
+    def platform, do: :android
+    def safe_area, do: {0.0, 0.0, 0.0, 0.0}
+    def take_launch_notification, do: :none
+    def clear_taps, do: :ok
+    def set_transition(_), do: :ok
+    def register_tap(_), do: 0
+    def set_root(_json), do: :ok
   end
 
   defp stop_safely(pid) do
@@ -114,6 +133,8 @@ defmodule Mob.RouterHotPathTest do
         end)
 
       assert messages == []
+      # Without this the test could pass because the handler never ran.
+      assert Mob.Screen.get_socket(router).assigns.typed == "hello"
     end
 
     test "a burst of messages produces no router traffic at all", %{
@@ -128,6 +149,56 @@ defmodule Mob.RouterHotPathTest do
 
       assert messages == []
       assert Mob.Screen.get_socket(router).assigns.count == 50
+    end
+  end
+
+  describe "the render path does not reach it either" do
+    setup do
+      services = [Mob.Sender, Mob.Listener, Mob.ComponentRegistry]
+      for name <- services, pid = Process.whereis(name), do: stop_safely(pid)
+
+      # The render path reconciles components, which needs the registry's table.
+      {:ok, _} = Mob.ComponentRegistry.start_link()
+      {:ok, router} = Mob.Router.start_root(HomeScreen, %{}, nif: StubNif)
+
+      on_exit(fn ->
+        stop_safely(router)
+        for name <- services, pid = Process.whereis(name), do: stop_safely(pid)
+      end)
+
+      %{rendering_router: router, rendering_screen: Mob.Screen.get_screen_pid(router)}
+    end
+
+    test "a message that triggers a real render leaves the router untouched", %{
+      rendering_router: router,
+      rendering_screen: screen
+    } do
+      # This is the half :no_render skips: tree expansion, component reconcile,
+      # and the hand-off to Mob.Sender all execute here.
+      messages =
+        router_messages(router, fn ->
+          send(screen, {:tap, :bump})
+          :sys.get_state(screen)
+          Mob.Sender.sync()
+        end)
+
+      assert messages == []
+      assert Mob.Screen.get_socket(router).assigns.count == 1
+    end
+
+    test "a burst of real renders leaves it untouched", %{
+      rendering_router: router,
+      rendering_screen: screen
+    } do
+      messages =
+        router_messages(router, fn ->
+          for _ <- 1..25, do: send(screen, {:tap, :bump})
+          :sys.get_state(screen)
+          Mob.Sender.sync()
+        end)
+
+      assert messages == []
+      assert Mob.Screen.get_socket(router).assigns.count == 25
     end
   end
 
