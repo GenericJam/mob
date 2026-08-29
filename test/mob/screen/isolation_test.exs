@@ -50,7 +50,7 @@ defmodule Mob.Screen.IsolationTest do
   end
 
   defp history_pids(owner) do
-    owner |> :sys.get_state() |> Map.fetch!(:nav) |> Mob.Nav.history() |> Enum.map(&elem(&1, 1))
+    owner |> :sys.get_state() |> Map.fetch!(:nav) |> Mob.Nav.history() |> Enum.map(& &1.pid)
   end
 
   setup do
@@ -60,12 +60,21 @@ defmodule Mob.Screen.IsolationTest do
     end
 
     {:ok, registry} = Mob.Nav.Registry.start_link(DemoApp)
-    on_exit(fn -> if Process.alive?(registry), do: GenServer.stop(registry) end)
+    on_exit(fn -> stop_safely(registry) end)
 
     {:ok, owner} = Mob.Screen.start_link(HomeScreen, %{})
-    on_exit(fn -> if Process.alive?(owner), do: GenServer.stop(owner) end)
+    on_exit(fn -> stop_safely(owner) end)
 
     %{owner: owner}
+  end
+
+  # `if Process.alive?, do: GenServer.stop` races: the process can exit between
+  # the check and the stop, and the :noproc exit then fails the test from inside
+  # the on_exit runner. Screens and their owner die with the test process.
+  defp stop_safely(pid) do
+    GenServer.stop(pid)
+  catch
+    :exit, _ -> :ok
   end
 
   describe "one process per screen" do

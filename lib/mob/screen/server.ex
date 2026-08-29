@@ -49,29 +49,30 @@ defmodule Mob.Screen.Server do
   defstruct [:module, :socket, :render_mode, :ref, :owner]
 
   @doc """
-  Start a screen process.
+  Start a screen linked to the calling process.
 
-  `:owner` receives nav actions and monitors this process. `:ref` is the
-  navigation stack this screen belongs to, used to address its renders at
-  `Mob.Sender`.
+  `:owner` receives nav actions and the exit signal. `:ref` is the navigation
+  stack this screen belongs to, used to address its renders at `Mob.Sender`.
+
+  `Mob.Screen` links *and* traps exits. Linking alone would make the owner die
+  with any screen it stopped or that crashed; trapping alone would leave every
+  screen orphaned when the owner died — and an orphaned persisted screen keeps
+  dumping to `Mob.ScreenState` under the same key as its live replacement.
+  Together the owner observes each exit as a message without sharing its fate,
+  and screens still come down with it.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
-  @doc """
-  Start a screen process **unlinked**.
-
-  This is what `Mob.Screen` uses. Linking would defeat the point: the owner
-  would die with any screen it stopped or that crashed, taking navigation and
-  every sibling screen with it — exactly the coupling MOB-112 removes. The
-  owner monitors instead, so it observes the exit without sharing its fate.
-  """
-  @spec start(keyword()) :: GenServer.on_start()
-  def start(opts), do: GenServer.start(__MODULE__, opts)
-
   @doc "Run a user event, returning any navigation action it produced."
   @spec dispatch(pid(), String.t(), map()) :: {:ok, term() | nil}
-  def dispatch(pid, event, params), do: GenServer.call(pid, {:event, event, params})
+  def dispatch(pid, event, params) do
+    # No deadline. The screen returns its nav action in the reply, having
+    # already cleared it from its socket, so a timeout here does not fail the
+    # event — it silently discards the navigation the user asked for. A slow
+    # handle_event is a slow app; it is not a lost push.
+    GenServer.call(pid, {:event, event, params}, :infinity)
+  end
 
   @doc "This screen's current socket."
   @spec socket(pid()) :: Mob.Socket.t()
@@ -83,11 +84,11 @@ defmodule Mob.Screen.Server do
 
   @doc "Paint and block until the frame has been committed."
   @spec render_sync(pid(), atom()) :: :ok
-  def render_sync(pid, transition \\ :none), do: GenServer.call(pid, {:render_sync, transition})
-
-  @doc "Tell this screen which stack it now belongs to."
-  @spec set_ref(pid(), render_ref()) :: :ok
-  def set_ref(pid, ref), do: GenServer.cast(pid, {:set_ref, ref})
+  def render_sync(pid, transition \\ :none) do
+    # Matches Mob.Sender.sync(:infinity) one hop down: rendering was never
+    # time-bounded, and bounding it here would kill the screen on a slow frame.
+    GenServer.call(pid, {:render_sync, transition}, :infinity)
+  end
 
   @doc "Repaint with the screen module's newly loaded code."
   @spec hot_reload(pid()) :: :ok
@@ -97,6 +98,12 @@ defmodule Mob.Screen.Server do
 
   @impl GenServer
   def init(opts) do
+    # Trapping so this screen shuts down gracefully when its owner exits:
+    # gen_server turns the parent's EXIT into a terminate/2 call, which is what
+    # runs the user's terminate/2 and the final Mob.ScreenState dump. Without
+    # it a screen is killed by the link and neither happens.
+    Process.flag(:trap_exit, true)
+
     module = Keyword.fetch!(opts, :module)
     render_mode = Keyword.get(opts, :render_mode, :no_render)
     platform = Keyword.get(opts, :platform, :android)
@@ -144,8 +151,6 @@ defmodule Mob.Screen.Server do
   def handle_cast({:render, transition}, state) do
     {:noreply, %{state | socket: paint(state, transition)}}
   end
-
-  def handle_cast({:set_ref, ref}, state), do: {:noreply, %{state | ref: ref}}
 
   def handle_cast(:__mob_hot_reload__, state) do
     {:noreply, %{state | socket: paint(state, :none)}}

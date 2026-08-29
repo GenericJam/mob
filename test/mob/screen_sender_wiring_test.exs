@@ -72,13 +72,22 @@ defmodule Mob.ScreenSenderWiringTest do
     {:ok, registry} = Mob.Nav.Registry.start_link(TabApp)
 
     on_exit(fn ->
-      for pid <- [sender, registry], Process.alive?(pid), do: GenServer.stop(pid)
+      for pid <- [sender, registry], do: stop_safely(pid)
     end)
 
     {:ok, screen} = Mob.Screen.start_link(HomeScreen, %{})
-    on_exit(fn -> if Process.alive?(screen), do: GenServer.stop(screen) end)
+    on_exit(fn -> stop_safely(screen) end)
 
     %{screen: screen}
+  end
+
+  # `if Process.alive?, do: GenServer.stop` races: the process can exit between
+  # the check and the stop, and the :noproc exit then fails the test from inside
+  # the on_exit runner. Screens and their owner die with the test process.
+  defp stop_safely(pid) do
+    GenServer.stop(pid)
+  catch
+    :exit, _ -> :ok
   end
 
   test "mounting a screen declares its stack active", %{screen: _} do
