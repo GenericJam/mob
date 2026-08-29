@@ -25,17 +25,47 @@ render_mode}` — with the socket replaced by the pid of the process that now
 owns it. `Mob.Nav` needed no change to hold pids: it always treated entries as
 opaque.
 
-### Screens are unlinked and monitored, not linked
+### Screens are linked, and everyone traps exits
 
-The first cut used `start_link`, and the tests caught it immediately: the owner
-stops a popped screen with `GenServer.stop(pid, :shutdown)`, the link
-propagated that exit to the owner, and the owner died — taking navigation and
-every sibling screen with it. Exactly the coupling this step exists to remove,
-reintroduced by the mechanism meant to manage it.
+This took two wrong turns worth recording, because each fix created the next
+problem.
 
-Screens are started with `GenServer.start/2` and monitored. The owner observes
-every exit without sharing its fate, and its `terminate/2` stops the screens it
-owns so each gets its own `terminate/2` and final state dump.
+Linking alone is wrong: the owner stops a popped screen with
+`GenServer.stop(pid, :shutdown)`, the link propagates that exit, and the owner
+dies — taking navigation and every sibling with it. Exactly the coupling this
+step removes, reintroduced by the mechanism meant to manage it.
+
+Unlinking (`GenServer.start/2` plus a monitor) fixes that and is also wrong: it
+orphans every screen when the owner dies. That is not hypothetical — an
+orphaned screen keeps its 30s `Mob.ScreenState` timer and dumps under the same
+`screen_key` as its live replacement, so orphans overwrite live persisted
+state.
+
+The answer is both: screens are **linked**, and the owner **traps exits**. The
+owner sees each exit as an `{:EXIT, pid, reason}` message without sharing its
+fate, and screens still come down with it. Screens trap too, so gen_server
+turns the owner's exit into a `terminate/2` call — which is what runs the
+user's `terminate/2` and the final state dump.
+
+Two consequences fall out:
+
+* The owner's `terminate/2` deliberately does **not** stop screens. Calling
+  `GenServer.stop/3` there corrupts the owner's own exit: the screen's
+  `:shutdown` travels back up the link while the owner is mid-terminate and
+  replaces its reason, so a clean `stop(owner, :normal)` exits `:shutdown`.
+  Letting the link do the work is both simpler and correct.
+* A *deliberate* stop (popping a screen) unlinks first, for the same reason —
+  we are discarding that screen, so its exit must not reflect back.
+
+### Every owner-to-screen call is protected
+
+`safe_call/1` wraps all of them, not most. Two were missed in the first cut and
+both were fatal: `handle_call(:inspect)` pattern-matched `{:ok, socket}`, so the
+one case `safe_call` exists for raised a `MatchError` *inside the owner*; and
+`paint_sync` was a raw `GenServer.call`, so a crash in the user's `render/1` —
+reached by the everyday "tap a button that pushes a screen" path — exited the
+owner. Both defeated the isolation on paths more common than the
+`handle_event` crash the tests covered.
 
 ### Not a DynamicSupervisor
 
@@ -59,17 +89,58 @@ defeating the isolation on the one path MOB-112's acceptance names explicitly.
 Every owner-to-screen call goes through `safe_call/1`, which catches the exit
 and lets the monitor repair the screen.
 
+### A navigation entry carries what a restart needs
+
+An entry is `%{module:, pid:, params:, ref:}`, not `{module, pid}`. The params
+and ref are not bookkeeping — a restart is wrong without them:
+
+* A screen that mounts on `%{id: id}` cannot come back from `%{}`. The re-mount
+  raises, the restart fails, and the owner is left holding a dead pid as
+  `current` — every later event calls a corpse and returns `:ok`, so the app
+  freezes silently.
+* A screen parked under an inactive stack must keep *that stack's* render ref.
+  Restarting it with the active ref means its next repaint commits over the
+  foreground tab, undoing the drop-inactive mechanism MOB-110 built.
+
 ### A restart re-mounts, and says so
 
 A restarted screen runs `mount/3` again and loses its assigns; persisted
-screens get their dumped state back through `load_state/2`. This is logged at
-error, because it is visible to the user — a form clears, a list resets — and
-silently losing state is worse than saying why.
+screens get their dumped state back through `load_state/2`. Logged at error,
+because it is visible to the user — a form clears, a list resets — and silently
+losing state is worse than saying why.
 
-Background screens (in the active stack's history, or parked under another
-stack) are re-mounted eagerly rather than lazily. A crash is rare, and keeping
-every nav entry a live pid means popping or switching back never has to handle
-a corpse.
+When the re-mount itself fails, the owner does not leave the corpse in place:
+a background screen is dropped from its stack, and a current screen pops to
+whatever is beneath it. With nothing beneath, it logs that the app has no live
+screen rather than pretending otherwise.
+
+Background screens are re-mounted eagerly rather than lazily. A crash is rare,
+and keeping every nav entry a live pid means popping or switching back never
+has to handle a corpse.
+
+### A no-op navigation still paints
+
+The screen deliberately does not paint when it produced a nav action, so every
+branch of `apply_nav_action/3` that changes nothing has to paint instead —
+`:noop` switch_tab, `pop` at root, `pop_to` not found, and each `start_screen`
+failure. Without that, `socket |> assign(:x, v) |> switch_tab(:home)` while
+already on `:home` updates the assigns and never renders them. Re-tapping the
+active tab is the everyday case, not an exotic one.
+
+### Mutate navigation only after the mount succeeds
+
+`switch_tab`'s `mount_root` starts the screen before touching `nav` or the
+sender's active ref. Doing it the other way round leaves the sender addressing
+a stack whose screen never started, so every frame the live screen produces is
+dropped — a silent freeze — while nav holds the same pid in two places.
+
+### Owner-to-screen calls have no deadline
+
+`dispatch/3` and `render_sync/2` pass `:infinity`. The screen returns its nav
+action *in the reply*, having already cleared it from its socket, so a timeout
+does not fail the event — it silently discards the navigation the user asked
+for. A slow `handle_event` is a slow app; it is not a lost push. A deliberate
+stop does have a bound, so one wedged screen cannot block teardown forever.
 
 ### Popping stops the screen; the ones below stay resident
 
@@ -113,5 +184,9 @@ not yank the stack out from under what the user is looking at.
 - Anything else addressed to `:mob_screen` — device events, notifications,
   plugin messages — is forwarded by the owner to the active screen.
 - An owner-to-screen call returns `nil` rather than raising when the screen is
-  mid-crash. Callers of `get_socket/1` in that window see `nil`; the monitor
-  repairs the screen immediately after.
+  mid-crash. `get_socket/1` and `Mob.Test.assigns/1` document and handle that.
+- **`Mob.Test.settle/2` now drains three processes, not two.** `:mob_screen` is
+  the navigation owner; it forwards to the screen, which builds the tree, which
+  the sender commits. Draining only the owner proved nothing — every
+  `tap -> settle -> screenshot` sequence in the agent workflow would have been
+  newly racy.
