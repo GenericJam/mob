@@ -7,7 +7,7 @@ Mob takes an unusual position in the mobile framework landscape. To understand w
 ```mermaid
 flowchart TD
     A["Your Elixir App<br/>(GenServers, Phoenix, Ecto, whatever you normally use)"]
-    B["Mob.Screen<br/>(your UI module) — GenServer"]
+    B["Mob.Screen.Server<br/>(your UI module) — one GenServer per live screen"]
     C["Mob.Renderer<br/>serialise + token resolution"]
     D1["Compose (JVM)<br/>Android"]
     D2["SwiftUI (Swift)<br/>iOS"]
@@ -20,7 +20,7 @@ flowchart TD
 
 BEAM and OTP run **on the device** — embedded inside the APK and the iOS app bundle. There is no server. Your screen logic, navigation state, and business logic all execute locally in the same BEAM node that the user has installed.
 
-The rendering layer is thin: `render/1` returns a plain Elixir map (the component tree), `Mob.Renderer` serialises it to JSON and passes it to the native side via a NIF call. Compose or SwiftUI diff and display it. UI events travel back as NIF callbacks that send messages to the screen GenServer. The BEAM owns state; the native UI is a thin view.
+The rendering layer is thin: `render/1` returns a plain Elixir map (the component tree), `Mob.Renderer` serialises it to JSON and passes it to the native side via a NIF call. Compose or SwiftUI diff and display it. UI events travel back as NIF callbacks; `Mob.Listener` unwraps them and sends them straight to the owning screen's process, without going through the router. The BEAM owns state; the native UI is a thin view.
 
 ## Erlang distribution for development
 
@@ -81,4 +81,4 @@ The right choice between them depends on your app's connectivity requirements an
 - **Native UI.** Components render as Compose and SwiftUI primitives. Animations, accessibility, platform gestures, and dark mode all work because the native layer handles them.
 - **No server required.** The app is self-contained. Online features are optional add-ons, not the foundation.
 - **Development speed.** `mix mob.connect` + `nl/1` gives you sub-second code push to a running device. The OTP debug toolchain — tracing, observer, remote IEx — is available without any extra infrastructure.
-- **OTP reliability.** A crashed screen is a crashed GenServer. OTP can restart it, log it, and keep the rest of the app running. You get fault tolerance on mobile for free.
+- **OTP reliability.** A crashed screen is a crashed GenServer. `Mob.Router` restarts it, logs it, and keeps navigation and every other screen running. You get fault tolerance on mobile for free.

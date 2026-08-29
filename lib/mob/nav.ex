@@ -111,7 +111,7 @@ defmodule Mob.Nav do
 
   # `navigation/1` is app-supplied and unvalidated. `Nav.Registry` has always
   # tolerated a shape it doesn't recognise (`register_nav(_), do: :ok`), and this
-  # runs inside `Mob.Screen.init/1` — raising here would turn a declaration the
+  # runs inside `Mob.Router.init/1` — raising here would turn a declaration the
   # framework previously ignored into a failure to boot.
   def from_layout(_layout, _current_module), do: new()
 
