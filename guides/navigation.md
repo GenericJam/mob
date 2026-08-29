@@ -120,7 +120,7 @@ Pop all screens back to the root of the current stack:
 Mob.Socket.pop_to_root(socket)
 ```
 
-### `reset_to/2,3`
+### `reset_to/2,3,4`
 
 Replace the entire navigation stack with a new root. No back button, no history. Used for auth transitions:
 
@@ -129,6 +129,13 @@ Replace the entire navigation stack with a new root. No back button, no history.
 def handle_event("tap", %{"tag" => "logged_in"}, socket) do
   {:noreply, Mob.Socket.reset_to(socket, MyApp.HomeScreen)}
 end
+```
+
+The reset always replaces the stack. Its animation can be overridden when the
+same stack operation represents directional movement, such as custom tabs:
+
+```elixir
+Mob.Socket.reset_to(socket, MyApp.PortfolioScreen, %{}, transition: :push)
 ```
 
 ### `switch_tab/2`
@@ -145,6 +152,9 @@ The framework automatically picks the right animation based on the navigation ac
 - **Push** — slide in from right (iOS) / slide up (Android)
 - **Pop** — reverse slide
 - **Reset** — cross-fade (no directional animation, no back history)
+
+`reset_to/4` can override only the animation with `transition: :push` or
+`transition: :pop`; it still discards navigation history.
 
 ## Passing data on pop
 

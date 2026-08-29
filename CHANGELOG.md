@@ -10,6 +10,38 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.7.34] - 2026-08-29
+
+### Added
+- **Directional resets.** `Mob.Socket.reset_to/4` takes
+  `transition: :push | :pop | :reset`. A reset always replaces the navigation
+  stack; the option only changes the animation, for cases like a custom tab bar
+  where replacing the stack still represents directional movement. `:reset`
+  (cross-fade) remains the default, so existing callers are unaffected.
+  `Mob.Test.reset_to/4` takes the same option, so the behaviour can be driven
+  on a device.
+
+### Changed
+- The `:reset` navigation action carries a fourth element, the transition.
+  `Mob.ScreenCase.navigated_to/1` and the router understand both shapes; the
+  three-element form still arrives from `Mob.Test.reset_to/3` and from any
+  socket built before a hot code push.
+- An unrecognised transition now raises `ArgumentError` at
+  `Mob.Socket.reset_to/4` rather than reaching the platform, which accepts any
+  atom and silently falls back to no animation. `:none` is rejected for the
+  same reason it is not merely a typo: it suppresses the navigation-version
+  bump, so SwiftUI would diff the incoming tree into the outgoing screen's view
+  identities — a text field at the same position keeping the old screen's text
+  and focus across a stack that no longer exists.
+
+### Fixed
+- **A navigation action the router does not recognise no longer takes the app
+  down.** It was an unmatched function clause in the owner process, which owns
+  navigation and links every live screen — so one bad action killed all of
+  them. Reachable during a hot code push, where module loading is not atomic
+  and a screen already running new code can hand an action to a router still
+  running old code. Now logged and ignored, and the current screen repaints.
+
 ## [0.7.33] - 2026-08-29
 
 First four steps of the screen-process architecture (MOB-108). Rationale in
