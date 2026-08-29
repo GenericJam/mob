@@ -230,6 +230,54 @@ defmodule Mob.Screen.RestartTest do
     end
   end
 
+  describe "giving up on a tab root" do
+    test "falls back to a live parked tab instead of bricking the app", %{owner: owner} do
+      # Every tab root has an empty history, so "nothing beneath it" is the
+      # ordinary shape here, not an exotic one. Leaving the dead screen as
+      # current would strand the app with a perfectly good :home tab parked.
+      home = Mob.Screen.get_screen_pid(owner)
+      Mob.Screen.dispatch(owner, "to_settings", %{})
+      assert Mob.Screen.get_current_module(owner) == SettingsScreen
+      assert Mob.Nav.history(:sys.get_state(owner).nav) == []
+
+      log =
+        capture_log(fn ->
+          # One more than @max_restarts trips the ceiling. Going further would
+          # start killing the screen we just fell back to.
+          for _ <- 1..6 do
+            Process.exit(Mob.Screen.get_screen_pid(owner), :kill)
+            :sys.get_state(owner)
+            :sys.get_state(owner)
+          end
+        end)
+
+      assert log =~ "given up on"
+      assert Mob.Screen.get_current_module(owner) == HomeScreen
+      assert Mob.Screen.get_screen_pid(owner) == home
+      assert Process.alive?(home)
+      assert Mob.Screen.get_socket(owner).assigns.where == :home
+    end
+
+    test "the dead screen is not left parked for a later switch to restore", %{owner: owner} do
+      Mob.Screen.dispatch(owner, "to_settings", %{})
+      dead = Mob.Screen.get_screen_pid(owner)
+
+      capture_log(fn ->
+        for _ <- 1..6 do
+          Process.exit(Mob.Screen.get_screen_pid(owner), :kill)
+          :sys.get_state(owner)
+          :sys.get_state(owner)
+        end
+      end)
+
+      # Switching back must mount a fresh root, never restore the corpse.
+      Mob.Screen.dispatch(owner, "to_settings", %{})
+      assert Mob.Screen.get_current_module(owner) == SettingsScreen
+      assert Mob.Screen.get_screen_pid(owner) != dead
+      assert Process.alive?(Mob.Screen.get_screen_pid(owner))
+    end
+  end
+
   describe "inspection is not a way to kill the app" do
     defmodule BadRenderScreen do
       use Mob.Screen
