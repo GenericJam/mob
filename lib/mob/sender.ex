@@ -50,6 +50,11 @@ defmodule Mob.Sender do
   `sync/1` that merely replied would return before the frame was committed.
   Mailbox order is the wrong tool here, and it looks like the right one.
 
+  `Mob.Router` uses `activate/2` before asking a screen to paint. Activation is
+  synchronous and carries the navigation transition as a one-shot reservation,
+  so an ordinary repaint from the newly active screen cannot race ahead and
+  erase the animation. Whichever tree arrives first consumes the reservation.
+
   `Mob.Router` uses `sync/1` on its `handle_call` paths to keep the guarantee
   `Mob.Test` documents for the synchronous navigation helpers. Note the ordering
   guarantee only covers renders cast by the *calling* process; the BEAM promises
@@ -68,7 +73,7 @@ defmodule Mob.Sender do
   """
   @type screen_ref :: reference() | atom()
 
-  defstruct active: nil, pending: %{}
+  defstruct active: nil, pending: %{}, reserved_transition: nil
 
   @doc "Start the sender. Named, so there is exactly one."
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -115,6 +120,21 @@ defmodule Mob.Sender do
   def set_active(ref), do: GenServer.cast(__MODULE__, {:set_active, ref})
 
   @doc """
+  Activate a screen and reserve its navigation transition for the next frame.
+
+  Unlike `set_active/1`, this call is synchronous. The router uses it at the
+  navigation boundary so paints sent by different screen processes cannot be
+  observed before the transition intent. The first tree for `ref` consumes the
+  reservation; later ordinary repaints remain `:none`.
+
+  A `:none` transition only activates the screen and creates no reservation.
+  """
+  @spec activate(screen_ref(), atom()) :: :ok
+  def activate(ref, transition) do
+    if running?(), do: GenServer.call(__MODULE__, {:activate, ref, transition}), else: :ok
+  end
+
+  @doc """
   Queue `tree` for commit on behalf of screen `ref`.
 
   Returns immediately. The tree is committed only if `ref` is active when the
@@ -146,7 +166,23 @@ defmodule Mob.Sender do
   end
 
   @impl GenServer
-  def handle_cast({:set_active, ref}, state), do: {:noreply, %{state | active: ref}}
+  def handle_call({:activate, ref, transition}, _from, state) do
+    reserved_transition = if transition == :none, do: nil, else: {ref, transition}
+    {:reply, :ok, %{state | active: ref, reserved_transition: reserved_transition}}
+  end
+
+  def handle_call(:sync, _from, state) do
+    # Flush here rather than just replying. The `:flush` this render self-sent
+    # lands at the BACK of the mailbox, which is behind a `sync` the caller has
+    # already queued — replying without flushing would return before the frame
+    # was committed, which is the one thing this function promises not to do.
+    {:reply, :ok, flush(state)}
+  end
+
+  @impl GenServer
+  def handle_cast({:set_active, ref}, state) do
+    {:noreply, %{state | active: ref, reserved_transition: nil}}
+  end
 
   def handle_cast({:render, ref, tree, platform, nif, transition}, state) do
     # Overwrite rather than append: a newer tree for the same screen supersedes
@@ -154,11 +190,22 @@ defmodule Mob.Sender do
     # is the exception — it describes the navigation animation for this frame,
     # not the frame's content, so a push superseded by an ordinary re-render
     # still has to animate as a push or the transition is silently swallowed.
-    transition = carry_transition(state.pending, ref, transition)
+    {transition, reserved_transition} =
+      take_transition(state.pending, state.reserved_transition, ref, transition)
+
     pending = Map.put(state.pending, ref, {tree, platform, nif, transition})
     send(self(), :flush)
-    {:noreply, %{state | pending: pending}}
+    {:noreply, %{state | pending: pending, reserved_transition: reserved_transition}}
   end
+
+  defp take_transition(pending, {ref, reserved}, ref, :none),
+    do: {carry_transition(pending, ref, reserved), nil}
+
+  defp take_transition(pending, {ref, _reserved}, ref, transition),
+    do: {carry_transition(pending, ref, transition), nil}
+
+  defp take_transition(pending, reserved, ref, transition),
+    do: {carry_transition(pending, ref, transition), reserved}
 
   defp carry_transition(pending, ref, :none) do
     case Map.fetch(pending, ref) do
@@ -173,15 +220,6 @@ defmodule Mob.Sender do
   def handle_info(:flush, state), do: {:noreply, flush(state)}
 
   def handle_info(_message, state), do: {:noreply, state}
-
-  @impl GenServer
-  def handle_call(:sync, _from, state) do
-    # Flush here rather than just replying. The `:flush` this render self-sent
-    # lands at the BACK of the mailbox, which is behind a `sync` the caller has
-    # already queued — replying without flushing would return before the frame
-    # was committed, which is the one thing this function promises not to do.
-    {:reply, :ok, flush(state)}
-  end
 
   defp flush(state) do
     case Map.fetch(state.pending, state.active) do
