@@ -159,17 +159,26 @@ defmodule Mob.Screen.RestartTest do
       assert Mob.Screen.get_current_module(owner) == SettingsScreen
     end
 
-    test "is restarted with its OWN stack's ref, not the active one", %{owner: owner} do
+    test "keeps its own render ref across a restart, and it is never the active one", %{
+      owner: owner
+    } do
       home = Mob.Screen.get_screen_pid(owner)
-      assert :sys.get_state(home).ref == :home
+      home_ref = :sys.get_state(home).ref
 
       Mob.Screen.dispatch(owner, "to_settings", %{})
+      settings_ref = :sys.get_state(owner).current.ref
+      refute settings_ref == home_ref
+
       kill_and_settle(owner, home)
 
       restarted = parked(owner)[:home].current
       assert restarted.pid != home
-      assert restarted.ref == :home, "a parked screen tagged :settings would paint over the tab"
-      assert :sys.get_state(restarted.pid).ref == :home
+      # The ref survives the restart — it is the same logical screen — and is
+      # still not the active one, so a repaint from it is dropped rather than
+      # committed over the foreground tab.
+      assert restarted.ref == home_ref
+      assert :sys.get_state(restarted.pid).ref == home_ref
+      refute restarted.ref == :sys.get_state(owner).current.ref
     end
 
     test "switching back reaches the restarted screen", %{owner: owner} do
@@ -182,6 +191,59 @@ defmodule Mob.Screen.RestartTest do
       assert Mob.Screen.get_current_module(owner) == HomeScreen
       assert Mob.Screen.get_screen_pid(owner) != home
       assert Process.alive?(Mob.Screen.get_screen_pid(owner))
+    end
+  end
+
+  describe "restart ceiling" do
+    test "a screen that keeps crashing is given up on rather than looped", %{owner: owner} do
+      Mob.Screen.dispatch(owner, "push", %{})
+
+      log =
+        capture_log(fn ->
+          # One more than the ceiling. Without it this spins at thousands of
+          # restarts a second, each writing a log line.
+          for _ <- 1..7 do
+            pid = Mob.Screen.get_screen_pid(owner)
+            Process.exit(pid, :kill)
+            :sys.get_state(owner)
+            :sys.get_state(owner)
+          end
+        end)
+
+      assert log =~ "given up on rather than restarted in a loop"
+    end
+
+    test "giving up falls back to the screen beneath", %{owner: owner} do
+      Mob.Screen.dispatch(owner, "push", %{})
+
+      capture_log(fn ->
+        for _ <- 1..7 do
+          pid = Mob.Screen.get_screen_pid(owner)
+          Process.exit(pid, :kill)
+          :sys.get_state(owner)
+          :sys.get_state(owner)
+        end
+      end)
+
+      assert Mob.Screen.get_current_module(owner) == HomeScreen
+      assert Process.alive?(Mob.Screen.get_screen_pid(owner))
+    end
+  end
+
+  describe "inspection is not a way to kill the app" do
+    defmodule BadRenderScreen do
+      use Mob.Screen
+      def mount(_p, _s, socket), do: {:ok, socket}
+      def render(_assigns), do: raise("render exploded")
+    end
+
+    test "a screen whose render/1 raises does not take the owner down", %{owner: owner} do
+      :ok = GenServer.call(owner, {:navigate, {:reset, BadRenderScreen, %{}}})
+
+      log = capture_log(fn -> assert GenServer.call(owner, :inspect).tree == nil end)
+
+      assert Process.alive?(owner), "render/1 must run in the screen, not the owner"
+      assert log =~ "render exploded"
     end
   end
 

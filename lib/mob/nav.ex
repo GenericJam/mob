@@ -167,6 +167,35 @@ defmodule Mob.Nav do
   end
 
   @doc """
+  Remove every parked entry for which `fun` returns true.
+
+  Dropping is not mapping: a stack whose *current* entry goes away has to
+  collapse. The head of its history is promoted; a stack left with nothing at
+  all is removed from `parked` entirely, so the next switch to it mounts its
+  root fresh rather than restoring a screen that is gone.
+
+  `Mob.Screen` uses this when a screen crashes and cannot be re-mounted —
+  leaving the dead entry in place would freeze that tab permanently, since
+  switching to it would restore a corpse.
+  """
+  @spec drop_parked(t(), (entry() -> boolean())) :: t()
+  def drop_parked(%__MODULE__{parked: parked} = nav, fun) when is_function(fun, 1) do
+    parked =
+      parked
+      |> Enum.reduce(%{}, fn {name, %{current: current, history: history}}, acc ->
+        history = Enum.reject(history, fun)
+
+        cond do
+          not fun.(current) -> Map.put(acc, name, %{current: current, history: history})
+          history == [] -> acc
+          true -> Map.put(acc, name, %{current: hd(history), history: tl(history)})
+        end
+      end)
+
+    %{nav | parked: parked}
+  end
+
+  @doc """
   Switch the active stack to `name`, parking `current_entry` under the stack it
   belongs to.
 

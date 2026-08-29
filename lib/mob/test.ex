@@ -238,7 +238,8 @@ defmodule Mob.Test do
   Block until the app has finished processing and the current frame is on
   screen.
 
-  Drains the navigation owner, then the screen process, then waits for
+  Drains the navigation owner and the screen process (twice, since an event
+  that navigates hands off to a *different* screen), then waits for
   `Mob.Sender` to commit. All three are needed: the owner forwards the event,
   the screen builds the tree, and the sender commits it — so a drained owner
   mailbox alone does not mean the frame has been rendered.
@@ -253,19 +254,28 @@ defmodule Mob.Test do
   """
   @spec settle(node(), timeout()) :: :ok
   def settle(node, timeout \\ 5000) do
-    # Three hops, not two. Since MOB-112 the process registered as :mob_screen
-    # is the navigation *owner*; it forwards events to the screen, which builds
-    # the tree, which the sender commits. Draining only the owner proves
-    # nothing about the other two.
+    # Since MOB-112 the process registered as :mob_screen is the navigation
+    # *owner*; it forwards events to the screen, which builds the tree, which
+    # the sender commits. Draining only the owner proves nothing about the rest.
+    #
+    # Twice, because an event that navigates moves through owner -> old screen
+    # -> owner -> NEW screen. Draining once settles the screen that is on its
+    # way out and returns before the incoming one has rendered, so a
+    # tap -> settle -> screenshot would read the stale frame.
+    drain_owner_and_screen(node)
+    drain_owner_and_screen(node)
+
+    :rpc.call(node, Mob.Sender, :sync, [timeout])
+    :ok
+  end
+
+  defp drain_owner_and_screen(node) do
     :rpc.call(node, :sys, :get_state, [:mob_screen])
 
     case :rpc.call(node, Mob.Screen, :get_screen_pid, [:mob_screen]) do
       pid when is_pid(pid) -> :rpc.call(node, :sys, :get_state, [pid])
       _ -> :ok
     end
-
-    :rpc.call(node, Mob.Sender, :sync, [timeout])
-    :ok
   end
 
   # ── System gestures ───────────────────────────────────────────────────────────
