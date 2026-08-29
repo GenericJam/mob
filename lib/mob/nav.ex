@@ -38,9 +38,13 @@ defmodule Mob.Nav do
   first visit its state is retained for the lifetime of the app.
   """
 
-  alias Mob.Socket
+  @typedoc """
+  Whatever the caller uses to identify a screen. Opaque here.
 
-  @type entry :: {module(), Socket.t()}
+  `Mob.Screen` puts `%{module:, pid:, params:, ref:}` in these slots since
+  MOB-112 — this module never looks inside one.
+  """
+  @type entry :: term()
   @type stack_name :: atom()
   @type parked_stack :: %{current: entry(), history: [entry()]}
 
@@ -130,20 +134,65 @@ defmodule Mob.Nav do
   @spec active(t()) :: stack_name() | nil
   def active(%__MODULE__{active: active}), do: active
 
-  @doc """
-  A stable identifier for the active stack, for addressing renders.
-
-  Falls back to `:__mob_single__` when the app declared no layout, so the sender
-  always has a concrete screen to compare against rather than a `nil` that would
-  match nothing.
-  """
-  @spec active_ref(t()) :: stack_name()
-  def active_ref(%__MODULE__{active: nil}), do: :__mob_single__
-  def active_ref(%__MODULE__{active: active}), do: active
-
   @doc "Declared stack names, in declaration order."
   @spec stacks(t()) :: [stack_name()]
   def stacks(%__MODULE__{order: order}), do: order
+
+  @doc """
+  Apply `fun` to every parked entry — each inactive stack's current screen and
+  every entry in its history.
+
+  Entries are opaque to this module, so the caller decides what an entry is and
+  what replacing one means. `Mob.Screen` uses it to substitute a restarted
+  screen process wherever it was referenced.
+
+  The *active* stack's history is not covered: it lives in `history`, which the
+  caller already holds and can rewrite with `put_history/2`.
+  """
+  @spec map_parked(t(), (entry() -> entry())) :: t()
+  def map_parked(%__MODULE__{parked: parked} = nav, fun) when is_function(fun, 1) do
+    parked =
+      Map.new(parked, fn {name, %{current: current, history: history}} ->
+        {name, %{current: fun.(current), history: Enum.map(history, fun)}}
+      end)
+
+    %{nav | parked: parked}
+  end
+
+  @doc "Names of the stacks currently parked, in declaration order."
+  @spec parked_stacks(t()) :: [stack_name()]
+  def parked_stacks(%__MODULE__{parked: parked, order: order}) do
+    Enum.filter(order, &Map.has_key?(parked, &1))
+  end
+
+  @doc """
+  Remove every parked entry for which `fun` returns true.
+
+  Dropping is not mapping: a stack whose *current* entry goes away has to
+  collapse. The head of its history is promoted; a stack left with nothing at
+  all is removed from `parked` entirely, so the next switch to it mounts its
+  root fresh rather than restoring a screen that is gone.
+
+  `Mob.Screen` uses this when a screen crashes and cannot be re-mounted —
+  leaving the dead entry in place would freeze that tab permanently, since
+  switching to it would restore a corpse.
+  """
+  @spec drop_parked(t(), (entry() -> boolean())) :: t()
+  def drop_parked(%__MODULE__{parked: parked} = nav, fun) when is_function(fun, 1) do
+    parked =
+      parked
+      |> Enum.reduce(%{}, fn {name, %{current: current, history: history}}, acc ->
+        history = Enum.reject(history, fun)
+
+        cond do
+          not fun.(current) -> Map.put(acc, name, %{current: current, history: history})
+          history == [] -> acc
+          true -> Map.put(acc, name, %{current: hd(history), history: tl(history)})
+        end
+      end)
+
+    %{nav | parked: parked}
+  end
 
   @doc """
   Switch the active stack to `name`, parking `current_entry` under the stack it
