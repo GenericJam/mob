@@ -1,6 +1,6 @@
 # Screen Lifecycle
 
-A Mob screen is a GenServer wrapped by `Mob.Screen`. Each screen in the navigation stack is a separate, supervised process. Understanding the lifecycle means understanding when each callback fires and what you can do in it.
+A Mob screen is a GenServer — a `Mob.Screen.Server` process holding your module's socket. Each live screen in the navigation stack is a separate process, and `Mob.Router` owns them: it starts them, stops them, and restarts one that crashes. It is not an OTP `Supervisor`, because only the router knows where in the navigation a crashed screen sat; a restarted screen re-mounts and loses its assigns. Understanding the lifecycle means understanding when each callback fires and what you can do in it.
 
 ## Callbacks
 

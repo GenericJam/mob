@@ -205,7 +205,7 @@ defmodule Mob.Screen.Server do
   # Android file/camera/photo/scan results arrive JSON-encoded; decode and
   # re-dispatch as the user-facing event tuple.
   def handle_info({:mob_file_result, event, sub, json_binary}, state) do
-    handle_info(Mob.Screen.decode_file_result(event, sub, json_binary), state)
+    handle_info(decode_file_result(event, sub, json_binary), state)
   end
 
   # A few Peripheral.* events carry JSON-encoded device records; the
@@ -344,6 +344,60 @@ defmodule Mob.Screen.Server do
       socket
     end
   end
+
+  # Android file/camera/photo/scan results arrive JSON-encoded from native.
+  defp decode_file_result(event, sub, json_binary) do
+    event_atom = String.to_atom(event)
+    sub_atom = String.to_atom(sub)
+
+    items =
+      case :json.decode(json_binary) do
+        list when is_list(list) ->
+          Enum.map(list, fn item when is_map(item) ->
+            Map.new(item, fn {k, v} -> {String.to_atom(k), v} end)
+          end)
+
+        _ ->
+          []
+      end
+
+    case {event_atom, sub_atom} do
+      {:camera, :photo} ->
+        {:camera, :photo, List.first(items) || %{}}
+
+      {:camera, :video} ->
+        {:camera, :video, List.first(items) || %{}}
+
+      {:camera, :cancelled} ->
+        {:camera, :cancelled}
+
+      {:photos, :picked} ->
+        {:photos, :picked, items}
+
+      {:files, :picked} ->
+        {:files, :picked, items}
+
+      {:audio, :recorded} ->
+        {:audio, :recorded, List.first(items) || %{}}
+
+      {:storage, :saved_to_library} ->
+        {:storage, :saved_to_library, (List.first(items) || %{})[:path]}
+
+      {:scan, :result} ->
+        scan_result(List.first(items) || %{})
+
+      _ ->
+        {event_atom, sub_atom, items}
+    end
+  end
+
+  defp scan_result(item) do
+    {:scan, :result, %{type: to_atom_safe(item[:type]), value: item[:value]}}
+  end
+
+  defp to_atom_safe(nil), do: :qr
+  defp to_atom_safe(s) when is_binary(s), do: String.to_atom(s)
+  defp to_atom_safe(a) when is_atom(a), do: a
 
   defp schedule_state_sync do
     Process.send_after(self(), :__mob_sync_state__, @state_sync_interval_ms)
