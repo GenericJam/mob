@@ -76,10 +76,18 @@ tab, and restoring it means putting the new pid back exactly where the old one
 was. The owner is the only thing that knows that, so it owns the restart. This
 is the "deliberate restart strategy" MOB-112 asks for.
 
-The cost: a screen orphans if the owner is killed without running `terminate/2`
-(`Process.exit(owner, :kill)`). Acceptable — the owner dying means the app is
-going down — but a `DynamicSupervisor` under a real supervision tree would
-close it, and mob does not have one yet.
+An earlier draft of this file claimed the cost was orphaning on
+`Process.exit(owner, :kill)`. That is wrong: `:killed` is a trappable reason for
+the *linked screens*, so each still runs `terminate/2` and its final dump.
+
+The real cost is the restart ceiling a supervisor would have given for free.
+The owner carries its own (`@max_restarts` in `@restart_window_ms`, per screen
+ref) because without it a screen that mounts cleanly and crashes on every render
+loops at roughly 6500 restarts a second, writing a log line each time. The other
+gap is a screen wedged in a callback: the owner's bounded `GenServer.stop/3`
+kills it outright on timeout rather than leaving it unlinked and untracked but
+alive, still dumping to `Mob.ScreenState` under the same key as its
+replacement.
 
 ### A crash must not come back up a call
 

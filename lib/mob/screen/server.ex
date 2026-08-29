@@ -41,6 +41,8 @@ defmodule Mob.Screen.Server do
 
   use GenServer
 
+  require Logger
+
   @state_sync_interval_ms 30_000
 
   @typedoc "Which navigation stack this screen belongs to, for addressing renders."
@@ -77,6 +79,16 @@ defmodule Mob.Screen.Server do
   @doc "This screen's current socket."
   @spec socket(pid()) :: Mob.Socket.t()
   def socket(pid), do: GenServer.call(pid, :get_socket)
+
+  @doc """
+  Render this screen's tree, in this screen's process.
+
+  For inspection only — it does not commit anything. Running `render/1` in the
+  caller instead would put user code in the owner, where a raise takes down
+  navigation and every other screen.
+  """
+  @spec tree(pid()) :: map()
+  def tree(pid), do: GenServer.call(pid, :get_tree)
 
   @doc "Paint this screen, with the given navigation transition."
   @spec render(pid(), atom()) :: :ok
@@ -143,6 +155,10 @@ defmodule Mob.Screen.Server do
 
   def handle_call(:get_socket, _from, state), do: {:reply, state.socket, state}
 
+  def handle_call(:get_tree, _from, state) do
+    {:reply, state.module.render(state.socket.assigns), state}
+  end
+
   def handle_call({:render_sync, transition}, _from, state) do
     {:reply, :ok, %{state | socket: paint(state, transition, :sync)}}
   end
@@ -198,6 +214,20 @@ defmodule Mob.Screen.Server do
       :handled -> {:noreply, state}
       :unhandled -> forward(message, state)
     end
+  end
+
+  # Trapping exits means a linked task's crash arrives here as a message
+  # instead of killing this screen. Passing it to the user's handle_info would
+  # silently swallow it — the default clause ignores unknown messages — so say
+  # so, then let the screen see it in case it wants to react.
+  def handle_info({:EXIT, pid, reason} = message, state)
+      when reason != :normal and pid != :erlang.map_get(:owner, state) do
+    Logger.warning(
+      "[mob] #{inspect(state.module)}: linked process #{inspect(pid)} exited: " <>
+        "#{inspect(reason)}"
+    )
+
+    forward(message, state)
   end
 
   def handle_info(message, state), do: forward(message, state)

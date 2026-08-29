@@ -172,11 +172,19 @@ defmodule Mob.Screen do
   # registered name, so the native layer's `enif_whereis_pid` lookups (back
   # gesture, alert actions, launch notifications) are unaffected.
   #
-  # A navigation entry is `%{module:, pid:, params:, ref:}`. The params and ref
-  # are carried because a restart has to reproduce the screen exactly: a screen
-  # that mounts on `%{id: id}` cannot come back from `%{}`, and a screen parked
-  # under an inactive stack must keep that stack's render ref or its next
-  # repaint would commit over the foreground tab.
+  # A navigation entry is `%{module:, pid:, params:, ref:}`.
+  #
+  # `params` is carried because a restart has to reproduce the screen exactly —
+  # one that mounts on `%{id: id}` cannot come back from `%{}`.
+  #
+  # `ref` identifies the screen to `Mob.Sender`, and is unique **per screen**,
+  # not per stack. That distinction is load-bearing: every screen is a live
+  # process now, including the ones below the top of the stack, and they repaint
+  # on any message they receive. Keyed by stack, a timer tick in a screen the
+  # user cannot see would commit its tree — tap table included — over the screen
+  # they can. The sender only ever commits the tree whose ref is active, so a
+  # background repaint is dropped wherever that screen sits. The ref survives a
+  # restart, because the replacement is the same logical screen.
   #
   # MOB-113 extracts this role into `Mob.Router`.
 
@@ -187,6 +195,14 @@ defmodule Mob.Screen do
   # Stopping a screen must not block the owner forever on one that is wedged in
   # a long callback. GenServer.stop/3 otherwise waits :infinity.
   @stop_timeout_ms 5_000
+
+  # A screen that mounts fine but crashes on every render otherwise loops at
+  # full speed — measured at ~6500 restarts/sec, each writing a log line. An
+  # OTP supervisor would cap this with max_restart_intensity; the owner restarts
+  # screens itself (it is the only thing that knows where one sat), so it has to
+  # carry the ceiling too.
+  @max_restarts 5
+  @restart_window_ms 10_000
 
   @doc """
   Start a screen process linked to the calling process.
@@ -247,7 +263,7 @@ defmodule Mob.Screen do
   Each live screen is its own process since MOB-112; this is how tooling
   reaches the one that is on screen.
   """
-  @spec get_screen_pid(pid()) :: pid()
+  @spec get_screen_pid(GenServer.server()) :: pid()
   def get_screen_pid(pid), do: GenServer.call(pid, :get_screen_pid)
 
   # ── GenServer callbacks ───────────────────────────────────────────────────
@@ -274,19 +290,20 @@ defmodule Mob.Screen do
     # becomes the active stack's current screen; every other declared stack
     # stays unmounted until first visited.
     nav = Mob.Nav.from_layout(Mob.Nav.Registry.layout(platform), screen_module)
-    ref = Mob.Nav.active_ref(nav)
-    Mob.Sender.set_active(ref)
 
     state = %{
       current: nil,
       nav: nav,
       render_mode: render_mode,
       platform: platform,
-      screens: %{}
+      screens: %{},
+      restarts: %{}
     }
 
-    case start_screen(screen_module, params, ref, state) do
+    case start_screen(screen_module, params, state) do
       {:ok, entry, state} ->
+        state = make_current(state, entry)
+
         if render_mode == :render do
           # A notification that launched the app from a killed state. Sent to
           # self so it arrives via handle_info after init returns, consistent
@@ -299,7 +316,7 @@ defmodule Mob.Screen do
           paint(entry, :none, state)
         end
 
-        {:ok, %{state | current: entry}}
+        {:ok, state}
 
       {:error, reason} ->
         {:stop, reason}
@@ -338,14 +355,22 @@ defmodule Mob.Screen do
   end
 
   def handle_call(:inspect, _from, state) do
-    module = state.current.module
     socket = current_socket(state)
 
+    # The tree is built in the screen's own process. Calling render/1 here would
+    # run user code in the owner, so a raise in it — reached by Mob.Test.tree/1,
+    # i.e. the debugging path — would kill navigation and every screen.
+    tree =
+      case safe_call(fn -> Mob.Screen.Server.tree(state.current.pid) end) do
+        {:ok, tree} -> tree
+        {:exit, _reason} -> nil
+      end
+
     info = %{
-      screen: module,
+      screen: state.current.module,
       assigns: socket && socket.assigns,
       nav_history: Enum.map(Mob.Nav.history(state.nav), & &1.module),
-      tree: socket && module.render(socket.assigns)
+      tree: tree
     }
 
     {:reply, info, state}
@@ -440,6 +465,8 @@ defmodule Mob.Screen do
     :exit, reason -> {:exit, reason}
   end
 
+  defp start_screen(module, params, state), do: start_screen(module, params, make_ref(), state)
+
   defp start_screen(module, params, ref, state) do
     opts = [
       module: module,
@@ -458,6 +485,13 @@ defmodule Mob.Screen do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # The single place `current` changes. The sender is told here and nowhere
+  # else, so only the screen the user is looking at can commit a frame.
+  defp make_current(state, entry) do
+    Mob.Sender.set_active(entry.ref)
+    %{state | current: entry}
   end
 
   defp all_entries(state) do
@@ -490,7 +524,32 @@ defmodule Mob.Screen do
   # A crashed screen is re-mounted in place, with the params and stack ref it
   # was created with. It loses its assigns — a restart runs mount/3 again —
   # which is the documented consequence of the isolation.
-  defp restart_screen(%{pid: dead_pid} = entry, reason, state) do
+  defp restart_screen(entry, reason, state) do
+    {allowed?, state} = record_restart(entry.ref, state)
+
+    if allowed? do
+      do_restart_screen(entry, reason, state)
+    else
+      Logger.error(
+        "[mob] screen #{inspect(entry.module)} crashed #{@max_restarts + 1} times in " <>
+          "#{@restart_window_ms}ms and is being given up on rather than restarted in a loop. " <>
+          "Reason: #{inspect(reason)}"
+      )
+
+      recover_from_failed_restart(entry, state)
+    end
+  end
+
+  # Sliding window per screen ref, so the ceiling follows a logical screen
+  # across its restarts rather than resetting with each new pid.
+  defp record_restart(ref, state) do
+    now = System.monotonic_time(:millisecond)
+    recent = Map.get(state.restarts, ref, []) |> Enum.filter(&(now - &1 < @restart_window_ms))
+    state = %{state | restarts: Map.put(state.restarts, ref, [now | recent])}
+    {length(recent) < @max_restarts, state}
+  end
+
+  defp do_restart_screen(%{pid: dead_pid} = entry, reason, state) do
     log_restart(entry.module, reason)
 
     case start_screen(entry.module, entry.params, entry.ref, state) do
@@ -534,7 +593,7 @@ defmodule Mob.Screen do
       Mob.Nav.history(state.nav) != [] ->
         state = drop_entry(state, dead_pid)
         [previous | rest] = Mob.Nav.history(state.nav)
-        state = %{state | nav: Mob.Nav.put_history(state.nav, rest), current: previous}
+        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous)
         paint(previous, :pop, state)
         state
 
@@ -549,12 +608,12 @@ defmodule Mob.Screen do
   end
 
   defp drop_entry(state, dead_pid) do
-    keep = fn %{pid: pid} -> pid != dead_pid end
+    dead? = fn %{pid: pid} -> pid == dead_pid end
 
     nav =
       state.nav
-      |> Mob.Nav.put_history(Enum.filter(Mob.Nav.history(state.nav), keep))
-      |> Mob.Nav.map_parked(& &1)
+      |> Mob.Nav.put_history(Enum.reject(Mob.Nav.history(state.nav), dead?))
+      |> Mob.Nav.drop_parked(dead?)
 
     %{state | nav: nav}
   end
@@ -604,10 +663,20 @@ defmodule Mob.Screen do
       # terminate/2 that signal overrides the owner's exit reason, which turns a
       # clean GenServer.stop(owner, :normal) into an exit with :shutdown.
       Process.unlink(pid)
-      GenServer.stop(pid, :shutdown, @stop_timeout_ms)
+
+      try do
+        GenServer.stop(pid, :shutdown, @stop_timeout_ms)
+      catch
+        # A wedged screen ignores the shutdown request. GenServer.stop/3 kills
+        # only its own proxy on timeout, so without this the screen survives —
+        # unlinked, untracked, and still dumping to Mob.ScreenState under the
+        # same key as its replacement. That is the orphan hazard linking exists
+        # to prevent.
+        :exit, _reason -> Process.exit(pid, :kill)
+      end
     end
-  catch
-    :exit, _reason -> :ok
+
+    :ok
   end
 
   # ── Navigation ────────────────────────────────────────────────────────────
@@ -616,13 +685,12 @@ defmodule Mob.Screen do
 
   defp apply_nav_action({:push, dest, params}, state, mode) do
     {new_module, route_params} = resolve_destination(dest)
-    ref = Mob.Nav.active_ref(state.nav)
     mount_params = Map.merge(route_params, params)
 
-    case start_screen(new_module, mount_params, ref, state) do
+    case start_screen(new_module, mount_params, state) do
       {:ok, entry, state} ->
         nav = Mob.Nav.put_history(state.nav, [state.current | Mob.Nav.history(state.nav)])
-        state = %{state | nav: nav, current: entry}
+        state = make_current(%{state | nav: nav}, entry)
         do_paint(entry, :push, state, mode)
         state
 
@@ -638,7 +706,7 @@ defmodule Mob.Screen do
         # goes with it. The ones still in `rest` stay resident — that is what
         # makes pop restore prior state without re-mounting.
         state = stop_screen(state.current, state)
-        state = %{state | nav: Mob.Nav.put_history(state.nav, rest), current: previous}
+        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous)
         do_paint(previous, :pop, state, mode)
         state
 
@@ -655,7 +723,7 @@ defmodule Mob.Screen do
         ]
 
         state = Enum.reduce(discarded, state, &stop_screen/2)
-        state = %{state | nav: Mob.Nav.put_history(state.nav, []), current: root}
+        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, root)
         do_paint(root, :pop, state, mode)
         state
 
@@ -672,7 +740,7 @@ defmodule Mob.Screen do
       {:found, previous, rest} ->
         discarded = [state.current | Enum.take_while(history, &(&1.pid != previous.pid))]
         state = Enum.reduce(discarded, state, &stop_screen/2)
-        state = %{state | nav: Mob.Nav.put_history(state.nav, rest), current: previous}
+        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous)
         do_paint(previous, :pop, state, mode)
         state
 
@@ -683,14 +751,13 @@ defmodule Mob.Screen do
 
   defp apply_nav_action({:reset, dest, params}, state, mode) do
     {new_module, route_params} = resolve_destination(dest)
-    ref = Mob.Nav.active_ref(state.nav)
     mount_params = Map.merge(route_params, params)
 
-    case start_screen(new_module, mount_params, ref, state) do
+    case start_screen(new_module, mount_params, state) do
       {:ok, entry, state} ->
         discarded = [state.current | Mob.Nav.history(state.nav)]
         state = Enum.reduce(discarded, state, &stop_screen/2)
-        state = %{state | nav: Mob.Nav.put_history(state.nav, []), current: entry}
+        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, entry)
         do_paint(entry, :reset, state, mode)
         state
 
@@ -702,24 +769,16 @@ defmodule Mob.Screen do
   defp apply_nav_action({:switch_tab, tab}, state, mode) do
     case Mob.Nav.switch(state.nav, tab, state.current) do
       {:switched, nav, entry} ->
-        # The restored screen already carries the ref of the stack it was
-        # parked under, which is the one becoming active.
-        Mob.Sender.set_active(Mob.Nav.active_ref(nav))
-        state = %{state | nav: nav, current: entry}
+        state = make_current(%{state | nav: nav}, entry)
         do_paint(entry, :none, state, mode)
         state
 
       {:mount_root, nav, root_module} ->
-        # Start first, mutate after. Switching nav and the sender's active ref
-        # before the mount could fail leaves the sender addressing a stack whose
-        # screen never started, and every frame the live screen produces is then
-        # dropped — a silent freeze.
-        ref = Mob.Nav.active_ref(nav)
-
-        case start_screen(root_module, %{}, ref, state) do
+        # Start first, mutate after. Switching nav before the mount could fail
+        # leaves navigation pointing at a stack whose screen never started.
+        case start_screen(root_module, %{}, state) do
           {:ok, entry, state} ->
-            Mob.Sender.set_active(ref)
-            state = %{state | nav: nav, current: entry}
+            state = make_current(%{state | nav: nav}, entry)
             do_paint(entry, :none, state, mode)
             state
 

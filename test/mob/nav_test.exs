@@ -108,6 +108,55 @@ defmodule Mob.NavTest do
     end
   end
 
+  describe "drop_parked/2" do
+    setup do
+      nav = Nav.from_layout(two_tabs(), HomeScreen)
+      {:mount_root, nav, _} = Nav.switch(nav, :settings, entry(HomeScreen))
+      %{nav: nav}
+    end
+
+    test "removes a matching entry from a parked stack's history", %{nav: nav} do
+      doomed = entry(ProfileScreen)
+      nav = %{nav | parked: %{home: %{current: entry(HomeScreen), history: [doomed]}}}
+
+      nav = Nav.drop_parked(nav, &(&1 == doomed))
+
+      assert nav.parked[:home].history == []
+      refute nav.parked[:home].current == doomed
+    end
+
+    test "promotes the history head when a stack's current is dropped", %{nav: nav} do
+      doomed = entry(HomeScreen)
+      survivor = entry(ProfileScreen)
+      nav = %{nav | parked: %{home: %{current: doomed, history: [survivor]}}}
+
+      nav = Nav.drop_parked(nav, &(&1 == doomed))
+
+      assert nav.parked[:home].current == survivor
+      assert nav.parked[:home].history == []
+    end
+
+    test "removes the stack entirely when nothing is left" do
+      # It must not linger with a dead current — switching to it would restore a
+      # corpse. Gone from parked means the next switch mounts its root fresh.
+      doomed = entry(HomeScreen)
+      nav = Nav.from_layout(two_tabs(), HomeScreen)
+      nav = %{nav | active: :settings, parked: %{home: %{current: doomed, history: []}}}
+
+      nav = Nav.drop_parked(nav, &(&1 == doomed))
+
+      refute Map.has_key?(nav.parked, :home)
+      assert {:mount_root, _nav, HomeScreen} = Nav.switch(nav, :home, entry(SettingsScreen))
+    end
+
+    test "leaves non-matching stacks untouched", %{nav: nav} do
+      kept = entry(HomeScreen)
+      nav = %{nav | parked: %{home: %{current: kept, history: []}}}
+
+      assert Nav.drop_parked(nav, fn _ -> false end).parked[:home].current == kept
+    end
+  end
+
   describe "back_target/1" do
     test "the first declared stack exits" do
       assert Nav.back_target(Nav.from_layout(two_tabs(), HomeScreen)) == :exit
