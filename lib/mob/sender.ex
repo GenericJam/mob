@@ -61,11 +61,12 @@ defmodule Mob.Sender do
   require Logger
 
   @typedoc """
-  Identifies which screen a tree belongs to. Today this is the active
-  navigation stack's name (see `Mob.Nav.active_ref/1`); MOB-112 replaces it with
-  a per-screen reference.
+  Identifies which screen a tree belongs to — one per live screen since
+  MOB-112, not one per navigation stack. Screens below the top of a stack are
+  live processes that repaint, so a stack-wide key would let a background
+  screen's tree commit over the foreground one.
   """
-  @type screen_ref :: atom() | reference()
+  @type screen_ref :: reference() | atom()
 
   defstruct active: nil, pending: %{}
 

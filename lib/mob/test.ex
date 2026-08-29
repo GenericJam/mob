@@ -67,8 +67,9 @@ defmodule Mob.Test do
       Mob.Test.assigns(node)
 
   `:sys.get_state/1` on `:mob_screen` is no longer sufficient on its own: since
-  MOB-110 the screen hands its tree to `Mob.Sender` and returns, so a drained
-  screen mailbox does not mean the frame is on screen. That only matters for the
+  MOB-110 the tree is handed to `Mob.Sender` and committed asynchronously, and
+  since MOB-112 `:mob_screen` is the navigation owner rather than the screen
+  itself. That only matters for the
   functions that read the *native* side — `view_tree/1`, `screenshot/2`,
   `tap_id/2`, `element_frames/2`. `tree/1` and `assigns/1` re-render in-process
   and are unaffected.
@@ -176,9 +177,18 @@ defmodule Mob.Test do
   @spec screen(node()) :: module()
   def screen(node), do: rpc(node, :get_current_module)
 
-  @doc "Return the current screen's assigns map."
-  @spec assigns(node()) :: map()
-  def assigns(node), do: rpc(node, :get_socket).assigns
+  @doc """
+  Return the current screen's assigns map, or `nil` while that screen is being
+  restarted after a crash (MOB-112 — the socket lives in the screen's own
+  process, which is briefly absent).
+  """
+  @spec assigns(node()) :: map() | nil
+  def assigns(node) do
+    case rpc(node, :get_socket) do
+      nil -> nil
+      socket -> socket.assigns
+    end
+  end
 
   @doc """
   Return a map with `:screen`, `:assigns`, `:nav_history`, and `:tree`
@@ -228,9 +238,11 @@ defmodule Mob.Test do
   Block until the app has finished processing and the current frame is on
   screen.
 
-  Drains the screen process's mailbox, then waits for `Mob.Sender` to commit.
-  Both halves are needed: the screen builds the tree and the sender commits it,
-  so a drained screen mailbox alone does not mean the frame has been rendered.
+  Drains the navigation owner and the screen process (twice, since an event
+  that navigates hands off to a *different* screen), then waits for
+  `Mob.Sender` to commit. All three are needed: the owner forwards the event,
+  the screen builds the tree, and the sender commits it — so a drained owner
+  mailbox alone does not mean the frame has been rendered.
 
   Use after any fire-and-forget call (`tap/2`, `back/1`, `send_message/2`)
   before reading the native side with `view_tree/1`, `screenshot/2`, `tap_id/2`
@@ -242,9 +254,28 @@ defmodule Mob.Test do
   """
   @spec settle(node(), timeout()) :: :ok
   def settle(node, timeout \\ 5000) do
-    :rpc.call(node, :sys, :get_state, [:mob_screen])
+    # Since MOB-112 the process registered as :mob_screen is the navigation
+    # *owner*; it forwards events to the screen, which builds the tree, which
+    # the sender commits. Draining only the owner proves nothing about the rest.
+    #
+    # Twice, because an event that navigates moves through owner -> old screen
+    # -> owner -> NEW screen. Draining once settles the screen that is on its
+    # way out and returns before the incoming one has rendered, so a
+    # tap -> settle -> screenshot would read the stale frame.
+    drain_owner_and_screen(node)
+    drain_owner_and_screen(node)
+
     :rpc.call(node, Mob.Sender, :sync, [timeout])
     :ok
+  end
+
+  defp drain_owner_and_screen(node) do
+    :rpc.call(node, :sys, :get_state, [:mob_screen])
+
+    case :rpc.call(node, Mob.Screen, :get_screen_pid, [:mob_screen]) do
+      pid when is_pid(pid) -> :rpc.call(node, :sys, :get_state, [pid])
+      _ -> :ok
+    end
   end
 
   # ── System gestures ───────────────────────────────────────────────────────────
