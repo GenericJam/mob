@@ -54,6 +54,14 @@ defmodule Mob.ScreenCaseTest do
       {:noreply, Mob.Socket.push_screen(socket, CounterScreen)}
     end
 
+    def handle_event("reset", _params, socket) do
+      {:noreply, Mob.Socket.reset_to(socket, CounterScreen)}
+    end
+
+    def handle_event("reset_push", _params, socket) do
+      {:noreply, Mob.Socket.reset_to(socket, CounterScreen, %{}, transition: :push)}
+    end
+
     def handle_info({:tap, :go}, socket) do
       {:noreply, Mob.Socket.push_screen(socket, CounterScreen)}
     end
@@ -164,6 +172,20 @@ defmodule Mob.ScreenCaseTest do
 
     test "records a push from a tap (handle_info) as the destination module" do
       view = NavScreen |> mount_screen() |> render_info({:tap, :go})
+      assert navigated_to(view) == CounterScreen
+    end
+
+    test "records a reset as the destination module" do
+      view = NavScreen |> mount_screen() |> render_event("reset")
+      assert navigated_to(view) == CounterScreen
+    end
+
+    test "records a reset carrying a transition as the destination module" do
+      # reset_to/4 grew a fourth element for the transition. Matching only the
+      # three-element shape here silently returned the raw action tuple, so
+      # `assert navigated_to(view) == SomeScreen` failed for every caller who
+      # passed a transition — in a helper whose whole job is that assertion.
+      view = NavScreen |> mount_screen() |> render_event("reset_push")
       assert navigated_to(view) == CounterScreen
     end
   end

@@ -627,9 +627,16 @@ defmodule Mob.Router do
     end
   end
 
+  # The three-element form predates the transition option. It still arrives from
+  # `Mob.Test.reset_to/3`, and from any socket built before a hot code push, so
+  # it keeps working and means what it always did.
   defp apply_nav_action({:reset, dest, params}, state, mode) do
+    apply_nav_action({:reset, dest, params, :reset}, state, mode)
+  end
+
+  defp apply_nav_action({:reset, dest, params, transition}, state, mode) do
     with {:ok, new_module, route_params} <- safe_resolve(dest, state) do
-      reset_resolved(new_module, Map.merge(route_params, params), state, mode)
+      reset_resolved(new_module, Map.merge(route_params, params), transition, state, mode)
     end
   end
 
@@ -671,13 +678,13 @@ defmodule Mob.Router do
     end
   end
 
-  defp reset_resolved(new_module, mount_params, state, mode) do
+  defp reset_resolved(new_module, mount_params, transition, state, mode) do
     case start_screen(new_module, mount_params, state) do
       {:ok, entry, state} ->
         discarded = [state.current | Mob.Nav.history(state.nav)]
         state = Enum.reduce(discarded, state, &stop_screen/2)
         state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, entry)
-        do_paint(entry, :reset, state, mode)
+        do_paint(entry, transition, state, mode)
         state
 
       {:error, _reason} ->

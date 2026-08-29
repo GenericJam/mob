@@ -13,6 +13,7 @@ defmodule Mob.Socket do
   """
 
   @type platform :: :android | :ios
+  @type transition :: :push | :pop | :reset | :none
 
   @type t :: %__MODULE__{
           assigns: map(),
@@ -175,10 +176,27 @@ defmodule Mob.Socket do
   Replace the entire navigation stack with a single new screen.
 
   Used for auth transitions (post-login → home with no back button to login).
+  Pass `transition: :push` or `transition: :pop` when the reset still represents
+  directional movement, such as switching between custom tabs.
   """
-  @spec reset_to(t(), atom() | module(), map()) :: t()
-  def reset_to(socket, dest, params \\ %{}) do
-    put_mob(socket, :nav_action, {:reset, dest, params})
+  @spec reset_to(t(), atom() | module(), map(), keyword()) :: t()
+  def reset_to(socket, dest, params \\ %{}, opts \\ []) do
+    transition = validate_transition!(Keyword.get(opts, :transition, :reset))
+    put_mob(socket, :nav_action, {:reset, dest, params, transition})
+  end
+
+  @valid_transitions [:push, :pop, :reset, :none]
+
+  # Checked here rather than left to the native layer. `set_transition/1`
+  # accepts any atom and the platform falls back to no animation for one it
+  # does not recognise, so a typo would silently produce the wrong motion with
+  # nothing to point at. Raising names the caller.
+  defp validate_transition!(transition) when transition in @valid_transitions, do: transition
+
+  defp validate_transition!(other) do
+    raise ArgumentError,
+          "Mob.Socket.reset_to/4: invalid transition #{inspect(other)}. " <>
+            "Expected one of #{inspect(@valid_transitions)}."
   end
 
   @doc """

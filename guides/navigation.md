@@ -131,6 +131,13 @@ def handle_event("tap", %{"tag" => "logged_in"}, socket) do
 end
 ```
 
+The reset always replaces the stack. Its animation can be overridden when the
+same stack operation represents directional movement, such as custom tabs:
+
+```elixir
+Mob.Socket.reset_to(socket, MyApp.PortfolioScreen, %{}, transition: :push)
+```
+
 ### `switch_tab/2`
 
 Switch to a named tab in a tab bar or drawer layout:
@@ -145,6 +152,9 @@ The framework automatically picks the right animation based on the navigation ac
 - **Push** — slide in from right (iOS) / slide up (Android)
 - **Pop** — reverse slide
 - **Reset** — cross-fade (no directional animation, no back history)
+
+`reset_to/4` can override only the animation with `transition: :push` or
+`transition: :pop`; it still discards navigation history.
 
 ## Passing data on pop
 
