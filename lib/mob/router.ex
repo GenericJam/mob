@@ -64,7 +64,8 @@ defmodule Mob.Router do
   """
   @spec start_link(module(), map(), keyword()) :: GenServer.on_start()
   def start_link(screen_module, params, opts \\ []) do
-    GenServer.start_link(__MODULE__, {screen_module, params, :no_render, :android}, opts)
+    {nif, opts} = Keyword.pop(opts, :nif, :mob_nif)
+    GenServer.start_link(__MODULE__, {screen_module, params, :no_render, :android, nif}, opts)
   end
 
   @doc """
@@ -90,8 +91,9 @@ defmodule Mob.Router do
   """
   @spec start_root(module(), map(), keyword()) :: GenServer.on_start()
   def start_root(screen_module, params \\ %{}, opts \\ []) do
-    platform = :mob_nif.platform()
-    GenServer.start_link(__MODULE__, {screen_module, params, :render, platform}, opts)
+    {nif, opts} = Keyword.pop(opts, :nif, :mob_nif)
+    platform = nif.platform()
+    GenServer.start_link(__MODULE__, {screen_module, params, :render, platform, nif}, opts)
   end
 
   @doc """
@@ -122,7 +124,7 @@ defmodule Mob.Router do
   # ── GenServer callbacks ───────────────────────────────────────────────────
 
   @impl GenServer
-  def init({screen_module, params, render_mode, platform}) do
+  def init({screen_module, params, render_mode, platform, nif}) do
     # Linked *and* trapping. Linking alone makes the owner die with any screen
     # it stops or that crashes; trapping alone orphans every screen when the
     # owner dies — and an orphaned persisted screen keeps dumping to
@@ -149,6 +151,7 @@ defmodule Mob.Router do
       nav: nav,
       render_mode: render_mode,
       platform: platform,
+      nif: nif,
       screens: %{},
       restarts: %{}
     }
@@ -161,7 +164,7 @@ defmodule Mob.Router do
           # A notification that launched the app from a killed state. Sent to
           # self so it arrives via handle_info after init returns, consistent
           # with foreground notification delivery.
-          case :mob_nif.take_launch_notification() do
+          case nif.take_launch_notification() do
             :none -> :ok
             json -> send(self(), {:mob_launch_notification, json})
           end
@@ -283,8 +286,8 @@ defmodule Mob.Router do
   # every screen gets back navigation without implementing anything. If a
   # WebView is present and has internal history, navigate within it first.
   def handle_info({:mob, :back}, state) do
-    if state.render_mode == :render && :mob_nif.webview_can_go_back() do
-      :mob_nif.webview_go_back()
+    if state.render_mode == :render && state.nif.webview_can_go_back() do
+      state.nif.webview_go_back()
       {:noreply, state}
     else
       case {Mob.Nav.history(state.nav), Mob.Nav.back_target(state.nav)} do
@@ -297,7 +300,7 @@ defmodule Mob.Router do
           {:noreply, apply_nav_action({:switch_tab, target}, state, :async)}
 
         {[], :exit} ->
-          if state.render_mode == :render, do: :mob_nif.exit_app()
+          if state.render_mode == :render, do: state.nif.exit_app()
           {:noreply, state}
       end
     end
@@ -342,7 +345,8 @@ defmodule Mob.Router do
       ref: ref,
       owner: self(),
       render_mode: state.render_mode,
-      platform: state.platform
+      platform: state.platform,
+      nif: state.nif
     ]
 
     case Mob.Screen.Server.start_link(opts) do
@@ -742,7 +746,7 @@ defmodule Mob.Router do
 
           {:error, :not_found} ->
             raise ArgumentError,
-                  "Mob.Screen: unknown navigation destination #{inspect(dest)}. " <>
+                  "Mob.Router: unknown navigation destination #{inspect(dest)}. " <>
                     "Register it via Mob.Nav.Registry.register/2 or declare it in " <>
                     "your App.navigation/1."
         end
