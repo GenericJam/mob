@@ -3,6 +3,15 @@ defmodule Mob.Nav.ScreenNavTest do
 
   import ExUnit.CaptureLog
 
+  # `if Process.alive?, do: GenServer.stop` races: the router dies with the test
+  # process, so it can exit between the check and the stop and fail the test
+  # from inside the on_exit runner.
+  defp stop_safely(pid) do
+    GenServer.stop(pid)
+  catch
+    :exit, _ -> :ok
+  end
+
   # ── Screen fixtures ────────────────────────────────────────────────────────
   # Bare module names inside nested defmodule blocks don't auto-alias to siblings.
   # Use module attributes with fully qualified names for cross-screen references.
@@ -87,7 +96,7 @@ defmodule Mob.Nav.ScreenNavTest do
     end
 
     {:ok, pid} = Mob.Nav.Registry.start_link(DemoApp)
-    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+    on_exit(fn -> stop_safely(pid) end)
     :ok
   end
 
@@ -291,7 +300,7 @@ defmodule Mob.Nav.ScreenNavTest do
       # would take down every screen — over a typo in push_screen/2. It is
       # caught: navigation is left untouched and the app carries on.
       {:ok, pid} = Mob.Screen.start_link(UnknownNavScreen, %{})
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> stop_safely(pid) end)
 
       log = capture_log(fn -> assert :ok = Mob.Screen.dispatch(pid, "bad_nav", %{}) end)
 

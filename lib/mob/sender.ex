@@ -50,7 +50,7 @@ defmodule Mob.Sender do
   `sync/1` that merely replied would return before the frame was committed.
   Mailbox order is the wrong tool here, and it looks like the right one.
 
-  `Mob.Screen` uses `sync/1` on its `handle_call` paths to keep the guarantee
+  `Mob.Router` uses `sync/1` on its `handle_call` paths to keep the guarantee
   `Mob.Test` documents for the synchronous navigation helpers. Note the ordering
   guarantee only covers renders cast by the *calling* process; the BEAM promises
   nothing about the relative order of sends from different processes.
@@ -87,7 +87,7 @@ defmodule Mob.Sender do
   started without going through `Mob.App` — `liveview_notes.md` documents
   exactly that — and a missing sender fails in the worst possible way: renders
   are casts, so they vanish silently and the app shows a blank screen with no
-  log, until the first synchronous render exits `:noproc`. `Mob.Screen` calls
+  log, until the first synchronous render exits `:noproc`. `Mob.Router` calls
   this so no render path can reach that state.
 
   Deliberately unlinked. The caller is usually a screen, and a screen crash must
@@ -108,7 +108,7 @@ defmodule Mob.Sender do
   @doc """
   Declare which screen's trees may be committed.
 
-  A render for any other screen is dropped. `Mob.Screen` sets this today;
+  A render for any other screen is dropped. `Mob.Router` sets this;
   MOB-113's router takes it over.
   """
   @spec set_active(screen_ref()) :: :ok
