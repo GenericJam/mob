@@ -73,13 +73,20 @@ defmodule Mob.Screen.RestartTest do
   defp history(owner), do: owner |> owner_state() |> Map.fetch!(:nav) |> Mob.Nav.history()
   defp parked(owner), do: owner |> owner_state() |> Map.fetch!(:nav) |> Map.fetch!(:parked)
 
+  # :sys.get_state/1 alone is not a barrier here — it is not ordered against the
+  # kill, so a later kill can land on an already-dead pid and be a no-op.
+  # Waiting for the :DOWN makes each kill land on a live process.
   defp kill_and_settle(owner, pid) do
-    capture_log(fn ->
-      Process.exit(pid, :kill)
-      # Let the owner process the EXIT and finish the restart.
-      :sys.get_state(owner)
-      :sys.get_state(owner)
-    end)
+    capture_log(fn -> kill_and_wait(owner, pid) end)
+  end
+
+  defp kill_and_wait(owner, pid) do
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^pid, _}
+    # Then let the owner see the EXIT and finish the restart.
+    :sys.get_state(owner)
+    :sys.get_state(owner)
   end
 
   setup do
@@ -202,12 +209,7 @@ defmodule Mob.Screen.RestartTest do
         capture_log(fn ->
           # One more than the ceiling. Without it this spins at thousands of
           # restarts a second, each writing a log line.
-          for _ <- 1..7 do
-            pid = Mob.Screen.get_screen_pid(owner)
-            Process.exit(pid, :kill)
-            :sys.get_state(owner)
-            :sys.get_state(owner)
-          end
+          for _ <- 1..6, do: kill_and_wait(owner, Mob.Screen.get_screen_pid(owner))
         end)
 
       assert log =~ "given up on rather than restarted in a loop"
@@ -217,12 +219,7 @@ defmodule Mob.Screen.RestartTest do
       Mob.Screen.dispatch(owner, "push", %{})
 
       capture_log(fn ->
-        for _ <- 1..7 do
-          pid = Mob.Screen.get_screen_pid(owner)
-          Process.exit(pid, :kill)
-          :sys.get_state(owner)
-          :sys.get_state(owner)
-        end
+        for _ <- 1..6, do: kill_and_wait(owner, Mob.Screen.get_screen_pid(owner))
       end)
 
       assert Mob.Screen.get_current_module(owner) == HomeScreen
@@ -244,11 +241,7 @@ defmodule Mob.Screen.RestartTest do
         capture_log(fn ->
           # One more than @max_restarts trips the ceiling. Going further would
           # start killing the screen we just fell back to.
-          for _ <- 1..6 do
-            Process.exit(Mob.Screen.get_screen_pid(owner), :kill)
-            :sys.get_state(owner)
-            :sys.get_state(owner)
-          end
+          for _ <- 1..6, do: kill_and_wait(owner, Mob.Screen.get_screen_pid(owner))
         end)
 
       assert log =~ "given up on"
@@ -263,11 +256,7 @@ defmodule Mob.Screen.RestartTest do
       dead = Mob.Screen.get_screen_pid(owner)
 
       capture_log(fn ->
-        for _ <- 1..6 do
-          Process.exit(Mob.Screen.get_screen_pid(owner), :kill)
-          :sys.get_state(owner)
-          :sys.get_state(owner)
-        end
+        for _ <- 1..6, do: kill_and_wait(owner, Mob.Screen.get_screen_pid(owner))
       end)
 
       # Switching back must mount a fresh root, never restore the corpse.
