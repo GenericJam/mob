@@ -12,6 +12,8 @@ defmodule Mob.Nav.ResetTransitionTest do
   """
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   defmodule HomeScreen do
     use Mob.Screen
 
@@ -81,7 +83,22 @@ defmodule Mob.Nav.ResetTransitionTest do
 
     # The render path reconciles components, which needs the registry's table.
     {:ok, components} = Mob.ComponentRegistry.start_link()
-    on_exit(fn -> stop_safely(components) end)
+
+    # Stop everything this file caused to start, not just what it started
+    # directly. Mob.Router brings up the Sender and Listener under their global
+    # names; leaving them behind is what produces cross-file ordering flakes.
+    on_exit(fn ->
+      stop_safely(components)
+
+      for name <- [Mob.Sender, Mob.Listener], pid = Process.whereis(name) do
+        stop_safely(pid)
+      end
+
+      case Process.whereis(RecordingNif) do
+        nil -> :ok
+        pid -> Agent.stop(pid)
+      end
+    end)
 
     case Process.whereis(RecordingNif) do
       nil -> RecordingNif.start()
@@ -119,6 +136,25 @@ defmodule Mob.Nav.ResetTransitionTest do
 
       assert Mob.Router.get_current_module(router) == OtherScreen
       assert Mob.Router.get_nav_history(router) == []
+    end
+  end
+
+  describe "an action shape the router does not know" do
+    test "is ignored rather than killing navigation and every screen", %{router: router} do
+      # Reachable during a hot code push: module loading is not atomic, so a
+      # screen already on new code can hand an action to a router still on old
+      # code. Unmatched, that is a FunctionClauseError in the owner.
+      screen = Mob.Router.get_screen_pid(router)
+
+      log =
+        capture_log(fn ->
+          :ok = GenServer.call(router, {:navigate, {:reset, OtherScreen, %{}, :push, :extra}})
+        end)
+
+      assert log =~ "unrecognised navigation action"
+      assert Process.alive?(router)
+      assert Process.alive?(screen)
+      assert Mob.Router.get_current_module(router) == HomeScreen
     end
   end
 

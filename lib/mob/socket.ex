@@ -13,7 +13,7 @@ defmodule Mob.Socket do
   """
 
   @type platform :: :android | :ios
-  @type transition :: :push | :pop | :reset | :none
+  @type transition :: :push | :pop | :reset
 
   @type t :: %__MODULE__{
           assigns: map(),
@@ -177,20 +177,36 @@ defmodule Mob.Socket do
 
   Used for auth transitions (post-login → home with no back button to login).
   Pass `transition: :push` or `transition: :pop` when the reset still represents
-  directional movement, such as switching between custom tabs.
+  directional movement, such as switching between custom tabs. The default,
+  `:reset`, cross-fades.
+
+  Raises `ArgumentError` on any other transition — including `:none`, which
+  would replace the stack while telling the platform no navigation happened,
+  leaving the incoming screen wearing the outgoing one's view identities.
   """
-  @spec reset_to(t(), atom() | module(), map(), keyword()) :: t()
+  @spec reset_to(t(), atom() | module(), map(), [{:transition, transition()}]) :: t()
   def reset_to(socket, dest, params \\ %{}, opts \\ []) do
     transition = validate_transition!(Keyword.get(opts, :transition, :reset))
     put_mob(socket, :nav_action, {:reset, dest, params, transition})
   end
 
-  @valid_transitions [:push, :pop, :reset, :none]
+  @valid_transitions [:push, :pop, :reset]
 
-  # Checked here rather than left to the native layer. `set_transition/1`
-  # accepts any atom and the platform falls back to no animation for one it
-  # does not recognise, so a typo would silently produce the wrong motion with
-  # nothing to point at. Raising names the caller.
+  # Checked here rather than left to the native layer, for two different
+  # reasons.
+  #
+  # An unrecognised atom is merely wrong-looking: `set_transition/1` accepts any
+  # atom and the platform falls back to no animation, so a typo would silently
+  # produce the wrong motion with nothing to point at.
+  #
+  # `:none` is worse, and is rejected rather than allowed. It is the one value
+  # that suppresses the navigation-version bump (`ios/mob_nif.m`'s
+  # `mob_bump_frame_generation`, `MobViewModel.navVersion`, and the `.id()` on
+  # the root view). A reset stops every screen process and replaces the stack,
+  # so telling native it was not navigation leaves SwiftUI diffing the incoming
+  # tree into the outgoing screen's view identities — a `TextField` at the same
+  # position inherits the old screen's text and focus, and scroll offsets
+  # survive a stack that no longer exists.
   defp validate_transition!(transition) when transition in @valid_transitions, do: transition
 
   defp validate_transition!(other) do

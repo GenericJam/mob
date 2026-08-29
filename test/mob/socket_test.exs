@@ -155,10 +155,20 @@ defmodule Mob.SocketTest do
       end
     end
 
-    test "accepts every transition the renderer understands" do
-      for t <- [:push, :pop, :reset, :none] do
+    test "accepts the directional transitions and the default" do
+      for t <- [:push, :pop, :reset] do
         socket = Socket.new(MyScreen) |> Socket.reset_to(OtherScreen, %{}, transition: t)
         assert {:reset, OtherScreen, %{}, ^t} = socket.__mob__.nav_action
+      end
+    end
+
+    test "rejects :none, which would replace the stack without telling the platform" do
+      # :none suppresses the navigation-version bump, so SwiftUI diffs the
+      # incoming tree into the outgoing screen's view identities — a TextField
+      # at the same position keeps the old screen's text and focus across a
+      # stack that no longer exists.
+      assert_raise ArgumentError, ~r/invalid transition :none/, fn ->
+        Socket.new(MyScreen) |> Socket.reset_to(OtherScreen, %{}, transition: :none)
       end
     end
   end

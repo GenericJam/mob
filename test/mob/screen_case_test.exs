@@ -175,9 +175,15 @@ defmodule Mob.ScreenCaseTest do
       assert navigated_to(view) == CounterScreen
     end
 
-    test "records a reset as the destination module" do
+    test "records a legacy three-element reset as the destination module" do
+      # Mob.Socket only emits the four-element form now, so this shape reaches
+      # navigated_to/1 only from a socket built before a hot code push. Built by
+      # hand because nothing in-repo produces it any more — without that the
+      # clause is dead code that a green suite would not notice.
       view = NavScreen |> mount_screen() |> render_event("reset")
-      assert navigated_to(view) == CounterScreen
+      legacy = Mob.Socket.put_mob(view.socket, :nav_action, {:reset, CounterScreen, %{}})
+
+      assert navigated_to(%{view | socket: legacy}) == CounterScreen
     end
 
     test "records a reset carrying a transition as the destination module" do

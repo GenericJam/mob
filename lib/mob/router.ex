@@ -665,6 +665,21 @@ defmodule Mob.Router do
     end
   end
 
+  # A shape this router does not know. Reachable during a hot code push, where
+  # module loading is not atomic: a screen already running new code can hand an
+  # action to a router still running old code. Unmatched, that is a
+  # FunctionClauseError in the owner — navigation and every live screen down,
+  # which is the failure safe_resolve/2 and safe_call/1 exist to prevent.
+  # Repaint and carry on instead.
+  defp apply_nav_action(action, state, mode) do
+    Logger.error(
+      "[mob] unrecognised navigation action #{inspect(action)} was ignored. " <>
+        "If this followed a hot code push, restart the app to clear it."
+    )
+
+    repaint_current(state, mode)
+  end
+
   defp push_resolved(new_module, mount_params, state, mode) do
     case start_screen(new_module, mount_params, state) do
       {:ok, entry, state} ->

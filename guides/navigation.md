@@ -120,7 +120,7 @@ Pop all screens back to the root of the current stack:
 Mob.Socket.pop_to_root(socket)
 ```
 
-### `reset_to/2,3`
+### `reset_to/2,3,4`
 
 Replace the entire navigation stack with a new root. No back button, no history. Used for auth transitions:
 

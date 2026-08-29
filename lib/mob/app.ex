@@ -236,7 +236,7 @@ defmodule Mob.App do
   Declare a navigation stack.
 
   `name` is the atom identifier used with `push_screen/2,3`, `pop_to/2`,
-  and `reset_to/2,3`. The `:root` option is the module mounted when the stack
+  and `reset_to/2,3,4`. The `:root` option is the module mounted when the stack
   is first entered.
 
   Options:
