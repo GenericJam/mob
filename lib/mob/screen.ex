@@ -408,7 +408,22 @@ defmodule Mob.Screen do
 
   # A notification that launched the app from a killed state.
   def handle_info({:mob_launch_notification, json}, state) do
-    handle_info({:notification, decode_notification_json(json)}, state)
+    # Decoded here rather than in the screen because the payload comes from
+    # native, not from a screen. :json.decode/1 raises on malformed input, and
+    # this runs in the owner — so a bad payload would take down every screen.
+    notification =
+      try do
+        decode_notification_json(json)
+      rescue
+        error ->
+          Logger.error(
+            "[mob] launch notification could not be decoded: " <> Exception.message(error)
+          )
+
+          %{source: :local, data: %{}}
+      end
+
+    handle_info({:notification, notification}, state)
   end
 
   # System back gesture (Android hardware/swipe, iOS edge-pan). Handled here so
@@ -598,9 +613,29 @@ defmodule Mob.Screen do
         state
 
       true ->
+        fall_back_to_parked_stack(entry, state)
+    end
+  end
+
+  # "Nothing beneath it" is the *common* shape in a tab-bar app — every tab root
+  # has an empty history — and there is usually a live screen parked under
+  # another tab. Leaving a dead pid as `current` bricks the app: every later
+  # event is safe_call'd into a corpse and replies :ok, while a perfectly good
+  # screen sits parked one call away.
+  defp fall_back_to_parked_stack(entry, state) do
+    with [name | _] <- Mob.Nav.parked_stacks(state.nav),
+         {:switched, nav, live} <- Mob.Nav.switch(state.nav, name, entry) do
+      # switch/3 parks the dead entry under the outgoing stack; drop it straight
+      # after, so nothing can restore a corpse by switching back.
+      nav = Mob.Nav.drop_parked(nav, &(&1.pid == entry.pid))
+      state = make_current(%{state | nav: nav}, live)
+      paint(live, :pop, state)
+      state
+    else
+      _ ->
         Logger.error(
-          "[mob] #{inspect(entry.module)} could not be restarted and there is no screen " <>
-            "beneath it. The app has no live screen."
+          "[mob] #{inspect(entry.module)} could not be restarted and there is no other live " <>
+            "screen to fall back to. The app has no live screen."
         )
 
         state
@@ -650,8 +685,15 @@ defmodule Mob.Screen do
 
   # Drop the entry from tracking BEFORE stopping, so the exit we asked for is
   # recognised as deliberate rather than restarted as a crash.
-  defp stop_screen(%{pid: pid}, state) do
-    state = %{state | screens: Map.delete(state.screens, pid)}
+  defp stop_screen(%{pid: pid} = entry, state) do
+    # Forget the restart history too — the map is keyed by screen ref and
+    # nothing else ever removes a key, so it grows for the owner's lifetime.
+    state = %{
+      state
+      | screens: Map.delete(state.screens, pid),
+        restarts: Map.delete(state.restarts, entry.ref)
+    }
+
     stop_process(pid)
     state
   end
@@ -684,18 +726,8 @@ defmodule Mob.Screen do
   defp apply_nav_action(nil, state, _mode), do: state
 
   defp apply_nav_action({:push, dest, params}, state, mode) do
-    {new_module, route_params} = resolve_destination(dest)
-    mount_params = Map.merge(route_params, params)
-
-    case start_screen(new_module, mount_params, state) do
-      {:ok, entry, state} ->
-        nav = Mob.Nav.put_history(state.nav, [state.current | Mob.Nav.history(state.nav)])
-        state = make_current(%{state | nav: nav}, entry)
-        do_paint(entry, :push, state, mode)
-        state
-
-      {:error, _reason} ->
-        repaint_current(state, mode)
+    with {:ok, new_module, route_params} <- safe_resolve(dest, state) do
+      push_resolved(new_module, Map.merge(route_params, params), state, mode)
     end
   end
 
@@ -733,36 +765,14 @@ defmodule Mob.Screen do
   end
 
   defp apply_nav_action({:pop_to, dest}, state, mode) do
-    target = resolve_module(dest)
-    history = Mob.Nav.history(state.nav)
-
-    case pop_to_module(history, target) do
-      {:found, previous, rest} ->
-        discarded = [state.current | Enum.take_while(history, &(&1.pid != previous.pid))]
-        state = Enum.reduce(discarded, state, &stop_screen/2)
-        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous)
-        do_paint(previous, :pop, state, mode)
-        state
-
-      :not_found ->
-        repaint_current(state, mode)
+    with {:ok, target, _params} <- safe_resolve(dest, state) do
+      pop_to_resolved(target, state, mode)
     end
   end
 
   defp apply_nav_action({:reset, dest, params}, state, mode) do
-    {new_module, route_params} = resolve_destination(dest)
-    mount_params = Map.merge(route_params, params)
-
-    case start_screen(new_module, mount_params, state) do
-      {:ok, entry, state} ->
-        discarded = [state.current | Mob.Nav.history(state.nav)]
-        state = Enum.reduce(discarded, state, &stop_screen/2)
-        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, entry)
-        do_paint(entry, :reset, state, mode)
-        state
-
-      {:error, _reason} ->
-        repaint_current(state, mode)
+    with {:ok, new_module, route_params} <- safe_resolve(dest, state) do
+      reset_resolved(new_module, Map.merge(route_params, params), state, mode)
     end
   end
 
@@ -791,6 +801,49 @@ defmodule Mob.Screen do
     end
   end
 
+  defp push_resolved(new_module, mount_params, state, mode) do
+    case start_screen(new_module, mount_params, state) do
+      {:ok, entry, state} ->
+        nav = Mob.Nav.put_history(state.nav, [state.current | Mob.Nav.history(state.nav)])
+        state = make_current(%{state | nav: nav}, entry)
+        do_paint(entry, :push, state, mode)
+        state
+
+      {:error, _reason} ->
+        repaint_current(state, mode)
+    end
+  end
+
+  defp reset_resolved(new_module, mount_params, state, mode) do
+    case start_screen(new_module, mount_params, state) do
+      {:ok, entry, state} ->
+        discarded = [state.current | Mob.Nav.history(state.nav)]
+        state = Enum.reduce(discarded, state, &stop_screen/2)
+        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, entry)
+        do_paint(entry, :reset, state, mode)
+        state
+
+      {:error, _reason} ->
+        repaint_current(state, mode)
+    end
+  end
+
+  defp pop_to_resolved(target, state, mode) do
+    history = Mob.Nav.history(state.nav)
+
+    case pop_to_module(history, target) do
+      {:found, previous, rest} ->
+        discarded = [state.current | Enum.take_while(history, &(&1.pid != previous.pid))]
+        state = Enum.reduce(discarded, state, &stop_screen/2)
+        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous)
+        do_paint(previous, :pop, state, mode)
+        state
+
+      :not_found ->
+        repaint_current(state, mode)
+    end
+  end
+
   # A nav action that changed nothing still has to paint. The screen deliberately
   # does not paint when it produced an action, so without this the assigns it set
   # in the same callback would never reach the screen — re-tapping the active tab
@@ -800,9 +853,24 @@ defmodule Mob.Screen do
     state
   end
 
-  defp resolve_module(dest) when is_atom(dest) do
-    {module, _route_params} = resolve_destination(dest)
-    module
+  # `push_screen/2` and friends take any atom, and an unregistered one raises.
+  # That raise runs in the OWNER, where it would kill navigation and every
+  # screen — falsifying the isolation this module's moduledoc promises, over a
+  # typo. A bad destination leaves navigation untouched and repaints instead.
+  #
+  # Returns the state unchanged (via repaint_current/2) rather than an error
+  # tuple, so the `with` in each caller falls straight through.
+  defp safe_resolve(dest, state) do
+    {module, route_params} = resolve_destination(dest)
+    {:ok, module, route_params}
+  rescue
+    error ->
+      Logger.error(
+        "[mob] navigation to #{inspect(dest)} failed and was ignored: " <>
+          Exception.message(error)
+      )
+
+      repaint_current(state, :async)
   end
 
   # Resolves a navigation destination to {module, route_params}. A loaded

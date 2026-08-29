@@ -1,6 +1,8 @@
 defmodule Mob.Nav.ScreenNavTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   # ── Screen fixtures ────────────────────────────────────────────────────────
   # Bare module names inside nested defmodule blocks don't auto-alias to siblings.
   # Use module attributes with fully qualified names for cross-screen references.
@@ -283,21 +285,19 @@ defmodule Mob.Nav.ScreenNavTest do
       end
     end
 
-    test "raises ArgumentError for unregistered atom" do
+    test "an unregistered atom is logged and ignored, not fatal" do
+      # Before MOB-112 this raised in the one screen process, which was also the
+      # whole app. The raise now happens in the navigation *owner*, where it
+      # would take down every screen — over a typo in push_screen/2. It is
+      # caught: navigation is left untouched and the app carries on.
       {:ok, pid} = Mob.Screen.start_link(UnknownNavScreen, %{})
-      # Unlink so the server crash doesn't kill the test process — we only want
-      # to observe the exit that GenServer.call propagates through the call path.
-      Process.unlink(pid)
+      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 
-      exit_reason =
-        try do
-          Mob.Screen.dispatch(pid, "bad_nav", %{})
-          nil
-        catch
-          :exit, reason -> reason
-        end
+      log = capture_log(fn -> assert :ok = Mob.Screen.dispatch(pid, "bad_nav", %{}) end)
 
-      assert inspect(exit_reason) =~ "no_such_screen"
+      assert log =~ "no_such_screen"
+      assert Process.alive?(pid)
+      assert Mob.Screen.get_current_module(pid) == UnknownNavScreen
     end
   end
 end

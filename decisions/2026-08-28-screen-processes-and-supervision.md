@@ -1,4 +1,4 @@
-# Screen processes: one per screen, owned and monitored rather than supervised
+# Screen processes: one per screen, owned and linked rather than supervised
 
 - Date: 2026-08-28
 - Status: accepted
@@ -95,7 +95,7 @@ replacement.
 in `handle_event` exits that inner call, which would have killed the owner —
 defeating the isolation on the one path MOB-112's acceptance names explicitly.
 Every owner-to-screen call goes through `safe_call/1`, which catches the exit
-and lets the monitor repair the screen.
+and lets the exit signal repair the screen.
 
 ### A navigation entry carries what a restart needs
 
@@ -125,6 +125,28 @@ screen rather than pretending otherwise.
 Background screens are re-mounted eagerly rather than lazily. A crash is rare,
 and keeping every nav entry a live pid means popping or switching back never
 has to handle a corpse.
+
+### A bad navigation destination is ignored, not fatal
+
+`push_screen/2` takes any atom and `resolve_destination/1` raises on one that
+was never registered — a typo reaches it. That raise runs in the *owner*, so it
+would kill navigation and every screen, falsifying the isolation this module's
+moduledoc promises. It is caught: the destination is logged, navigation is left
+untouched, and the current screen repaints.
+
+The same reasoning covers `decode_notification_json/1`, which runs in the owner
+because a launch notification comes from native rather than from a screen.
+`:json.decode/1` raises on malformed input.
+
+### Giving up on a screen falls back to a live tab
+
+When a screen cannot be re-mounted and its own stack has nothing beneath it,
+the owner switches to a parked stack rather than keeping a dead pid as
+`current`. In a tab-bar app "nothing beneath it" is the *ordinary* shape —
+every tab root has an empty history — so without this a repeat crash on one tab
+bricks the whole app while a perfectly good screen sits parked under another.
+The dead entry is dropped from `parked` immediately after the switch, so
+nothing can restore a corpse later.
 
 ### A no-op navigation still paints
 
@@ -157,7 +179,7 @@ history stay alive, which is what makes pop restore prior state without
 re-mounting — and what the epic's ADR called out as the memory cost of matching
 how iOS and Android actually behave.
 
-Demonitoring before stopping matters: without it, the shutdown the owner asked
+Unlinking before stopping matters: without it, the shutdown the owner asked
 for returns as a `:DOWN` and the screen is "restarted" immediately after being
 deliberately discarded.
 
@@ -193,6 +215,18 @@ not yank the stack out from under what the user is looking at.
   plugin messages — is forwarded by the owner to the active screen.
 - An owner-to-screen call returns `nil` rather than raising when the screen is
   mid-crash. `get_socket/1` and `Mob.Test.assigns/1` document and handle that.
+- **Known, deferred, and worth an issue of their own.** The owner is now a
+  shared serialisation point: `dispatch/3` passes `:infinity`, so one screen
+  wedged in a callback blocks the owner — and therefore the back gesture,
+  notifications, and message routing for *every other* screen — for as long as
+  it takes. Stopping a wedged screen costs the owner a 5s timeout before it
+  resorts to a kill, and `pop_to_root`/`reset` pay that serially per discarded
+  screen. Both are defensible as written for one screen and questionable for N;
+  neither is a regression from master, where there was only one process to
+  block.
+- **A tripped restart ceiling is permanent and silent to the user.** A screen
+  crashing repeatedly for a transient reason is dropped for the process
+  lifetime, with only a log line. No cooldown, no retry.
 - **`Mob.Test.settle/2` now drains three processes, not two.** `:mob_screen` is
   the navigation owner; it forwards to the screen, which builds the tree, which
   the sender commits. Draining only the owner proved nothing — every

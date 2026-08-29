@@ -45,16 +45,23 @@ defmodule Mob.Screen.Server do
 
   @state_sync_interval_ms 30_000
 
-  @typedoc "Which navigation stack this screen belongs to, for addressing renders."
-  @type render_ref :: atom()
+  @typedoc """
+  Identifies this screen to `Mob.Sender`. Unique per **screen**, not per stack.
+
+  Every screen is a live process that repaints on any message it receives,
+  including the ones below the top of a stack. Keyed by stack they would share
+  a ref, and a timer tick in a screen the user cannot see would commit its tree
+  over the one they can. The sender only commits the active ref.
+  """
+  @type render_ref :: reference()
 
   defstruct [:module, :socket, :render_mode, :ref, :owner]
 
   @doc """
   Start a screen linked to the calling process.
 
-  `:owner` receives nav actions and the exit signal. `:ref` is the navigation
-  stack this screen belongs to, used to address its renders at `Mob.Sender`.
+  `:owner` receives nav actions and the exit signal. `:ref` identifies this
+  screen to `Mob.Sender` and is unique per screen — see `t:render_ref/0`.
 
   `Mob.Screen` links *and* traps exits. Linking alone would make the owner die
   with any screen it stopped or that crashed; trapping alone would leave every
