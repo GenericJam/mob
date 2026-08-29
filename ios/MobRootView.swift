@@ -47,6 +47,11 @@ public final class MobNativeViewRegistry {
     }
 }
 
+enum MobLayoutWeightAxis {
+    case horizontal
+    case vertical
+}
+
 extension View {
     @ViewBuilder
     func ifLet<T>(_ value: T?, transform: (Self, T) -> some View) -> some View {
@@ -241,13 +246,21 @@ extension MobNode {
 
 struct MobNodeView: View {
     let node: MobNode
+    private let layoutWeightAxis: MobLayoutWeightAxis?
+
+    init(node: MobNode, layoutWeightAxis: MobLayoutWeightAxis? = nil) {
+        self.node = node
+        self.layoutWeightAxis = layoutWeightAxis
+    }
 
     var body: some View {
         Group {
             switch node.nodeType {
             case .column:
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in MobNodeView(node: child) }
+                    ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
+                        MobNodeView(node: child, layoutWeightAxis: .vertical)
+                    }
                 }
                 // fill_height: true lets a column flex to fill its parent so children
                 // with Spacer() or fill_height of their own can pin to the bottom.
@@ -272,7 +285,9 @@ struct MobNodeView: View {
                     }
                 }()
                 HStack(alignment: alignment, spacing: 0) {
-                    ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in MobNodeView(node: child) }
+                    ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
+                        MobNodeView(node: child, layoutWeightAxis: .horizontal)
+                    }
                 }
                 // Without maxWidth: .infinity an HStack hugs its content.
                 // Flex Spacers inside then have nothing to expand into and
@@ -513,6 +528,12 @@ struct MobNodeView: View {
                 EmptyView()
             }
         }
+        // Weight sizing must wrap the node's own visual decoration. Applying
+        // the frame from the parent after MobNodeView has painted its
+        // background leaves an expanded transparent region around a
+        // content-sized fill. Repaint that decoration on the weighted frame
+        // so iOS matches Compose's weight-before-nodeModifier ordering.
+        .modifier(MobLayoutWeight(node: node, axis: layoutWeightAxis))
         // Per-node offset — applied uniformly to every node type. Default is
         // (0, 0) which is a no-op. Used by SquareTriangle's hexagonal
         // snowflake to position rings absolutely within a center-aligned box.
@@ -521,6 +542,36 @@ struct MobNodeView: View {
         // carrying an :id, so the agent can read positions via the
         // element_frames NIF without a screenshot.
         .modifier(MobFrameTracker(node: node))
+    }
+}
+
+private struct MobLayoutWeight: ViewModifier {
+    let node: MobNode
+    let axis: MobLayoutWeightAxis?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if node.layoutWeight > 0, let axis {
+            switch axis {
+            case .horizontal:
+                decorate(content.frame(maxWidth: .infinity, alignment: .leading))
+            case .vertical:
+                decorate(content.frame(maxHeight: .infinity, alignment: .top))
+            }
+        } else {
+            content
+        }
+    }
+
+    private func decorate(_ content: some View) -> some View {
+        content
+            .mobBoxBackground(node: node)
+            .overlay(
+                RoundedRectangle(cornerRadius: node.cornerRadius)
+                    .stroke(node.borderColor.map { Color($0) } ?? Color.clear,
+                            lineWidth: node.borderWidth)
+                    .allowsHitTesting(false)
+            )
     }
 }
 

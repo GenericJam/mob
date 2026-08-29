@@ -1073,6 +1073,10 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         if (fixedHeight)
             node.fixedHeight = [fixedHeight doubleValue];
 
+        id layoutWeight = props[@"weight"];
+        if (layoutWeight)
+            node.layoutWeight = [layoutWeight doubleValue];
+
         id cornerRadius = props[@"corner_radius"];
         if (cornerRadius)
             node.cornerRadius = [cornerRadius doubleValue];

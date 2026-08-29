@@ -35,6 +35,7 @@
         _contentModeStr = @"fit";
         _fixedWidth = 0.0;
         _fixedHeight = 0.0;
+        _layoutWeight = 0.0;
         _fillWidth = NO;
         _cornerRadius = 0.0;
         _nativeViewHandle = -1;     // -1 = no native component slot assigned (MOB-100)
