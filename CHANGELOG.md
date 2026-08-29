@@ -10,6 +10,69 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.7.33] - 2026-08-29
+
+First four steps of the screen-process architecture (MOB-108). Rationale in
+`decisions/2026-08-27-screen-process-architecture.md`; each step has its own
+decision record alongside it. **No `.m`, `.zig`, or generator-template change
+was required** — the whole move happens above the native boundary.
+
+### Added
+- **One process per live screen, with real crash isolation.** A crash in a
+  screen's `handle_event` no longer takes down navigation, sibling screens, or
+  the BEAM: the owner observes the exit, restarts that screen, and repaints.
+  `Mob.Screen`'s moduledoc had claimed this for a long time and mob#76 had to
+  correct it; the claim is now true. A restarted screen re-mounts and loses its
+  assigns — persisted screens (`use Mob.Screen, vsn: N` or `persist: true`)
+  recover through `load_state/2` — and the restart is logged, because a form
+  clearing itself is visible to the user. Restarts are capped (5 in 10s per
+  screen) so a screen that crashes on every render cannot spin.
+- **Multi-stack navigation.** `Mob.App.tab_bar/1` and `drawer/1` have been
+  public API in `Mob.App`'s own moduledoc while the runtime behind them could
+  hold exactly one history, and `Mob.Socket.switch_tab/2` did nothing at all.
+  Each declared stack now owns its own history *and* its own live screen, so
+  switching away and back restores where you were instead of re-mounting.
+  Stacks materialize on first visit, matching `UITabBarController`.
+- `Mob.Nav` — multi-stack navigation state. `Mob.Sender` — the single process
+  permitted to call the render NIFs. `Mob.Listener` — the single inbound entry
+  point from native. `Mob.Screen.Server` — one per live screen.
+- `Mob.Screen.get_screen_pid/1`, for reaching the process that actually holds
+  the screen on show.
+- `Mob.Test.settle/2`, which waits for a frame to reach the screen. Prefer it
+  over `:sys.get_state/1` after any fire-and-forget call (`tap/2`, `back/1`,
+  `send_message/2`) before reading the native side with `view_tree/1`,
+  `screenshot/2`, `tap_id/2` or `element_frames/2`.
+
+### Changed
+- **`self()` inside a screen callback is now that screen's own pid**, not the
+  process registered as `:mob_screen`. This is what user code already assumed
+  when writing `on_tap: {self(), :save}` or starting a task from a screen.
+- Rendering is serialized through `Mob.Sender` and committed asynchronously.
+  The native tap tables share one global build cursor, so two screens rendering
+  concurrently would interleave their handles and one screen's tree would never
+  commit. Only the screen on show can commit a frame; a background screen's
+  repaint is dropped rather than painted over the foreground.
+- `__mob_hot_reload__` is a broadcast — every live screen repaints with the new
+  code, not just the one on show.
+
+### Fixed
+- **Async results are no longer delivered to the wrong screen** (MOB-107,
+  reported by @minibikini). A task started by screen A that completed after
+  navigating to B was handed to B's `handle_info` with B's socket; where both
+  used the same message shape, B silently processed A's payload, and where B
+  did not match, the generated catch-all swallowed it with no log and no crash.
+  Work started by a screen now goes to that screen's own pid: if it has been
+  popped and stopped the BEAM drops the message, and if it is alive in another
+  tab it handles it and its state is current when you switch back.
+
+### Known gaps
+- **Nothing renders a tab bar yet.** `tab_bar/1` and `drawer/1` are now backed
+  by the runtime and `switch_tab/2` works, but no tab bar or drawer chrome is
+  drawn — switching is programmatic for now.
+- `reset_to/2` does not re-derive which stack its destination belongs to
+  (MOB-115); parked screens miss `terminate/2` and state sync (MOB-116);
+  re-selecting the active tab does not pop that stack to its root (MOB-117).
+
 ## [0.7.32] - 2026-08-27
 
 ### Added
