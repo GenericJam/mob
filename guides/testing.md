@@ -141,7 +141,8 @@ Mob.Test.navigate(node, MyApp.DetailScreen, %{id: 42})
 Mob.Test.navigate(node, :detail, %{id: 42})      # by registered name
 Mob.Test.pop_to(node, MyApp.HomeScreen)          # pop back to a specific screen
 Mob.Test.pop_to_root(node)                       # pop all the way back
-Mob.Test.reset_to(node, MyApp.HomeScreen)        # replace the entire stack
+Mob.Test.reset_to(node, MyApp.HomeScreen)        # replace the active stack
+Mob.Test.reset_to(node, MyApp.LoginScreen, %{}, scope: :all) # discard every stack
 
 # System back gesture (fire-and-forget — same as hardware back / edge-pan)
 Mob.Test.back(node)

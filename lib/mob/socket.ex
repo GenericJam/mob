@@ -173,21 +173,30 @@ defmodule Mob.Socket do
   end
 
   @doc """
-  Replace the entire navigation stack with a single new screen.
+  Replace the current navigation stack with a single new screen.
 
   Used for auth transitions (post-login → home with no back button to login).
   Pass `transition: :push` or `transition: :pop` when the reset still represents
   directional movement, such as switching between custom tabs. The default,
-  `:reset`, cross-fades.
+  `:reset`, cross-fades. Pass `scope: :all` for an auth boundary that must also
+  discard every parked tab stack. The default `scope: :stack` preserves the
+  established current-stack-only behavior.
 
   Raises `ArgumentError` on any other transition — including `:none`, which
   would replace the stack while telling the platform no navigation happened,
   leaving the incoming screen wearing the outgoing one's view identities.
   """
-  @spec reset_to(t(), atom() | module(), map(), [{:transition, transition()}]) :: t()
+  @spec reset_to(t(), atom() | module(), map(), [
+          {:transition, transition()} | {:scope, :stack | :all}
+        ]) :: t()
   def reset_to(socket, dest, params \\ %{}, opts \\ []) do
     transition = validate_transition!(Keyword.get(opts, :transition, :reset), "reset_to/4")
-    put_mob(socket, :nav_action, {:reset, dest, params, transition})
+    scope = validate_reset_scope!(Keyword.get(opts, :scope, :stack))
+
+    case scope do
+      :stack -> put_mob(socket, :nav_action, {:reset, dest, params, transition})
+      :all -> put_mob(socket, :nav_action, {:reset, dest, params, transition, :all})
+    end
   end
 
   @valid_transitions [:push, :pop, :reset]
@@ -214,6 +223,14 @@ defmodule Mob.Socket do
     raise ArgumentError,
           "Mob.Socket.#{function}: invalid transition #{inspect(other)}. " <>
             "Expected one of #{inspect(@valid_transitions)}."
+  end
+
+  defp validate_reset_scope!(scope) when scope in [:stack, :all], do: scope
+
+  defp validate_reset_scope!(other) do
+    raise ArgumentError,
+          "Mob.Socket.reset_to/4: invalid scope #{inspect(other)}. " <>
+            "Expected one of [:stack, :all]."
   end
 
   @doc """

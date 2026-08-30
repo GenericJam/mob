@@ -121,6 +121,38 @@ defmodule Mob.Router do
   @spec get_screen_pid(GenServer.server()) :: pid()
   def get_screen_pid(pid), do: GenServer.call(pid, :get_screen_pid)
 
+  @doc false
+  @spec reset_navigation(map(), module(), module()) :: map()
+  def reset_navigation(nav, new_module, nav_module \\ Mob.Nav) do
+    if function_exported?(nav_module, :reset, 2) do
+      nav_module.reset(nav, new_module)
+    else
+      roots = Map.get(nav, :roots, %{})
+
+      active =
+        Enum.find_value(Map.get(nav, :order, []), :__mob_root__, fn name ->
+          if Map.get(roots, name) == new_module, do: name
+        end)
+
+      nav
+      |> Map.put(:active, active)
+      |> Map.put(:history, [])
+      |> Map.put(:parked, %{})
+    end
+  end
+
+  @doc false
+  @spec reset_all_supported?(module(), module()) :: boolean()
+  def reset_all_supported?(
+        screen_server \\ Mob.Screen.Server,
+        screen_state \\ Mob.ScreenState
+      ) do
+    Code.ensure_loaded?(screen_server) and
+      function_exported?(screen_server, :discard_persisted_state, 1) and
+      Code.ensure_loaded?(screen_state) and
+      function_exported?(screen_state, :delete_all, 0)
+  end
+
   # ── GenServer callbacks ───────────────────────────────────────────────────
 
   @impl GenServer
@@ -339,6 +371,10 @@ defmodule Mob.Router do
   defp start_screen(module, params, state), do: start_screen(module, params, make_ref(), state)
 
   defp start_screen(module, params, ref, state) do
+    start_screen(module, params, ref, state, [])
+  end
+
+  defp start_screen(module, params, ref, state, screen_opts) do
     opts = [
       module: module,
       params: params,
@@ -346,7 +382,8 @@ defmodule Mob.Router do
       owner: self(),
       render_mode: state.render_mode,
       platform: state.platform,
-      nif: state.nif
+      nif: state.nif,
+      restore_persisted_state: Keyword.get(screen_opts, :restore_persisted_state, true)
     ]
 
     case Mob.Screen.Server.start_link(opts) do
@@ -603,6 +640,18 @@ defmodule Mob.Router do
     state
   end
 
+  defp discard_screen(entry, state) do
+    # This call both deletes the current module/key snapshot and disables the
+    # periodic/final dumps before stop_screen/2 asks the process to terminate.
+    # The order matters: deleting first and then allowing terminate/2 to dump
+    # would immediately recreate the session we are trying to discard.
+    safe_call(fn ->
+      Mob.Screen.Server.discard_persisted_state(entry.pid, @stop_timeout_ms)
+    end)
+
+    stop_screen(entry, state)
+  end
+
   defp stop_process(pid) do
     if Process.alive?(pid) do
       # Unlink first. We are discarding this screen deliberately, so its
@@ -691,6 +740,21 @@ defmodule Mob.Router do
     end
   end
 
+  defp apply_nav_action({:reset, dest, params, transition, :all}, state, mode) do
+    if reset_all_supported?() do
+      with {:ok, new_module, route_params} <- safe_resolve(dest, state) do
+        reset_all_resolved(new_module, Map.merge(route_params, params), transition, state, mode)
+      end
+    else
+      Logger.error(
+        "[mob] all-stack reset was ignored while older navigation lifecycle code was loaded. " <>
+          "Retry after the code push finishes or restart the app."
+      )
+
+      repaint_current(state, mode)
+    end
+  end
+
   defp apply_nav_action({:switch_tab, tab}, state, mode) do
     apply_tab_switch(tab, :none, state, mode)
   end
@@ -770,6 +834,34 @@ defmodule Mob.Router do
         state =
           make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, entry, transition)
 
+        do_paint(entry, :none, state, mode)
+        state
+
+      {:error, _reason} ->
+        repaint_current(state, mode)
+    end
+  end
+
+  defp reset_all_resolved(new_module, mount_params, transition, state, mode) do
+    discarded = all_entries(state)
+
+    # Mount first and mutate only after it succeeds. An auth reset often points
+    # at user code, and a failed mount must not destroy every still-live tab.
+    case start_screen(
+           new_module,
+           mount_params,
+           make_ref(),
+           state,
+           restore_persisted_state: false
+         ) do
+      {:ok, entry, state} ->
+        state = Enum.reduce(discarded, state, &discard_screen/2)
+        # Every old screen is now stopped, so nothing from the prior session
+        # can recreate a record after this sweep. This also covers one that
+        # exited between collection and its synchronous preparation call.
+        Mob.ScreenState.delete_all()
+        nav = reset_navigation(state.nav, new_module)
+        state = make_current(%{state | nav: nav}, entry, transition)
         do_paint(entry, :none, state, mode)
         state
 

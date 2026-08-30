@@ -7,6 +7,14 @@ defmodule Mob.TestTest do
 
   alias Mob.Test, as: M
 
+  describe "reset_to/4" do
+    test "rejects an invalid scope before making an RPC" do
+      assert_raise ArgumentError, ~r/Mob.Test.reset_to\/4: invalid scope :tabs/, fn ->
+        M.reset_to(:unused_node, :login, %{}, scope: :tabs)
+      end
+    end
+  end
+
   describe "switch_tab/3" do
     test "rejects transitions that application sockets reject" do
       assert_raise ArgumentError, ~r/Mob.Test.switch_tab\/3: invalid transition :puhs/, fn ->

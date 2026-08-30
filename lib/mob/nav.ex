@@ -123,6 +123,24 @@ defmodule Mob.Nav do
   end
 
   @doc """
+  Clear every materialized stack and select the stack for `current_module`.
+
+  The declared roots and their order are preserved. When `current_module` is
+  one of those roots, its declared stack becomes active; otherwise the fresh
+  screen belongs to the private orphan stack used for login and deep-link
+  screens. No previous history or parked screen survives the reset.
+  """
+  @spec reset(t(), module()) :: t()
+  def reset(%__MODULE__{} = nav, current_module) do
+    active =
+      Enum.find_value(nav.order, @orphan_stack, fn name ->
+        if Map.get(nav.roots, name) == current_module, do: name
+      end)
+
+    %{nav | active: active, history: [], parked: %{}}
+  end
+
+  @doc """
   Name of the active stack.
 
   `nil` when no layout was declared. `:__mob_root__` when the mounted screen is

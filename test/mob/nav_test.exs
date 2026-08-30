@@ -108,6 +108,33 @@ defmodule Mob.NavTest do
     end
   end
 
+  describe "reset/2" do
+    test "preserves declared roots and order while clearing all materialized state" do
+      nav = Nav.from_layout(two_tabs(), HomeScreen)
+      {:mount_root, nav, _} = Nav.switch(nav, :settings, entry(HomeScreen))
+
+      nav =
+        nav
+        |> Nav.put_history([entry(ProfileScreen)])
+        |> Nav.reset(HomeScreen)
+
+      assert Nav.stacks(nav) == [:home, :settings]
+      assert nav.roots == %{home: HomeScreen, settings: SettingsScreen}
+      assert Nav.active(nav) == :home
+      assert Nav.history(nav) == []
+      assert nav.parked == %{}
+    end
+
+    test "selects the orphan stack when the replacement is not a declared root" do
+      nav = Nav.from_layout(two_tabs(), HomeScreen) |> Nav.reset(StrayScreen)
+
+      assert Nav.active(nav) == :__mob_root__
+      assert Nav.history(nav) == []
+      assert nav.parked == %{}
+      assert Nav.stacks(nav) == [:home, :settings]
+    end
+  end
+
   describe "drop_parked/2" do
     setup do
       nav = Nav.from_layout(two_tabs(), HomeScreen)

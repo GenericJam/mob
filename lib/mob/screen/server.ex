@@ -55,7 +55,7 @@ defmodule Mob.Screen.Server do
   """
   @type render_ref :: reference()
 
-  defstruct [:module, :socket, :render_mode, :ref, :owner, :nif]
+  defstruct [:module, :socket, :render_mode, :ref, :owner, :nif, persist_on_terminate: true]
 
   @doc """
   Start a screen linked to the calling process.
@@ -86,6 +86,12 @@ defmodule Mob.Screen.Server do
   @doc "This screen's current socket."
   @spec socket(pid()) :: Mob.Socket.t()
   def socket(pid), do: GenServer.call(pid, :get_socket)
+
+  @doc false
+  @spec discard_persisted_state(pid(), timeout()) :: :ok
+  def discard_persisted_state(pid, timeout \\ 5_000) do
+    GenServer.call(pid, :discard_persisted_state, timeout)
+  end
 
   @doc """
   Render this screen's tree, in this screen's process.
@@ -149,7 +155,13 @@ defmodule Mob.Screen.Server do
     case module.mount(Keyword.get(opts, :params, %{}), %{}, socket) do
       {:ok, mounted} ->
         # Restore persisted assigns after mount so mount always runs cleanly.
-        socket = maybe_load_state(module, mounted)
+        socket =
+          if Keyword.get(opts, :restore_persisted_state, true) do
+            maybe_load_state(module, mounted)
+          else
+            mounted
+          end
+
         if module.__mob_persist__(), do: schedule_state_sync()
 
         {:ok,
@@ -176,6 +188,11 @@ defmodule Mob.Screen.Server do
   end
 
   def handle_call(:get_socket, _from, state), do: {:reply, state.socket, state}
+
+  def handle_call(:discard_persisted_state, _from, state) do
+    if state.module.__mob_persist__(), do: Mob.ScreenState.delete(state.module, state.socket)
+    {:reply, :ok, Map.put(state, :persist_on_terminate, false)}
+  end
 
   def handle_call(:get_tree, _from, state) do
     {:reply, state.module.render(state.socket.assigns), state}
@@ -217,7 +234,7 @@ defmodule Mob.Screen.Server do
   # Periodic state sync — intercepted before the user's handle_info so the
   # screen module never sees this internal message.
   def handle_info(:__mob_sync_state__, state) do
-    if state.module.__mob_persist__() do
+    if Map.get(state, :persist_on_terminate, true) and state.module.__mob_persist__() do
       Mob.ScreenState.dump(state.module, state.socket)
       schedule_state_sync()
     end
@@ -264,7 +281,10 @@ defmodule Mob.Screen.Server do
 
   @impl GenServer
   def terminate(reason, state) do
-    if state.module.__mob_persist__(), do: Mob.ScreenState.dump(state.module, state.socket)
+    if Map.get(state, :persist_on_terminate, true) and state.module.__mob_persist__() do
+      Mob.ScreenState.dump(state.module, state.socket)
+    end
+
     state.module.terminate(reason, state.socket)
   end
 
