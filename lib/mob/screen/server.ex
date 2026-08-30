@@ -101,12 +101,23 @@ defmodule Mob.Screen.Server do
   @spec render(pid(), atom()) :: :ok
   def render(pid, transition \\ :none), do: GenServer.cast(pid, {:render, transition})
 
+  @doc false
+  @spec render(pid(), atom(), reference() | nil) :: :ok
+  def render(pid, transition, activation_token),
+    do: GenServer.cast(pid, {:render, transition, activation_token})
+
   @doc "Paint and block until the frame has been committed."
   @spec render_sync(pid(), atom()) :: :ok
   def render_sync(pid, transition \\ :none) do
     # Matches Mob.Sender.sync(:infinity) one hop down: rendering was never
     # time-bounded, and bounding it here would kill the screen on a slow frame.
     GenServer.call(pid, {:render_sync, transition}, :infinity)
+  end
+
+  @doc false
+  @spec render_sync(pid(), atom(), reference() | nil) :: :ok
+  def render_sync(pid, transition, activation_token) do
+    GenServer.call(pid, {:render_sync, transition, activation_token}, :infinity)
   end
 
   @doc "Repaint with the screen module's newly loaded code."
@@ -174,9 +185,17 @@ defmodule Mob.Screen.Server do
     {:reply, :ok, %{state | socket: paint(state, transition, :sync)}}
   end
 
+  def handle_call({:render_sync, transition, activation_token}, _from, state) do
+    {:reply, :ok, %{state | socket: paint(state, transition, :sync, activation_token)}}
+  end
+
   @impl GenServer
   def handle_cast({:render, transition}, state) do
     {:noreply, %{state | socket: paint(state, transition)}}
+  end
+
+  def handle_cast({:render, transition, activation_token}, state) do
+    {:noreply, %{state | socket: paint(state, transition, :async, activation_token)}}
   end
 
   def handle_cast(:__mob_hot_reload__, state) do
@@ -285,10 +304,12 @@ defmodule Mob.Screen.Server do
     end
   end
 
-  defp paint(state, transition, mode \\ :async)
-  defp paint(%{render_mode: :no_render} = state, _transition, _mode), do: state.socket
+  defp paint(state, transition, mode \\ :async, activation_token \\ nil)
 
-  defp paint(state, transition, mode) do
+  defp paint(%{render_mode: :no_render} = state, _transition, _mode, _activation_token),
+    do: state.socket
+
+  defp paint(state, transition, mode, activation_token) do
     socket = ensure_safe_area(state.socket, state.socket.__mob__.platform, state.nif)
     platform = socket.__mob__.platform
     list_renderers = Map.get(socket.__mob__, :list_renderers, %{})
@@ -302,7 +323,13 @@ defmodule Mob.Screen.Server do
       |> Mob.Component.expand(self(), platform)
 
     Mob.ComponentRegistry.reconcile(self(), active_component_keys)
-    Mob.Sender.render(state.ref, tree, platform, state.nif, transition)
+
+    if activation_token && function_exported?(Mob.Sender, :render, 6) do
+      Mob.Sender.render(state.ref, tree, platform, state.nif, transition, activation_token)
+    else
+      Mob.Sender.render(state.ref, tree, platform, state.nif, transition)
+    end
+
     if mode == :sync, do: Mob.Sender.sync(:infinity)
 
     Mob.Socket.put_root_view(socket, :json_tree)

@@ -28,6 +28,21 @@ defmodule Mob.Nav.MultiStackTest do
     def handle_event("to_settings", _, socket),
       do: {:noreply, Mob.Socket.switch_tab(socket, :settings)}
 
+    def handle_event("to_settings_with_params", _, socket),
+      do:
+        {:noreply,
+         Mob.Socket.switch_tab(socket, :settings, mount_params: %{source: :first_visit})}
+
+    def handle_event("to_settings_with_other_params", _, socket),
+      do:
+        {:noreply,
+         Mob.Socket.switch_tab(socket, :settings, mount_params: %{source: :later_visit})}
+
+    def handle_event("to_broken", _, socket),
+      do:
+        {:noreply,
+         Mob.Socket.switch_tab(socket, :broken, mount_params: %{source: :never_mounted})}
+
     def handle_event("to_home", _, socket),
       do: {:noreply, Mob.Socket.switch_tab(socket, :home)}
 
@@ -54,7 +69,12 @@ defmodule Mob.Nav.MultiStackTest do
 
     @detail Mob.Nav.MultiStackTest.SettingsDetailScreen
 
-    def mount(_params, _session, socket), do: {:ok, Mob.Socket.assign(socket, :theme, :light)}
+    def mount(params, _session, socket) do
+      {:ok,
+       socket
+       |> Mob.Socket.assign(:theme, :light)
+       |> Mob.Socket.assign(:mount_source, Map.get(params, :source))}
+    end
 
     def render(assigns),
       do: %{type: :text, props: %{text: "settings #{assigns.theme}"}, children: []}
@@ -67,6 +87,13 @@ defmodule Mob.Nav.MultiStackTest do
 
     def handle_event("to_home", _, socket),
       do: {:noreply, Mob.Socket.switch_tab(socket, :home)}
+  end
+
+  defmodule BrokenScreen do
+    use Mob.Screen
+
+    def mount(_params, _session, _socket), do: {:error, :requested_mount_failure}
+    def render(_assigns), do: %{type: :text, props: %{text: "broken"}, children: []}
   end
 
   defmodule SettingsDetailScreen do
@@ -87,11 +114,13 @@ defmodule Mob.Nav.MultiStackTest do
 
     @home Mob.Nav.MultiStackTest.HomeScreen
     @settings Mob.Nav.MultiStackTest.SettingsScreen
+    @broken Mob.Nav.MultiStackTest.BrokenScreen
 
     def navigation(_) do
       tab_bar([
         stack(:home, root: @home, title: "Home"),
-        stack(:settings, root: @settings, title: "Settings")
+        stack(:settings, root: @settings, title: "Settings"),
+        stack(:broken, root: @broken, title: "Broken")
       ])
     end
   end
@@ -124,6 +153,31 @@ defmodule Mob.Nav.MultiStackTest do
     test "first switch mounts the target stack's declared root", %{screen: screen} do
       Mob.Screen.dispatch(screen, "to_settings", %{})
       assert Mob.Screen.get_current_module(screen) == SettingsScreen
+    end
+
+    test "first switch passes mount params to the target root", %{screen: screen} do
+      Mob.Screen.dispatch(screen, "to_settings_with_params", %{})
+
+      assert Mob.Screen.get_current_module(screen) == SettingsScreen
+      assert Mob.Screen.get_socket(screen).assigns.mount_source == :first_visit
+    end
+
+    test "restoring a stack preserves its original mount params", %{screen: screen} do
+      Mob.Screen.dispatch(screen, "to_settings_with_params", %{})
+      Mob.Screen.dispatch(screen, "to_home", %{})
+      Mob.Screen.dispatch(screen, "to_settings_with_other_params", %{})
+
+      assert Mob.Screen.get_current_module(screen) == SettingsScreen
+      assert Mob.Screen.get_socket(screen).assigns.mount_source == :first_visit
+    end
+
+    test "a failed first mount leaves the current navigation intact", %{screen: screen} do
+      Mob.Screen.dispatch(screen, "bump", %{})
+      Mob.Screen.dispatch(screen, "to_broken", %{})
+
+      assert Mob.Screen.get_current_module(screen) == HomeScreen
+      assert Mob.Screen.get_socket(screen).assigns.count == 1
+      assert Mob.Screen.get_nav_history(screen) == []
     end
 
     test "switching back restores the previous stack's screen", %{screen: screen} do

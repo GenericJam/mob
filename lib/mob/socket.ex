@@ -186,7 +186,7 @@ defmodule Mob.Socket do
   """
   @spec reset_to(t(), atom() | module(), map(), [{:transition, transition()}]) :: t()
   def reset_to(socket, dest, params \\ %{}, opts \\ []) do
-    transition = validate_transition!(Keyword.get(opts, :transition, :reset))
+    transition = validate_transition!(Keyword.get(opts, :transition, :reset), "reset_to/4")
     put_mob(socket, :nav_action, {:reset, dest, params, transition})
   end
 
@@ -207,19 +207,53 @@ defmodule Mob.Socket do
   # tree into the outgoing screen's view identities — a `TextField` at the same
   # position inherits the old screen's text and focus, and scroll offsets
   # survive a stack that no longer exists.
-  defp validate_transition!(transition) when transition in @valid_transitions, do: transition
+  defp validate_transition!(transition, _function) when transition in @valid_transitions,
+    do: transition
 
-  defp validate_transition!(other) do
+  defp validate_transition!(other, function) do
     raise ArgumentError,
-          "Mob.Socket.reset_to/4: invalid transition #{inspect(other)}. " <>
+          "Mob.Socket.#{function}: invalid transition #{inspect(other)}. " <>
             "Expected one of #{inspect(@valid_transitions)}."
   end
 
   @doc """
   Switch to the named tab in a tab_bar or drawer layout.
+
+  By default, switching tabs has no animation. Pass `transition: :push`,
+  `transition: :pop`, or `transition: :reset` when the tab order implies
+  directional movement or a cross-fade. `mount_params: %{...}` supplies the
+  params for the target root's first mount. A previously mounted stack ignores
+  later mount params and restores its existing screen state.
   """
   @spec switch_tab(t(), atom()) :: t()
   def switch_tab(socket, tab) when is_atom(tab) do
     put_mob(socket, :nav_action, {:switch_tab, tab})
+  end
+
+  @spec switch_tab(t(), atom(), [
+          {:transition, transition()} | {:mount_params, map()}
+        ]) :: t()
+  def switch_tab(socket, tab, opts) when is_atom(tab) and is_list(opts) do
+    transition =
+      case Keyword.fetch(opts, :transition) do
+        {:ok, value} -> validate_transition!(value, "switch_tab/3")
+        :error -> :none
+      end
+
+    case Keyword.fetch(opts, :mount_params) do
+      {:ok, mount_params} when is_map(mount_params) ->
+        put_mob(socket, :nav_action, {:switch_tab, tab, transition, mount_params})
+
+      {:ok, mount_params} ->
+        raise ArgumentError,
+              "Mob.Socket.switch_tab/3: invalid mount_params #{inspect(mount_params)}. " <>
+                "Expected a map."
+
+      :error when transition == :none ->
+        switch_tab(socket, tab)
+
+      :error ->
+        put_mob(socket, :nav_action, {:switch_tab, tab, transition})
+    end
   end
 end
