@@ -10,7 +10,33 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.7.35] - 2026-08-30
+
+### Added
+- **Coordinate taps report observed effect; pixel sampling for rendered
+  colour (iOS harness).** `Mob.Test.tap_xy/3` returns `:ok` only when a UI
+  event actually reached the BEAM within the settle window; otherwise
+  `{:error, :no_view_at_point}`, `{:error, :no_element_at_point}` (simulator),
+  or `{:error, :no_effect}` — never a phantom success. New
+  `Mob.Test.sample_color/2` samples real rendered pixels by element id or
+  rect (debug builds only) for exact-colour assertions. The effect counter
+  is process-wide: one driver per device at a time. (#80)
+
 ### Fixed
+- **iOS honors layout `weight` in stacks.** Previously parsed only by the
+  Android bridge; a weighted child on iOS hugged its content. Now every node
+  type (including `:spacer`) expands to fill remaining space along a
+  column/row's axis, the expanded frame is tappable, and the frame registry
+  reports expanded geometry. Multiple weighted children divide remaining
+  space evenly on iOS; Android additionally honors unequal numeric ratios —
+  see the components guide. (#98)
+- **The initial transition survives mount-time repaints.** The router now
+  reserves the navigation transition at activation and the first committed
+  frame for that screen consumes it, so a screen that repaints from `mount/3`
+  (the standard data-loading pattern) no longer races its `:none` frame ahead
+  of the animated one — previously a lost or doubled transition. Makes
+  `reset_to/4`'s directional `:push`/`:pop` wipes reliable for screens that
+  load data on mount. (#103)
 - **Cold-start launch notifications are no longer dropped (Android + iOS).**
   `mob_set_launch_notification` (Android) and `mob_set_launch_notification_json`
   (iOS) bailed out when called before `nif_load` had created their mutex — which
@@ -22,6 +48,17 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   pre-mutex pattern `mob_set_opened_document` has always used — safe because
   nothing reads the global until `take_launch_notification`, which can only
   run post-`nif_load`.
+
+### Documentation
+- Guides realigned with the screen-process architecture that landed in
+  0.7.33: navigation (multi-stack/tab state, no-chrome-yet status and the
+  `:tab_bar` widget interim path), screen lifecycle, testing
+  (`Mob.ScreenCase`, `Mob.Test.settle/2`, tap-effect contract, colour
+  sampling), and getting-started examples corrected to APIs that exist
+  (`Mob.Socket.push_screen/2,3`; taps arrive as `{:tap, tag}` in
+  `handle_info/2`). The agentic coding guide is split into "working with
+  one agent" and "working with agent teams". Surface-matrix corrections and
+  hexdocs-themed mermaid diagrams. (#92, #91, #105)
 
 ## [0.7.34] - 2026-08-29
 
