@@ -284,11 +284,29 @@ If the state didn't change, the tap didn't reach a handler — wrong tag, a
 `handle_info/2` clause that doesn't match, or a stale handle. That is a
 first-class diagnostic signal, not a flake to retry.
 
-One assumption to respect: effect detection is **process-wide**. You are
-asserting "the state changed after my tap", and anything else driving the same
-app inside that window — another agent, a timer, a device event — can
-false-positive the check. Exactly one agent drives a given device at a time
-(see [Working with agent teams](#working-with-agent-teams)).
+Coordinate driving is held to the same contract by the framework itself:
+`Mob.Test.tap_xy/3` (and `tap_id/2`, which inherits its contract) returns
+`:ok` only when **the app reacted** — an event reached the BEAM within 300 ms
+of the tap. Everything else is an honest error, never a "probably worked":
+
+- `{:error, :no_view_at_point}` — hit-test found nothing at that coordinate
+- `{:error, :no_element_at_point}` — iOS simulator: a view is there but no
+  accessibility element to activate
+- `{:error, :no_effect}` — the OS accepted the input but no handler ran
+
+Read `Mob.Test.tap_xy/3` before treating a non-`:ok` as a test failure: a
+SwiftUI `Box`/`Row`/`Column` with `on_tap:` has no activate action on the
+simulator, and on a physical iOS device coordinate injection currently
+delivers no touch at all — both legitimately report `{:error, :no_effect}`,
+and `tap/2` (by tag) is the way to drive them.
+
+One assumption to respect: effect detection is **process-wide**. Both the
+state-change assertion and `tap_xy`'s 300 ms effect window count *any* Mob
+event that reaches the BEAM — another agent, a timer, a scroll notification —
+so concurrent activity can false-positive either check. The harness is assumed
+serial: one synthetic interaction in flight at a time, and exactly one agent
+driving a given device (see
+[Working with agent teams](#working-with-agent-teams)).
 
 ### Match the evidence to the question
 
@@ -301,10 +319,19 @@ one, not a screenshot of everything:
   overlap?") — `Mob.Test.element_frames/1` and `frame/2` give exact
   `{x, y, w, h}` per `:id`, no screenshot required. `scroll_info/2` for
   scroll positions.
-- **Exact appearance** ("is it the right shade?", "did the font apply?") —
-  a screenshot (`Mob.Test.screenshot/2`), compared with tolerance. Pixel
-  colors vary by device profile, scale and alpha compositing; treat exact
-  equality as a bug in the test.
+- **Exact color** ("is this Box actually `:primary`?", "did the theme drop
+  the background?") — `Mob.Test.sample_color/2`: real rendered pixels for one
+  element's frame (or an explicit rect), reduced to
+  `%{average:, dominant:, dominant_share:, ...}` as `0xAARRGGBB` integers.
+  Assert on `:dominant` for flat fills, `:average` for gradients/glass, and
+  compare regions against each other to catch a theme regression (two
+  different tokens sampling identical is the bug). iOS-only and debug-build
+  only — a release build deliberately ships no sampling probe.
+- **Holistic appearance** ("does this screen look right?", "did the font
+  apply?") — a screenshot (`Mob.Test.screenshot/2`), compared with tolerance.
+  Pixel colors vary by device profile, scale and alpha compositing; treat
+  exact equality across a whole screenshot as a bug in the test. For a
+  single color *decision*, prefer `sample_color/2` above.
 - **Transitions and animation** ("did the push slide?") — a still proves
   nothing about motion. Use the MCP `record_video` / `stop_recording`
   tools, or capture a timed sequence of `screenshot/2` frames and compare.
