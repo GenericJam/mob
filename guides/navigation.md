@@ -152,7 +152,7 @@ same stack operation represents directional movement, such as custom tabs:
 Mob.Socket.reset_to(socket, MyApp.PortfolioScreen, %{}, transition: :push)
 ```
 
-### `switch_tab/2`
+### `switch_tab/2,3`
 
 Switch to a named stack in a tab bar or drawer layout:
 
@@ -162,8 +162,29 @@ Mob.Socket.switch_tab(socket, :settings)
 
 The first switch to a stack mounts its declared `:root`; later switches restore
 the stack exactly as you left it. Switching to the stack you are already on, or
-to a name no stack declares, is a no-op. A tab switch is a swap, not a move
-along a stack, so it renders with no push/pop animation.
+to a name no stack declares, is a no-op. By default a tab switch is an
+unanimated swap. Apps with ordered tabs can supply a directional transition:
+
+```elixir
+Mob.Socket.switch_tab(socket, :portfolio, transition: :push)
+Mob.Socket.switch_tab(socket, :home, transition: :pop)
+```
+
+The transition changes only the animation; each tab still retains its own
+screen and history stack.
+
+When a tab root needs session or launch data, pass it on the first switch:
+
+```elixir
+Mob.Socket.switch_tab(socket, :home,
+  transition: :push,
+  mount_params: %{session: session}
+)
+```
+
+`mount_params` must be a map. They are used only when the target stack has not
+yet mounted. Switching back to an existing stack restores its original screen
+and state; later `mount_params` do not replace the params it mounted with.
 
 ## Tabs and multi-stack state
 
@@ -202,7 +223,7 @@ The framework automatically picks the right animation based on the navigation ac
 - **Push** — slide in from right (iOS) / slide up (Android)
 - **Pop** — reverse slide
 - **Reset** — cross-fade (no directional animation, no back history)
-- **Tab switch** — none (a swap, not a move along a stack)
+- **Tab switch** — none by default; `switch_tab/3` can request push, pop, or reset
 
 `reset_to/4` can override only the animation with `transition: :push` or
 `transition: :pop`; it still discards navigation history. Any other transition
@@ -211,6 +232,11 @@ value raises `ArgumentError` — including `:none`, which native would treat as
 identities. A navigation's animation survives coalescing: an ordinary re-render
 (a timer tick, a component update) queued behind a push cannot swallow the
 push's animation.
+
+`switch_tab/3` accepts the same validated transition values (`:push`, `:pop`,
+or `:reset`) and an optional `mount_params` map. Unlike `reset_to/4`, its
+legacy `switch_tab/2` form deliberately uses `:none`, preserving the
+unanimated tab-swap behavior.
 
 ## Passing data on pop
 

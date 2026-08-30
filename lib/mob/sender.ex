@@ -50,10 +50,11 @@ defmodule Mob.Sender do
   `sync/1` that merely replied would return before the frame was committed.
   Mailbox order is the wrong tool here, and it looks like the right one.
 
-  `Mob.Router` uses `activate/2` before asking a screen to paint. Activation is
-  synchronous and carries the navigation transition as a one-shot reservation,
-  so an ordinary repaint from the newly active screen cannot race ahead and
-  erase the animation. Whichever tree arrives first consumes the reservation.
+  `Mob.Router` uses an activation-frame token before asking a screen to paint.
+  Activation is synchronous and carries the navigation transition; only the
+  router-requested paint bearing that token may cross the boundary. A timer
+  repaint that began while the screen was parked is therefore dropped even if
+  its cast reaches the sender after activation.
 
   `Mob.Router` uses `sync/1` on its `handle_call` paths to keep the guarantee
   `Mob.Test` documents for the synchronous navigation helpers. Note the ordering
@@ -73,7 +74,7 @@ defmodule Mob.Sender do
   """
   @type screen_ref :: reference() | atom()
 
-  defstruct active: nil, pending: %{}, reserved_transition: nil
+  defstruct active: nil, pending: %{}, reserved_transition: nil, activation_gate: nil
 
   @doc "Start the sender. Named, so there is exactly one."
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -134,6 +135,14 @@ defmodule Mob.Sender do
     if running?(), do: GenServer.call(__MODULE__, {:activate, ref, transition}), else: :ok
   end
 
+  @doc false
+  @spec activate_frame(screen_ref(), atom()) :: reference() | nil
+  def activate_frame(ref, transition) do
+    if running?() do
+      GenServer.call(__MODULE__, {:activate_frame, ref, transition})
+    end
+  end
+
   @doc """
   Queue `tree` for commit on behalf of screen `ref`.
 
@@ -143,6 +152,15 @@ defmodule Mob.Sender do
   @spec render(screen_ref(), map(), atom(), module() | atom(), atom()) :: :ok
   def render(ref, tree, platform, nif, transition) do
     GenServer.cast(__MODULE__, {:render, ref, tree, platform, nif, transition})
+  end
+
+  @doc false
+  @spec render(screen_ref(), map(), atom(), module() | atom(), atom(), reference() | nil) :: :ok
+  def render(ref, tree, platform, nif, transition, activation_token) do
+    GenServer.cast(
+      __MODULE__,
+      {:render, ref, tree, platform, nif, transition, activation_token}
+    )
   end
 
   @doc """
@@ -168,7 +186,27 @@ defmodule Mob.Sender do
   @impl GenServer
   def handle_call({:activate, ref, transition}, _from, state) do
     reserved_transition = if transition == :none, do: nil, else: {ref, transition}
-    {:reply, :ok, %{state | active: ref, reserved_transition: reserved_transition}}
+
+    # An inactive screen may have queued a repaint just before activation.
+    # That tree predates the navigation boundary and must not become the first
+    # frame of the newly active screen; the router requests a fresh paint next.
+    pending = Map.delete(state.pending, ref)
+
+    {:reply, :ok,
+     %{state | active: ref, pending: pending, reserved_transition: reserved_transition}}
+  end
+
+  def handle_call({:activate_frame, ref, transition}, _from, state) do
+    token = make_ref()
+
+    state =
+      state
+      |> Map.put(:active, ref)
+      |> Map.put(:pending, Map.delete(state.pending, ref))
+      |> Map.put(:reserved_transition, nil)
+      |> Map.put(:activation_gate, {ref, token, transition})
+
+    {:reply, token, state}
   end
 
   def handle_call(:sync, _from, state) do
@@ -185,6 +223,27 @@ defmodule Mob.Sender do
   end
 
   def handle_cast({:render, ref, tree, platform, nif, transition}, state) do
+    handle_cast({:render, ref, tree, platform, nif, transition, nil}, state)
+  end
+
+  def handle_cast(
+        {:render, ref, tree, platform, nif, transition, activation_token},
+        %{activation_gate: {ref, expected_token, reserved}} = state
+      ) do
+    if activation_token == expected_token do
+      transition = if transition == :none, do: reserved, else: transition
+      pending = Map.put(state.pending, ref, {tree, platform, nif, transition})
+      send(self(), :flush)
+      {:noreply, %{state | pending: pending, activation_gate: nil}}
+    else
+      # This render began before the router activated the screen. The router's
+      # tokened paint follows it from the same screen process, so dropping it
+      # prevents a stale target frame from consuming the navigation boundary.
+      {:noreply, state}
+    end
+  end
+
+  def handle_cast({:render, ref, tree, platform, nif, transition, _activation_token}, state) do
     # Overwrite rather than append: a newer tree for the same screen supersedes
     # the one waiting, which is the whole point of queueing here. The transition
     # is the exception — it describes the navigation animation for this frame,

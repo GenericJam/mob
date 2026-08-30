@@ -172,4 +172,53 @@ defmodule Mob.SocketTest do
       end
     end
   end
+
+  describe "switch_tab/3" do
+    test "keeps the legacy action shape when no transition is requested" do
+      socket = Socket.new(MyScreen) |> Socket.switch_tab(:settings)
+      assert socket.__mob__.nav_action == {:switch_tab, :settings}
+
+      socket = Socket.new(MyScreen) |> Socket.switch_tab(:settings, [])
+      assert socket.__mob__.nav_action == {:switch_tab, :settings}
+    end
+
+    test "stores a validated directional transition" do
+      for transition <- [:push, :pop, :reset] do
+        socket = Socket.new(MyScreen) |> Socket.switch_tab(:settings, transition: transition)
+        assert socket.__mob__.nav_action == {:switch_tab, :settings, transition}
+      end
+    end
+
+    test "stores mount params with the default or an explicit transition" do
+      socket = Socket.new(MyScreen) |> Socket.switch_tab(:settings, mount_params: %{user_id: 7})
+
+      assert socket.__mob__.nav_action ==
+               {:switch_tab, :settings, :none, %{user_id: 7}}
+
+      socket =
+        Socket.new(MyScreen)
+        |> Socket.switch_tab(:settings, transition: :push, mount_params: %{user_id: 7})
+
+      assert socket.__mob__.nav_action ==
+               {:switch_tab, :settings, :push, %{user_id: 7}}
+    end
+
+    test "rejects non-map mount params" do
+      assert_raise ArgumentError, ~r/invalid mount_params \[user_id: 7\]/, fn ->
+        Socket.new(MyScreen) |> Socket.switch_tab(:settings, mount_params: [user_id: 7])
+      end
+    end
+
+    test "rejects an invalid transition" do
+      assert_raise ArgumentError, ~r/Mob.Socket.switch_tab\/3: invalid transition :puhs/, fn ->
+        Socket.new(MyScreen) |> Socket.switch_tab(:settings, transition: :puhs)
+      end
+    end
+
+    test "rejects an explicit :none transition" do
+      assert_raise ArgumentError, ~r/invalid transition :none/, fn ->
+        Socket.new(MyScreen) |> Socket.switch_tab(:settings, transition: :none)
+      end
+    end
+  end
 end

@@ -362,8 +362,25 @@ defmodule Mob.Router do
   # The single place `current` changes. The sender is told here and nowhere
   # else, so only the screen the user is looking at can commit a frame.
   defp make_current(state, entry, transition) do
-    Mob.Sender.activate(entry.ref, transition)
-    %{state | current: entry}
+    activation_token =
+      if activation_frame_supported?() do
+        Mob.Sender.activate_frame(entry.ref, transition)
+      else
+        Mob.Sender.activate(entry.ref, transition)
+        nil
+      end
+
+    %{state | current: Map.put(entry, :activation_token, activation_token)}
+  end
+
+  # During a code push modules are loaded independently. Only enter the token
+  # protocol once every participant can carry it end-to-end; otherwise use the
+  # established activation/render API until the next navigation.
+  defp activation_frame_supported? do
+    function_exported?(Mob.Sender, :activate_frame, 2) and
+      function_exported?(Mob.Sender, :render, 6) and
+      function_exported?(Mob.Screen.Server, :render, 3) and
+      function_exported?(Mob.Screen.Server, :render_sync, 3)
   end
 
   defp all_entries(state) do
@@ -441,6 +458,15 @@ defmodule Mob.Router do
   end
 
   defp substitute(state, dead_pid, new_entry) do
+    new_entry =
+      case state.current do
+        %{pid: ^dead_pid} = current ->
+          Map.put(new_entry, :activation_token, Map.get(current, :activation_token))
+
+        _other ->
+          new_entry
+      end
+
     replace = fn
       %{pid: ^dead_pid} -> new_entry
       other -> other
@@ -528,17 +554,39 @@ defmodule Mob.Router do
 
   defp do_paint(_entry, _transition, %{render_mode: :no_render}, _mode), do: :ok
 
-  defp do_paint(entry, transition, _state, :sync) do
+  defp do_paint(entry, transition, state, :sync) do
     # Unprotected, this is the other way a screen crash killed the owner: the
     # user's render/1 runs inside the screen, and a raise there exits this call.
-    case safe_call(fn -> Mob.Screen.Server.render_sync(entry.pid, transition) end) do
+    token = activation_token(entry, state)
+
+    case safe_call(fn -> render_screen_sync(entry.pid, transition, token) end) do
       {:ok, _} -> :ok
       {:exit, _reason} -> :ok
     end
   end
 
-  defp do_paint(entry, transition, _state, :async),
-    do: Mob.Screen.Server.render(entry.pid, transition)
+  defp do_paint(entry, transition, state, :async) do
+    token = activation_token(entry, state)
+
+    if token && function_exported?(Mob.Screen.Server, :render, 3) do
+      Mob.Screen.Server.render(entry.pid, transition, token)
+    else
+      Mob.Screen.Server.render(entry.pid, transition)
+    end
+  end
+
+  defp render_screen_sync(pid, transition, token) do
+    if token && function_exported?(Mob.Screen.Server, :render_sync, 3) do
+      Mob.Screen.Server.render_sync(pid, transition, token)
+    else
+      Mob.Screen.Server.render_sync(pid, transition)
+    end
+  end
+
+  defp activation_token(%{pid: pid}, %{current: %{pid: pid} = current}),
+    do: Map.get(current, :activation_token)
+
+  defp activation_token(_entry, _state), do: nil
 
   # Drop the entry from tracking BEFORE stopping, so the exit we asked for is
   # recognised as deliberate rather than restarted as a crash.
@@ -644,28 +692,16 @@ defmodule Mob.Router do
   end
 
   defp apply_nav_action({:switch_tab, tab}, state, mode) do
-    case Mob.Nav.switch(state.nav, tab, state.current) do
-      {:switched, nav, entry} ->
-        state = make_current(%{state | nav: nav}, entry, :none)
-        do_paint(entry, :none, state, mode)
-        state
+    apply_tab_switch(tab, :none, state, mode)
+  end
 
-      {:mount_root, nav, root_module} ->
-        # Start first, mutate after. Switching nav before the mount could fail
-        # leaves navigation pointing at a stack whose screen never started.
-        case start_screen(root_module, %{}, state) do
-          {:ok, entry, state} ->
-            state = make_current(%{state | nav: nav}, entry, :none)
-            do_paint(entry, :none, state, mode)
-            state
+  defp apply_nav_action({:switch_tab, tab, transition}, state, mode) do
+    apply_tab_switch(tab, transition, %{}, state, mode)
+  end
 
-          {:error, _reason} ->
-            repaint_current(state, mode)
-        end
-
-      :noop ->
-        repaint_current(state, mode)
-    end
+  defp apply_nav_action({:switch_tab, tab, transition, mount_params}, state, mode)
+       when is_map(mount_params) do
+    apply_tab_switch(tab, transition, mount_params, state, mode)
   end
 
   # A shape this router does not know. Reachable during a hot code push, where
@@ -681,6 +717,35 @@ defmodule Mob.Router do
     )
 
     repaint_current(state, mode)
+  end
+
+  defp apply_tab_switch(tab, transition, state, mode) do
+    apply_tab_switch(tab, transition, %{}, state, mode)
+  end
+
+  defp apply_tab_switch(tab, transition, mount_params, state, mode) do
+    case Mob.Nav.switch(state.nav, tab, state.current) do
+      {:switched, nav, entry} ->
+        state = make_current(%{state | nav: nav}, entry, transition)
+        do_paint(entry, transition, state, mode)
+        state
+
+      {:mount_root, nav, root_module} ->
+        # Start first, mutate after. Switching nav before the mount could fail
+        # leaves navigation pointing at a stack whose screen never started.
+        case start_screen(root_module, mount_params, state) do
+          {:ok, entry, state} ->
+            state = make_current(%{state | nav: nav}, entry, transition)
+            do_paint(entry, transition, state, mode)
+            state
+
+          {:error, _reason} ->
+            repaint_current(state, mode)
+        end
+
+      :noop ->
+        repaint_current(state, mode)
+    end
   end
 
   defp push_resolved(new_module, mount_params, state, mode) do

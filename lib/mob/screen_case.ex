@@ -208,7 +208,9 @@ defmodule Mob.ScreenCase do
       (`{:push, Dest, _}`, `{:reset, Dest, _}`, `{:reset, Dest, _, _}`,
       `{:pop_to, Dest}`) return
       `Dest`; destinationless ones (`{:pop}`, `{:pop_to_root}`,
-      `{:switch_tab, tab}`) return the raw action unchanged.
+      `{:switch_tab, tab}`, `{:switch_tab, tab, transition}`,
+      `{:switch_tab, tab, transition, mount_params}`) return the raw
+      action unchanged.
     * on device: the screen currently showing (`Mob.Test.screen/1`).
   """
   @spec navigated_to(View.t()) :: term() | nil

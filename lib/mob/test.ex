@@ -372,6 +372,47 @@ defmodule Mob.Test do
     end
   end
 
+  @doc """
+  Switch to a named tab stack. Synchronous.
+
+  Pass `transition: :push`, `transition: :pop`, or `transition: :reset` to
+  exercise the same directional animation as `Mob.Socket.switch_tab/3`.
+  `mount_params: %{...}` is passed to a target root only on its first mount.
+  """
+  @spec switch_tab(node(), atom(), [{:transition, atom()} | {:mount_params, map()}]) :: :ok
+  def switch_tab(node, tab, opts \\ []) do
+    transition =
+      case Keyword.fetch(opts, :transition) do
+        :error -> :none
+        {:ok, value} -> validate_tab_transition!(value)
+      end
+
+    case Keyword.fetch(opts, :mount_params) do
+      {:ok, mount_params} when is_map(mount_params) ->
+        nav(node, {:switch_tab, tab, transition, mount_params})
+
+      {:ok, mount_params} ->
+        raise ArgumentError,
+              "Mob.Test.switch_tab/3: invalid mount_params #{Kernel.inspect(mount_params)}. " <>
+                "Expected a map."
+
+      :error when transition == :none ->
+        nav(node, {:switch_tab, tab})
+
+      :error ->
+        nav(node, {:switch_tab, tab, transition})
+    end
+  end
+
+  defp validate_tab_transition!(transition) when transition in [:push, :pop, :reset],
+    do: transition
+
+  defp validate_tab_transition!(transition) do
+    raise ArgumentError,
+          "Mob.Test.switch_tab/3: invalid transition #{Kernel.inspect(transition)}. " <>
+            "Expected one of [:push, :pop, :reset]."
+  end
+
   # ── Lists ─────────────────────────────────────────────────────────────────────
 
   @doc """

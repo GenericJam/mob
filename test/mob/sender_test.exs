@@ -177,6 +177,77 @@ defmodule Mob.SenderTest do
       assert {:set_transition, :push} in RecordingNif.calls()
     end
 
+    test "activation drops a stale pending repaint for the newly active screen" do
+      state = %Sender{active: :home}
+
+      {:noreply, state} =
+        Sender.handle_cast(
+          {:render, :settings, tree("stale"), :ios, RecordingNif, :none},
+          state
+        )
+
+      {:reply, :ok, state} =
+        Sender.handle_call({:activate, :settings, :push}, self(), state)
+
+      assert state.pending == %{}
+
+      {:noreply, state} = Sender.handle_info(:flush, state)
+      assert committed_texts() == []
+
+      {:noreply, state} =
+        Sender.handle_cast(
+          {:render, :settings, tree("fresh"), :ios, RecordingNif, :none},
+          state
+        )
+
+      {:noreply, _state} = Sender.handle_info(:flush, state)
+      assert [json] = committed_texts()
+      assert json =~ "fresh"
+      assert {:set_transition, :push} in RecordingNif.calls()
+    end
+
+    test "a pre-activation render arriving late cannot consume the fresh frame" do
+      state = %Sender{active: :home}
+
+      {:reply, token, state} =
+        Sender.handle_call({:activate_frame, :settings, :push}, self(), state)
+
+      assert is_reference(token)
+
+      {:noreply, state} =
+        Sender.handle_cast(
+          {:render, :settings, tree("stale"), :ios, RecordingNif, :none, nil},
+          state
+        )
+
+      assert state.pending == %{}
+      assert state.activation_gate == {:settings, token, :push}
+
+      {:noreply, state} =
+        Sender.handle_cast(
+          {:render, :settings, tree("fresh"), :ios, RecordingNif, :push, token},
+          state
+        )
+
+      {:noreply, state} = Sender.handle_info(:flush, state)
+
+      assert state.activation_gate == nil
+      assert [json] = committed_texts()
+      assert json =~ "fresh"
+      refute json =~ "stale"
+      assert {:set_transition, :push} in RecordingNif.calls()
+    end
+
+    test "activation upgrades sender state loaded before the gate field existed" do
+      old_state = Map.delete(%Sender{active: :home}, :activation_gate)
+
+      {:reply, token, state} =
+        Sender.handle_call({:activate_frame, :settings, :push}, self(), old_state)
+
+      assert state.active == :settings
+      assert state.activation_gate == {:settings, token, :push}
+    end
+
     test "the activated transition survives a second ordinary paint before flush" do
       state = %Sender{active: :home}
 
