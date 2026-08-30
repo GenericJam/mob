@@ -180,6 +180,29 @@ static void mob_handle_meta(int handle, uint64_t *seq_out, uint64_t *ts_out) {
 }
 static char g_transition[16] = "none";
 
+// ── UI-event observation counter (test-harness honesty) ──────────────────────
+//
+// Every user-originated event we hand to the BEAM bumps this counter. The
+// synthetic-input NIFs sample it before and after injecting a touch so they can
+// answer "did the app actually react?" instead of "did the injection API not
+// return an error?". Without it tap_xy reports :ok whenever the private input
+// API accepts the event — which on a physical device is always, even when the
+// touch lands on nothing and no handler runs.
+//
+// Bumped from the send helpers rather than from the SwiftUI callbacks so it
+// covers every route into the BEAM (tap, focus, blur, submit, select, change).
+static _Atomic uint64_t g_ui_event_seq;
+
+#if !MOB_RELEASE // only the harness reads it; the writers stay unconditional
+static uint64_t mob_ui_event_seq(void) {
+    return atomic_load_explicit(&g_ui_event_seq, memory_order_relaxed);
+}
+#endif
+
+static void mob_note_ui_event(void) {
+    atomic_fetch_add_explicit(&g_ui_event_seq, 1, memory_order_relaxed);
+}
+
 // Called from node onTap blocks — routes tap to BEAM via enif_send.
 static void mob_send_tap(int handle) {
     enif_mutex_lock(tap_mutex);
@@ -191,6 +214,7 @@ static void mob_send_tap(int handle) {
     ERL_NIF_TERM tag = tap_handles[handle].tag;
     enif_mutex_unlock(tap_mutex);
 
+    mob_note_ui_event();
     ErlNifEnv *msg_env = enif_alloc_env();
     ERL_NIF_TERM msg =
         enif_make_tuple2(msg_env, enif_make_atom(msg_env, "tap"), enif_make_copy(msg_env, tag));
@@ -211,6 +235,7 @@ static void mob_send_event(int handle, const char *atom) {
     ERL_NIF_TERM tag = tap_handles[handle].tag;
     enif_mutex_unlock(tap_mutex);
 
+    mob_note_ui_event();
     ErlNifEnv *msg_env = enif_alloc_env();
     ERL_NIF_TERM msg =
         enif_make_tuple2(msg_env, enif_make_atom(msg_env, atom), enif_make_copy(msg_env, tag));
@@ -560,6 +585,7 @@ static void mob_send_change(int handle, ERL_NIF_TERM value_term) {
     ERL_NIF_TERM tag = tap_handles[handle].tag;
     enif_mutex_unlock(tap_mutex);
 
+    mob_note_ui_event();
     ErlNifEnv *msg_env = enif_alloc_env();
     ERL_NIF_TERM msg =
         enif_make_tuple3(msg_env, enif_make_atom(msg_env, "change"), enif_make_copy(msg_env, tag),
@@ -3857,7 +3883,8 @@ static void ax_walk(void *elem, ErlNifEnv *env, ERL_NIF_TERM *list, int depth) {
 //   - ui_tree returns a flat list of accessibility leaves; useful when an
 //     agent wants the same view of the world VoiceOver/XCUITest see.
 //   - ui_view_tree returns the full UIView hierarchy as a nested map,
-//     including non-accessible containers, with frames in window coords.
+//     including non-accessible containers, with frames in window coords and
+//     the colours actually painted (bg_color / text_color, 0xAARRGGBB).
 //     Strict superset of what AX exposes — class names, hidden subviews,
 //     things AX wouldn't surface.
 
@@ -3902,6 +3929,142 @@ static NSString *extract_view_text(UIView *view) {
     return nil;
 }
 
+// ── Drawn colour extraction for ui_view_tree ─────────────────────────────────
+//
+// Inverse of color_from_argb: packs a resolved UIColor into the repo's
+// canonical 0xAARRGGBB integer (guides/theming.md — alpha first, NOT CSS
+// #RRGGBBAA). Returns the atom nil when there is no colour, or when the colour
+// is a pattern (or otherwise unconvertible) one with no single RGBA value.
+//
+// Must run on the main thread: dynamic colours (UIColor.labelColor, anything
+// from an asset catalog) resolve against the current trait collection.
+static ERL_NIF_TERM argb_term_from_uicolor(ErlNifEnv *env, UIColor *color) {
+    if (!color)
+        return enif_make_atom(env, "nil");
+    CGFloat r = 0, g = 0, b = 0, a = 0;
+    if (![color getRed:&r green:&g blue:&b alpha:&a])
+        return enif_make_atom(env, "nil");
+    // Wide-gamut (Display P3) colours can land outside 0..1 once converted to
+    // sRGB components; clamp so the packed byte is always in range.
+    CGFloat comps[4] = {a, r, g, b};
+    unsigned long argb = 0;
+    for (int i = 0; i < 4; i++) {
+        CGFloat c = comps[i] < 0 ? 0 : (comps[i] > 1 ? 1 : comps[i]);
+        argb = (argb << 8) | (unsigned long)(c * 255.0 + 0.5);
+    }
+    return enif_make_ulong(env, argb);
+}
+
+// ── Where the paint actually lives ───────────────────────────────────────────
+//
+// UIKit puts colour on the view (`UILabel.textColor`, `UIView.backgroundColor`).
+// SwiftUI mostly doesn't: `.background(Color, in: shape)` and `.foregroundColor`
+// (which is what `MobRootView` uses for every Box and Text) go through SwiftUI's
+// own renderer, and the resulting colour lands on a CALayer — usually a
+// CAShapeLayer fill — hanging off a structural view whose own backgroundColor
+// stays nil. Reading only the view is why a 443-node dump came back with two
+// colours, both system chrome.
+//
+// So each node harvests from its own layer subtree as well. A view's
+// `layer.sublayers` includes its subviews' layers; those are excluded so a
+// container never claims a child's paint as its own.
+
+// Depth cap: SwiftUI stacks a handful of layers per view, never dozens. Bounding
+// the walk keeps ui_view_tree's cost linear in views, not in the whole layer graph.
+#define MOB_LAYER_WALK_DEPTH 6
+
+static BOOL mob_all_gradient_stops_equal(CAGradientLayer *gradient) {
+    if (gradient.colors.count < 2)
+        return YES;
+    id first = gradient.colors.firstObject;
+    for (id c in gradient.colors) {
+        if (!CGColorEqualToColor((__bridge CGColorRef)c, (__bridge CGColorRef)first))
+            return NO;
+    }
+    return YES;
+}
+
+// The single colour this layer paints, or NULL. A gradient with distinct stops
+// has no single colour, so it reports none rather than inventing one from a stop.
+static CGColorRef mob_layer_fill_color(CALayer *layer) {
+    if ([layer isKindOfClass:[CAShapeLayer class]]) {
+        CGColorRef fill = ((CAShapeLayer *)layer).fillColor;
+        if (fill && CGColorGetAlpha(fill) > 0)
+            return fill;
+    }
+    if ([layer isKindOfClass:[CAGradientLayer class]]) {
+        CAGradientLayer *gradient = (CAGradientLayer *)layer;
+        if (gradient.colors.count && mob_all_gradient_stops_equal(gradient))
+            return (__bridge CGColorRef)gradient.colors.firstObject;
+    }
+    if (layer.backgroundColor && CGColorGetAlpha(layer.backgroundColor) > 0)
+        return layer.backgroundColor;
+    return NULL;
+}
+
+static CGColorRef mob_layer_text_color(CALayer *layer) {
+    if ([layer isKindOfClass:[CATextLayer class]])
+        return ((CATextLayer *)layer).foregroundColor;
+    return NULL;
+}
+
+typedef CGColorRef (*MobLayerColorFn)(CALayer *);
+
+// First colour `probe` finds in this layer subtree, skipping layers owned by
+// subviews (they are visited as their own nodes).
+static CGColorRef mob_walk_layers(CALayer *layer, NSSet *subviewLayers, MobLayerColorFn probe,
+                                  int depth) {
+    if (!layer || depth > MOB_LAYER_WALK_DEPTH)
+        return NULL;
+    CGColorRef own = probe(layer);
+    if (own)
+        return own;
+    for (CALayer *sub in layer.sublayers) {
+        if ([subviewLayers containsObject:sub])
+            continue;
+        CGColorRef found = mob_walk_layers(sub, subviewLayers, probe, depth + 1);
+        if (found)
+            return found;
+    }
+    return NULL;
+}
+
+static NSSet *mob_subview_layers(UIView *view) {
+    NSMutableSet *layers = [NSMutableSet setWithCapacity:view.subviews.count];
+    for (UIView *sub in view.subviews) {
+        if (sub.layer)
+            [layers addObject:sub.layer];
+    }
+    return layers;
+}
+
+static ERL_NIF_TERM extract_view_bg_color(ErlNifEnv *env, UIView *view) {
+    if (view.backgroundColor && CGColorGetAlpha(view.backgroundColor.CGColor) > 0)
+        return argb_term_from_uicolor(env, view.backgroundColor);
+    CGColorRef painted =
+        mob_walk_layers(view.layer, mob_subview_layers(view), mob_layer_fill_color, 0);
+    if (painted)
+        return argb_term_from_uicolor(env, [UIColor colorWithCGColor:painted]);
+    return enif_make_atom(env, "nil");
+}
+
+static ERL_NIF_TERM extract_view_text_color(ErlNifEnv *env, UIView *view) {
+    if ([view isKindOfClass:[UILabel class]])
+        return argb_term_from_uicolor(env, ((UILabel *)view).textColor);
+    if ([view isKindOfClass:[UITextField class]])
+        return argb_term_from_uicolor(env, ((UITextField *)view).textColor);
+    if ([view isKindOfClass:[UITextView class]])
+        return argb_term_from_uicolor(env, ((UITextView *)view).textColor);
+    if ([view isKindOfClass:[UIButton class]])
+        return argb_term_from_uicolor(env,
+                                      [(UIButton *)view titleColorForState:UIControlStateNormal]);
+    CGColorRef painted =
+        mob_walk_layers(view.layer, mob_subview_layers(view), mob_layer_text_color, 0);
+    if (painted)
+        return argb_term_from_uicolor(env, [UIColor colorWithCGColor:painted]);
+    return enif_make_atom(env, "nil");
+}
+
 static ERL_NIF_TERM build_view_node(ErlNifEnv *env, UIView *view, int depth) {
     if (!view || depth > 50)
         return enif_make_atom(env, "nil");
@@ -3922,13 +4085,24 @@ static ERL_NIF_TERM build_view_node(ErlNifEnv *env, UIView *view, int depth) {
         children = enif_make_list_cell(env, child, children);
     }
 
-    ERL_NIF_TERM keys[5] = {enif_make_atom(env, "type"), enif_make_atom(env, "label"),
-                            enif_make_atom(env, "value"), enif_make_atom(env, "frame"),
-                            enif_make_atom(env, "children")};
-    ERL_NIF_TERM vals[5] = {enif_make_atom(env, type_str), nsstring_to_term(env, text),
-                            nsstring_to_term(env, value), frame, children};
+    // `class` is the concrete UIView subclass. On SwiftUI it's the only thing
+    // that says what a node actually is (`type` collapses everything unknown to
+    // "view"), and it's what tells you which renderer drew a node when a colour
+    // comes back nil.
+    ERL_NIF_TERM keys[8] = {enif_make_atom(env, "type"),       enif_make_atom(env, "class"),
+                            enif_make_atom(env, "label"),      enif_make_atom(env, "value"),
+                            enif_make_atom(env, "frame"),      enif_make_atom(env, "bg_color"),
+                            enif_make_atom(env, "text_color"), enif_make_atom(env, "children")};
+    ERL_NIF_TERM vals[8] = {enif_make_atom(env, type_str),
+                            nsstring_to_term(env, NSStringFromClass(object_getClass(view))),
+                            nsstring_to_term(env, text),
+                            nsstring_to_term(env, value),
+                            frame,
+                            extract_view_bg_color(env, view),
+                            extract_view_text_color(env, view),
+                            children};
     ERL_NIF_TERM result;
-    enif_make_map_from_arrays(env, keys, vals, 5, &result);
+    enif_make_map_from_arrays(env, keys, vals, 8, &result);
     return result;
 }
 
@@ -3954,18 +4128,164 @@ static ERL_NIF_TERM nif_ui_view_tree(ErlNifEnv *env, int argc, const ERL_NIF_TER
 
     // Synthetic root wrapping all top-level windows. Frame is the screen size
     // so consumers always have a valid bounding box for the whole UI.
-    ERL_NIF_TERM root_keys[5] = {enif_make_atom(env, "type"), enif_make_atom(env, "label"),
-                                 enif_make_atom(env, "value"), enif_make_atom(env, "frame"),
-                                 enif_make_atom(env, "children")};
-    ERL_NIF_TERM root_vals[5] = {
-        enif_make_atom(env, "root"), enif_make_atom(env, "nil"), enif_make_atom(env, "nil"),
-        enif_make_tuple4(env, enif_make_double(env, 0.0), enif_make_double(env, 0.0),
-                         enif_make_double(env, screen_size.width),
-                         enif_make_double(env, screen_size.height)),
-        windows_list};
+    // The synthetic root paints nothing and has no class, so those are always
+    // nil — but the keys are present so consumers can read them on any node.
+    ERL_NIF_TERM root_keys[8] = {
+        enif_make_atom(env, "type"),       enif_make_atom(env, "class"),
+        enif_make_atom(env, "label"),      enif_make_atom(env, "value"),
+        enif_make_atom(env, "frame"),      enif_make_atom(env, "bg_color"),
+        enif_make_atom(env, "text_color"), enif_make_atom(env, "children")};
+    ERL_NIF_TERM root_vals[8] = {enif_make_atom(env, "root"),
+                                 enif_make_atom(env, "nil"),
+                                 enif_make_atom(env, "nil"),
+                                 enif_make_atom(env, "nil"),
+                                 enif_make_tuple4(env, enif_make_double(env, 0.0),
+                                                  enif_make_double(env, 0.0),
+                                                  enif_make_double(env, screen_size.width),
+                                                  enif_make_double(env, screen_size.height)),
+                                 enif_make_atom(env, "nil"),
+                                 enif_make_atom(env, "nil"),
+                                 windows_list};
     ERL_NIF_TERM root;
-    enif_make_map_from_arrays(env, root_keys, root_vals, 5, &root);
+    enif_make_map_from_arrays(env, root_keys, root_vals, 8, &root);
     return root;
+}
+
+// ── ui_paint_debug/0 — census of where colour lives in this app's view tree ──
+//
+// When ui_view_tree reports nil colours you need to know *why* before changing
+// the extractor: which view classes the renderer produced, what layers hang off
+// them, and which colour-bearing properties are actually set. Guessing at
+// SwiftUI's private class names across device rebuilds is the slow way to find
+// that out; this answers it in one RPC.
+//
+// Returns a JSON binary, grouped by (view class, layer class, sublayer classes)
+// with a count and a tally of which paint properties were non-nil in that group:
+//
+//   {"total_views":443,
+//    "groups":[{"view":"SwiftUI.CGDrawingView","layer":"SwiftUI.CGDrawingLayer",
+//               "sublayers":["CAShapeLayer"],"count":40,
+//               "view_bg":0,"layer_bg":0,"shape_fill":40,"gradient":0,
+//               "text_layer_fg":0,"uikit_text":0,"has_contents":40}, ...]}
+//
+// Read it as: for these 40 views, colour is only in CAShapeLayer.fillColor, so
+// that is what the extractor has to read.
+static void mob_paint_census(UIView *view, NSMutableDictionary *groups, int depth) {
+    if (!view || depth > 50)
+        return;
+
+    NSMutableArray<NSString *> *sublayerClasses = [NSMutableArray array];
+    NSSet *ownedBySubviews = mob_subview_layers(view);
+    BOOL shapeFill = NO, gradient = NO, textLayerFg = NO, layerBg = NO, contents = NO;
+    for (CALayer *sub in view.layer.sublayers) {
+        if ([ownedBySubviews containsObject:sub])
+            continue;
+        NSString *cls = NSStringFromClass(object_getClass(sub));
+        if (![sublayerClasses containsObject:cls])
+            [sublayerClasses addObject:cls];
+        if ([sub isKindOfClass:[CAShapeLayer class]] && ((CAShapeLayer *)sub).fillColor)
+            shapeFill = YES;
+        if ([sub isKindOfClass:[CAGradientLayer class]] && ((CAGradientLayer *)sub).colors.count)
+            gradient = YES;
+        if ([sub isKindOfClass:[CATextLayer class]] && ((CATextLayer *)sub).foregroundColor)
+            textLayerFg = YES;
+        if (sub.backgroundColor)
+            layerBg = YES;
+        if (sub.contents)
+            contents = YES;
+    }
+    if (view.layer.backgroundColor)
+        layerBg = YES;
+    if (view.layer.contents)
+        contents = YES;
+    if ([view.layer isKindOfClass:[CAShapeLayer class]] && ((CAShapeLayer *)view.layer).fillColor)
+        shapeFill = YES;
+
+    BOOL uikitText =
+        [view isKindOfClass:[UILabel class]] || [view isKindOfClass:[UITextField class]] ||
+        [view isKindOfClass:[UITextView class]] || [view isKindOfClass:[UIButton class]];
+
+    NSString *viewClass = NSStringFromClass(object_getClass(view));
+    NSString *layerClass = NSStringFromClass(object_getClass(view.layer));
+    NSArray *sortedSublayers = [sublayerClasses sortedArrayUsingSelector:@selector(compare:)];
+    NSString *key = [NSString stringWithFormat:@"%@|%@|%@", viewClass, layerClass,
+                                               [sortedSublayers componentsJoinedByString:@","]];
+
+    NSMutableDictionary *group = groups[key];
+    if (!group) {
+        group = [NSMutableDictionary dictionaryWithDictionary:@{
+            @"view" : viewClass,
+            @"layer" : layerClass,
+            @"sublayers" : sortedSublayers,
+            @"count" : @0,
+            @"view_bg" : @0,
+            @"layer_bg" : @0,
+            @"shape_fill" : @0,
+            @"gradient" : @0,
+            @"text_layer_fg" : @0,
+            @"uikit_text" : @0,
+            @"has_contents" : @0
+        }];
+        groups[key] = group;
+    }
+    group[@"count"] = @([group[@"count"] intValue] + 1);
+    if (view.backgroundColor)
+        group[@"view_bg"] = @([group[@"view_bg"] intValue] + 1);
+    if (layerBg)
+        group[@"layer_bg"] = @([group[@"layer_bg"] intValue] + 1);
+    if (shapeFill)
+        group[@"shape_fill"] = @([group[@"shape_fill"] intValue] + 1);
+    if (gradient)
+        group[@"gradient"] = @([group[@"gradient"] intValue] + 1);
+    if (textLayerFg)
+        group[@"text_layer_fg"] = @([group[@"text_layer_fg"] intValue] + 1);
+    if (uikitText)
+        group[@"uikit_text"] = @([group[@"uikit_text"] intValue] + 1);
+    if (contents)
+        group[@"has_contents"] = @([group[@"has_contents"] intValue] + 1);
+
+    for (UIView *sub in view.subviews)
+        mob_paint_census(sub, groups, depth + 1);
+}
+
+static ERL_NIF_TERM nif_ui_paint_debug(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    __block NSData *jsonData = nil;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+      NSMutableDictionary *groups = [NSMutableDictionary dictionary];
+      for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+          if (![s isKindOfClass:[UIWindowScene class]])
+              continue;
+          for (UIWindow *w in [(UIWindowScene *)s windows]) {
+              if (!w.isHidden)
+                  mob_paint_census(w, groups, 0);
+          }
+      }
+      int total = 0;
+      for (NSDictionary *g in groups.allValues)
+          total += [g[@"count"] intValue];
+      NSArray *sorted = [groups.allValues
+          sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+            return [b[@"count"] compare:a[@"count"]];
+          }];
+      jsonData = [NSJSONSerialization dataWithJSONObject:@{
+          @"total_views" : @(total),
+          @"groups" : sorted
+      }
+                                                 options:0
+                                                   error:nil];
+    });
+
+    if (!jsonData)
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "encode_failed"));
+    ErlNifBinary bin;
+    if (!enif_alloc_binary(jsonData.length, &bin))
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "alloc_failed"));
+    memcpy(bin.data, jsonData.bytes, jsonData.length);
+    return enif_make_binary(env, &bin);
 }
 
 // ── screen_info/0 — unified screen/safe-area shape ───────────────────────────
@@ -4965,6 +5285,26 @@ static ERL_NIF_TERM nif_tap_xy_probe(ErlNifEnv *env) {
     return list;
 }
 
+// Block until a UI event reaches the BEAM, or timeout_ms elapses.
+//
+// Synthetic input is delivered on the main runloop; the SwiftUI gesture handler
+// that ends up calling mob_send_tap has usually NOT run by the time the
+// dispatch_sync that injected the touch returns. Polling (rather than a fixed
+// sleep) keeps a landed tap fast — the common case returns in one step.
+static BOOL mob_await_ui_event(uint64_t seq_before, int timeout_ms) {
+    for (int waited = 0; waited < timeout_ms; waited += 5) {
+        if (mob_ui_event_seq() != seq_before)
+            return YES;
+        [NSThread sleepForTimeInterval:0.005];
+    }
+    return mob_ui_event_seq() != seq_before;
+}
+
+// How long tap_xy waits for the app to react before reporting :no_effect.
+// 300ms is well past a SwiftUI tap gesture's recognition delay while staying
+// short enough for the tight loops the harness runs.
+#define MOB_TAP_SETTLE_MS 300
+
 static ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     // Diagnostics mode — pass :probe or :enumerate_touch or :enumerate_event
     if (enif_is_atom(env, argv[0])) {
@@ -5071,53 +5411,14 @@ static ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 
     CGPoint pt = CGPointMake(x, y);
 
-#if TARGET_OS_SIMULATOR
-    // ── Simulator: accessibility-based activation by coordinates ─────────────────
-    // The iOS simulator rejects in-process synthetic IOHIDEvents (no valid display
-    // context) and SwiftUI on iOS 26 ignores direct touchesBegan: calls without
-    // proper event system backing. Accessibility activation is the reliable path
-    // for the simulator; for scroll views and custom GRs that lack accessibility,
-    // a simulator-specific event injection mechanism would be needed.
-    // Find-then-act atomically inside ONE dispatch_sync per attempt (see
-    // mob_retry_main_thread_bool) — using the SAME window the element was
-    // found in for the text-field focus walk below, not a second,
-    // independently-resolved window (MOB-99 review: with an overlapping
-    // keyboard window, an independent re-scan could land on the wrong one).
-    BOOL activated = mob_retry_main_thread_bool("tap_xy(sim)", ^BOOL {
-      UIWindow *win = nil;
-      id elem = find_a11y_at_point_in_current_windows(pt, &win);
-      if (!elem)
-          return NO;
+    // Sampled before any injection so we can tell a tap that ran a handler from
+    // one the input API merely accepted. See mob_note_ui_event.
+    const uint64_t seq_before = mob_ui_event_seq();
 
-      LOGI(@"tap_xy(sim): accessibilityActivate on %@ frame=%@",
-           NSStringFromClass(object_getClass(elem)), NSStringFromCGRect([elem accessibilityFrame]));
-      [elem accessibilityActivate];
-      // For text fields: accessibilityActivate on UITextFieldLabel (the hint
-      // label inside UITextField) doesn't focus the field. Walk the
-      // responder chain up from the hit view to find the first
-      // UITextField/UITextView and focus it.
-      UIView *hv = [win hitTest:pt withEvent:nil];
-      UIResponder *r = hv;
-      while (r) {
-          if ([r isKindOfClass:[UITextField class]] || [r isKindOfClass:[UITextView class]]) {
-              [(UIView *)r becomeFirstResponder];
-              break;
-          }
-          r = r.nextResponder;
-      }
-      return YES;
-    });
-
-    if (activated)
-        return enif_make_atom(env, "ok");
-    return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                            enif_make_atom(env, "no_element_at_point"));
-
-#else
-    // ── Real device: UITouch injection via IOHIDEvent ─────────────────────────────
+    // Hit-test on both platforms first: a coordinate outside every visible window
+    // can never do anything, and saying so beats reporting :no_effect.
     __block UIWindow *targetWindow = nil;
     __block UIView *hitView = nil;
-
     dispatch_sync(dispatch_get_main_queue(), ^{
       for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
           if (![scene isKindOfClass:[UIWindowScene class]])
@@ -5134,12 +5435,69 @@ static ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
           }
       }
     });
-
     if (!hitView) {
         return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                 enif_make_atom(env, "no_view_at_point"));
     }
 
+#if TARGET_OS_SIMULATOR
+    // ── Simulator: accessibility-based activation by coordinates ─────────────────
+    // The iOS simulator rejects in-process synthetic IOHIDEvents (no valid display
+    // context) and SwiftUI on iOS 26 ignores direct touchesBegan: calls without
+    // proper event system backing. Accessibility activation is the reliable path
+    // for the simulator; for scroll views and custom GRs that lack accessibility,
+    // a simulator-specific event injection mechanism would be needed.
+    //
+    // Find-then-act atomically inside ONE dispatch_sync per attempt (see
+    // mob_retry_main_thread_bool) — using the SAME window the element was
+    // found in for the text-field focus walk below, not a second,
+    // independently-resolved window (MOB-99 review: with an overlapping
+    // keyboard window, an independent re-scan could land on the wrong one).
+    //
+    // accessibilityActivate returning YES does NOT mean the app reacted: SwiftUI
+    // only maps it to a default action for Button-like views. A plain
+    // `.onTapGesture` (what Mob's Box/Row/Column use for on_tap) has no AX action,
+    // so activation "succeeds" and the handler never fires — true even for a Box
+    // given accessibility_role "button" (#94: real AX element, .isButton trait,
+    // still no accessibilityAction; verified on-simulator). That is why the
+    // outcome is decided by the event counter below, not by `activated`.
+    BOOL activated = mob_retry_main_thread_bool("tap_xy(sim)", ^BOOL {
+      UIWindow *win = nil;
+      id elem = find_a11y_at_point_in_current_windows(pt, &win);
+      if (!elem)
+          return NO;
+
+      LOGI(@"tap_xy(sim): accessibilityActivate on %@ frame=%@ hitWindow=%@",
+           NSStringFromClass(object_getClass(elem)), NSStringFromCGRect([elem accessibilityFrame]),
+           NSStringFromClass(object_getClass(targetWindow)));
+      [elem accessibilityActivate];
+      // For text fields: accessibilityActivate on UITextFieldLabel (the hint
+      // label inside UITextField) doesn't focus the field. Walk the
+      // responder chain up from the hit view to find the first
+      // UITextField/UITextView and focus it.
+      UIView *hv = [win hitTest:pt withEvent:nil];
+      UIResponder *r = hv;
+      while (r) {
+          if ([r isKindOfClass:[UITextField class]] || [r isKindOfClass:[UITextView class]]) {
+              [(UIView *)r becomeFirstResponder];
+              break;
+          }
+          r = r.nextResponder;
+      }
+      return YES;
+    });
+    if (!activated) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "no_element_at_point"));
+    }
+    if (!mob_await_ui_event(seq_before, MOB_TAP_SETTLE_MS)) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "no_effect"));
+    }
+    return enif_make_atom(env, "ok");
+
+#else
+    // ── Real device: UITouch injection via IOHIDEvent ─────────────────────────────
     __block BOOL ok = NO;
     dispatch_sync(dispatch_get_main_queue(), ^{
       ok = mob_send_touch_phase(targetWindow, hitView, pt, UITouchPhaseBegan);
@@ -5154,6 +5512,15 @@ static ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
       mob_send_touch_phase(targetWindow, hitView, pt, UITouchPhaseEnded);
     });
 
+    // mob_send_touch_phase's YES only means "the private input API exists and
+    // accepted the event" — on iOS 26 devices UIKit routinely swallows the
+    // in-process IOHID event and no touch is ever delivered (decisions/
+    // 2026-08-09-ios-device-tap-injection-has-no-effect.md). The counter is the
+    // only thing that distinguishes a real tap from an accepted no-op.
+    if (!mob_await_ui_event(seq_before, MOB_TAP_SETTLE_MS)) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "no_effect"));
+    }
     return enif_make_atom(env, "ok");
 #endif
 }
@@ -5688,6 +6055,44 @@ static UIScrollView *mob_find_scroll_view(NSString *identifier) {
 // conscious build choice, never a silent default. In release this lets an agent SEE the
 // screen to error-correct while remaining unable to DRIVE it (tap/type stay stripped).
 #if !MOB_RELEASE || defined(MOB_ENABLE_SCREENSHOT)
+// The window capture reads from: the key window, else the first visible one.
+// Main-thread only.
+static UIWindow *mob_capture_window(void) {
+    UIWindow *fallback = nil;
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]])
+            continue;
+        for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+            if (win.isHidden)
+                continue;
+            if (win.isKeyWindow)
+                return win;
+            if (!fallback)
+                fallback = win;
+        }
+    }
+    return fallback;
+}
+
+// Render `crop` (a rect in window points — pass `window.bounds` for the whole
+// surface) at `scale` × the native screen scale. The window is drawn offset by
+// -crop.origin so the cropped region lands at the context origin, which makes
+// the returned image exactly that region. Main-thread only.
+static UIImage *mob_capture_image(UIWindow *window, CGRect crop, CGFloat scale) {
+    UIGraphicsImageRendererFormat *rf = [UIGraphicsImageRendererFormat preferredFormat];
+    rf.scale = [UIScreen mainScreen].scale * scale;
+    rf.opaque = YES;
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:crop.size
+                                                                               format:rf];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *_Nonnull ctx) {
+      (void)ctx;
+      CGRect r = window.bounds;
+      r.origin.x -= crop.origin.x;
+      r.origin.y -= crop.origin.y;
+      [window drawViewHierarchyInRect:r afterScreenUpdates:YES];
+    }];
+}
+
 static ERL_NIF_TERM nif_screenshot(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     char fmt[8] = {0};
     int quality = 90;
@@ -5702,37 +6107,13 @@ static ERL_NIF_TERM nif_screenshot(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 
     __block NSData *imageData = nil;
     dispatch_sync(dispatch_get_main_queue(), ^{
-      UIWindow *window = nil;
-      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-          if (![scene isKindOfClass:[UIWindowScene class]])
-              continue;
-          for (UIWindow *win in [(UIWindowScene *)scene windows]) {
-              if (win.isHidden)
-                  continue;
-              if (win.isKeyWindow) {
-                  window = win;
-                  break;
-              }
-              if (!window)
-                  window = win; // first visible window as fallback
-          }
-          if (window.isKeyWindow)
-              break;
-      }
+      UIWindow *window = mob_capture_window();
       if (!window)
           return;
 
       // `scale` is a multiplier of the native screen scale: 1.0 = crisp native
       // resolution, 0.5 = half (smaller payload over dist).
-      UIGraphicsImageRendererFormat *rf = [UIGraphicsImageRendererFormat preferredFormat];
-      rf.scale = [UIScreen mainScreen].scale * (CGFloat)scale;
-      rf.opaque = YES;
-      UIGraphicsImageRenderer *renderer =
-          [[UIGraphicsImageRenderer alloc] initWithSize:window.bounds.size format:rf];
-      UIImage *img = [renderer imageWithActions:^(UIGraphicsImageRendererContext *_Nonnull ctx) {
-        (void)ctx;
-        [window drawViewHierarchyInRect:window.bounds afterScreenUpdates:YES];
-      }];
+      UIImage *img = mob_capture_image(window, window.bounds, (CGFloat)scale);
       imageData = jpeg ? UIImageJPEGRepresentation(img, (CGFloat)quality / 100.0)
                        : UIImagePNGRepresentation(img);
     });
@@ -5748,7 +6129,96 @@ static ERL_NIF_TERM nif_screenshot(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 }
 #endif // !MOB_RELEASE || MOB_ENABLE_SCREENSHOT
 
-#if !MOB_RELEASE // resume the debug-only harness (scroll + element frames)
+#if !MOB_RELEASE // resume the debug-only harness (sampling + scroll + element frames)
+
+// sample_region(X, Y, W, H) -> {ok, PixelW, PixelH, RGBA} | {error, Reason}
+//
+// Raw pixels for one region of the app's own surface. This is the only reliable
+// way to verify what colour was actually drawn: on iOS 26 SwiftUI paints through
+// SDFLayer or rasterises into `contents`, so neither the view nor the layer tree
+// exposes a readable colour — see
+// decisions/2026-08-09-view-tree-colour-needs-screenshot-sampling.md.
+//
+// The crop happens in the render, not after it, so what crosses distribution is
+// one element's worth of pixels instead of a whole framebuffer. Coordinates are
+// window points (the same space element_frames/0 reports); the returned buffer is
+// PixelW*PixelH*4 bytes of 8-bit RGBA at the native screen scale, so its size is
+// W*H*scale^2*4 — a 100x50pt element is ~180 KB at 3x.
+//
+// Rects are clamped to the window, so a partly-scrolled-off element samples the
+// visible part and reports the pixel dimensions it actually got. A rect entirely
+// outside the window is `offscreen` rather than a plausible-looking black.
+//
+// Unlike screenshot/3 this stays strictly debug-only: it is a screen-capture
+// primitive, and a release build shipping it could reconstruct the screen region
+// by region, silently defeating the MOB_ENABLE_SCREENSHOT opt-in.
+static ERL_NIF_TERM nif_sample_region(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    double x = 0.0, y = 0.0, w = 0.0, h = 0.0;
+    if (!enif_get_double(env, argv[0], &x) || !enif_get_double(env, argv[1], &y) ||
+        !enif_get_double(env, argv[2], &w) || !enif_get_double(env, argv[3], &h))
+        return enif_make_badarg(env);
+
+    __block const char *err = NULL;
+    __block NSMutableData *rgba = nil;
+    __block size_t pw = 0, ph = 0;
+
+    if (w <= 0.0 || h <= 0.0)
+        err = "empty_region";
+
+    if (!err)
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          UIWindow *window = mob_capture_window();
+          if (!window) {
+              err = "no_window";
+              return;
+          }
+          CGRect crop = CGRectIntersection(window.bounds, CGRectMake(x, y, w, h));
+          if (CGRectIsNull(crop) || CGRectIsEmpty(crop)) {
+              err = "offscreen";
+              return;
+          }
+
+          CGImageRef cg = mob_capture_image(window, crop, 1.0).CGImage;
+          if (!cg) {
+              err = "capture_failed";
+              return;
+          }
+          pw = CGImageGetWidth(cg);
+          ph = CGImageGetHeight(cg);
+
+          // Redraw into a bitmap context of known layout: a UIImage's own backing
+          // store has no guaranteed byte order or component count, so reading it
+          // directly would make the returned bytes device-dependent.
+          size_t stride = pw * 4;
+          rgba = [NSMutableData dataWithLength:stride * ph];
+          CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+          CGContextRef bmp =
+              CGBitmapContextCreate(rgba.mutableBytes, pw, ph, 8, stride, cs,
+                                    kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+          CGColorSpaceRelease(cs);
+          if (!bmp) {
+              rgba = nil;
+              err = "capture_failed";
+              return;
+          }
+          CGContextDrawImage(bmp, CGRectMake(0, 0, pw, ph), cg);
+          CGContextRelease(bmp);
+        });
+
+    if (err || !rgba)
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, err ?: "capture_failed"));
+
+    ErlNifBinary bin;
+    if (!enif_alloc_binary(rgba.length, &bin))
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "alloc_failed"));
+    memcpy(bin.data, rgba.mutableBytes, rgba.length);
+    return enif_make_tuple4(env, enif_make_atom(env, "ok"), enif_make_ulong(env, pw),
+                            enif_make_ulong(env, ph), enif_make_binary(env, &bin));
+}
+
 static ERL_NIF_TERM nif_scroll_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifBinary idb;
     if (!enif_inspect_binary(env, argv[0], &idb))
@@ -6692,11 +7162,15 @@ static ERL_NIF_TERM nif_vendor_usb_close(ErlNifEnv *env, int argc, const ERL_NIF
 //   * ui_tree         — recursive UIAccessibility walk (variable, can be 10s of ms)
 //   * ui_debug        — same walk, more output
 //
-// Synthetic-input NIFs (tap_xy, swipe_xy, long_press_xy, type_text, key_press,
+// Synthetic-input NIFs (swipe_xy, long_press_xy, type_text, key_press,
 // delete_backward, clear_text) dispatch_sync to the main queue but also do
 // some pre-dispatch work; they're left on regular schedulers for now because
 // the test harness calls them in tight loops and dirty-dispatch overhead would
 // add up. Re-evaluate if benchmarks show scheduler stalls under heavy harness use.
+//
+// tap_xy is the exception: it blocks up to MOB_TAP_SETTLE_MS waiting for the
+// app to react (that wait is what makes its :ok trustworthy), which is far too
+// long to hold a normal scheduler.
 static ErlNifFunc nif_funcs[] = {
 #if !MOB_RELEASE
     // ── Test harness (listed first to survive linker dead-code stripping) ──────
@@ -6706,12 +7180,13 @@ static ErlNifFunc nif_funcs[] = {
     // App Store validator rejects binaries that reference them).
     {"ui_tree", 0, nif_ui_tree, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"ui_view_tree", 0, nif_ui_view_tree, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"ui_paint_debug", 0, nif_ui_paint_debug, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"ui_debug", 0, nif_ui_debug, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"screen_info", 0, nif_screen_info, 0},
     {"tap", 1, nif_tap, 0},
     {"ax_action", 2, nif_ax_action, 0},
     {"ax_action_at_xy", 3, nif_ax_action_at_xy, 0},
-    {"tap_xy", 2, nif_tap_xy, 0},
+    {"tap_xy", 2, nif_tap_xy, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"type_text", 1, nif_type_text, 0},
     {"delete_backward", 0, nif_delete_backward, 0},
     {"key_press", 1, nif_key_press, 0},
@@ -6723,6 +7198,7 @@ static ErlNifFunc nif_funcs[] = {
     {"screenshot", 3, nif_screenshot, ERL_NIF_DIRTY_JOB_CPU_BOUND},
 #endif
 #if !MOB_RELEASE
+    {"sample_region", 4, nif_sample_region, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"scroll_info", 1, nif_scroll_info, 0},
     {"scroll_to", 3, nif_scroll_to, 0},
     {"element_frames", 0, nif_element_frames, ERL_NIF_DIRTY_JOB_CPU_BOUND},
