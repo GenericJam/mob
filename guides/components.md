@@ -199,6 +199,10 @@ cancel_tap = {self(), :cancel}
 """
 ```
 
+A single weighted child expands into the parent's remaining main-axis space. Multiple
+weighted children divide that space evenly on iOS; Android additionally honors unequal
+numeric ratios. Weight values must be positive. Use equal weights for cross-platform layouts.
+
 ### `:box`
 
 A single-child container. Use it to add background, padding, or corner radius to a child:
