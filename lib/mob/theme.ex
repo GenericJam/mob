@@ -1,5 +1,5 @@
 defmodule Mob.Theme do
-  @color_scheme_nif_status {__MODULE__, :color_scheme_nif_status}
+  @nif_status {__MODULE__, :nif_status}
 
   @moduledoc """
   Design token system for Mob apps.
@@ -303,19 +303,11 @@ defmodule Mob.Theme do
 
     json = IO.iodata_to_binary(:json.encode(stringify_keys(payload)))
 
-    try do
-      :mob_nif.set_theme(json)
-    rescue
-      _ -> :ok
-    catch
-      _, _ -> :ok
-    end
+    nif_call(:ok, fn -> :mob_nif.set_theme(json) end)
   end
 
   defp safe_platform do
-    :mob_nif.platform()
-  rescue
-    _ in [UndefinedFunctionError, ErlangError] -> :host
+    nif_call(:host, fn -> :mob_nif.platform() end)
   end
 
   defp resolved_font_fallback(theme, platform) do
@@ -350,46 +342,60 @@ defmodule Mob.Theme do
   """
   @spec color_scheme() :: :light | :dark
   def color_scheme do
-    case :persistent_term.get(@color_scheme_nif_status, :unknown) do
-      :available -> native_color_scheme(false)
-      :unavailable -> recover_color_scheme_nif()
-      :unknown -> probe_color_scheme_nif()
+    nif_call(:light, fn ->
+      if :mob_nif.color_scheme() == :dark, do: :dark, else: :light
+    end)
+  end
+
+  defp nif_call(fallback, call) do
+    case :persistent_term.get(@nif_status, :unknown) do
+      :available -> invoke_nif(fallback, call, false)
+      :unavailable -> recover_nif(fallback, call)
+      :unknown -> probe_nif(fallback, call)
     end
   end
 
-  defp native_color_scheme(mark_available?) do
-    scheme = if :mob_nif.color_scheme() == :dark, do: :dark, else: :light
-    if mark_available?, do: :persistent_term.put(@color_scheme_nif_status, :available)
-    scheme
+  defp invoke_nif(fallback, call, mark_available?) do
+    result = call.()
+    if mark_available?, do: :persistent_term.put(@nif_status, :available)
+    result
   rescue
-    _error in [UndefinedFunctionError, ErlangError] ->
-      :persistent_term.put(@color_scheme_nif_status, :unavailable)
-      :light
+    _error -> mark_nif_unavailable(fallback)
+  catch
+    _kind, _reason -> mark_nif_unavailable(fallback)
   end
 
-  defp recover_color_scheme_nif do
-    if :code.is_loaded(:mob_nif) == false, do: :light, else: probe_color_scheme_nif()
+  defp mark_nif_unavailable(fallback) do
+    :persistent_term.put(@nif_status, :unavailable)
+    fallback
   end
 
-  # A failed on_load purges mob_nif, so every caller would otherwise retry the
-  # same failing load. The first probe is serialised across callers; a later
-  # successful native code load makes the module visible and re-enables it.
-  defp probe_color_scheme_nif do
+  defp recover_nif(fallback, call) do
+    if :code.is_loaded(:mob_nif) == false, do: fallback, else: probe_nif(fallback, call)
+  end
+
+  # A failed on_load purges mob_nif, so every Theme caller would otherwise
+  # retry the same failing load. The first probe is serialised across callers;
+  # a later successful native code load makes the module visible and re-enables
+  # all native theme calls.
+  defp probe_nif(fallback, call) do
     :global.trans(
-      {@color_scheme_nif_status, self()},
+      {@nif_status, self()},
       fn ->
-        case :persistent_term.get(@color_scheme_nif_status, :unknown) do
-          :available -> native_color_scheme(false)
-          :unavailable -> recover_color_scheme_nif_without_lock()
-          :unknown -> native_color_scheme(true)
+        case :persistent_term.get(@nif_status, :unknown) do
+          :available -> invoke_nif(fallback, call, false)
+          :unavailable -> recover_nif_without_lock(fallback, call)
+          :unknown -> invoke_nif(fallback, call, true)
         end
       end,
       [node()]
     )
   end
 
-  defp recover_color_scheme_nif_without_lock do
-    if :code.is_loaded(:mob_nif) == false, do: :light, else: native_color_scheme(true)
+  defp recover_nif_without_lock(fallback, call) do
+    if :code.is_loaded(:mob_nif) == false,
+      do: fallback,
+      else: invoke_nif(fallback, call, true)
   end
 
   # ── Token maps (used by Mob.Renderer) ─────────────────────────────────────
