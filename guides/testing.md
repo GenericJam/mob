@@ -230,6 +230,33 @@ Mob.Test.settle(node)
 {:ok, png} = Mob.Test.screenshot(node)
 ```
 
+### Coordinate taps report observed effect
+
+`Mob.Test.tap_xy/3` — and `tap_id/2`, which inherits its contract — returns
+`:ok` only when the app **reacted**: an event reached the BEAM within 300 ms of
+the tap. Anything else is an honest error tuple (`{:error, :no_view_at_point}`,
+`{:error, :no_element_at_point}`, `{:error, :no_effect}`), never a phantom
+success. Read `Mob.Test.tap_xy/3`'s platform notes before treating a
+non-`:ok` as a failure — some targets (a SwiftUI `Box` with `on_tap:`, any
+coordinate on a physical iOS device) legitimately report `{:error, :no_effect}`
+and should be driven with `tap/2` by tag instead.
+
+### Sampling rendered colors
+
+`Mob.Test.sample_color/2` reads the pixels the app actually drew for an
+element's frame (or an explicit `{x, y, w, h}` rect) and reduces them to
+`%{average:, dominant:, dominant_share:, distinct:, pixels:}`, all
+`0xAARRGGBB`. It exists because the view tree cannot answer color questions on
+iOS 26 SwiftUI — use it to assert a theme token actually painted, or to catch
+a regression where two different tokens render identically. iOS-only,
+debug-build only.
+
+```elixir
+{:ok, %{dominant: color, dominant_share: share}} = Mob.Test.sample_color(node, "my-card")
+assert share > 0.8            # a flat fill, so :dominant is the background
+assert color == 0xFF2196F3    # the ARGB the theme resolves :primary to
+```
+
 ### Native UI interaction
 
 `Mob.Test.tap_native/1` locates an element via the iOS accessibility tree and sends a real touch event. **iOS only.** Requires `idb` — install it with `brew install facebook/fb/idb-companion`.
