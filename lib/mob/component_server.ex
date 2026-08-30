@@ -41,20 +41,14 @@ defmodule Mob.ComponentServer do
 
   @impl GenServer
   def init(opts) do
-    # MOB-100: Mob.ComponentRegistry.reconcile/2 stops a component that has
-    # left the tree via Process.exit(pid, :shutdown). A GenServer that isn't
-    # trapping exits terminates immediately on that signal WITHOUT running
-    # terminate/2 — the native handle (and, before this fix, the registry
-    # entry) leaked on every single screen navigation, not just for slot 0.
-    # Trapping exits turns that signal into a regular {:EXIT, _, reason}
-    # message (handled below) that goes through the normal {:stop, ...}
-    # path instead, so terminate/2 — and its deregister_component call —
-    # actually runs.
+    # A component is isolated from its screen, but still needs graceful
+    # termination so its native handle and user state are released.
     Process.flag(:trap_exit, true)
 
     module = opts[:module]
     id = opts[:id]
     screen_pid = opts[:screen_pid]
+    screen_monitor = Process.monitor(screen_pid)
     props = opts[:props]
     platform = opts[:platform]
     nif = opts[:nif] || @default_nif
@@ -74,7 +68,8 @@ defmodule Mob.ComponentServer do
            screen_pid: screen_pid,
            id: id,
            handle: handle,
-           nif: nif
+           nif: nif,
+           screen_monitor: screen_monitor
          }}
 
       {:error, reason} ->
@@ -165,9 +160,15 @@ defmodule Mob.ComponentServer do
     {:noreply, %{state | socket: new_socket}}
   end
 
-  # Trapping exits (see init/1) turns Mob.ComponentRegistry.reconcile/2's
-  # Process.exit(pid, :shutdown) into this message instead of an untrappable
-  # kill — route it through the normal stop path so terminate/2 runs.
+  def handle_info(
+        {:DOWN, monitor, :process, screen_pid, reason},
+        %{screen_monitor: monitor, screen_pid: screen_pid} = state
+      ) do
+    {:stop, reason, state}
+  end
+
+  # Preserve graceful termination for callers that deliberately link a
+  # component process despite ComponentServer.start/1 itself being unlinked.
   def handle_info({:EXIT, _from, reason}, state) do
     {:stop, reason, state}
   end
@@ -240,7 +241,7 @@ defmodule Mob.ComponentServer do
         handle: handle,
         nif: nif
       }) do
-    Mob.ComponentRegistry.deregister(screen_pid, id, module)
+    Mob.ComponentRegistry.deregister(screen_pid, id, module, self())
     if handle >= 0, do: nif.deregister_component(handle)
     module.terminate(reason, socket)
   end

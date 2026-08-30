@@ -62,6 +62,18 @@ defmodule Mob.ScreenCaseTest do
       {:noreply, Mob.Socket.reset_to(socket, CounterScreen, %{}, transition: :push)}
     end
 
+    def handle_event("reset_all", _params, socket) do
+      {:noreply, Mob.Socket.reset_to(socket, CounterScreen, %{}, scope: :all)}
+    end
+
+    def handle_event("switch_push", _params, socket) do
+      {:noreply, Mob.Socket.switch_tab(socket, :settings, transition: :push)}
+    end
+
+    def handle_event("switch_params", _params, socket) do
+      {:noreply, Mob.Socket.switch_tab(socket, :settings, mount_params: %{user_id: 7})}
+    end
+
     def handle_info({:tap, :go}, socket) do
       {:noreply, Mob.Socket.push_screen(socket, CounterScreen)}
     end
@@ -193,6 +205,21 @@ defmodule Mob.ScreenCaseTest do
       # passed a transition — in a helper whose whole job is that assertion.
       view = NavScreen |> mount_screen() |> render_event("reset_push")
       assert navigated_to(view) == CounterScreen
+    end
+
+    test "records an all-stack reset as the destination module" do
+      view = NavScreen |> mount_screen() |> render_event("reset_all")
+      assert navigated_to(view) == CounterScreen
+    end
+
+    test "keeps a tab switch carrying a transition as the raw action" do
+      view = NavScreen |> mount_screen() |> render_event("switch_push")
+      assert navigated_to(view) == {:switch_tab, :settings, :push}
+    end
+
+    test "keeps a tab switch carrying mount params as the raw action" do
+      view = NavScreen |> mount_screen() |> render_event("switch_params")
+      assert navigated_to(view) == {:switch_tab, :settings, :none, %{user_id: 7}}
     end
   end
 

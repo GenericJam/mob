@@ -357,19 +357,76 @@ defmodule Mob.Test do
   def pop_to_root(node), do: nav(node, {:pop_to_root})
 
   @doc """
-  Replace the entire navigation stack with a new root screen. Synchronous.
+  Replace the current navigation stack with a new root screen. Synchronous.
 
   Use this to simulate auth transitions (e.g. login → home with no back button).
 
   Pass `transition: :push` or `transition: :pop` to drive a directional reset,
-  matching `Mob.Socket.reset_to/4`.
+  matching `Mob.Socket.reset_to/4`. Pass `scope: :all` to discard every parked
+  stack as well as the active one.
   """
-  @spec reset_to(node(), module() | atom(), map(), [{:transition, atom()}]) :: :ok
+  @spec reset_to(node(), module() | atom(), map(), [
+          {:transition, atom()} | {:scope, :stack | :all}
+        ]) :: :ok
   def reset_to(node, dest, params \\ %{}, opts \\ []) do
-    case Keyword.get(opts, :transition) do
-      nil -> nav(node, {:reset, dest, params})
-      transition -> nav(node, {:reset, dest, params, transition})
+    transition = Keyword.get(opts, :transition)
+
+    case Keyword.get(opts, :scope, :stack) do
+      :stack when is_nil(transition) ->
+        nav(node, {:reset, dest, params})
+
+      :stack ->
+        nav(node, {:reset, dest, params, transition})
+
+      :all ->
+        nav(node, {:reset, dest, params, transition || :reset, :all})
+
+      other ->
+        raise ArgumentError,
+              "Mob.Test.reset_to/4: invalid scope #{Kernel.inspect(other)}. " <>
+                "Expected one of [:stack, :all]."
     end
+  end
+
+  @doc """
+  Switch to a named tab stack. Synchronous.
+
+  Pass `transition: :push`, `transition: :pop`, or `transition: :reset` to
+  exercise the same directional animation as `Mob.Socket.switch_tab/3`.
+  `mount_params: %{...}` is passed to a target root only on its first mount.
+  """
+  @spec switch_tab(node(), atom(), [{:transition, atom()} | {:mount_params, map()}]) :: :ok
+  def switch_tab(node, tab, opts \\ []) do
+    transition =
+      case Keyword.fetch(opts, :transition) do
+        :error -> :none
+        {:ok, value} -> validate_tab_transition!(value)
+      end
+
+    case Keyword.fetch(opts, :mount_params) do
+      {:ok, mount_params} when is_map(mount_params) ->
+        nav(node, {:switch_tab, tab, transition, mount_params})
+
+      {:ok, mount_params} ->
+        raise ArgumentError,
+              "Mob.Test.switch_tab/3: invalid mount_params #{Kernel.inspect(mount_params)}. " <>
+                "Expected a map."
+
+      :error when transition == :none ->
+        nav(node, {:switch_tab, tab})
+
+      :error ->
+        nav(node, {:switch_tab, tab, transition})
+    end
+  end
+
+  defp validate_tab_transition!(transition) when transition in [:push, :pop, :reset],
+    do: transition
+
+  defp validate_tab_transition!(transition) do
+    raise ArgumentError,
+          "Mob.Test.switch_tab/3: invalid transition #{Kernel.inspect(transition)}. " <>
+            "Expected one of [:push, :pop, :reset]."
   end
 
   # ── Lists ─────────────────────────────────────────────────────────────────────
