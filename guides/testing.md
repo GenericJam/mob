@@ -2,9 +2,53 @@
 
 Mob supports two levels of testing: unit tests for screen logic (no device required) and live inspection of a running app via Erlang distribution.
 
-## Unit testing screens
+## Unit testing screens with Mob.ScreenCase
 
-`Mob.Screen.start_link/2` starts a screen process in `:no_render` mode — it runs all Elixir callbacks but skips NIF calls. Use it in `ExUnit` tests:
+`Mob.ScreenCase` is the blessed way to unit-test a screen in the BEAM — the
+screen-level analog of `Phoenix.LiveViewTest`. It drives `mount/3`,
+`handle_event/3`, and `handle_info/2` directly and gives you query helpers
+whose vocabulary matches `Mob.Test` (`assigns/1`, `tree/1`, `find/3`,
+`text/1`), so a test reads the same whether it runs in-BEAM in milliseconds or
+against a real device:
+
+```elixir
+defmodule MyApp.CounterScreenTest do
+  use Mob.ScreenCase
+
+  test "increment bumps the count and the rendered text" do
+    view = mount_screen(MyApp.CounterScreen)
+    assert assigns(view).count == 0
+
+    # A tap arrives as a message — render_info is the in-BEAM equivalent:
+    view = render_info(view, {:tap, :increment})
+    assert assigns(view).count == 1
+    assert text(view) =~ "Count: 1"
+
+    # cheap native-contract check: every node the screen emits is a
+    # type the Compose / SwiftUI layer actually renders.
+    assert_renderable(view)
+  end
+
+  test "save navigates to the detail screen" do
+    view = mount_screen(MyApp.HomeScreen)
+    view = render_info(view, {:tap, :open_detail})
+    assert navigated_to(view) == MyApp.DetailScreen
+  end
+end
+```
+
+`device_view/1` wraps a running device node in the same `View` handle, so the
+query helpers (`assigns/1`, `tree/1`, `assert_renderable/2`, `navigated_to/1`)
+work against live hardware behind a `@tag :on_device`. See `Mob.ScreenCase`
+for the full API.
+
+## Unit testing with a real screen process
+
+When you want the actual GenServer semantics (messages through a mailbox,
+navigation applied by the router), `Mob.Screen.start_link/2` starts real
+screen processes in `:no_render` mode — it runs all Elixir callbacks but skips
+NIF calls. The returned pid is the navigation owner, which starts one process
+per live screen behind it. Use it in `ExUnit` tests:
 
 ```elixir
 defmodule MyApp.CounterScreenTest do
@@ -17,17 +61,19 @@ defmodule MyApp.CounterScreenTest do
     socket = Mob.Screen.get_socket(pid)
     assert socket.assigns.count == 0
 
-    # Dispatch an event
-    :ok = Mob.Screen.dispatch(pid, "tap", %{"tag" => "increment"})
+    # Dispatch an event (needs a handle_event("increment", ...) clause)
+    :ok = Mob.Screen.dispatch(pid, "increment", %{})
 
     # Verify updated state
     socket = Mob.Screen.get_socket(pid)
     assert socket.assigns.count == 1
   end
 
-  test "navigates to detail on tap" do
+  test "navigates to detail" do
     {:ok, pid} = Mob.Screen.start_link(MyApp.HomeScreen, %{})
-    :ok = Mob.Screen.dispatch(pid, "tap", %{"tag" => "open_detail"})
+
+    # dispatch/3 is synchronous — navigation is applied before it returns
+    :ok = Mob.Screen.dispatch(pid, "open_detail", %{})
 
     assert Mob.Screen.get_current_module(pid) == MyApp.DetailScreen
   end
@@ -49,13 +95,16 @@ test "handles location update" do
   {:ok, pid} = Mob.Screen.start_link(MyApp.MapScreen, %{})
 
   send(pid, {:location, %{lat: 43.6532, lon: -79.3832, accuracy: 10.0, altitude: 80.0}})
-  # handle_info is async — wait for the message to process
-  :sys.get_state(pid)  # sync point: blocks until GenServer is idle
 
+  # handle_info is async, but get_socket/1 calls into the screen process, so
+  # its reply queues behind the message you just sent — no explicit sync needed.
   socket = Mob.Screen.get_socket(pid)
   assert socket.assigns.location.lat == 43.6532
 end
 ```
+
+For a pure-logic test with no processes at all, `Mob.ScreenCase.render_info/2`
+(above) drives the same callback synchronously.
 
 ## Live inspection with Mob.Test
 
@@ -80,7 +129,7 @@ Mob.Test.inspect(node)   # full snapshot: screen + assigns + nav_history + tree
 Mob.Test.tap(node, :increment)
 ```
 
-The tag atom comes from `on_tap: {self(), :increment}` in the screen's `render/1`. Fire-and-forget — does not block.
+The tag atom comes from `on_tap: {self(), :increment}` in the screen's `render/1`. Fire-and-forget — does not block. Follow with `settle/2` (below) before reading the native side.
 
 ### Navigation
 
@@ -154,13 +203,31 @@ Mob.Test.send_message(node, {:alert, :dismiss})
 Mob.Test.send_message(node, {:my_event, %{key: "value"}})
 ```
 
-`send_message/2` is fire-and-forget. Use `:sys.get_state` as a sync point if you need to wait before reading state. Pass the screen pid retrieved via `Mob.Test`:
+`send_message/2` is fire-and-forget. Use `Mob.Test.settle/2` as a sync point if
+you need to wait before reading state:
 
 ```elixir
 Mob.Test.send_message(node, {:permission, :camera, :granted})
-pid = Mob.Test.screen_pid(node)
-:rpc.call(node, :sys, :get_state, [pid])  # blocks until the GenServer is idle
+Mob.Test.settle(node)
 Mob.Test.assigns(node)
+```
+
+### Settling: waiting for a frame to land
+
+`settle/2` blocks until the app has finished processing and the current frame
+is committed. Three processes are involved since the screen-process
+architecture: the navigation owner (registered as `:mob_screen`) forwards the
+event, the screen process builds the tree, and `Mob.Sender` commits it —
+so a bare `:sys.get_state(:mob_screen)` is no longer a sufficient sync point.
+Use `settle/2` after any fire-and-forget call (`tap/2`, `back/1`,
+`send_message/2`) before reading the *native* side (`view_tree/1`,
+`screenshot/2`, `tap_id/2`, `element_frames/2`); `tree/1` and `assigns/1`
+re-render in-process and don't need it.
+
+```elixir
+Mob.Test.tap(node, :save)
+Mob.Test.settle(node)
+{:ok, png} = Mob.Test.screenshot(node)
 ```
 
 ### Native UI interaction
