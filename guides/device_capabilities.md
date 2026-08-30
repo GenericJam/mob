@@ -52,7 +52,7 @@ end
 `Mob.Haptic.trigger/2` fires synchronously (no `handle_info` needed) and returns the socket:
 
 ```elixir
-def handle_event("tap", %{"tag" => "purchase"}, socket) do
+def handle_info({:tap, :purchase}, socket) do
   socket = Mob.Haptic.trigger(socket, :success)
   {:noreply, socket}
 end
@@ -66,13 +66,13 @@ iOS uses `UIImpactFeedbackGenerator` / `UINotificationFeedbackGenerator`. Androi
 
 ```elixir
 # Write to clipboard
-def handle_event("tap", %{"tag" => "copy"}, socket) do
+def handle_info({:tap, :copy}, socket) do
   socket = Mob.Clipboard.write(socket, socket.assigns.code)
   {:noreply, socket}
 end
 
 # Read from clipboard — result arrives in handle_info
-def handle_event("tap", %{"tag" => "paste"}, socket) do
+def handle_info({:tap, :paste}, socket) do
   socket = Mob.Clipboard.read(socket)
   {:noreply, socket}
 end
@@ -87,7 +87,7 @@ end
 Opens the platform's native share sheet (iOS: `UIActivityViewController`, Android: `ACTION_SEND`):
 
 ```elixir
-def handle_event("tap", %{"tag" => "share"}, socket) do
+def handle_info({:tap, :share}, socket) do
   socket = Mob.Share.sheet(socket, text: "Check out this app!", url: "https://example.com")
   {:noreply, socket}
 end

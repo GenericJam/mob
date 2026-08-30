@@ -187,7 +187,8 @@ defmodule Mob.MixProject do
           Mob.Theme.Dark,
           Mob.Theme.Adaptive
         ],
-        Navigation: [Mob.Nav, Mob.Nav.Registry],
+        Navigation: [Mob.Nav, Mob.Nav.Registry, Mob.Router],
+        "Runtime Processes": [Mob.Screen.Server, Mob.Listener, Mob.Sender],
         Plugins: [Mob.Plugins, Mob.Plugins.Supervisor, Mob.Plugins.Lifecycle],
         "Device APIs": [
           Mob.Haptic,
@@ -198,7 +199,7 @@ defmodule Mob.MixProject do
           Mob.Audio,
           Mob.Motion
         ],
-        "Testing & Debugging": [Mob.Test],
+        "Testing & Debugging": [Mob.Test, Mob.ScreenCase],
         Tooling: [Mob.Formatter],
         Internals: [Mob.Dist, Mob.NativeLogger, Mob.List, Mob.Sigil]
       ]

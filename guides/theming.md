@@ -56,6 +56,27 @@ Mob's design token system lets you control color, spacing, and typography across
 | `:radius_lg` | 16 |
 | `:radius_pill` | 100 |
 
+**Font tokens** — named fonts declared in the theme's `fonts:` map and passed
+via the `font:` prop. `fonts[:default]` applies app-wide to any node that
+doesn't set its own `font:`, and `font_fallback:` is an ordered list of names
+tried when the resolved font can't be loaded on-device:
+
+```elixir
+use Mob.App,
+  theme: [
+    fonts: %{
+      default: Mob.Theme.font("Inter-Regular", from_file: "priv/fonts/Inter-Regular.ttf"),
+      heading: Mob.Theme.font("Inter-Bold", from_file: "priv/fonts/Inter-Bold.ttf")
+    }
+  ]
+
+# Then in any screen:
+%{type: :text, props: %{text: "Section", font: :heading}, children: []}
+```
+
+See [Styling → Custom fonts](styling.md#custom-fonts) for the full story
+(file placement, `Mob.Theme.font/2`, plugin default fonts, fallback rules).
+
 ## Using tokens in components
 
 Pass token atoms as prop values for color, spacing, radius, and text size props. The renderer resolves them at render time:
