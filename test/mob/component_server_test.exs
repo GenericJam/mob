@@ -29,6 +29,47 @@ defmodule Mob.ComponentServerTest do
     end
   end
 
+  defmodule ComponentScreen do
+    use Mob.Screen
+
+    def mount(_params, _session, socket), do: {:ok, socket}
+
+    def render(_assigns) do
+      Mob.UI.native_view(Mob.ComponentServerTest.Recorder, id: :owned)
+    end
+  end
+
+  defmodule BlockingTermination do
+    use Mob.Component
+
+    def mount(%{observer: observer}, socket),
+      do: {:ok, Mob.Socket.assign(socket, :observer, observer)}
+
+    def render(_assigns), do: %{}
+
+    def terminate(reason, socket) do
+      send(socket.assigns.observer, {:component_terminating, self(), reason})
+
+      receive do
+        :release -> :ok
+      end
+    end
+  end
+
+  defmodule RaisingTermination do
+    use Mob.Component
+
+    def mount(%{observer: observer}, socket),
+      do: {:ok, Mob.Socket.assign(socket, :observer, observer)}
+
+    def render(_assigns), do: %{}
+
+    def terminate(reason, socket) do
+      send(socket.assigns.observer, {:component_terminating, self(), reason})
+      raise "hostile terminate callback"
+    end
+  end
+
   setup do
     # Mob.ComponentRegistry registers under a fixed global name. Another
     # async test file (component_test.exs) may have already started it —
@@ -152,6 +193,13 @@ defmodule Mob.ComponentServerTest do
 
       def calls, do: Agent.get(__MODULE__, & &1.calls)
 
+      def platform, do: :ios
+      def safe_area, do: {0.0, 0.0, 0.0, 0.0}
+      def clear_taps, do: :ok
+      def register_tap(_tag), do: 0
+      def set_transition(_transition), do: :ok
+      def set_root(_json), do: :ok
+
       def reset,
         do:
           Agent.update(__MODULE__, fn _ -> %{calls: [], next: 0, freed: [], result: :allocate} end)
@@ -260,6 +308,122 @@ defmodule Mob.ComponentServerTest do
       assert {:deregister_component, [0]} in MockNIF.calls()
     end
 
+    test "a component terminates and releases its handle when its screen dies" do
+      screen_pid = spawn(fn -> Process.sleep(:infinity) end)
+
+      {:ok, pid} =
+        Mob.ComponentServer.start(
+          module: Recorder,
+          id: :owned,
+          screen_pid: screen_pid,
+          props: %{},
+          platform: :ios,
+          nif: MockNIF
+        )
+
+      assert Mob.ComponentServer.get_handle(pid) == 0
+      assert {:ok, ^pid} = Mob.ComponentRegistry.lookup(screen_pid, :owned, Recorder)
+
+      ref = Process.monitor(pid)
+      Process.exit(screen_pid, :kill)
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 500
+      assert {:error, :not_found} = Mob.ComponentRegistry.lookup(screen_pid, :owned, Recorder)
+      assert {:deregister_component, [0]} in MockNIF.calls()
+    end
+
+    test "a blocking component terminate callback cannot hold up its owner" do
+      screen_pid = spawn(fn -> Process.sleep(:infinity) end)
+
+      {:ok, component_pid} =
+        Mob.ComponentServer.start(
+          module: BlockingTermination,
+          id: :blocking,
+          screen_pid: screen_pid,
+          props: %{observer: self()},
+          platform: :ios,
+          nif: MockNIF
+        )
+
+      screen_ref = Process.monitor(screen_pid)
+      Process.exit(screen_pid, :kill)
+
+      assert_receive {:DOWN, ^screen_ref, :process, ^screen_pid, :killed}, 100
+      assert_receive {:component_terminating, ^component_pid, :killed}, 500
+
+      assert {:error, :not_found} =
+               Mob.ComponentRegistry.lookup(screen_pid, :blocking, BlockingTermination)
+
+      assert {:deregister_component, [0]} in MockNIF.calls()
+      Process.exit(component_pid, :kill)
+    end
+
+    test "a raising component terminate callback cannot affect its owner or leak its handle" do
+      screen_pid = spawn(fn -> Process.sleep(:infinity) end)
+
+      {:ok, component_pid} =
+        Mob.ComponentServer.start(
+          module: RaisingTermination,
+          id: :raising,
+          screen_pid: screen_pid,
+          props: %{observer: self()},
+          platform: :ios,
+          nif: MockNIF
+        )
+
+      screen_ref = Process.monitor(screen_pid)
+      component_ref = Process.monitor(component_pid)
+      Process.exit(screen_pid, :kill)
+
+      assert_receive {:DOWN, ^screen_ref, :process, ^screen_pid, :killed}, 100
+      assert_receive {:component_terminating, ^component_pid, :killed}, 500
+      assert_receive {:DOWN, ^component_ref, :process, ^component_pid, _reason}, 500
+
+      assert {:error, :not_found} =
+               Mob.ComponentRegistry.lookup(screen_pid, :raising, RaisingTermination)
+
+      assert {:deregister_component, [0]} in MockNIF.calls()
+    end
+
+    test "an old component cannot deregister its replacement" do
+      screen_pid = self()
+
+      {:ok, old_pid} =
+        Mob.ComponentServer.start(
+          module: Recorder,
+          id: :replaced,
+          screen_pid: screen_pid,
+          props: %{},
+          platform: :ios,
+          nif: MockNIF
+        )
+
+      :ok = :sys.suspend(old_pid)
+      Mob.ComponentRegistry.reconcile(screen_pid, MapSet.new())
+
+      {:ok, replacement_pid} =
+        Mob.ComponentServer.start(
+          module: Recorder,
+          id: :replaced,
+          screen_pid: screen_pid,
+          props: %{},
+          platform: :ios,
+          nif: MockNIF
+        )
+
+      assert {:ok, ^replacement_pid} =
+               Mob.ComponentRegistry.lookup(screen_pid, :replaced, Recorder)
+
+      old_ref = Process.monitor(old_pid)
+      :ok = :sys.resume(old_pid)
+      assert_receive {:DOWN, ^old_ref, :process, ^old_pid, :shutdown}, 500
+
+      assert {:ok, ^replacement_pid} =
+               Mob.ComponentRegistry.lookup(screen_pid, :replaced, Recorder)
+
+      assert Process.alive?(replacement_pid)
+    end
+
     test "pool exhaustion fails only that component — process survives with the sentinel handle" do
       MockNIF.set_result(:exhausted)
 
@@ -336,11 +500,8 @@ defmodule Mob.ComponentServerTest do
     end
 
     test "register/reconcile/register cycling does not leak slots (MOB-100 root cause)" do
-      # Exercises the REAL production stop path: Mob.ComponentRegistry.reconcile/2
-      # calls Process.exit(pid, :shutdown) directly (see lib/mob/component_registry.ex),
-      # not GenServer.stop. Before trap_exit was added to init/1, that signal
-      # terminated the process without ever running terminate/2 — so every
-      # screen navigation leaked a slot, independent of the slot-0 sentinel bug.
+      # Exercises the production reconciliation path used both after a render
+      # and while a screen terminates.
       screen_pid = self()
 
       for i <- 1..5 do
@@ -362,8 +523,8 @@ defmodule Mob.ComponentServerTest do
 
         Mob.ComponentRegistry.reconcile(screen_pid, MapSet.new())
 
-        # reconcile/2 exits the process; wait for it to actually be gone
-        # before the next cycle re-registers under the same {screen_pid, id}.
+        # Keep the monitor assertion so a future asynchronous implementation
+        # cannot make the next cycle race the old registration.
         ref = Process.monitor(pid)
         assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 500
       end
