@@ -10,6 +10,22 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.7.36] - 2026-08-30
+
+### Fixed
+- **iOS honors a Box's fixed `height` without a fixed `width`.** `fixedHeight`
+  was only applied inside the fixed-width branch, so a width-less `height:`
+  box rendered at intrinsic height on iOS while Android honored it; it now
+  sizes to the requested height and keeps the full-width default, with
+  background, border, and tap target covering the full frame. A weighted box
+  with a fixed height still lets weight win, matching Android. (#104)
+- **Host runs log the theme NIF load failure once, not on every call.**
+  `Mob.Theme` caches the `mob_nif` availability probe in `:persistent_term`
+  (first probe serialized; re-probed when the module loads), so host test
+  runs lose the per-call `Failed to load NIF library` noise while device hot
+  code loads still restore the native color-scheme path. A genuine device
+  load failure still reports once via the standard OTP on_load error. (#108)
+
 ## [0.7.35] - 2026-08-30
 
 ### Added
