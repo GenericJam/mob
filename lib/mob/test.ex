@@ -961,8 +961,11 @@ defmodule Mob.Test do
     That works for `Button`, and for text fields (the responder chain is walked
     to focus them). It does **not** work for Mob's `Box`/`Row`/`Column` with
     `on_tap:`: SwiftUI gives a plain `.onTapGesture` no accessibility action, so
-    activation is accepted and the handler never runs. Those taps return
-    `{:error, :no_effect}`. Use `tap/2` (by tag) to drive them.
+    activation is accepted and the handler never runs. A `Box` with
+    `accessibility_role: "button"` is a real AX element (`.isButton`) since
+    #94, but it still has no activate action, so the result is the same.
+    Those taps return `{:error, :no_effect}`. Use `tap/2` (by tag) to drive
+    them.
   - **iOS physical device** — synthesises an `IOHIDEvent`. As of iOS 26.5 UIKit
     accepts the event and delivers no touch, so this returns
     `{:error, :no_effect}` for every coordinate. Treat coordinate tapping as
@@ -977,6 +980,12 @@ defmodule Mob.Test do
   Driving a non-Mob app (sidecar mode), a genuinely successful tap still reports
   `{:error, :no_effect}` because there is nothing for the NIF to observe.
   Confirm those with `ui_tree/1` or a screenshot instead.
+
+  The counter behind the check is process-wide, not per-tap: any Mob event that
+  reaches the BEAM inside the 300ms settle window (a scroll notification, a
+  timer-driven `change`, another handler) counts as the tap's effect and can
+  turn a miss into a false `:ok`. The check assumes a serial harness — one
+  synthetic interaction in flight at a time, no concurrent UI activity.
   """
   @spec tap_xy(node(), number(), number()) ::
           :ok | {:error, :no_view_at_point | :no_element_at_point | :no_effect | term()}
