@@ -100,7 +100,7 @@ can be removed.
 ## Migration path for `Mob.List`
 
 Currently `Mob.List` is a render helper, not a stateful component. Each row
-gets `on_tap: {screen_pid, {:list, list_id, :select, index}}`. `Mob.Screen`
+gets `on_tap: {screen_pid, {:list, list_id, :select, index}}`. `Mob.Screen.Server`
 has hardcoded knowledge of this shape and re-emits as `{:select, list_id, index}`.
 
 Under the new event model, this becomes a stateful component (planned, not in
