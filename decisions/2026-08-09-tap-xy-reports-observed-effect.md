@@ -11,8 +11,12 @@ raise an error. That is not the same as "the tap worked", and the gap is wide:
 - **iOS simulator** — the branch activates the accessibility element under the
   point. SwiftUI only maps `accessibilityActivate` to a default action for
   `Button`-like views. Mob's `Box` / `Row` / `Column` implement `on_tap:` with a
-  plain `.onTapGesture`, which has no accessibility action, so activation is
-  accepted, the handler never runs, and `tap_xy` still answered `ok`.
+  plain `.onTapGesture`, which has no accessibility *action*, so activation is
+  accepted, the handler never runs, and `tap_xy` still answered `ok`. (Since
+  #94 a `Box` given `accessibility_role: "button"` does collapse into a real
+  AX element with the `.isButton` trait — but it still carries no
+  `accessibilityAction`, and activating it verifiably does not fire the
+  gesture, so the outcome is unchanged: `{error, no_effect}`.)
 - **iOS physical device** (iPhone, iOS 26.5.2) — the branch synthesises an
   `IOHIDEvent` and asks `mob_send_touch_phase` whether it worked.
   `mob_send_touch_phase` returns `YES` as soon as
@@ -67,7 +71,11 @@ rather than needing a doc edit.
   because there is nothing to observe. Documented on `Mob.Test.tap_xy/3`;
   callers there should verify with `ui_tree/1` or a screenshot. Closing this
   properly needs Phase 3 event interception (see `CLAUDE.md`), where the BEAM
-  sees the touch stream itself.
+  sees the touch stream itself. The counter is also process-wide, not per-tap:
+  scroll notifications (`scroll_began`/`scroll_ended`/`scroll_settled`) bump it
+  too, so any unrelated Mob event landing inside the settle window reads as the
+  tap's effect — the check assumes a serial harness with one interaction in
+  flight at a time.
 - `swipe_xy/4` and `long_press_xy/3` share the injection path and still report on
   acceptance. Flagged in the matrix as unverified; converting them is the same
   mechanical change and is deliberately left out of this diff.

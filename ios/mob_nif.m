@@ -4281,7 +4281,9 @@ static ERL_NIF_TERM nif_ui_paint_debug(ErlNifEnv *env, int argc, const ERL_NIF_T
         return enif_make_tuple2(env, enif_make_atom(env, "error"),
                                 enif_make_atom(env, "encode_failed"));
     ErlNifBinary bin;
-    enif_alloc_binary(jsonData.length, &bin);
+    if (!enif_alloc_binary(jsonData.length, &bin))
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "alloc_failed"));
     memcpy(bin.data, jsonData.bytes, jsonData.length);
     return enif_make_binary(env, &bin);
 }
@@ -5455,7 +5457,9 @@ static ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     // accessibilityActivate returning YES does NOT mean the app reacted: SwiftUI
     // only maps it to a default action for Button-like views. A plain
     // `.onTapGesture` (what Mob's Box/Row/Column use for on_tap) has no AX action,
-    // so activation "succeeds" and the handler never fires. That is why the
+    // so activation "succeeds" and the handler never fires — true even for a Box
+    // given accessibility_role "button" (#94: real AX element, .isButton trait,
+    // still no accessibilityAction; verified on-simulator). That is why the
     // outcome is decided by the event counter below, not by `activated`.
     BOOL activated = mob_retry_main_thread_bool("tap_xy(sim)", ^BOOL {
       UIWindow *win = nil;
@@ -6207,7 +6211,9 @@ static ERL_NIF_TERM nif_sample_region(ErlNifEnv *env, int argc, const ERL_NIF_TE
                                 enif_make_atom(env, err ?: "capture_failed"));
 
     ErlNifBinary bin;
-    enif_alloc_binary(rgba.length, &bin);
+    if (!enif_alloc_binary(rgba.length, &bin))
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "alloc_failed"));
     memcpy(bin.data, rgba.mutableBytes, rgba.length);
     return enif_make_tuple4(env, enif_make_atom(env, "ok"), enif_make_ulong(env, pw),
                             enif_make_ulong(env, ph), enif_make_binary(env, &bin));
