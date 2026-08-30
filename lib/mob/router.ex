@@ -158,7 +158,7 @@ defmodule Mob.Router do
 
     case start_screen(screen_module, params, state) do
       {:ok, entry, state} ->
-        state = make_current(state, entry)
+        state = make_current(state, entry, :none)
 
         if render_mode == :render do
           # A notification that launched the app from a killed state. Sent to
@@ -361,8 +361,8 @@ defmodule Mob.Router do
 
   # The single place `current` changes. The sender is told here and nowhere
   # else, so only the screen the user is looking at can commit a frame.
-  defp make_current(state, entry) do
-    Mob.Sender.set_active(entry.ref)
+  defp make_current(state, entry, transition) do
+    Mob.Sender.activate(entry.ref, transition)
     %{state | current: entry}
   end
 
@@ -465,8 +465,8 @@ defmodule Mob.Router do
       Mob.Nav.history(state.nav) != [] ->
         state = drop_entry(state, dead_pid)
         [previous | rest] = Mob.Nav.history(state.nav)
-        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous)
-        paint(previous, :pop, state)
+        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous, :pop)
+        paint(previous, :none, state)
         state
 
       true ->
@@ -485,8 +485,8 @@ defmodule Mob.Router do
       # switch/3 parks the dead entry under the outgoing stack; drop it straight
       # after, so nothing can restore a corpse by switching back.
       nav = Mob.Nav.drop_parked(nav, &(&1.pid == entry.pid))
-      state = make_current(%{state | nav: nav}, live)
-      paint(live, :pop, state)
+      state = make_current(%{state | nav: nav}, live, :pop)
+      paint(live, :none, state)
       state
     else
       _ ->
@@ -595,8 +595,11 @@ defmodule Mob.Router do
         # goes with it. The ones still in `rest` stay resident — that is what
         # makes pop restore prior state without re-mounting.
         state = stop_screen(state.current, state)
-        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous)
-        do_paint(previous, :pop, state, mode)
+
+        state =
+          make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous, :pop)
+
+        do_paint(previous, :none, state, mode)
         state
 
       [] ->
@@ -612,8 +615,8 @@ defmodule Mob.Router do
         ]
 
         state = Enum.reduce(discarded, state, &stop_screen/2)
-        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, root)
-        do_paint(root, :pop, state, mode)
+        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, root, :pop)
+        do_paint(root, :none, state, mode)
         state
 
       [] ->
@@ -643,7 +646,7 @@ defmodule Mob.Router do
   defp apply_nav_action({:switch_tab, tab}, state, mode) do
     case Mob.Nav.switch(state.nav, tab, state.current) do
       {:switched, nav, entry} ->
-        state = make_current(%{state | nav: nav}, entry)
+        state = make_current(%{state | nav: nav}, entry, :none)
         do_paint(entry, :none, state, mode)
         state
 
@@ -652,7 +655,7 @@ defmodule Mob.Router do
         # leaves navigation pointing at a stack whose screen never started.
         case start_screen(root_module, %{}, state) do
           {:ok, entry, state} ->
-            state = make_current(%{state | nav: nav}, entry)
+            state = make_current(%{state | nav: nav}, entry, :none)
             do_paint(entry, :none, state, mode)
             state
 
@@ -684,8 +687,8 @@ defmodule Mob.Router do
     case start_screen(new_module, mount_params, state) do
       {:ok, entry, state} ->
         nav = Mob.Nav.put_history(state.nav, [state.current | Mob.Nav.history(state.nav)])
-        state = make_current(%{state | nav: nav}, entry)
-        do_paint(entry, :push, state, mode)
+        state = make_current(%{state | nav: nav}, entry, :push)
+        do_paint(entry, :none, state, mode)
         state
 
       {:error, _reason} ->
@@ -698,8 +701,11 @@ defmodule Mob.Router do
       {:ok, entry, state} ->
         discarded = [state.current | Mob.Nav.history(state.nav)]
         state = Enum.reduce(discarded, state, &stop_screen/2)
-        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, entry)
-        do_paint(entry, transition, state, mode)
+
+        state =
+          make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, entry, transition)
+
+        do_paint(entry, :none, state, mode)
         state
 
       {:error, _reason} ->
@@ -714,8 +720,11 @@ defmodule Mob.Router do
       {:found, previous, rest} ->
         discarded = [state.current | Enum.take_while(history, &(&1.pid != previous.pid))]
         state = Enum.reduce(discarded, state, &stop_screen/2)
-        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous)
-        do_paint(previous, :pop, state, mode)
+
+        state =
+          make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous, :pop)
+
+        do_paint(previous, :none, state, mode)
         state
 
       :not_found ->
