@@ -256,8 +256,12 @@ defmodule Mob.App do
   @doc """
   Declare a tab bar containing multiple named stacks.
 
-  Each branch must be a `stack/2` map. Renders as a bottom NavigationBar on
-  Android and a UITabBarController on iOS.
+  Each branch must be a `stack/2` map. Each declared stack keeps its own
+  navigation history and its own live screens; switch between them with
+  `Mob.Socket.switch_tab/2` (see `Mob.Nav` for the state model).
+
+  No tab-bar chrome is drawn yet — the runtime fully backs the declaration,
+  but switching is programmatic for now.
   """
   @spec tab_bar([map()]) :: map()
   def tab_bar(branches) when is_list(branches) do
@@ -267,8 +271,9 @@ defmodule Mob.App do
   @doc """
   Declare a side drawer containing multiple named stacks.
 
-  Renders as a ModalNavigationDrawer on Android. iOS uses a custom slide-in
-  panel (native UIKit drawer support deferred).
+  Same multi-stack semantics as `tab_bar/1`; the two differ only in intended
+  chrome. No drawer chrome is drawn yet — switching is programmatic via
+  `Mob.Socket.switch_tab/2` for now.
   """
   @spec drawer([map()]) :: map()
   def drawer(branches) when is_list(branches) do

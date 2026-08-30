@@ -309,15 +309,15 @@ One thing to be aware of: a mixed app has **two distinct forms of navigation**.
     `<.link navigate={...}>` or `push_navigate(...)`. Lives entirely inside the
     LiveView WebSocket; the WebView's URL changes but the native nav stack
     doesn't.
-  * **Native navigation** — `Mob.Nav.push/2`, `pop/1`, tab bars, drawers.
-    Lives in the native nav controller; the WebView is just one screen on
-    that stack.
+  * **Native navigation** — `Mob.Socket.push_screen/2,3`, `pop_screen/1`,
+    tab bars, drawers. Lives in the Mob navigation stack; the WebView is just
+    one screen on that stack.
 
 The two stacks don't talk to each other (by default but you control both sides so if you _really_ want to you could make that happen). A Phoenix route change inside a
-WebView doesn't push a native screen, and a `Mob.Nav.push` doesn't navigate
+WebView doesn't push a native screen, and a `push_screen` doesn't navigate
 the WebView. Plan crossings explicitly: a tap inside the LiveView that should
 push a native screen sends a `mob_message` event up to the hosting
-`Mob.Screen`, which calls `Mob.Nav.push/2`; a native back-button in a parent
+`Mob.Screen`, which calls `Mob.Socket.push_screen/2,3`; a native back-button in a parent
 screen pops the WebView screen as a whole, not the route inside it.
 
 ### Extra prerequisite

@@ -50,8 +50,9 @@ defmodule Mob.Test do
 
   ## Tap vs send_message
 
-  `tap/2` is for UI interactions that go through `handle_event/3` via the native
-  tap registry. `send_message/2` delivers any term directly to `handle_info/2`.
+  `tap/2` sends the same `{:tap, tag}` message a native tap produces, so it
+  arrives in the screen's `handle_info/2` exactly like a real button press.
+  `send_message/2` delivers any term to `handle_info/2`.
   Use `send_message/2` to simulate async results from device APIs (camera, location,
   notifications, etc.) without having to trigger the actual hardware.
 

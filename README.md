@@ -14,7 +14,7 @@ BEAM-on-device mobile framework for Elixir. OTP runs inside your iOS and Android
 ```mermaid
 flowchart TD
     A["Your Elixir app<br/>(GenServers, OTP supervision, pattern matching, pipes)"]
-    B["Mob.Screen<br/>(GenServer — your logic lives here)"]
+    B["Mob.Screen.Server<br/>(one GenServer per live screen — your logic lives here)"]
     C["Mob.Renderer<br/>(component tree → JSON → NIF call)"]
     D1["Compose (Android)<br/>native rendering, gestures"]
     D2["SwiftUI (iOS)<br/>native rendering, gestures"]
@@ -63,11 +63,15 @@ defmodule MyApp.CounterScreen do
     }
   end
 
-  def handle_event("tap", %{"tag" => "increment"}, socket) do
+  def handle_info({:tap, :increment}, socket) do
     {:noreply, Mob.Socket.assign(socket, :count, socket.assigns.count + 1)}
   end
 end
 ```
+
+A tap on the button delivers `{:tap, :increment}` to `handle_info/2` — the tag
+comes from the `on_tap: {self(), :increment}` tuple in `render/1`, and `self()`
+is this screen's own process.
 
 ## App entry point
 
@@ -251,10 +255,14 @@ Mob.Test.tap(:"my_app_ios@127.0.0.1", :increment)
 ## Testing
 
 ```elixir
-test "increments count" do
-  {:ok, pid} = Mob.Screen.start_link(MyApp.CounterScreen, %{})
-  :ok = Mob.Screen.dispatch(pid, "tap", %{"tag" => "increment"})
-  assert Mob.Screen.get_socket(pid).assigns.count == 1
+defmodule MyApp.CounterScreenTest do
+  use Mob.ScreenCase
+
+  test "increments count" do
+    view = mount_screen(MyApp.CounterScreen)
+    view = render_info(view, {:tap, :increment})
+    assert assigns(view).count == 1
+  end
 end
 ```
 

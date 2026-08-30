@@ -142,7 +142,15 @@ The default implementation (from `use Mob.Screen`) raises for any unhandled even
 @callback terminate(reason :: term(), socket :: Mob.Socket.t()) :: term()
 ```
 
-Called when the screen process is about to stop. Use it for cleanup — cancel timers, release resources. The return value is ignored.
+Called when the screen process is about to stop — when the screen is popped
+from its stack, or when navigation shuts down and takes its linked screens with
+it. Use it for cleanup — cancel timers, release resources. The return value is
+ignored. Persisted screens (`use Mob.Screen, vsn: N` or `persist: true`) also
+dump their state here, so their assigns survive an app exit.
+
+Only the screen leaving the stack is stopped: on a pop, the screens still below
+it in the history stay alive, which is what lets pop restore the previous
+screen's state without re-mounting it.
 
 The default is a no-op. Most screens don't need to implement this.
 
@@ -208,6 +216,22 @@ def render(assigns) do
 end
 ```
 
+## Crashes and restarts
+
+A crash in a screen callback kills that screen's process only. The router
+observes the exit, restarts the screen in the same navigation slot with its
+original mount params, and repaints. The restarted screen runs `mount/3` again
+and loses its assigns — persisted screens get their dumped state back through
+`load_state/2` — and the restart is logged at error, because a form clearing
+itself is visible to the user. Restarts are capped (5 in 10 seconds per screen)
+so a screen that crashes on every render cannot spin.
+
+Because each screen owns its own process, `self()` in a callback is that
+screen's pid. A task or timer started by a screen delivers to that screen —
+even if it's parked under an inactive tab — and if the screen has been popped
+and stopped, the BEAM drops the message rather than delivering it to whatever
+screen is now current.
+
 ## System back
 
-The framework handles the system back gesture (Android hardware back / swipe, iOS edge-pan) automatically. If there is a screen behind the current one in the navigation stack, it pops. If the stack is empty, the app exits. You do not need to handle `{:mob, :back}` unless you want to override this behaviour.
+The framework handles the system back gesture (Android hardware back / swipe, iOS edge-pan) automatically. If there is a screen behind the current one in the active stack, it pops. At the root of a secondary stack in a `tab_bar/1`/`drawer/1` layout, back switches to the first stack (the Android convention — see [Navigation](navigation.md#tabs-and-multi-stack-state)). At the root of the first (or only) stack, the app exits. You do not need to handle `{:mob, :back}` unless you want to override this behaviour.

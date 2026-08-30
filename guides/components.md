@@ -295,6 +295,7 @@ Displays a string.
 | `text` | string | The text to display (required) |
 | `text_size` | number / token | Font size |
 | `text_color` | color | Text color |
+| `font` | token / string | A named font token from `Mob.Theme`'s `fonts:` map (e.g. `:heading`), or a raw platform font name. See [Styling → Custom fonts](styling.md#custom-fonts). |
 | `font_weight` | `"regular"` / `"medium"` / `"bold"` | Font weight |
 | `text_align` | `"left"` / `"center"` / `"right"` | Horizontal alignment |
 
@@ -400,6 +401,59 @@ def handle_info({:change, :volume_changed, value}, socket) do
   {:noreply, Mob.Socket.assign(socket, :volume, value)}
 end
 ```
+
+## Overlay components
+
+### `:sheet`
+
+A native modal bottom sheet (iOS `.sheet`, Android Material 3
+`ModalBottomSheet`) that composes ordinary Mob nodes as its content. Build one
+with `Mob.UI.sheet/2` or the `<Sheet>` tag.
+
+There is no `presented` boolean: **presence in the render tree is
+presentation**. Rendering the sheet node presents it, a re-render that still
+includes it updates its content in place, and removing it from the tree
+dismisses it. So sheet visibility is an ordinary assign plus `:if`:
+
+```elixir
+def render(assigns) do
+  dismiss = {self(), :sheet_dismissed}
+  ~MOB"""
+  <Column padding={:space_md}>
+    <Text text="Main content" />
+    <Sheet detents={[:medium, :large]} on_dismiss={dismiss} :if={@show_sheet}>
+      <Text text="Hello from the sheet" padding={:space_md} />
+    </Sheet>
+  </Column>
+  """
+end
+
+def handle_info({:dismiss, :sheet_dismissed}, socket) do
+  # The user swiped the sheet down — mirror that in your state, or the next
+  # render will present it again.
+  {:noreply, Mob.Socket.assign(socket, :show_sheet, false)}
+end
+```
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `detents` | list | Stops the sheet can rest at: a subset of `[:medium, :large]`, or the exclusive content-height detent `[:content]` / `[{:content, max_height: n}]`. Default `[:medium, :large]`. Invalid detents raise, both in `Mob.UI.sheet/2` and again at render time. |
+| `on_dismiss` | `{pid, tag}` | Delivered as `{:dismiss, tag}` to `handle_info/2`, exactly once, when the user dismisses the sheet (swipe-down, back gesture, outside tap) |
+| `background` | color | Sheet container color |
+| `scrim` | color | Dimming-layer color. Applied exactly on Android; **iOS cannot set the system dimming opacity** and stays system-black |
+| `corner_radius` | number / token | Top-corner radius |
+| `drag_indicator_color` / `_width` / `_height` / `_rail_height` | color / numbers | Custom drag-indicator capsule. All four together, or omit all four for the platform default |
+| `ios` / `android` | map | Per-platform overrides of the style props above |
+
+A `:content` detent sizes the sheet from its content's *intrinsic* height —
+it hugs short content and caps at `max_height` (and at live screen geometry).
+Because a scrollable child (`scroll`, `lazy_list`) reports its full content
+height, it expands inside the sheet rather than scrolling independently; use
+`:medium`/`:large` when the sheet's body is itself scrollable. On iOS a
+content sheet presents at `:medium` for its first frame and resizes once the
+content has been measured.
+
+See `Mob.UI.sheet/2` for the full option reference and validation rules.
 
 ## Native view components
 
@@ -730,6 +784,22 @@ end
 | `on_submit: {pid, tag}` | `{:tap, tag}` |
 | `on_focus: {pid, tag}` | `{:tap, tag}` |
 | `on_blur: {pid, tag}` | `{:tap, tag}` |
+
+### Handle limits
+
+The native layer stores event handlers in fixed-size pools, per committed
+frame:
+
+- **256 interactive handles per frame.** Every `on_tap`, `on_change`,
+  `on_focus`, etc. in the rendered tree registers one handle. Past the cap,
+  the element still renders but its handler is silently unwired (a native
+  error is logged); it does not crash the screen. In practice only an
+  unvirtualized long list or a very large form gets there — use `:list` /
+  `:lazy_list` for long content.
+- **256 native component slots.** `Mob.UI.native_view/2` / `Mob.Component`
+  instances each take a slot. A full pool returns
+  `{:error, :component_slots_exhausted}`; the framework logs and fails just
+  that one component, leaving the screen alive.
 
 ### Sub-component event isolation (planned, not yet implemented)
 
