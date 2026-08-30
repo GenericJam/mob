@@ -39,6 +39,9 @@ defmodule Mob.Test do
       Mob.Test.frame(node, "save")                  # {x, y, w, h}
       Mob.Test.tap_id(node, "save")                 # drive by id at real coords
 
+      # What colour did the app actually draw? (samples pixels — the view tree can't)
+      Mob.Test.sample_color(node, "my-card")        # %{average: 0xFF2196F3, ...}
+
       # Device API simulation
       Mob.Test.send_message(node, {:permission, :camera, :granted})
       Mob.Test.send_message(node, {:camera, :photo, %{path: "/tmp/photo.jpg", width: 1920, height: 1080}})
@@ -81,7 +84,7 @@ defmodule Mob.Test do
   | API                           | Source                              | When to use |
   |-------------------------------|-------------------------------------|-------------|
   | `tree/1`, `find/2`            | Mob render tree (logical components) | Mob apps you control. Fast, exact, has `on_tap` tags, no AX activation needed. |
-  | `view_tree/1`, `find_view/2`  | Native view hierarchy via NIF       | Native pixel frames; works for any app on iOS UIKit; shallow on SwiftUI/Compose. |
+  | `view_tree/1`, `find_view/2`  | Native view hierarchy via NIF       | Native pixel frames **and painted colours**; works for any app on iOS UIKit; shallow on SwiftUI/Compose. |
   | `ui_tree/1`                   | OS accessibility tree               | What sighted users read; works on any app *if* AX is active (iOS: VoiceOver). Strict superset of `view_tree` for UIKit; the only path to semantics inside SwiftUI/Compose. |
 
   Choose render tree first if your app is Mob-rendered. Reach for `view_tree`
@@ -119,29 +122,48 @@ defmodule Mob.Test do
   | `back/1`, `pop/1`, `navigate`| ✅            | ✅            | ✅              |
   | `send_message/2`             | ✅            | ✅            | ✅              |
   | `screen_info/1`              | ✅            | ✅            | ✅              |
-  | `view_tree/1`                | ✅ (shallow†) | ✅ (shallow†) | ✅ (root only‡) |
-  | `find_view/2`                | ✅            | ✅            | ✅              |
+  | `view_tree/1`                | ✅ (shallow†) | ✅ (shallow†) | ❌ not_loaded‡  |
+  | `sample_color/2`             | ✅            | ✅            | ❌ not_loaded°  |
+  | `find_view/2`                | ✅            | ✅            | ❌ not_loaded‡  |
   | `ui_tree/1` (legacy AX)      | ⚠️ AX active§ | ⚠️ AX active§ | ❌ not_loaded   |
   | `ax_action/3`                | ⚠️ AX active§ | ⚠️ AX active§ | ❌ not_supported |
   | `ax_action_at_xy/4`          | ⚠️ AX active§ | ⚠️ AX active§ | ❌ not_supported |
   | `toggle/2`                   | ⚠️ AX active§ | ⚠️ AX active§ | ❌ ui_tree_unavailable |
   | `dismiss_alert/2`            | ⚠️ AX active§ | ⚠️ AX active§ | ❌ ui_tree_unavailable |
   | `adjust_slider/4`            | ⚠️ AX active§ | ⚠️ AX active§ | ❌ ui_tree_unavailable |
-  | `tap_xy/3`                   | ✅ (AX path)  | ✅ (HID inj.) | n/a             |
-  | `swipe/5`                    | ⚠️ scroll only| ✅ (HID inj.) | n/a             |
+  | `tap_xy/3`                   | ⚠️ AX-activatable only¶ | ❌ no_effect¶ | n/a  |
+  | `swipe/5`                    | ⚠️ scroll only| ⚠️ unverified✱| n/a             |
 
   - **†** SwiftUI doesn't expose its content as separate UIView instances —
     `view_tree` reaches the SwiftUI hosting view's container and stops.
     For semantic content on Mob screens use `tree/1` (render tree); for any
     other SwiftUI-based content use `ui_tree/1`.
-  - **‡** Android's Mob renderer is Compose. The View walk stops at the
-    `AndroidComposeView` host. The eventual fix is `Modifier.onGloballyPositioned`
-    in Mob's components writing to a registry the NIF reads (planned).
-    See `issues.md` #11.
+  - **‡** Android's `ui_view_tree` NIF delegates to a `MobBridge.uiViewTree()`
+    Kotlin method that no shipped template implements, so it returns
+    `{:error, :not_loaded}`. When it lands it must emit the same keys iOS does
+    (including `bg_color`/`text_color`); the contract is documented at the NIF
+    in `android/jni/mob_nif.zig`. The Mob renderer is Compose, so the View walk
+    would stop at the `AndroidComposeView` host anyway — the real fix is
+    `Modifier.onGloballyPositioned` in Mob's components writing to a registry
+    the NIF reads. See `issues.md` #11.
+  - **°** `sample_region/4` is implemented in `ios/mob_nif.m` only. Android
+    would need the same crop-in-the-render treatment against the activity
+    window; until then `sample_color/2` returns `{:error, {:badrpc, _}}` there.
   - **§** "AX active" means an iOS accessibility client is asking for the
     AX tree so SwiftUI materializes it. Today: VoiceOver toggle. Production:
     `XCAXClient_iOS` activation, debug-only — see WireTap stretch goals in
     `future_developments.md`.
+  - **¶** `tap_xy/3` now verifies that the tap actually produced an event
+    before returning `:ok`. On the simulator that limits it to elements SwiftUI
+    exposes an accessibility action for (`Button`, text fields) — a `Box` with
+    `on_tap:` returns `{:error, :no_effect}`. On a physical device the
+    IOHID-injected touch is accepted but never delivered, so **every**
+    coordinate returns `{:error, :no_effect}`. Drive taps with `tap/2` (by tag);
+    see `tap_xy/3` and
+    `decisions/2026-08-09-ios-device-tap-injection-has-no-effect.md`.
+  - **✱** `swipe/5` and `long_press/4` use the same device injection path as
+    `tap_xy/3` and still report `:ok` on acceptance rather than on effect.
+    Same root cause, not yet converted — treat their `:ok` as unverified.
 
   Helpers that depend on AX return clear error tuples on Android instead of
   raising. Callers should match on `{:error, :not_supported_on_android}` and
@@ -451,49 +473,178 @@ defmodule Mob.Test do
   Returns a nested map:
 
       %{
-        type: :root, label: nil, value: nil,
+        type: :root, class: nil, label: nil, value: nil,
         frame: {0.0, 0.0, 393.0, 852.0},
+        bg_color: nil, text_color: nil,
         children: [
-          %{type: :window, ..., children: [
+          %{type: :window, class: "UIWindow", ..., children: [
             %{type: :scroll, ..., children: [
-              %{type: :button, label: "Roll Dice",
-                frame: {24.0, 416.0, 327.0, 53.5}, children: []}
+              %{type: :button, class: "SwiftUI.CGDrawingView", label: "Roll Dice",
+                frame: {24.0, 416.0, 327.0, 53.5},
+                bg_color: 0xFF2196F3, text_color: 0xFFFFFFFF, children: []}
             ]}
           ]}
         ]
       }
 
-  On Android, the JSON returned by `mob_nif:ui_view_tree/0` is decoded here.
+  `:class` is the concrete native view class. On SwiftUI it is usually the only
+  thing that identifies a node — `:type` collapses anything it doesn't recognise
+  to `:view` — and it's what tells you which renderer drew a node when a colour
+  comes back `nil`.
+
+  ## Colours
+
+  `:bg_color` and `:text_color` are the colours the view **actually painted**,
+  as `0xAARRGGBB` integers — the same representation component props use
+  (`guides/theming.md`). `nil` means nothing paintable was found, or the colour
+  has no single RGBA value (a multi-stop gradient, a pattern fill).
+
+  UIKit puts colour on the view (`UIView.backgroundColor`, `UILabel.textColor`).
+  **SwiftUI mostly does not** — `.background(Color, in: shape)` and
+  `.foregroundColor`, which is what Mob's renderer uses for every Box and Text,
+  go through SwiftUI's own renderer and land on a `CALayer` (typically a
+  `CAShapeLayer` fill) under a structural view whose own `backgroundColor` stays
+  `nil`. So each node also harvests from its own layer subtree, excluding layers
+  owned by its subviews so a container never claims a child's paint.
+
+  Sources consulted per node, first match wins:
+
+  | | Background | Text |
+  |---|---|---|
+  | view | `UIView.backgroundColor` | `UILabel`/`UITextField`/`UITextView`/`UIButton` |
+  | layer subtree | `CAShapeLayer.fillColor`, single-stop `CAGradientLayer`, `CALayer.backgroundColor` | `CATextLayer.foregroundColor` |
+
+  Fully-transparent colours are treated as no colour, so a `Color.clear`
+  placeholder doesn't read as "painted black at alpha 0".
+
+  Because these are read back off `UIView`/`CALayer` rather than echoed from the
+  render tree, they are the way to catch a styling regression where a theme or
+  modifier silently drops a colour Elixir sent. Compare against `tree/1` (what
+  Elixir asked for) to see the two diverge.
+
+  **If colours come back `nil` across the board**, don't guess at the reason —
+  call `paint_debug/1`, which reports which view/layer classes the renderer
+  produced and which colour properties they actually set. On iOS 26 SwiftUI that
+  is the expected outcome, and `sample_color/2` (real pixels) is the way to
+  verify a drawn colour.
+
+  On Android, the JSON returned by `mob_nif:ui_view_tree/0` is decoded here —
+  but no shipped `MobBridge.kt` implements `uiViewTree()`, so today Android
+  returns `{:error, :not_loaded}`.
   """
   @spec view_tree(node()) :: map() | {:error, term()}
   def view_tree(node) do
     case :rpc.call(node, :mob_nif, :ui_view_tree, []) do
-      bin when is_binary(bin) -> :json.decode(bin) |> normalize_tree()
+      bin when is_binary(bin) -> bin |> :json.decode() |> normalize_view_tree()
       %{} = m -> m
       other -> other
     end
   end
 
-  # JSON decode produces string keys; the iOS NIF returns atom keys directly.
-  # Normalize to atom keys so the API is uniform across platforms.
-  defp normalize_tree(%{"type" => _} = node) do
+  @doc """
+  Normalize an Android-shaped (JSON-decoded, string-keyed) view tree into the
+  iOS map shape: atom keys, atom `:type`, `{x, y, w, h}` frame tuple.
+
+  `view_tree/1` applies this automatically. It's public so a captured tree can
+  be normalized without a device.
+  """
+  @spec normalize_view_tree(map() | term()) :: map() | term()
+  def normalize_view_tree(%{"type" => _} = node) do
     %{
       type: normalize_atom(node["type"]),
-      label: node["label"],
-      value: node["value"],
+      class: denull(node["class"]),
+      label: denull(node["label"]),
+      value: denull(node["value"]),
       frame:
         case node["frame"] do
           [x, y, w, h] -> {x * 1.0, y * 1.0, w * 1.0, h * 1.0}
-          other -> other
+          other -> denull(other)
         end,
-      children: Enum.map(node["children"] || [], &normalize_tree/1)
+      bg_color: denull(node["bg_color"]),
+      text_color: denull(node["text_color"]),
+      children: Enum.map(denull(node["children"]) || [], &normalize_view_tree/1)
     }
   end
 
-  defp normalize_tree(other), do: other
+  def normalize_view_tree(other), do: other
+
+  # `:json.decode/1` maps JSON null to the atom :null. Left as-is it leaks into
+  # every comparison against nil, and `:null || []` is truthy, so an absent
+  # children list would crash Enum.map.
+  defp denull(:null), do: nil
+  defp denull(other), do: other
 
   defp normalize_atom(s) when is_binary(s), do: String.to_atom(s)
   defp normalize_atom(a) when is_atom(a), do: a
+
+  @doc """
+  Census of where colour lives in the native view tree — the diagnostic to reach
+  for when `view_tree/1` reports `nil` colours and you need to know why.
+
+  Groups every native view by `(view class, layer class, sublayer classes)` and
+  reports, per group, how many views set each colour-bearing property:
+
+      Mob.Test.paint_debug(node)
+      #=> %{
+      #     "total_views" => 443,
+      #     "groups" => [
+      #       %{"view" => "SwiftUI.CGDrawingView", "layer" => "SwiftUI.CGDrawingLayer",
+      #         "sublayers" => ["CAShapeLayer"], "count" => 40,
+      #         "view_bg" => 0, "layer_bg" => 0, "shape_fill" => 40,
+      #         "gradient" => 0, "text_layer_fg" => 0, "uikit_text" => 0,
+      #         "has_contents" => 40},
+      #       ...
+      #     ]
+      #   }
+
+  Read a row as: for these 40 views the only colour set is
+  `CAShapeLayer.fillColor`, so that is the property the extractor has to read.
+  A group where every tally is 0 but `has_contents` is high is a view that drew
+  itself into a bitmap — its colour is not recoverable without pixel sampling.
+
+  iOS only, debug builds only. Android raises `:nif_error`.
+  """
+  @spec paint_debug(node()) :: map() | {:error, term()}
+  def paint_debug(node) do
+    case :rpc.call(node, :mob_nif, :ui_paint_debug, []) do
+      bin when is_binary(bin) -> :json.decode(bin)
+      other -> other
+    end
+  end
+
+  @doc """
+  Tally of the distinct painted colours in a view tree — the cheap way to assert
+  a styling change actually reached the screen.
+
+  Pass a node to fetch the tree, or an already-fetched tree to work offline.
+  Returns `%{background: %{argb => count}, text: %{argb => count}}`, `nil`
+  colours excluded.
+
+      Mob.Test.color_census(node)
+      #=> %{background: %{0xFF2196F3 => 4, 0xFF1E1E1E => 1}, text: %{0xFFFFFFFF => 9}}
+
+  A theme regression that discards backgrounds shows up as an empty (or
+  collapsed) `:background` map, and two themes that should differ produce
+  different key sets.
+  """
+  @spec color_census(node() | map()) :: %{background: map(), text: map()}
+  def color_census(node) when is_atom(node), do: color_census(view_tree(node))
+
+  def color_census(%{} = tree) do
+    tree
+    |> flatten_tree()
+    |> Enum.reduce(%{background: %{}, text: %{}}, fn {_path, n}, acc ->
+      acc
+      |> tally(:background, n[:bg_color])
+      |> tally(:text, n[:text_color])
+    end)
+  end
+
+  defp tally(acc, _key, nil), do: acc
+
+  defp tally(acc, key, color) do
+    Map.update!(acc, key, &Map.update(&1, color, 1, fn n -> n + 1 end))
+  end
 
   @doc """
   Return the view tree flattened to a list of `{path, node}` tuples.
@@ -787,12 +938,57 @@ defmodule Mob.Test do
   end
 
   @doc """
-  Tap at screen coordinates on the native app. On simulator uses accessibility
-  activation; on real device synthesises a UITouch via IOHIDEvent.
+  Tap at screen coordinates on the native app.
 
       Mob.Test.tap_xy(node, 289.7, 518.8)
+
+  ## Return values
+
+  `:ok` means **the app reacted** — an event reached the BEAM within 300ms of
+  the tap. Every other outcome is an error tuple; there is no "probably worked".
+
+  | Value | Meaning |
+  |---|---|
+  | `:ok` | A `tap`/`focus`/`change`/`submit`/`select` event reached the BEAM. |
+  | `{:error, :no_view_at_point}` | Hit-test found nothing — the coordinate is outside every visible window. |
+  | `{:error, :no_element_at_point}` | iOS simulator only: a view is there but no accessibility element to activate. |
+  | `{:error, :no_effect}` | Input was accepted by the OS but no handler ran. |
+  | `{:error, probe}` | iOS device only: the private injection API is missing; `probe` lists which selectors resolved. |
+
+  ## Real capability per platform — read before trusting a result
+
+  - **iOS simulator** — activates the accessibility element under the point.
+    That works for `Button`, and for text fields (the responder chain is walked
+    to focus them). It does **not** work for Mob's `Box`/`Row`/`Column` with
+    `on_tap:`: SwiftUI gives a plain `.onTapGesture` no accessibility action, so
+    activation is accepted and the handler never runs. A `Box` with
+    `accessibility_role: "button"` is a real AX element (`.isButton`) since
+    #94, but it still has no activate action, so the result is the same.
+    Those taps return `{:error, :no_effect}`. Use `tap/2` (by tag) to drive
+    them.
+  - **iOS physical device** — synthesises an `IOHIDEvent`. As of iOS 26.5 UIKit
+    accepts the event and delivers no touch, so this returns
+    `{:error, :no_effect}` for every coordinate. Treat coordinate tapping as
+    **not working on device** and use `tap/2`. See
+    `decisions/2026-08-09-ios-device-tap-injection-has-no-effect.md`.
+  - **Android** — not routed through this function; `adb shell input tap` works
+    and is what the tooling uses.
+
+  ## `:no_effect` in sidecar mode
+
+  The check is "did an event reach the BEAM", so it only sees handlers Mob owns.
+  Driving a non-Mob app (sidecar mode), a genuinely successful tap still reports
+  `{:error, :no_effect}` because there is nothing for the NIF to observe.
+  Confirm those with `ui_tree/1` or a screenshot instead.
+
+  The counter behind the check is process-wide, not per-tap: any Mob event that
+  reaches the BEAM inside the 300ms settle window (a scroll notification, a
+  timer-driven `change`, another handler) counts as the tap's effect and can
+  turn a miss into a false `:ok`. The check assumes a serial harness — one
+  synthetic interaction in flight at a time, no concurrent UI activity.
   """
-  @spec tap_xy(node(), number(), number()) :: :ok | {:error, atom()}
+  @spec tap_xy(node(), number(), number()) ::
+          :ok | {:error, :no_view_at_point | :no_element_at_point | :no_effect | term()}
   def tap_xy(node, x, y) do
     :rpc.call(node, :mob_nif, :tap_xy, [x * 1.0, y * 1.0])
   end
@@ -1248,6 +1444,9 @@ defmodule Mob.Test do
   (see `element_frames/1`).
 
       Mob.Test.tap_id(node, "save")
+
+  Inherits `tap_xy/3`'s return contract, including its platform limits — read
+  those before treating a non-`:ok` result as a test failure.
   """
   @spec tap_id(node(), String.t() | atom()) :: :ok | {:error, term()}
   def tap_id(node, id) do
@@ -1257,6 +1456,152 @@ defmodule Mob.Test do
       {:error, _} = err -> err
     end
   end
+
+  # ── Colour sampling (pixels, because the view tree can't answer) ─────────────
+
+  @doc """
+  What colour did the app actually draw in a region? Samples real pixels.
+
+  Address the region either by an element `:id` (resolved through
+  `element_frames/1`) or by an explicit `{x, y, w, h}` rect in logical points:
+
+      Mob.Test.sample_color(node, "my-card")
+      Mob.Test.sample_color(node, {24.0, 416.0, 327.0, 53.5})
+
+  Returns `{:ok, sample}` where `sample` is the map `reduce_rgba/3` produces:
+
+      {:ok, %{average: 0xFF2196F3, dominant: 0xFF2196F3, dominant_share: 0.94,
+              distinct: 37, pixels: 2400}}
+
+  ## Why pixels and not `view_tree/1`
+
+  `view_tree/1`'s `:bg_color` is `nil` for virtually all SwiftUI content — on
+  iOS 26 SwiftUI paints via `SDFLayer` or rasterises into `contents`, exposing no
+  readable paint property (measured: colour for 4 of 443 nodes; see
+  `decisions/2026-08-09-view-tree-colour-needs-screenshot-sampling.md`). Sampling
+  the rendered pixels is the only way to catch a regression like the glass theme
+  that discarded every Box background — under which a `background: :primary` Box
+  and a `:surface_raised` Box sample to the *same* colour, and that difference is
+  what this asserts.
+
+  ## Reading the result
+
+  A region is rarely one flat colour — a card has text, a border, antialiased
+  corners — so a bare mean can be misleading. `:average` is the mean, `:dominant`
+  is the most common exact pixel value (the background of a mostly-flat region),
+  and `:dominant_share` says how much to trust it: `0.9` is a flat fill, `0.2` is
+  a gradient or a busy region where only `:average` means much. Assert on
+  `:dominant` for solid fills, on `:average` for anything glassy.
+
+  ## Errors
+
+    * `{:error, :not_found}` — no element with that `:id` has a tracked frame
+      (the element needs an `:id`, and must have laid out at least once)
+    * `{:error, :empty_frame}` — the element's frame has zero width or height
+    * `{:error, :offscreen}` — the rect lies entirely outside the window
+    * `{:error, :no_window}` — app has no visible window (backgrounded)
+    * `{:error, :size_mismatch}` — the buffer didn't match the reported
+      dimensions, so no colour is reported rather than a wrong one
+    * `{:error, {:badrpc, _}}` — no `sample_region/4` on this platform; the NIF
+      is iOS-only and debug-build only
+
+  A rect that only partly overlaps the window is clamped to the visible part and
+  `:pixels` reports what was actually sampled.
+
+  The payload is `w * h * screen_scale^2 * 4` bytes — cropping happens in the
+  native render, so an element-sized region is tens to hundreds of KB, not a
+  framebuffer. Don't hand it a full-screen rect.
+  """
+  @spec sample_color(node(), String.t() | atom() | {number(), number(), number(), number()}) ::
+          {:ok, map()} | {:error, term()}
+  def sample_color(node, id_or_rect)
+
+  def sample_color(node, {x, y, w, h})
+      when is_number(x) and is_number(y) and is_number(w) and is_number(h) do
+    sample_rect(node, x, y, w, h)
+  end
+
+  def sample_color(node, id) do
+    case frame(node, id) do
+      {_x, _y, w, h} when w <= 0.0 or h <= 0.0 -> {:error, :empty_frame}
+      {x, y, w, h} -> sample_rect(node, x, y, w, h)
+      nil -> {:error, :not_found}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp sample_rect(node, x, y, w, h) do
+    args = [x * 1.0, y * 1.0, w * 1.0, h * 1.0]
+
+    case :rpc.call(node, :mob_nif, :sample_region, args) do
+      {:ok, pixel_w, pixel_h, rgba} -> reduce_rgba(rgba, pixel_w, pixel_h)
+      {:error, _} = err -> err
+      other -> {:error, other}
+    end
+  end
+
+  @doc """
+  Reduce a raw RGBA buffer to colour statistics. Pure — no device needed.
+
+  `rgba` is `width * height` pixels of 4 bytes each in R, G, B, A order (what
+  `:mob_nif.sample_region/4` returns). Colours come back as `0xAARRGGBB`
+  integers, alpha first, matching component props (`guides/theming.md`).
+
+      Mob.Test.reduce_rgba(<<0, 0, 255, 255, 0, 0, 255, 255>>, 2, 1)
+      #=> {:ok, %{average: 0xFF0000FF, dominant: 0xFF0000FF, dominant_share: 1.0,
+      #           distinct: 1, pixels: 2}}
+
+  `:average` is the per-channel mean (each channel independently, alpha
+  included, rounded to nearest). `:dominant` is the most frequent exact pixel
+  value, ties broken by the higher `0xAARRGGBB` value so the result is
+  deterministic. `:dominant_share` is its fraction of all pixels and
+  `:distinct` counts distinct values — together they say whether `:dominant`
+  describes a flat fill or just the most common pixel of a gradient.
+
+  The capture path renders opaque, so alpha is `255` in practice; a buffer with
+  varying alpha is averaged channel-wise and *not* un-premultiplied.
+
+  `{:error, :empty_region}` for a non-positive dimension, `{:error,
+  :size_mismatch}` when `byte_size(rgba) != width * height * 4`.
+  """
+  @spec reduce_rgba(binary(), integer(), integer()) :: {:ok, map()} | {:error, atom()}
+  def reduce_rgba(rgba, width, height)
+      when is_binary(rgba) and is_integer(width) and is_integer(height) do
+    pixels = width * height
+
+    cond do
+      width <= 0 or height <= 0 -> {:error, :empty_region}
+      byte_size(rgba) != pixels * 4 -> {:error, :size_mismatch}
+      true -> {:ok, rgba_stats(rgba, pixels)}
+    end
+  end
+
+  defp rgba_stats(rgba, pixels) do
+    {sum_a, sum_r, sum_g, sum_b, freq} =
+      for <<r, g, b, a <- rgba>>, reduce: {0, 0, 0, 0, %{}} do
+        {sum_a, sum_r, sum_g, sum_b, freq} ->
+          {sum_a + a, sum_r + r, sum_g + g, sum_b + b,
+           Map.update(freq, argb(a, r, g, b), 1, &(&1 + 1))}
+      end
+
+    {dominant, count} = Enum.max_by(freq, fn {color, n} -> {n, color} end)
+
+    %{
+      average:
+        argb(
+          round(sum_a / pixels),
+          round(sum_r / pixels),
+          round(sum_g / pixels),
+          round(sum_b / pixels)
+        ),
+      dominant: dominant,
+      dominant_share: count / pixels,
+      distinct: map_size(freq),
+      pixels: pixels
+    }
+  end
+
+  defp argb(a, r, g, b), do: a * 0x1000000 + r * 0x10000 + g * 0x100 + b
 
   # ── Native UI (requires MCP tools) ───────────────────────────────────────────
 

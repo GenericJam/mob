@@ -76,6 +76,19 @@ Mob.Test.inspect(node)           # full snapshot: screen, assigns, nav stack, wi
 This is faster, exact (not pixel-inferred), and works without taking a
 screenshot. Use it as the default.
 
+**Colour is the exception.** `view_tree/1`'s `bg_color`/`text_color` are `nil`
+for virtually all SwiftUI content (iOS 26 paints via `SDFLayer` or rasterises
+into `contents` — colour for 4 of 443 nodes when measured). To verify what was
+actually drawn, sample pixels:
+
+```elixir
+Mob.Test.sample_color(node, "my-card")   # {:ok, %{average: 0xFF2196F3, dominant: ..., ...}}
+```
+
+It crops in the NIF, so only that element's pixels cross dist. See
+`decisions/2026-08-09-view-tree-colour-needs-screenshot-sampling.md` and
+`decisions/2026-08-10-sample-region-crops-natively-and-stays-debug-only.md`.
+
 ### Drive
 
 ```elixir
@@ -211,6 +224,17 @@ These are the things we've burned ourselves on. Following them isn't optional.
     them from the installed mob_new archive via `:code.priv_dir(:mob_new)`
     rather than duplicating them. See
     `mob_dev/decisions/2026-06-19-mob-adopt-lives-in-mob_dev.md`.
+
+14. **Don't drive iOS by coordinate — use `Mob.Test.tap/2`.** `tap_xy/3` works
+    on the simulator only for elements SwiftUI gives an accessibility action
+    (`Button`, text fields); a `Box` with `on_tap:` has none. On a physical
+    device the injected IOHID touch is accepted and never delivered, so every
+    coordinate fails. Both now return `{:error, :no_effect}` instead of the
+    `:ok` they used to — a harness that reported success for taps that did
+    nothing let a downstream iOS renderer bug sit unverified for weeks. When
+    you add a harness NIF, make its success value mean *observed effect*, never
+    *the platform API didn't complain*. See
+    `decisions/2026-08-09-tap-xy-reports-observed-effect.md`.
 
 ## Where to look
 

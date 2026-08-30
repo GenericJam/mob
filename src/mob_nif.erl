@@ -85,6 +85,7 @@
     %% Test harness — native UI inspection and interaction
     ui_tree/0,
     ui_view_tree/0,
+    ui_paint_debug/0,
     ui_debug/0,
     screen_info/0,
     tap/1,
@@ -101,6 +102,7 @@
     %% (remote-driving: agent gets pixels + deterministic scroll over dist,
     %% no adb/xcrun). See Mob.Test.screenshot/2, scroll_info/2, scroll_to/3.
     screenshot/3,
+    sample_region/4,
     scroll_info/1,
     scroll_to/3,
     element_frames/0,
@@ -185,6 +187,7 @@
     device_keep_awake/1,
     ui_tree/0,
     ui_view_tree/0,
+    ui_paint_debug/0,
     ui_debug/0,
     screen_info/0,
     tap/1,
@@ -198,6 +201,7 @@
     long_press_xy/3,
     swipe_xy/4,
     screenshot/3,
+    sample_region/4,
     scroll_info/1,
     scroll_to/3,
     element_frames/0,
@@ -310,12 +314,26 @@ device_orientation() -> erlang:nif_error(not_loaded).
 device_lock_orientation(_Orientation) -> erlang:nif_error(not_loaded).
 device_keep_awake(_On) -> erlang:nif_error(not_loaded).
 ui_tree() -> erlang:nif_error(not_loaded).
+%% ui_view_tree() -> nested map (iOS) | JSON binary (Android) | {error, Reason}
+%% Node shape: #{type, label, value, frame, bg_color, text_color, children}.
+%% bg_color/text_color are the colours the view actually painted, as
+%% 0xAARRGGBB integers (see guides/theming.md), or nil.
 ui_view_tree() -> erlang:nif_error(not_loaded).
+%% ui_paint_debug() -> JSON binary censusing where colour lives in the native
+%% view tree, grouped by view/layer class. Diagnostic for when ui_view_tree
+%% reports nil colours — tells you which property the renderer actually set.
+%% iOS only; Android has no implementation, so the stub raises there.
+ui_paint_debug() -> erlang:nif_error(not_loaded).
 ui_debug() -> erlang:nif_error(not_loaded).
 screen_info() -> erlang:nif_error(not_loaded).
 tap(_Label) -> erlang:nif_error(not_loaded).
 ax_action(_Match, _Action) -> erlang:nif_error(not_loaded).
 ax_action_at_xy(_X, _Y, _Action) -> erlang:nif_error(not_loaded).
+%% tap_xy(X, Y) -> ok | {error, Reason}
+%% ok is only returned when the tap demonstrably reached the BEAM (a tap/focus/
+%% change/submit/select event arrived within 300ms). Reason is one of
+%% no_view_at_point | no_element_at_point (simulator) | no_effect | Probe.
+%% See Mob.Test.tap_xy/3 for the per-platform capabilities behind those.
 tap_xy(_X, _Y) -> erlang:nif_error(not_loaded).
 type_text(_Text) -> erlang:nif_error(not_loaded).
 delete_backward() -> erlang:nif_error(not_loaded).
@@ -329,6 +347,13 @@ swipe_xy(_X1, _Y1, _X2, _Y2) -> erlang:nif_error(not_loaded).
 %% scroll_info(Id) -> #{offset, content, viewport, max_offset, kind} | {error, Reason}
 %% scroll_to(Id, X, Y) -> ok | {error, Reason}
 screenshot(_Format, _Quality, _Scale) -> erlang:nif_error(not_loaded).
+%% sample_region(X, Y, W, H) -> {ok, PixelW, PixelH, RGBA} | {error, Reason}
+%%   X/Y/W/H are window points (the element_frames/0 space); RGBA is
+%%   PixelW*PixelH*4 bytes of 8-bit RGBA at the native screen scale.
+%%   Reason :: empty_region | offscreen | no_window | capture_failed.
+%% Pixel sampling is the only reliable way to verify a drawn colour on iOS 26 —
+%% see Mob.Test.sample_color/2. iOS only; the stub raises on Android.
+sample_region(_X, _Y, _W, _H) -> erlang:nif_error(not_loaded).
 scroll_info(_Id) -> erlang:nif_error(not_loaded).
 scroll_to(_Id, _X, _Y) -> erlang:nif_error(not_loaded).
 %% element_frames() -> JSON binary {"id":[x,y,w,h],...} of on-screen frames for
