@@ -173,7 +173,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, nullable) UIColor *color; // track / indicator color
 
 // Layout behaviour
-@property(nonatomic) BOOL fillWidth; // fill parent width (default NO; button default YES)
+@property(nonatomic) CGFloat layoutWeight; // positive = expand on a row/column's main axis
+@property(nonatomic) BOOL fillWidth;       // fill parent width (default NO; button default YES)
 @property(nonatomic)
     BOOL fillHeight; // fill parent height (default NO) — used for full-screen overlays/dialogs
 @property(nonatomic) CGFloat cornerRadius; // rounded corners in pt (default 0)
