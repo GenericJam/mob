@@ -31,7 +31,7 @@ The first argument is the stack's name atom — it becomes a valid navigation de
 
 ### Tab bar
 
-A bottom tab bar (iOS: `UITabBarController`, Android: `NavigationBar`) containing multiple named stacks:
+Multiple named stacks, each with its own independent navigation history:
 
 ```elixir
 tab_bar([
@@ -41,9 +41,20 @@ tab_bar([
 ])
 ```
 
+Each declared stack keeps its own history *and* its own live screens, so
+switching away from a tab and back restores exactly where you were — see
+[Tabs and multi-stack state](#tabs-and-multi-stack-state) below.
+
+> **No automatic tab chrome yet.** The runtime fully backs `tab_bar/1` —
+> per-stack state is kept and `switch_tab/2` works — but declaring it does not
+> yet draw a bottom tab bar. Switching is programmatic via
+> `Mob.Socket.switch_tab/2` for now; to draw chrome yourself, render the
+> `:tab_bar` *widget* in your screens and wire its `on_tab_select` to
+> `switch_tab/2` (see [Styling → Tab bar props](styling.md#tab-bar-props-tab_bar)).
+
 ### Drawer
 
-A side drawer (Android: `ModalNavigationDrawer`, iOS: custom slide-in panel) containing multiple named stacks:
+The same shape with drawer semantics — multiple named stacks:
 
 ```elixir
 drawer([
@@ -51,6 +62,9 @@ drawer([
   stack(:settings, root: MyApp.SettingsScreen, title: "Settings")
 ])
 ```
+
+The multi-stack state rules below apply identically. As with `tab_bar/1`, no
+drawer chrome is drawn yet; switching is programmatic.
 
 ### Platform-specific navigation
 
@@ -71,7 +85,7 @@ Navigation is queued by returning a modified socket from any callback. The frame
 Navigate to a new screen, pushing it onto the stack:
 
 ```elixir
-def handle_event("tap", %{"tag" => "open_detail"}, socket) do
+def handle_info({:tap, :open_detail}, socket) do
   {:noreply, Mob.Socket.push_screen(socket, MyApp.DetailScreen, %{id: socket.assigns.id})}
 end
 ```
@@ -93,7 +107,7 @@ The params map is passed to the destination screen's `mount/3`.
 Return to the previous screen:
 
 ```elixir
-def handle_event("tap", %{"tag" => "back"}, socket) do
+def handle_info({:tap, :back}, socket) do
   {:noreply, Mob.Socket.pop_screen(socket)}
 end
 ```
@@ -126,7 +140,7 @@ Replace the entire navigation stack with a new root. No back button, no history.
 
 ```elixir
 # After login — go to home with no way to navigate back to the login screen
-def handle_event("tap", %{"tag" => "logged_in"}, socket) do
+def handle_info({:tap, :logged_in}, socket) do
   {:noreply, Mob.Socket.reset_to(socket, MyApp.HomeScreen)}
 end
 ```
@@ -140,11 +154,47 @@ Mob.Socket.reset_to(socket, MyApp.PortfolioScreen, %{}, transition: :push)
 
 ### `switch_tab/2`
 
-Switch to a named tab in a tab bar or drawer layout:
+Switch to a named stack in a tab bar or drawer layout:
 
 ```elixir
 Mob.Socket.switch_tab(socket, :settings)
 ```
+
+The first switch to a stack mounts its declared `:root`; later switches restore
+the stack exactly as you left it. Switching to the stack you are already on, or
+to a name no stack declares, is a no-op. A tab switch is a swap, not a move
+along a stack, so it renders with no push/pop animation.
+
+## Tabs and multi-stack state
+
+With a `tab_bar/1` or `drawer/1` layout, every declared stack owns its own
+history and its own live screens (`Mob.Nav` holds this state). The rules:
+
+- **Stacks materialize on first visit.** A declared stack has no screen and has
+  never mounted until it is first switched to — matching `UITabBarController`,
+  which does not instantiate a tab's view controller until selected. From the
+  second visit onward its state is retained for the app's lifetime.
+- **Switching away parks the whole stack.** The parked stack's screen processes
+  stay alive with their state, but their renders are not committed — an
+  inactive tab holds state without painting. Switching back restores the exact
+  screen and history, without re-mounting.
+- **Histories are independent.** `pop_screen/1`, `pop_to/2`, and
+  `pop_to_root/1` operate on the active stack only; nothing can pop across a
+  stack boundary.
+- **Back at a secondary stack's root returns to the first stack.** The system
+  back gesture at the root of any declared stack other than the first switches
+  to the first stack instead of exiting the app (the Android convention). Only
+  back at the first stack's root exits.
+- **A root outside the layout gets a private stack.** If `start_root/1` mounts
+  a screen no stack declares (a splash, login, or deep-link target), it is
+  parked under a private orphan stack when you first `switch_tab/2` away. Its
+  state is preserved, every declared root stays reachable, and the orphan is
+  never itself a switch target.
+
+Known gaps, tracked on the epic: `reset_to/2` does not re-derive which stack
+its destination belongs to (MOB-115); parked screens miss `terminate/2` and
+persisted-state sync (MOB-116); re-selecting the active tab is a no-op rather
+than popping that stack to its root (MOB-117).
 
 ## Navigation animations
 
@@ -152,9 +202,15 @@ The framework automatically picks the right animation based on the navigation ac
 - **Push** — slide in from right (iOS) / slide up (Android)
 - **Pop** — reverse slide
 - **Reset** — cross-fade (no directional animation, no back history)
+- **Tab switch** — none (a swap, not a move along a stack)
 
 `reset_to/4` can override only the animation with `transition: :push` or
-`transition: :pop`; it still discards navigation history.
+`transition: :pop`; it still discards navigation history. Any other transition
+value raises `ArgumentError` — including `:none`, which native would treat as
+"not navigation" and diff the incoming tree into the outgoing screen's view
+identities. A navigation's animation survives coalescing: an ordinary re-render
+(a timer tick, a component update) queued behind a push cannot swallow the
+push's animation.
 
 ## Passing data on pop
 
