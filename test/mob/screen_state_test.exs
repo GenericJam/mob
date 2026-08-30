@@ -155,6 +155,53 @@ defmodule Mob.ScreenStateTest do
     end
   end
 
+  describe "delete_all/0" do
+    test "removes every screen snapshot", %{socket: socket} do
+      Mob.ScreenState.dump(PersistScreen, Mob.Socket.assign(socket, count: 1))
+
+      keyed = Mob.Socket.new(KeyedScreen) |> Mob.Socket.assign(user_id: 99)
+      Mob.ScreenState.dump(KeyedScreen, keyed)
+
+      assert %{rows: [[2]]} = TestRepo.query!("SELECT count(*) FROM mob_screen_states", [])
+      assert :ok = Mob.ScreenState.delete_all()
+      assert %{rows: [[0]]} = TestRepo.query!("SELECT count(*) FROM mob_screen_states", [])
+    end
+
+    test "is a no-op when no Repo is configured" do
+      Application.delete_env(:mob, :repo)
+      assert :ok = Mob.ScreenState.delete_all()
+    after
+      Application.put_env(:mob, :repo, TestRepo)
+    end
+  end
+
+  describe "discarding a live screen's persisted state" do
+    test "suppresses both periodic sync and the final terminate dump" do
+      {:ok, pid} =
+        Mob.Screen.Server.start_link(
+          module: PersistScreen,
+          params: %{},
+          owner: self(),
+          ref: make_ref(),
+          render_mode: :no_render,
+          platform: :android,
+          nif: :mob_nif
+        )
+
+      socket = Mob.Screen.Server.socket(pid) |> Mob.Socket.assign(count: 77)
+      Mob.ScreenState.dump(PersistScreen, socket)
+      assert {:ok, 1, %{count: 77}} = Mob.ScreenState.load(PersistScreen, socket)
+
+      assert :ok = Mob.Screen.Server.discard_persisted_state(pid)
+      send(pid, :__mob_sync_state__)
+      :sys.get_state(pid)
+      assert :not_found = Mob.ScreenState.load(PersistScreen, socket)
+
+      GenServer.stop(pid)
+      assert :not_found = Mob.ScreenState.load(PersistScreen, socket)
+    end
+  end
+
   # ── use Mob.Screen, vsn: ─────────────────────────────────────────────────
 
   describe "use Mob.Screen, vsn:" do

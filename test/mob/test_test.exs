@@ -7,6 +7,36 @@ defmodule Mob.TestTest do
 
   alias Mob.Test, as: M
 
+  describe "reset_to/4" do
+    test "rejects an invalid scope before making an RPC" do
+      assert_raise ArgumentError, ~r/Mob.Test.reset_to\/4: invalid scope :tabs/, fn ->
+        M.reset_to(:unused_node, :login, %{}, scope: :tabs)
+      end
+    end
+  end
+
+  describe "switch_tab/3" do
+    test "rejects transitions that application sockets reject" do
+      assert_raise ArgumentError, ~r/Mob.Test.switch_tab\/3: invalid transition :puhs/, fn ->
+        M.switch_tab(:unused_node, :settings, transition: :puhs)
+      end
+
+      assert_raise ArgumentError, ~r/invalid transition :none/, fn ->
+        M.switch_tab(:unused_node, :settings, transition: :none)
+      end
+
+      assert_raise ArgumentError, ~r/invalid transition nil/, fn ->
+        M.switch_tab(:unused_node, :settings, transition: nil)
+      end
+    end
+
+    test "rejects invalid mount params before making an RPC" do
+      assert_raise ArgumentError, ~r/Mob.Test.switch_tab\/3: invalid mount_params/, fn ->
+        M.switch_tab(:unused_node, :settings, mount_params: [user_id: 7])
+      end
+    end
+  end
+
   defp sample_tree do
     %{
       type: :root,

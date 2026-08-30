@@ -136,14 +136,29 @@ Mob.Socket.pop_to_root(socket)
 
 ### `reset_to/2,3,4`
 
-Replace the entire navigation stack with a new root. No back button, no history. Used for auth transitions:
+Replace the current navigation stack with a new root. No back button, no history:
 
 ```elixir
-# After login — go to home with no way to navigate back to the login screen
+# Replace only the active stack
 def handle_info({:tap, :logged_in}, socket) do
   {:noreply, Mob.Socket.reset_to(socket, MyApp.HomeScreen)}
 end
 ```
+
+In an app with tabs, authentication transitions normally need to discard every
+stack so no screen or state from the prior session remains parked:
+
+```elixir
+Mob.Socket.reset_to(socket, MyApp.LoginScreen, %{}, scope: :all)
+```
+
+The default scope is `:stack`, which preserves the other tab stacks. `:all`
+stops every screen in every stack and starts fresh. If the destination is a
+declared root, its stack becomes active; login and other undeclared roots use
+the private orphan stack. If the destination cannot mount, the existing stacks
+remain intact. An all-stack reset is also a persistence boundary: it clears all
+stored screen snapshots, suppresses final writes from the discarded screens,
+and does not restore a snapshot into the replacement screen.
 
 The reset always replaces the stack. Its animation can be overridden when the
 same stack operation represents directional movement, such as custom tabs:
@@ -152,7 +167,7 @@ same stack operation represents directional movement, such as custom tabs:
 Mob.Socket.reset_to(socket, MyApp.PortfolioScreen, %{}, transition: :push)
 ```
 
-### `switch_tab/2`
+### `switch_tab/2,3`
 
 Switch to a named stack in a tab bar or drawer layout:
 
@@ -162,8 +177,29 @@ Mob.Socket.switch_tab(socket, :settings)
 
 The first switch to a stack mounts its declared `:root`; later switches restore
 the stack exactly as you left it. Switching to the stack you are already on, or
-to a name no stack declares, is a no-op. A tab switch is a swap, not a move
-along a stack, so it renders with no push/pop animation.
+to a name no stack declares, is a no-op. By default a tab switch is an
+unanimated swap. Apps with ordered tabs can supply a directional transition:
+
+```elixir
+Mob.Socket.switch_tab(socket, :portfolio, transition: :push)
+Mob.Socket.switch_tab(socket, :home, transition: :pop)
+```
+
+The transition changes only the animation; each tab still retains its own
+screen and history stack.
+
+When a tab root needs session or launch data, pass it on the first switch:
+
+```elixir
+Mob.Socket.switch_tab(socket, :home,
+  transition: :push,
+  mount_params: %{session: session}
+)
+```
+
+`mount_params` must be a map. They are used only when the target stack has not
+yet mounted. Switching back to an existing stack restores its original screen
+and state; later `mount_params` do not replace the params it mounted with.
 
 ## Tabs and multi-stack state
 
@@ -191,8 +227,7 @@ history and its own live screens (`Mob.Nav` holds this state). The rules:
   state is preserved, every declared root stays reachable, and the orphan is
   never itself a switch target.
 
-Known gaps, tracked on the epic: `reset_to/2` does not re-derive which stack
-its destination belongs to (MOB-115); parked screens miss `terminate/2` and
+Known gaps, tracked on the epic: parked screens miss `terminate/2` and
 persisted-state sync (MOB-116); re-selecting the active tab is a no-op rather
 than popping that stack to its root (MOB-117).
 
@@ -202,15 +237,21 @@ The framework automatically picks the right animation based on the navigation ac
 - **Push** — slide in from right (iOS) / slide up (Android)
 - **Pop** — reverse slide
 - **Reset** — cross-fade (no directional animation, no back history)
-- **Tab switch** — none (a swap, not a move along a stack)
+- **Tab switch** — none by default; `switch_tab/3` can request push, pop, or reset
 
-`reset_to/4` can override only the animation with `transition: :push` or
-`transition: :pop`; it still discards navigation history. Any other transition
+`reset_to/4` can override the animation with `transition: :push` or
+`transition: :pop`, and the reset boundary with `scope: :stack` or `scope: :all`.
+Any other transition
 value raises `ArgumentError` — including `:none`, which native would treat as
 "not navigation" and diff the incoming tree into the outgoing screen's view
 identities. A navigation's animation survives coalescing: an ordinary re-render
 (a timer tick, a component update) queued behind a push cannot swallow the
 push's animation.
+
+`switch_tab/3` accepts the same validated transition values (`:push`, `:pop`,
+or `:reset`) and an optional `mount_params` map. Unlike `reset_to/4`, its
+legacy `switch_tab/2` form deliberately uses `:none`, preserving the
+unanimated tab-swap behavior.
 
 ## Passing data on pop
 
