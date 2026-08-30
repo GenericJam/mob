@@ -156,6 +156,14 @@ These are the things we've burned ourselves on. Following them isn't optional.
    build a tree and hand it to `Mob.Sender.render/5`; the sender is the only
    caller. See `decisions/2026-08-28-sender-serialises-render.md`.
 
+   Android event handles also encode the render generation. `clear_taps`
+   advances the build generation, and `set_root` commits the table, count, and
+   generation under the same mutex. Every active-table lookup must decode and
+   validate through `resolveActiveTapLocked`; treating a handle as a bare slot
+   can route a callback from an old Compose tree into the current screen. A
+   sender must also copy the tag into its delivery environment while holding
+   that mutex; the table's `tag_env` may be freed as soon as the lock is released.
+
 4. **TDD discipline in mob_dev.** Every new public function gets a test.
    `mob_dev/CLAUDE.md` makes this explicit. Don't bypass — the tests are how we
    catch the multi-step regressions like the iOS-device deploy chain.
