@@ -10,6 +10,30 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.7.37] - 2026-08-30
+
+### Added
+- **Directional tab switches with first-mount parameters.**
+  `Mob.Socket.switch_tab/3` and `Mob.Test.switch_tab/3` take
+  `transition: :push | :pop | :reset` and `mount_params` delivered to a stack
+  root on its first mount (revisits keep the original params). Tab-switch
+  frames carry an activation token, so a repaint that began while a screen
+  was parked can no longer consume the navigation frame or blank the
+  incoming screen. (#111)
+- **Opt-in all-stack reset for session boundaries.** `Mob.Socket.reset_to/4`
+  accepts `scope: :all` (mirrored by `Mob.Test.reset_to/4`): stops every
+  screen in every stack — parked ones included — and clears all persisted
+  screen snapshots without restoring one into the replacement. Built for
+  sign-out. (#111)
+
+### Fixed
+- **Component processes are reclaimed when their owning screen exits.**
+  Components monitor their owner: on screen exit they terminate and release
+  their native handle-pool slots (before user `terminate/2`, so a raising
+  callback cannot skip reclamation), and a terminating component can no
+  longer deregister a replacement that has reclaimed its id. Fixes native
+  handle exhaustion under tab churn. (#111)
+
 ## [0.7.36] - 2026-08-30
 
 ### Fixed
