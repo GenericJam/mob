@@ -767,6 +767,10 @@ private struct MobBox: View {
                     height: node.fixedHeight > 0 ? CGFloat(node.fixedHeight) : nil,
                     alignment: alignment
                 )
+            } else if node.fixedHeight > 0 {
+                stack
+                    .frame(height: CGFloat(node.fixedHeight), alignment: alignment)
+                    .frame(maxWidth: .infinity, alignment: alignment)
             } else if node.fillHeight {
                 // fill_height: true is what lets a wrapping box stretch to the
                 // viewport so center alignment lands on the visible midpoint
