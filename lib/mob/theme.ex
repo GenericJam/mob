@@ -1,4 +1,6 @@
 defmodule Mob.Theme do
+  @color_scheme_nif_status {__MODULE__, :color_scheme_nif_status}
+
   @moduledoc """
   Design token system for Mob apps.
 
@@ -348,13 +350,46 @@ defmodule Mob.Theme do
   """
   @spec color_scheme() :: :light | :dark
   def color_scheme do
-    case :mob_nif.color_scheme() do
-      :dark -> :dark
-      _ -> :light
+    case :persistent_term.get(@color_scheme_nif_status, :unknown) do
+      :available -> native_color_scheme(false)
+      :unavailable -> recover_color_scheme_nif()
+      :unknown -> probe_color_scheme_nif()
     end
+  end
+
+  defp native_color_scheme(mark_available?) do
+    scheme = if :mob_nif.color_scheme() == :dark, do: :dark, else: :light
+    if mark_available?, do: :persistent_term.put(@color_scheme_nif_status, :available)
+    scheme
   rescue
-    # NIF not loaded (host BEAM), wrong arity, or platform doesn't implement
-    _ -> :light
+    _error in [UndefinedFunctionError, ErlangError] ->
+      :persistent_term.put(@color_scheme_nif_status, :unavailable)
+      :light
+  end
+
+  defp recover_color_scheme_nif do
+    if :code.is_loaded(:mob_nif) == false, do: :light, else: probe_color_scheme_nif()
+  end
+
+  # A failed on_load purges mob_nif, so every caller would otherwise retry the
+  # same failing load. The first probe is serialised across callers; a later
+  # successful native code load makes the module visible and re-enables it.
+  defp probe_color_scheme_nif do
+    :global.trans(
+      {@color_scheme_nif_status, self()},
+      fn ->
+        case :persistent_term.get(@color_scheme_nif_status, :unknown) do
+          :available -> native_color_scheme(false)
+          :unavailable -> recover_color_scheme_nif_without_lock()
+          :unknown -> native_color_scheme(true)
+        end
+      end,
+      [node()]
+    )
+  end
+
+  defp recover_color_scheme_nif_without_lock do
+    if :code.is_loaded(:mob_nif) == false, do: :light, else: native_color_scheme(true)
   end
 
   # ── Token maps (used by Mob.Renderer) ─────────────────────────────────────
