@@ -153,7 +153,7 @@ defmodule Mob.ComponentTest do
     test "deregister removes the entry" do
       screen = self()
       Mob.ComponentRegistry.register(screen, :temp, CounterComponent, self())
-      Mob.ComponentRegistry.deregister(screen, :temp, CounterComponent)
+      Mob.ComponentRegistry.deregister(screen, :temp, CounterComponent, self())
 
       assert {:error, :not_found} =
                Mob.ComponentRegistry.lookup(screen, :temp, CounterComponent)

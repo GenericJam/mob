@@ -45,20 +45,24 @@ defmodule Mob.ComponentRegistry do
   end
 
   @doc "Remove a component registration (called from ComponentServer.terminate)."
-  @spec deregister(pid(), atom(), module()) :: :ok
-  def deregister(screen_pid, id, module) do
-    key = {screen_pid, id, module}
+  @spec deregister(pid(), atom(), module(), pid()) :: :ok
+  def deregister(screen_pid, id, module, component_pid) do
+    if :ets.whereis(@table) != :undefined do
+      key = {screen_pid, id, module}
 
-    case :ets.lookup(@table, key) do
-      [{_, pid}] ->
-        :ets.delete(@table, key)
-        :ets.delete(@table, pid)
+      case :ets.lookup(@table, key) do
+        [{_, ^component_pid}] ->
+          :ets.delete(@table, key)
+          :ets.delete(@table, component_pid)
 
-      [] ->
-        :ok
+        _ ->
+          :ok
+      end
     end
 
     :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   @doc """
@@ -67,18 +71,22 @@ defmodule Mob.ComponentRegistry do
   """
   @spec reconcile(pid(), MapSet.t()) :: :ok
   def reconcile(screen_pid, active_keys) do
-    pattern = {{screen_pid, :_, :_}, :_}
-    entries = :ets.match_object(@table, pattern)
+    if :ets.whereis(@table) != :undefined do
+      pattern = {{screen_pid, :_, :_}, :_}
+      entries = :ets.match_object(@table, pattern)
 
-    for {{^screen_pid, id, module}, pid} <- entries do
-      unless MapSet.member?(active_keys, {id, module}) do
-        :ets.delete(@table, {screen_pid, id, module})
-        :ets.delete(@table, pid)
-        Process.exit(pid, :shutdown)
+      for {{^screen_pid, id, module}, pid} <- entries do
+        unless MapSet.member?(active_keys, {id, module}) do
+          :ets.delete(@table, {screen_pid, id, module})
+          :ets.delete(@table, pid)
+          Process.exit(pid, :shutdown)
+        end
       end
     end
 
     :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   # ── GenServer ──────────────────────────────────────────────────────────────
