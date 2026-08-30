@@ -36,6 +36,7 @@ defmodule Mob.ScreenState do
   VALUES (?, ?, ?, ?)
   """
   @delete_sql "DELETE FROM mob_screen_states WHERE key = ?"
+  @delete_all_sql "DELETE FROM mob_screen_states"
 
   @doc """
   Persist the current assigns of `socket` for `module`.
@@ -91,6 +92,23 @@ defmodule Mob.ScreenState do
     with repo when not is_nil(repo) <- repo(),
          key <- screen_key(module, socket) do
       apply(repo, :query!, [@delete_sql, [key]])
+    end
+
+    :ok
+  end
+
+  @doc """
+  Delete every persisted screen snapshot.
+
+  This is the final sweep for an explicit navigation session boundary such as
+  `Mob.Socket.reset_to/4` with `scope: :all`. Per-screen deletion uses the live
+  socket so custom `screen_key/1` callbacks are respected; this sweep also
+  removes a snapshot written by a screen that exited during that preparation.
+  """
+  @spec delete_all() :: :ok
+  def delete_all do
+    with repo when not is_nil(repo) <- repo() do
+      apply(repo, :query!, [@delete_all_sql, []])
     end
 
     :ok

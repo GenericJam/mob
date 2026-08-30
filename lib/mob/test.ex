@@ -357,18 +357,34 @@ defmodule Mob.Test do
   def pop_to_root(node), do: nav(node, {:pop_to_root})
 
   @doc """
-  Replace the entire navigation stack with a new root screen. Synchronous.
+  Replace the current navigation stack with a new root screen. Synchronous.
 
   Use this to simulate auth transitions (e.g. login → home with no back button).
 
   Pass `transition: :push` or `transition: :pop` to drive a directional reset,
-  matching `Mob.Socket.reset_to/4`.
+  matching `Mob.Socket.reset_to/4`. Pass `scope: :all` to discard every parked
+  stack as well as the active one.
   """
-  @spec reset_to(node(), module() | atom(), map(), [{:transition, atom()}]) :: :ok
+  @spec reset_to(node(), module() | atom(), map(), [
+          {:transition, atom()} | {:scope, :stack | :all}
+        ]) :: :ok
   def reset_to(node, dest, params \\ %{}, opts \\ []) do
-    case Keyword.get(opts, :transition) do
-      nil -> nav(node, {:reset, dest, params})
-      transition -> nav(node, {:reset, dest, params, transition})
+    transition = Keyword.get(opts, :transition)
+
+    case Keyword.get(opts, :scope, :stack) do
+      :stack when is_nil(transition) ->
+        nav(node, {:reset, dest, params})
+
+      :stack ->
+        nav(node, {:reset, dest, params, transition})
+
+      :all ->
+        nav(node, {:reset, dest, params, transition || :reset, :all})
+
+      other ->
+        raise ArgumentError,
+              "Mob.Test.reset_to/4: invalid scope #{Kernel.inspect(other)}. " <>
+                "Expected one of [:stack, :all]."
     end
   end
 

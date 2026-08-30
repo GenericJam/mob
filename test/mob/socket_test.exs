@@ -162,6 +162,34 @@ defmodule Mob.SocketTest do
       end
     end
 
+    test "emits an all-stack reset only when explicitly requested" do
+      socket =
+        Socket.new(MyScreen)
+        |> Socket.reset_to(OtherScreen, %{source: :logout}, scope: :all)
+
+      assert socket.__mob__.nav_action ==
+               {:reset, OtherScreen, %{source: :logout}, :reset, :all}
+    end
+
+    test "combines all-stack scope with a directional transition" do
+      socket =
+        Socket.new(MyScreen)
+        |> Socket.reset_to(OtherScreen, %{}, transition: :pop, scope: :all)
+
+      assert socket.__mob__.nav_action == {:reset, OtherScreen, %{}, :pop, :all}
+    end
+
+    test "keeps the established action shape for explicit stack scope" do
+      socket = Socket.new(MyScreen) |> Socket.reset_to(OtherScreen, %{}, scope: :stack)
+      assert socket.__mob__.nav_action == {:reset, OtherScreen, %{}, :reset}
+    end
+
+    test "rejects an unknown reset scope" do
+      assert_raise ArgumentError, ~r/invalid scope :tabs/, fn ->
+        Socket.new(MyScreen) |> Socket.reset_to(OtherScreen, %{}, scope: :tabs)
+      end
+    end
+
     test "rejects :none, which would replace the stack without telling the platform" do
       # :none suppresses the navigation-version bump, so SwiftUI diffs the
       # incoming tree into the outgoing screen's view identities — a TextField

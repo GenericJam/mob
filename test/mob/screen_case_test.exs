@@ -62,6 +62,10 @@ defmodule Mob.ScreenCaseTest do
       {:noreply, Mob.Socket.reset_to(socket, CounterScreen, %{}, transition: :push)}
     end
 
+    def handle_event("reset_all", _params, socket) do
+      {:noreply, Mob.Socket.reset_to(socket, CounterScreen, %{}, scope: :all)}
+    end
+
     def handle_event("switch_push", _params, socket) do
       {:noreply, Mob.Socket.switch_tab(socket, :settings, transition: :push)}
     end
@@ -200,6 +204,11 @@ defmodule Mob.ScreenCaseTest do
       # `assert navigated_to(view) == SomeScreen` failed for every caller who
       # passed a transition — in a helper whose whole job is that assertion.
       view = NavScreen |> mount_screen() |> render_event("reset_push")
+      assert navigated_to(view) == CounterScreen
+    end
+
+    test "records an all-stack reset as the destination module" do
+      view = NavScreen |> mount_screen() |> render_event("reset_all")
       assert navigated_to(view) == CounterScreen
     end
 
