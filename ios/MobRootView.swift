@@ -381,33 +381,41 @@ struct MobNodeView: View {
 
             case .scroll:
                 let isHorizontal = node.axis == "horizontal"
-                let axes: Axis.Set = isHorizontal ? .horizontal : .vertical
-                ScrollView(axes, showsIndicators: node.showIndicator) {
-                    if isHorizontal {
+                if isHorizontal {
+                    ScrollView(.horizontal, showsIndicators: node.showIndicator) {
                         HStack(alignment: .top, spacing: 0) {
                             ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in MobNodeView(node: child) }
                         }
                         .frame(maxHeight: .infinity, alignment: .topLeading)
-                    } else {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in MobNodeView(node: child) }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .scrollDismissesKeyboard(.interactively)
+                    .padding(node.paddingEdgeInsets)
+                    .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
+                    .ifLet(node.nativeViewId) { view, id in view.accessibilityIdentifier(id) }
+                    .modifier(MobScrollObserverGate(node: node, isHorizontal: true))
+                } else {
+                    GeometryReader { viewport in
+                        ScrollView(.vertical, showsIndicators: node.showIndicator) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in MobNodeView(node: child) }
+                            }
+                            // Bind vertical scroll content to the live scene
+                            // width. Without this minimum, SwiftUI may retain
+                            // the content's prior portrait-sized proposal after
+                            // an iPad window rotates or resizes.
+                            .frame(
+                                minWidth: max(0, viewport.size.width),
+                                maxWidth: .infinity,
+                                alignment: .leading
+                            )
+                        }
+                        .scrollDismissesKeyboard(.interactively)
+                        .ifLet(node.nativeViewId) { view, id in view.accessibilityIdentifier(id) }
+                        .modifier(MobScrollObserverGate(node: node, isHorizontal: false))
+                    }
+                    .padding(node.paddingEdgeInsets)
+                    .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
                 }
-                .scrollDismissesKeyboard(.interactively)
-                .padding(node.paddingEdgeInsets)
-                .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
-                // Expose the node :id on the backing UIScrollView so the test
-                // harness (Mob.Test.scroll_info/scroll_to) can address it by id.
-                .ifLet(node.nativeViewId) { view, id in view.accessibilityIdentifier(id) }
-                // ── Batch 5 Tier 1: scroll position observation ──
-                // SwiftUI's onScrollGeometryChange is iOS 18+. On older iOS
-                // there's no clean SwiftUI API for raw offset; UIKit-backed
-                // alternative pending. Until then, scroll events are silently
-                // unavailable on iOS 17 (renderer still accepts on_scroll
-                // props — they just won't fire).
-                .modifier(MobScrollObserverGate(node: node, isHorizontal: isHorizontal))
 
             case .textField:
                 let placeholder = node.placeholder ?? ""
