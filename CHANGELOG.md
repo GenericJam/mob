@@ -15,9 +15,10 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   and iOS event handles now carry their render generation, with the handler
   table, count, and generation committed atomically. Taps and gestures from an
   old native tree are rejected; change-family events and animation-delayed
-  sheet dismissals may cross one render only when the retained and current
-  registrations have identical PID and tag identity, preserving in-flight
-  intent without permitting misroutes. Building tables are generation-invalid
+  sheet dismissals may cross any number of renders while the slot's consecutive
+  committed registrations retain identical PID and tag identity, preserving
+  in-flight intent without permitting delivery to a replacement handler.
+  Building tables are generation-invalid
   until committed, so stale lookup cannot observe partially rebuilt handlers.
   Event tags are copied while their registry lock is held, closing the iOS and
   Android environment-lifetime race. Persistent component handles also carry a

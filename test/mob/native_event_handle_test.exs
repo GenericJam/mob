@@ -75,13 +75,17 @@ defmodule Mob.NativeEventHandleTest do
              ~r/defer erts\.enif_free_env\(env\);\s+const snap = snapChangeTap\(handle, env\) orelse return;/
   end
 
-  test "change events tolerate only identity-preserving stale handles" do
+  test "identity events tolerate stale handles across unchanged renders" do
     assert @android_source =~ "fn snapChangeTap(handle: c_int, env: ?*erts.ErlNifEnv) ?TapSnap"
-    assert @android_source =~ "source.pid.pid != active.pid.pid"
-    assert @android_source =~ "erts.enif_compare(source.tag, active.tag) != 0"
+    assert @android_source =~ "identity_start_generation: u32"
+    assert @android_source =~ "tap_handle_codec.generationWithinIdentity"
+    assert @android_source =~ "prior.pid.pid == current.pid.pid"
+    assert @android_source =~ "erts.enif_compare(prior.tag, current.tag) == 0"
     assert @ios_source =~ "mob_snap_change_tap"
-    assert @ios_source =~ "source->pid.pid != active->pid.pid"
-    assert @ios_source =~ "enif_compare(source->tag, active->tag) != 0"
+    assert @ios_source =~ "identity_start_generation"
+    assert @ios_source =~ "mob_generation_within_identity"
+    assert @ios_source =~ "previous[slot].pid.pid == build[slot].pid.pid"
+    assert @ios_source =~ "enif_compare(previous[slot].tag, build[slot].tag) == 0"
   end
 
   test "building tables are unmatchable until their generation is committed" do
@@ -94,6 +98,24 @@ defmodule Mob.NativeEventHandleTest do
     [ios_clear, _] = String.split(ios_clear, "return enif_make_atom(env, \"ok\");", parts: 2)
 
     assert ios_clear =~ "tap_table_generations[1 - tap_active] = 0"
+  end
+
+  test "tap registrations allocate their tag environment before publishing the slot" do
+    [_, android_register] = String.split(@android_source, "export fn nif_register_tap", parts: 2)
+    [android_register, _] = String.split(android_register, "// nif_clear_taps/0", parts: 2)
+
+    {android_alloc, _} = :binary.match(android_register, "erts.enif_alloc_env()")
+    {android_publish, _} = :binary.match(android_register, "tap_build_count += 1")
+    assert android_alloc < android_publish
+
+    [_, ios_register] =
+      String.split(@ios_source, "static ERL_NIF_TERM nif_register_tap", parts: 2)
+
+    [ios_register, _] = String.split(ios_register, "// ── NIF: clear_taps/0", parts: 2)
+
+    {ios_alloc, _} = :binary.match(ios_register, "enif_alloc_env()")
+    {ios_publish, _} = :binary.match(ios_register, "tap_build_count++")
+    assert ios_alloc < ios_publish
   end
 
   test "animation-delayed dismissals use identity-preserving stale handling" do
