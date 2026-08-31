@@ -40,6 +40,7 @@
 const std = @import("std");
 const jni = @import("mob_zig.zig");
 const erts = @import("mob_erts.zig");
+const tap_handle_codec = @import("tap_handle_codec.zig");
 
 // ── Logging tag for NIFs that log to Android logcat ──────────────────────
 
@@ -950,7 +951,7 @@ export fn nif_swipe_xy(
 // Both pools sit behind mutexes. The mutexes are created lazily by
 // mob_nif_init_state (called from mob_nif.c's nif_load BEAM callback).
 
-const MAX_TAP_HANDLES: usize = 256;
+const MAX_TAP_HANDLES: usize = tap_handle_codec.slot_count;
 // MOB-100: bumped from 64 — a single screen legitimately rendering ~60
 // components (e.g. an icon catalog) plus a few leftover slots from prior
 // navigation could tip over the old cap. Keep in sync with the identical
@@ -965,6 +966,10 @@ const TapHandle = extern struct {
     pid: erts.ErlNifPid,
     tag_env: ?*erts.ErlNifEnv,
     tag: erts.ERL_NIF_TERM,
+    // First generation in the current consecutive run of identical PID/tag
+    // registrations at this slot. Identity events can safely outlive the two
+    // physical tables while their route remains unchanged.
+    identity_start_generation: u32,
 
     // ── Batch 5 throttle state — populated by mob_set_throttle_config ──
     throttle_ms: c_int,
@@ -993,7 +998,9 @@ const ComponentHandle = extern struct {
 var tap_tables: [2][MAX_TAP_HANDLES]TapHandle = std.mem.zeroes([2][MAX_TAP_HANDLES]TapHandle);
 var tap_active: usize = 0; // index of the table readers resolve against
 var tap_active_count: c_int = 0; // committed handle count in the active table
+var tap_table_generations: [2]u32 = .{ 0, 0 };
 var tap_build_count: c_int = 0; // handles registered so far into the building table
+var tap_build_generation: u32 = 0; // generation encoded while building the next tree
 var tap_mutex: ?*erts.ErlNifMutex = null;
 /// Snapshotted by nif_set_root; written by nif_set_transition. Guarded by
 /// tap_mutex (the C original reused that mutex rather than allocating a
@@ -1008,6 +1015,7 @@ var g_transition: [16]u8 = blk: {
 };
 
 var component_handles: [MAX_COMPONENT_HANDLES]ComponentHandle = @splat(std.mem.zeroes(ComponentHandle));
+var component_generations: [MAX_COMPONENT_HANDLES]u32 = @splat(0);
 var component_mutex: ?*erts.ErlNifMutex = null;
 
 /// Initialise both mutexes. Called from mob_nif.c's nif_load BEAM callback
@@ -1020,11 +1028,10 @@ pub export fn mob_nif_init_state() callconv(.c) c_int {
 }
 
 // ── Sender helpers ───────────────────────────────────────────────────────
-// All senders share the same shape: lock tap_mutex, validate the handle
-// is in use (slot index in range AND tag_env non-null), copy the pid + tag
-// out under the lock, then build and deliver the message to that pid in a
-// freshly allocated env. The lock is dropped before enif_send so we don't
-// hold it across a potentially-blocking send.
+// All senders allocate their delivery env first, then lock tap_mutex, validate
+// the handle, and copy the tag into that delivery env while its source tag_env
+// is protected. The lock is dropped before message construction and enif_send
+// so we don't hold it across potentially-blocking work.
 
 /// Snapshot a TapHandle's routing under the tap_mutex. Returns null if
 /// the handle is unused/out of range. The boolean flag pulls seq too —
@@ -1035,24 +1042,88 @@ const TapSnap = struct {
     seq: u64,
 };
 
-fn snapTap(handle: c_int) ?TapSnap {
+fn resolveActiveTapLocked(handle: c_int) ?*TapHandle {
+    const slot_index = tap_handle_codec.slotForActive(
+        handle,
+        tap_table_generations[tap_active],
+        @intCast(tap_active_count),
+    ) orelse return null;
+    const tap = &tap_tables[tap_active][slot_index];
+    return if (tap.tag_env == null) null else tap;
+}
+
+fn copyTap(tap: *const TapHandle, env: ?*erts.ErlNifEnv) TapSnap {
+    return .{ .pid = tap.pid, .tag = erts.enif_make_copy(env, tap.tag), .seq = tap.seq };
+}
+
+fn snapTap(handle: c_int, env: ?*erts.ErlNifEnv) ?TapSnap {
     erts.enif_mutex_lock(tap_mutex);
-    defer erts.enif_mutex_unlock(tap_mutex);
-    if (handle < 0 or handle >= tap_active_count) return null;
-    const h = &tap_tables[tap_active][@intCast(handle)];
-    if (h.tag_env == null) return null;
-    return TapSnap{ .pid = h.pid, .tag = h.tag, .seq = h.seq };
+    const h = resolveActiveTapLocked(handle) orelse {
+        erts.enif_mutex_unlock(tap_mutex);
+        logd_nif("rejected stale event handle {d}", .{handle});
+        return null;
+    };
+    const snap = copyTap(h, env);
+    erts.enif_mutex_unlock(tap_mutex);
+    return snap;
+}
+
+fn snapChangeTap(handle: c_int, env: ?*erts.ErlNifEnv) ?TapSnap {
+    erts.enif_mutex_lock(tap_mutex);
+    if (resolveActiveTapLocked(handle)) |active| {
+        const snap = copyTap(active, env);
+        erts.enif_mutex_unlock(tap_mutex);
+        return snap;
+    }
+
+    const decoded = tap_handle_codec.decode(handle) orelse {
+        erts.enif_mutex_unlock(tap_mutex);
+        logd_nif("rejected stale event handle {d}", .{handle});
+        return null;
+    };
+    const active = if (decoded.slot < @as(usize, @intCast(tap_active_count)))
+        &tap_tables[tap_active][decoded.slot]
+    else {
+        erts.enif_mutex_unlock(tap_mutex);
+        logd_nif("rejected stale event handle {d}", .{handle});
+        return null;
+    };
+    if (active.tag_env == null or !tap_handle_codec.generationWithinIdentity(
+        decoded.generation,
+        active.identity_start_generation,
+        tap_table_generations[tap_active],
+    )) {
+        erts.enif_mutex_unlock(tap_mutex);
+        logd_nif("rejected stale event handle {d}", .{handle});
+        return null;
+    }
+
+    const snap = copyTap(active, env);
+    erts.enif_mutex_unlock(tap_mutex);
+    return snap;
 }
 
 /// `{:event, tag}` — used by focus/blur/submit/select and the gesture
 /// senders that don't carry a payload.
 fn sendEvent(handle: c_int, comptime atom_name: [:0]const u8) void {
-    const snap = snapTap(handle) orelse return;
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
+    const snap = snapTap(handle, env) orelse return;
     const msg = erts.makeTuple(env, .{
         erts.enif_make_atom(env, atom_name.ptr),
-        erts.enif_make_copy(env, snap.tag),
+        snap.tag,
+    });
+    var pid = snap.pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+fn sendIdentityEvent(handle: c_int, comptime atom_name: [:0]const u8) void {
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const snap = snapChangeTap(handle, env) orelse return;
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, atom_name.ptr),
+        snap.tag,
     });
     var pid = snap.pid;
     _ = erts.enif_send(null, &pid, env, msg);
@@ -1061,12 +1132,12 @@ fn sendEvent(handle: c_int, comptime atom_name: [:0]const u8) void {
 /// `{:change, tag, value}` — used by the three change senders below. The
 /// value term must originate in the same env we're delivering through.
 fn sendChange(handle: c_int, value_term: erts.ERL_NIF_TERM) void {
-    const snap = snapTap(handle) orelse return;
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
+    const snap = snapChangeTap(handle, env) orelse return;
     const msg = erts.makeTuple(env, .{
         erts.enif_make_atom(env, "change"),
-        erts.enif_make_copy(env, snap.tag),
+        snap.tag,
         erts.enif_make_copy(env, value_term),
     });
     var pid = snap.pid;
@@ -1092,7 +1163,7 @@ pub export fn mob_send_tap(handle: c_int) callconv(.c) void {
 /// screen down — or silently drops it if the screen has a catch-all, in which
 /// case the BEAM never learns the sheet closed and can't re-present it (MOB-104).
 pub export fn mob_send_dismiss(handle: c_int) callconv(.c) void {
-    sendEvent(handle, "dismiss");
+    sendIdentityEvent(handle, "dismiss");
 }
 
 pub export fn mob_send_change_str(handle: c_int, utf8: [*:0]const u8) callconv(.c) void {
@@ -1138,9 +1209,9 @@ pub export fn mob_send_select(handle: c_int) callconv(.c) void {
 /// `{:compose, tag, %{text, phase}}` — IME composition events. phase is
 /// began | updating | committed | cancelled (the latter two are terminal).
 pub export fn mob_send_compose(handle: c_int, text: ?[*:0]const u8, phase: [*:0]const u8) callconv(.c) void {
-    const snap = snapTap(handle) orelse return;
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
+    const snap = snapTap(handle, env) orelse return;
 
     const text_cstr: [*:0]const u8 = text orelse "";
     const keys = [_]erts.ERL_NIF_TERM{
@@ -1154,7 +1225,7 @@ pub export fn mob_send_compose(handle: c_int, text: ?[*:0]const u8, phase: [*:0]
     const payload = erts.makeMap(env, &keys, &vals) orelse return;
     const msg = erts.makeTuple(env, .{
         erts.enif_make_atom(env, "compose"),
-        erts.enif_make_copy(env, snap.tag),
+        snap.tag,
         payload,
     });
     var pid = snap.pid;
@@ -1186,12 +1257,12 @@ pub export fn mob_send_swipe_down(handle: c_int) callconv(.c) void {
 }
 
 pub export fn mob_send_swipe_with_direction(handle: c_int, direction: [*:0]const u8) callconv(.c) void {
-    const snap = snapTap(handle) orelse return;
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
+    const snap = snapTap(handle, env) orelse return;
     const msg = erts.makeTuple(env, .{
         erts.enif_make_atom(env, "swipe"),
-        erts.enif_make_copy(env, snap.tag),
+        snap.tag,
         erts.enif_make_atom(env, direction),
     });
     var pid = snap.pid;
@@ -1214,9 +1285,7 @@ pub export fn mob_set_throttle_config(
 ) callconv(.c) void {
     erts.enif_mutex_lock(tap_mutex);
     defer erts.enif_mutex_unlock(tap_mutex);
-    if (handle < 0 or handle >= tap_active_count) return;
-    const h = &tap_tables[tap_active][@intCast(handle)];
-    if (h.tag_env == null) return;
+    const h = resolveActiveTapLocked(handle) orelse return;
     h.throttle_ms = throttle_ms;
     h.debounce_ms = debounce_ms;
     h.delta_threshold = delta_threshold;
@@ -1231,9 +1300,7 @@ pub export fn mob_set_throttle_config(
 fn throttleCheck(handle: c_int, x: f64, y: f64, default_throttle_ms: i32, default_delta: f64) bool {
     erts.enif_mutex_lock(tap_mutex);
     defer erts.enif_mutex_unlock(tap_mutex);
-    if (handle < 0 or handle >= tap_active_count) return false;
-    const h = &tap_tables[tap_active][@intCast(handle)];
-    if (h.tag_env == null) return false;
+    const h = resolveActiveTapLocked(handle) orelse return false;
 
     const throttle_ms: i32 = if (h.throttle_ms != 0) h.throttle_ms else default_throttle_ms;
     const delta_threshold: f64 = if (h.delta_threshold > 0) h.delta_threshold else default_delta;
@@ -1310,14 +1377,14 @@ pub export fn mob_send_scroll(
     phase: [*:0]const u8,
 ) callconv(.c) void {
     if (!isPhaseBoundary(phase) and !throttleCheck(handle, x, y, 33, 1.0)) return;
-    const snap = snapTap(handle) orelse return;
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
+    const snap = snapTap(handle, env) orelse return;
     const ts_ms = @divTrunc(jni.nowNs(), 1_000_000);
     const payload = buildScrollMap(env, x, y, dx, dy, vx, vy, phase, ts_ms, snap.seq);
     const msg = erts.makeTuple(env, .{
         erts.enif_make_atom(env, "scroll"),
-        erts.enif_make_copy(env, snap.tag),
+        snap.tag,
         payload,
     });
     var pid = snap.pid;
@@ -1333,9 +1400,9 @@ pub export fn mob_send_drag(
     phase: [*:0]const u8,
 ) callconv(.c) void {
     if (!isPhaseBoundary(phase) and !throttleCheck(handle, x, y, 16, 1.0)) return;
-    const snap = snapTap(handle) orelse return;
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
+    const snap = snapTap(handle, env) orelse return;
     const ts_ms = @divTrunc(jni.nowNs(), 1_000_000);
     const keys = [_]erts.ERL_NIF_TERM{
         erts.enif_make_atom(env, "x"),
@@ -1358,7 +1425,7 @@ pub export fn mob_send_drag(
     const payload = erts.makeMap(env, &keys, &vals) orelse return;
     const msg = erts.makeTuple(env, .{
         erts.enif_make_atom(env, "drag"),
-        erts.enif_make_copy(env, snap.tag),
+        snap.tag,
         payload,
     });
     var pid = snap.pid;
@@ -1367,9 +1434,9 @@ pub export fn mob_send_drag(
 
 pub export fn mob_send_pinch(handle: c_int, scale: f64, velocity: f64, phase: [*:0]const u8) callconv(.c) void {
     if (!isPhaseBoundary(phase) and !throttleCheck(handle, scale, 0, 16, 0.01)) return;
-    const snap = snapTap(handle) orelse return;
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
+    const snap = snapTap(handle, env) orelse return;
     const ts_ms = @divTrunc(jni.nowNs(), 1_000_000);
     const keys = [_]erts.ERL_NIF_TERM{
         erts.enif_make_atom(env, "scale"),
@@ -1388,7 +1455,7 @@ pub export fn mob_send_pinch(handle: c_int, scale: f64, velocity: f64, phase: [*
     const payload = erts.makeMap(env, &keys, &vals) orelse return;
     const msg = erts.makeTuple(env, .{
         erts.enif_make_atom(env, "pinch"),
-        erts.enif_make_copy(env, snap.tag),
+        snap.tag,
         payload,
     });
     var pid = snap.pid;
@@ -1397,9 +1464,9 @@ pub export fn mob_send_pinch(handle: c_int, scale: f64, velocity: f64, phase: [*
 
 pub export fn mob_send_rotate(handle: c_int, degrees: f64, velocity: f64, phase: [*:0]const u8) callconv(.c) void {
     if (!isPhaseBoundary(phase) and !throttleCheck(handle, degrees, 0, 16, 1.0)) return;
-    const snap = snapTap(handle) orelse return;
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
+    const snap = snapTap(handle, env) orelse return;
     const ts_ms = @divTrunc(jni.nowNs(), 1_000_000);
     const keys = [_]erts.ERL_NIF_TERM{
         erts.enif_make_atom(env, "degrees"),
@@ -1418,7 +1485,7 @@ pub export fn mob_send_rotate(handle: c_int, degrees: f64, velocity: f64, phase:
     const payload = erts.makeMap(env, &keys, &vals) orelse return;
     const msg = erts.makeTuple(env, .{
         erts.enif_make_atom(env, "rotate"),
-        erts.enif_make_copy(env, snap.tag),
+        snap.tag,
         payload,
     });
     var pid = snap.pid;
@@ -1427,9 +1494,9 @@ pub export fn mob_send_rotate(handle: c_int, degrees: f64, velocity: f64, phase:
 
 pub export fn mob_send_pointer_move(handle: c_int, x: f64, y: f64) callconv(.c) void {
     if (!throttleCheck(handle, x, y, 33, 4.0)) return;
-    const snap = snapTap(handle) orelse return;
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
+    const snap = snapTap(handle, env) orelse return;
     const ts_ms = @divTrunc(jni.nowNs(), 1_000_000);
     const keys = [_]erts.ERL_NIF_TERM{
         erts.enif_make_atom(env, "x"),
@@ -1446,7 +1513,7 @@ pub export fn mob_send_pointer_move(handle: c_int, x: f64, y: f64) callconv(.c) 
     const payload = erts.makeMap(env, &keys, &vals) orelse return;
     const msg = erts.makeTuple(env, .{
         erts.enif_make_atom(env, "pointer_move"),
-        erts.enif_make_copy(env, snap.tag),
+        snap.tag,
         payload,
     });
     var pid = snap.pid;
@@ -1473,18 +1540,28 @@ pub export fn mob_send_scrolled_past(handle: c_int) callconv(.c) void {
 
 // ── Component event sender ──────────────────────────────────────────────
 
+fn decodeComponentHandle(handle: c_int) ?usize {
+    const decoded = tap_handle_codec.decode(handle) orelse return null;
+    if (decoded.slot >= MAX_COMPONENT_HANDLES or
+        component_generations[decoded.slot] != decoded.generation or
+        component_handles[decoded.slot].active == 0)
+    {
+        return null;
+    }
+    return decoded.slot;
+}
+
 pub export fn mob_send_component_event(
     handle: c_int,
     event: [*:0]const u8,
     payload_json: [*:0]const u8,
 ) callconv(.c) void {
-    if (handle < 0 or handle >= @as(c_int, @intCast(MAX_COMPONENT_HANDLES))) return;
     erts.enif_mutex_lock(component_mutex);
-    const slot = &component_handles[@intCast(handle)];
-    if (slot.active == 0) {
+    const slot_index = decodeComponentHandle(handle) orelse {
         erts.enif_mutex_unlock(component_mutex);
         return;
-    }
+    };
+    const slot = &component_handles[slot_index];
     const pid_copy = slot.pid;
     erts.enif_mutex_unlock(component_mutex);
 
@@ -1562,8 +1639,23 @@ export fn nif_set_root(
     // handlers into 1 - tap_active, so make that table active now. Events for
     // the new tree (delivered to Compose just below) resolve against it, and
     // any send racing this swap sees a complete table on either side.
+    const previous = &tap_tables[tap_active];
+    const build = &tap_tables[1 - tap_active];
+    var slot_index: usize = 0;
+    while (slot_index < @as(usize, @intCast(tap_build_count))) : (slot_index += 1) {
+        const current = &build[slot_index];
+        if (slot_index < @as(usize, @intCast(tap_active_count))) {
+            const prior = &previous[slot_index];
+            if (prior.tag_env != null and prior.pid.pid == current.pid.pid and
+                erts.enif_compare(prior.tag, current.tag) == 0)
+            {
+                current.identity_start_generation = prior.identity_start_generation;
+            }
+        }
+    }
     tap_active = 1 - tap_active;
     tap_active_count = tap_build_count;
+    tap_table_generations[tap_active] = tap_build_generation;
     erts.enif_mutex_unlock(tap_mutex);
     const transition_cstr: [*:0]const u8 = @ptrCast(&transition);
 
@@ -1617,12 +1709,21 @@ export fn nif_register_tap(
         return erts.enif_make_int(env, -1);
     }
 
-    const handle: c_int = tap_build_count;
-    tap_build_count += 1;
-    const slot = &tap_tables[1 - tap_active][@intCast(handle)];
+    const slot_index: usize = @intCast(tap_build_count);
+    const handle = tap_handle_codec.encode(tap_build_generation, slot_index) orelse {
+        loge_nif("register_tap: invalid generation {d}", .{tap_build_generation});
+        return erts.enif_make_int(env, -1);
+    };
+    const tag_env = erts.enif_alloc_env() orelse {
+        loge_nif("register_tap: unable to allocate tag environment", .{});
+        return erts.atom(env, "error");
+    };
+    const slot = &tap_tables[1 - tap_active][slot_index];
     slot.pid = pid;
-    slot.tag_env = erts.enif_alloc_env() orelse return erts.atom(env, "error");
+    slot.tag_env = tag_env;
     slot.tag = erts.enif_make_copy(slot.tag_env, tag_term);
+    slot.identity_start_generation = tap_build_generation;
+    tap_build_count += 1;
     return erts.enif_make_int(env, handle);
 }
 
@@ -1638,6 +1739,8 @@ export fn nif_clear_taps(
     _ = argv;
     erts.enif_mutex_lock(tap_mutex);
     defer erts.enif_mutex_unlock(tap_mutex);
+    tap_build_generation = tap_handle_codec.nextGeneration(tap_build_generation);
+    tap_table_generations[1 - tap_active] = 0;
     // Prepare the INACTIVE (building) table for a fresh frame; leave the active
     // table intact so concurrent mob_send_* keep resolving the last committed
     // frame. The freshly built table is swapped in at set_root.
@@ -1704,9 +1807,11 @@ export fn nif_register_component(
     var i: usize = 0;
     while (i < MAX_COMPONENT_HANDLES) : (i += 1) {
         if (component_handles[i].active == 0) {
+            component_generations[i] = tap_handle_codec.nextGeneration(component_generations[i]);
+            const handle = tap_handle_codec.encode(component_generations[i], i) orelse unreachable;
             component_handles[i].pid = pid;
             component_handles[i].active = 1;
-            return erts.makeTuple(env, .{ erts.atom(env, "ok"), erts.enif_make_int(env, @intCast(i)) });
+            return erts.makeTuple(env, .{ erts.atom(env, "ok"), erts.enif_make_int(env, handle) });
         }
     }
     return erts.errorTuple(env, erts.atom(env, "component_slots_exhausted"));
@@ -1721,14 +1826,13 @@ export fn nif_deregister_component(
 ) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     var handle: c_int = 0;
-    if (erts.enif_get_int(env, argv[0], &handle) == 0 or
-        handle < 0 or
-        handle >= @as(c_int, @intCast(MAX_COMPONENT_HANDLES)))
-    {
-        return erts.badarg(env);
-    }
+    if (erts.enif_get_int(env, argv[0], &handle) == 0) return erts.badarg(env);
     erts.enif_mutex_lock(component_mutex);
-    component_handles[@intCast(handle)].active = 0;
+    const slot_index = decodeComponentHandle(handle) orelse {
+        erts.enif_mutex_unlock(component_mutex);
+        return erts.badarg(env);
+    };
+    component_handles[slot_index].active = 0;
     erts.enif_mutex_unlock(component_mutex);
     return erts.ok(env);
 }
@@ -1744,6 +1848,10 @@ const NIF_LOG_TAG: [*:0]const u8 = "MobNIF";
 
 inline fn logi_nif(comptime fmt: []const u8, args: anytype) void {
     jni.logWrite(jni.ANDROID_LOG_INFO, NIF_LOG_TAG, fmt, args);
+}
+
+inline fn logd_nif(comptime fmt: []const u8, args: anytype) void {
+    jni.logWrite(jni.ANDROID_LOG_DEBUG, NIF_LOG_TAG, fmt, args);
 }
 
 inline fn loge_nif(comptime fmt: []const u8, args: anytype) void {

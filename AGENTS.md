@@ -156,6 +156,17 @@ These are the things we've burned ourselves on. Following them isn't optional.
    build a tree and hand it to `Mob.Sender.render/5`; the sender is the only
    caller. See `decisions/2026-08-28-sender-serialises-render.md`.
 
+   Native event handles encode the render generation on both platforms.
+   `clear_taps` advances the build generation, and `set_root` commits the table,
+   count, and generation under the same mutex. Treating a handle as a bare slot
+   can route a callback from an old native tree into the current screen. A sender
+   must also copy the tag into its delivery environment while holding that
+   mutex; the table's `tag_env` may be freed as soon as the lock is released.
+   Change events and animation-delayed dismissals may cross one render when
+   both retained registrations have identical PID and tag identity; taps and
+   gestures stay generation-strict. Invalidate the building table's generation
+   at `clear_taps` so stale lookup never observes a partially rebuilt table.
+
 4. **TDD discipline in mob_dev.** Every new public function gets a test.
    `mob_dev/CLAUDE.md` makes this explicit. Don't bypass — the tests are how we
    catch the multi-step regressions like the iOS-device deploy chain.

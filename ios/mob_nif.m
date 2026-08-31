@@ -47,6 +47,11 @@ extern char *dlerror(void) __attribute__((weak));
 
 #define LOGI(...) NSLog(@"[MobNIF] " __VA_ARGS__)
 #define LOGE(...) NSLog(@"[MobNIF][ERROR] " __VA_ARGS__)
+#if DEBUG
+#define LOGD(...) NSLog(@"[MobNIF][DEBUG] " __VA_ARGS__)
+#else
+#define LOGD(...)
+#endif
 
 // ── Startup status (declared in mob_beam.h, called from mob_beam.m) ───────────
 // Implemented here rather than in mob_beam.m because this file is compiled with
@@ -66,11 +71,16 @@ void mob_set_startup_error(const char *error) {
 // Cleared before every render. Max 256 tappable elements per frame.
 
 #define MAX_TAP_HANDLES 256
+#define MAX_EVENT_GENERATION 0x7fffffU
 
 typedef struct {
     ErlNifPid pid;
     ErlNifEnv *tag_env; // persistent env owning tag; NULL when slot is free
     ERL_NIF_TERM tag;
+    // First generation in the current consecutive run of identical PID/tag
+    // registrations at this slot. Identity events can safely outlive the two
+    // physical tables while their route remains unchanged.
+    uint32_t identity_start_generation;
 
     // ── Batch 5 throttle state — populated by mob_set_throttle_config ──
     int throttle_ms; // 0 = no throttle (raw firing)
@@ -95,7 +105,103 @@ static int tap_active = 0;
 static TapHandle *tap_handles = tap_tables[0]; // active table (readers use this)
 static int tap_handle_next = 0;                // active committed count (readers' bound)
 static int tap_build_count = 0;                // cursor into the building table
+static uint32_t tap_table_generations[2] = {0, 0};
+static uint32_t tap_build_generation = 0;
 static ErlNifMutex *tap_mutex = NULL;
+
+static uint32_t mob_next_handle_generation(uint32_t generation) {
+    return generation == 0 || generation >= MAX_EVENT_GENERATION ? 1 : generation + 1;
+}
+
+static uint32_t mob_generation_age(uint32_t active_generation, uint32_t prior_generation) {
+    return active_generation >= prior_generation
+               ? active_generation - prior_generation
+               : MAX_EVENT_GENERATION - prior_generation + active_generation;
+}
+
+static int mob_generation_within_identity(uint32_t handle_generation,
+                                          uint32_t identity_start_generation,
+                                          uint32_t active_generation) {
+    if (handle_generation == 0 || handle_generation > MAX_EVENT_GENERATION ||
+        identity_start_generation == 0 || identity_start_generation > MAX_EVENT_GENERATION ||
+        active_generation == 0 || active_generation > MAX_EVENT_GENERATION)
+        return 0;
+    return mob_generation_age(active_generation, handle_generation) <=
+           mob_generation_age(active_generation, identity_start_generation);
+}
+
+static int mob_encode_event_handle(uint32_t generation, int slot) {
+    if (generation == 0 || generation > MAX_EVENT_GENERATION || slot < 0 || slot >= MAX_TAP_HANDLES)
+        return -1;
+    return (int)((generation << 8) | (uint32_t)slot);
+}
+
+static int mob_decode_event_handle(int handle, uint32_t *generation, int *slot) {
+    if (handle <= 0)
+        return 0;
+    uint32_t raw = (uint32_t)handle;
+    *generation = raw >> 8;
+    *slot = (int)(raw & 0xffU);
+    return *generation != 0;
+}
+
+typedef struct {
+    ErlNifPid pid;
+    ERL_NIF_TERM tag;
+    uint64_t seq;
+} TapSnap;
+
+static TapHandle *mob_resolve_active_tap_locked(int handle) {
+    uint32_t generation;
+    int slot;
+    if (!mob_decode_event_handle(handle, &generation, &slot) ||
+        generation != tap_table_generations[tap_active] || slot >= tap_handle_next ||
+        !tap_handles[slot].tag_env)
+        return NULL;
+    return &tap_handles[slot];
+}
+
+static int mob_snap_tap(int handle, ErlNifEnv *msg_env, TapSnap *snap) {
+    enif_mutex_lock(tap_mutex);
+    TapHandle *active = mob_resolve_active_tap_locked(handle);
+    if (!active) {
+        enif_mutex_unlock(tap_mutex);
+        LOGD(@"rejected stale event handle %d", handle);
+        return 0;
+    }
+    snap->pid = active->pid;
+    snap->tag = enif_make_copy(msg_env, active->tag);
+    snap->seq = active->seq;
+    enif_mutex_unlock(tap_mutex);
+    return 1;
+}
+
+static int mob_snap_change_tap(int handle, ErlNifEnv *msg_env, TapSnap *snap) {
+    enif_mutex_lock(tap_mutex);
+    TapHandle *active = mob_resolve_active_tap_locked(handle);
+    if (!active) {
+        uint32_t generation;
+        int slot;
+        if (!mob_decode_event_handle(handle, &generation, &slot)) {
+            enif_mutex_unlock(tap_mutex);
+            LOGD(@"rejected stale event handle %d", handle);
+            return 0;
+        }
+        active = slot >= 0 && slot < tap_handle_next ? &tap_handles[slot] : NULL;
+        if (!active || !active->tag_env ||
+            !mob_generation_within_identity(generation, active->identity_start_generation,
+                                            tap_table_generations[tap_active])) {
+            enif_mutex_unlock(tap_mutex);
+            LOGD(@"rejected stale event handle %d", handle);
+            return 0;
+        }
+    }
+    snap->pid = active->pid;
+    snap->tag = enif_make_copy(msg_env, active->tag);
+    snap->seq = active->seq;
+    enif_mutex_unlock(tap_mutex);
+    return 1;
+}
 
 // Convert mach absolute time to nanoseconds (initialised once).
 static mach_timebase_info_data_t g_timebase = {0, 0};
@@ -110,12 +216,13 @@ static uint64_t mob_now_ns(void) {
 static void mob_set_throttle_config(int handle, int throttle_ms, int debounce_ms,
                                     double delta_threshold, int leading, int trailing) {
     enif_mutex_lock(tap_mutex);
-    if (handle >= 0 && handle < tap_handle_next && tap_handles[handle].tag_env) {
-        tap_handles[handle].throttle_ms = throttle_ms;
-        tap_handles[handle].debounce_ms = debounce_ms;
-        tap_handles[handle].delta_threshold = delta_threshold;
-        tap_handles[handle].leading = leading;
-        tap_handles[handle].trailing = trailing;
+    TapHandle *tap = mob_resolve_active_tap_locked(handle);
+    if (tap) {
+        tap->throttle_ms = throttle_ms;
+        tap->debounce_ms = debounce_ms;
+        tap->delta_threshold = delta_threshold;
+        tap->leading = leading;
+        tap->trailing = trailing;
     }
     enif_mutex_unlock(tap_mutex);
 }
@@ -129,11 +236,11 @@ static void mob_set_throttle_config(int handle, int throttle_ms, int debounce_ms
 static int mob_throttle_check(int handle, double x, double y, int default_throttle_ms,
                               double default_delta) {
     enif_mutex_lock(tap_mutex);
-    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
+    TapHandle *h = mob_resolve_active_tap_locked(handle);
+    if (!h) {
         enif_mutex_unlock(tap_mutex);
         return 0;
     }
-    TapHandle *h = &tap_handles[handle];
 
     int throttle_ms = h->throttle_ms ? h->throttle_ms : default_throttle_ms;
     double delta_threshold = h->delta_threshold > 0 ? h->delta_threshold : default_delta;
@@ -169,8 +276,9 @@ static int mob_throttle_check(int handle, double x, double y, int default_thrott
 // Read current seq + ts for a handle (for envelope construction).
 static void mob_handle_meta(int handle, uint64_t *seq_out, uint64_t *ts_out) {
     enif_mutex_lock(tap_mutex);
-    if (handle >= 0 && handle < tap_handle_next && tap_handles[handle].tag_env) {
-        *seq_out = tap_handles[handle].seq;
+    TapHandle *tap = mob_resolve_active_tap_locked(handle);
+    if (tap) {
+        *seq_out = tap->seq;
         *ts_out = mob_now_ns() / 1000000ULL; // ms since boot
     } else {
         *seq_out = 0;
@@ -205,20 +313,18 @@ static void mob_note_ui_event(void) {
 
 // Called from node onTap blocks — routes tap to BEAM via enif_send.
 static void mob_send_tap(int handle) {
-    enif_mutex_lock(tap_mutex);
-    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
-        enif_mutex_unlock(tap_mutex);
+    ErlNifEnv *msg_env = enif_alloc_env();
+    if (!msg_env)
+        return;
+    TapSnap snap;
+    if (!mob_snap_tap(handle, msg_env, &snap)) {
+        enif_free_env(msg_env);
         return;
     }
-    ErlNifPid pid = tap_handles[handle].pid;
-    ERL_NIF_TERM tag = tap_handles[handle].tag;
-    enif_mutex_unlock(tap_mutex);
 
     mob_note_ui_event();
-    ErlNifEnv *msg_env = enif_alloc_env();
-    ERL_NIF_TERM msg =
-        enif_make_tuple2(msg_env, enif_make_atom(msg_env, "tap"), enif_make_copy(msg_env, tag));
-    enif_send(NULL, &pid, msg_env, msg);
+    ERL_NIF_TERM msg = enif_make_tuple2(msg_env, enif_make_atom(msg_env, "tap"), snap.tag);
+    enif_send(NULL, &snap.pid, msg_env, msg);
     enif_free_env(msg_env);
 }
 
@@ -226,20 +332,34 @@ static void mob_send_tap(int handle) {
 // Called from MobTextField SwiftUI view when focus state changes or return key tapped.
 
 static void mob_send_event(int handle, const char *atom) {
-    enif_mutex_lock(tap_mutex);
-    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
-        enif_mutex_unlock(tap_mutex);
+    ErlNifEnv *msg_env = enif_alloc_env();
+    if (!msg_env)
+        return;
+    TapSnap snap;
+    if (!mob_snap_tap(handle, msg_env, &snap)) {
+        enif_free_env(msg_env);
         return;
     }
-    ErlNifPid pid = tap_handles[handle].pid;
-    ERL_NIF_TERM tag = tap_handles[handle].tag;
-    enif_mutex_unlock(tap_mutex);
 
     mob_note_ui_event();
+    ERL_NIF_TERM msg = enif_make_tuple2(msg_env, enif_make_atom(msg_env, atom), snap.tag);
+    enif_send(NULL, &snap.pid, msg_env, msg);
+    enif_free_env(msg_env);
+}
+
+static void mob_send_identity_event(int handle, const char *atom) {
     ErlNifEnv *msg_env = enif_alloc_env();
-    ERL_NIF_TERM msg =
-        enif_make_tuple2(msg_env, enif_make_atom(msg_env, atom), enif_make_copy(msg_env, tag));
-    enif_send(NULL, &pid, msg_env, msg);
+    if (!msg_env)
+        return;
+    TapSnap snap;
+    if (!mob_snap_change_tap(handle, msg_env, &snap)) {
+        enif_free_env(msg_env);
+        return;
+    }
+
+    mob_note_ui_event();
+    ERL_NIF_TERM msg = enif_make_tuple2(msg_env, enif_make_atom(msg_env, atom), snap.tag);
+    enif_send(NULL, &snap.pid, msg_env, msg);
     enif_free_env(msg_env);
 }
 
@@ -256,23 +376,22 @@ static void mob_send_select(int handle) {
     mob_send_event(handle, "select");
 }
 static void mob_send_dismiss(int handle) {
-    mob_send_event(handle, "dismiss");
+    mob_send_identity_event(handle, "dismiss");
 }
 
 // IME composition. Sends {compose, tag, %{text: ..., phase: ...}} where
 // phase is one of began/updating/committed/cancelled. Called from the
 // text-input layer when marked-text state changes.
 static void mob_send_compose(int handle, const char *text, const char *phase) {
-    enif_mutex_lock(tap_mutex);
-    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
-        enif_mutex_unlock(tap_mutex);
+    ErlNifEnv *msg_env = enif_alloc_env();
+    if (!msg_env)
+        return;
+    TapSnap snap;
+    if (!mob_snap_tap(handle, msg_env, &snap)) {
+        enif_free_env(msg_env);
         return;
     }
-    ErlNifPid pid = tap_handles[handle].pid;
-    ERL_NIF_TERM tag = tap_handles[handle].tag;
-    enif_mutex_unlock(tap_mutex);
 
-    ErlNifEnv *msg_env = enif_alloc_env();
     ERL_NIF_TERM keys[2] = {
         enif_make_atom(msg_env, "text"),
         enif_make_atom(msg_env, "phase"),
@@ -283,9 +402,9 @@ static void mob_send_compose(int handle, const char *text, const char *phase) {
     };
     ERL_NIF_TERM payload;
     enif_make_map_from_arrays(msg_env, keys, vals, 2, &payload);
-    ERL_NIF_TERM msg = enif_make_tuple3(msg_env, enif_make_atom(msg_env, "compose"),
-                                        enif_make_copy(msg_env, tag), payload);
-    enif_send(NULL, &pid, msg_env, msg);
+    ERL_NIF_TERM msg =
+        enif_make_tuple3(msg_env, enif_make_atom(msg_env, "compose"), snap.tag, payload);
+    enif_send(NULL, &snap.pid, msg_env, msg);
     enif_free_env(msg_env);
 }
 
@@ -314,20 +433,18 @@ static void mob_send_swipe_down(int handle) {
 
 // Generic on_swipe with direction: emits {swipe, tag, direction} where direction is an atom.
 static void mob_send_swipe_with_direction(int handle, const char *direction) {
-    enif_mutex_lock(tap_mutex);
-    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
-        enif_mutex_unlock(tap_mutex);
+    ErlNifEnv *msg_env = enif_alloc_env();
+    if (!msg_env)
+        return;
+    TapSnap snap;
+    if (!mob_snap_tap(handle, msg_env, &snap)) {
+        enif_free_env(msg_env);
         return;
     }
-    ErlNifPid pid = tap_handles[handle].pid;
-    ERL_NIF_TERM tag = tap_handles[handle].tag;
-    enif_mutex_unlock(tap_mutex);
 
-    ErlNifEnv *msg_env = enif_alloc_env();
-    ERL_NIF_TERM msg =
-        enif_make_tuple3(msg_env, enif_make_atom(msg_env, "swipe"), enif_make_copy(msg_env, tag),
-                         enif_make_atom(msg_env, direction));
-    enif_send(NULL, &pid, msg_env, msg);
+    ERL_NIF_TERM msg = enif_make_tuple3(msg_env, enif_make_atom(msg_env, "swipe"), snap.tag,
+                                        enif_make_atom(msg_env, direction));
+    enif_send(NULL, &snap.pid, msg_env, msg);
     enif_free_env(msg_env);
 }
 
@@ -376,22 +493,21 @@ static void mob_send_scroll(int handle, double x, double y, double dx, double dy
     if (!is_phase_boundary && !mob_throttle_check(handle, x, y, 33, 1.0))
         return;
 
-    enif_mutex_lock(tap_mutex);
-    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
-        enif_mutex_unlock(tap_mutex);
+    ErlNifEnv *msg_env = enif_alloc_env();
+    if (!msg_env)
+        return;
+    TapSnap snap;
+    if (!mob_snap_tap(handle, msg_env, &snap)) {
+        enif_free_env(msg_env);
         return;
     }
-    ErlNifPid pid = tap_handles[handle].pid;
-    ERL_NIF_TERM tag = tap_handles[handle].tag;
-    uint64_t seq = tap_handles[handle].seq;
-    enif_mutex_unlock(tap_mutex);
 
     uint64_t ts = mob_now_ns() / 1000000ULL;
-    ErlNifEnv *msg_env = enif_alloc_env();
-    ERL_NIF_TERM payload = mob_build_scroll_payload(msg_env, x, y, dx, dy, vx, vy, phase, ts, seq);
-    ERL_NIF_TERM msg = enif_make_tuple3(msg_env, enif_make_atom(msg_env, "scroll"),
-                                        enif_make_copy(msg_env, tag), payload);
-    enif_send(NULL, &pid, msg_env, msg);
+    ERL_NIF_TERM payload =
+        mob_build_scroll_payload(msg_env, x, y, dx, dy, vx, vy, phase, ts, snap.seq);
+    ERL_NIF_TERM msg =
+        enif_make_tuple3(msg_env, enif_make_atom(msg_env, "scroll"), snap.tag, payload);
+    enif_send(NULL, &snap.pid, msg_env, msg);
     enif_free_env(msg_env);
 }
 
@@ -400,18 +516,16 @@ static void mob_send_drag(int handle, double x, double y, double dx, double dy, 
     if (!is_phase_boundary && !mob_throttle_check(handle, x, y, 16, 1.0))
         return;
 
-    enif_mutex_lock(tap_mutex);
-    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
-        enif_mutex_unlock(tap_mutex);
+    ErlNifEnv *msg_env = enif_alloc_env();
+    if (!msg_env)
+        return;
+    TapSnap snap;
+    if (!mob_snap_tap(handle, msg_env, &snap)) {
+        enif_free_env(msg_env);
         return;
     }
-    ErlNifPid pid = tap_handles[handle].pid;
-    ERL_NIF_TERM tag = tap_handles[handle].tag;
-    uint64_t seq = tap_handles[handle].seq;
-    enif_mutex_unlock(tap_mutex);
 
     uint64_t ts = mob_now_ns() / 1000000ULL;
-    ErlNifEnv *msg_env = enif_alloc_env();
     // Drag payload: %{x, y, dx, dy, phase, ts, seq}
     ERL_NIF_TERM keys[7] = {
         enif_make_atom(msg_env, "x"),     enif_make_atom(msg_env, "y"),
@@ -420,16 +534,16 @@ static void mob_send_drag(int handle, double x, double y, double dx, double dy, 
         enif_make_atom(msg_env, "seq"),
     };
     ERL_NIF_TERM vals[7] = {
-        enif_make_double(msg_env, x),   enif_make_double(msg_env, y),
-        enif_make_double(msg_env, dx),  enif_make_double(msg_env, dy),
-        enif_make_atom(msg_env, phase), enif_make_uint64(msg_env, ts),
-        enif_make_uint64(msg_env, seq),
+        enif_make_double(msg_env, x),        enif_make_double(msg_env, y),
+        enif_make_double(msg_env, dx),       enif_make_double(msg_env, dy),
+        enif_make_atom(msg_env, phase),      enif_make_uint64(msg_env, ts),
+        enif_make_uint64(msg_env, snap.seq),
     };
     ERL_NIF_TERM payload;
     enif_make_map_from_arrays(msg_env, keys, vals, 7, &payload);
-    ERL_NIF_TERM msg = enif_make_tuple3(msg_env, enif_make_atom(msg_env, "drag"),
-                                        enif_make_copy(msg_env, tag), payload);
-    enif_send(NULL, &pid, msg_env, msg);
+    ERL_NIF_TERM msg =
+        enif_make_tuple3(msg_env, enif_make_atom(msg_env, "drag"), snap.tag, payload);
+    enif_send(NULL, &snap.pid, msg_env, msg);
     enif_free_env(msg_env);
 }
 
@@ -438,33 +552,31 @@ static void mob_send_pinch(int handle, double scale, double velocity, const char
     if (!is_phase_boundary && !mob_throttle_check(handle, scale, 0, 16, 0.01))
         return;
 
-    enif_mutex_lock(tap_mutex);
-    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
-        enif_mutex_unlock(tap_mutex);
+    ErlNifEnv *msg_env = enif_alloc_env();
+    if (!msg_env)
+        return;
+    TapSnap snap;
+    if (!mob_snap_tap(handle, msg_env, &snap)) {
+        enif_free_env(msg_env);
         return;
     }
-    ErlNifPid pid = tap_handles[handle].pid;
-    ERL_NIF_TERM tag = tap_handles[handle].tag;
-    uint64_t seq = tap_handles[handle].seq;
-    enif_mutex_unlock(tap_mutex);
 
     uint64_t ts = mob_now_ns() / 1000000ULL;
-    ErlNifEnv *msg_env = enif_alloc_env();
     ERL_NIF_TERM keys[5] = {
         enif_make_atom(msg_env, "scale"), enif_make_atom(msg_env, "velocity"),
         enif_make_atom(msg_env, "phase"), enif_make_atom(msg_env, "ts"),
         enif_make_atom(msg_env, "seq"),
     };
     ERL_NIF_TERM vals[5] = {
-        enif_make_double(msg_env, scale), enif_make_double(msg_env, velocity),
-        enif_make_atom(msg_env, phase),   enif_make_uint64(msg_env, ts),
-        enif_make_uint64(msg_env, seq),
+        enif_make_double(msg_env, scale),    enif_make_double(msg_env, velocity),
+        enif_make_atom(msg_env, phase),      enif_make_uint64(msg_env, ts),
+        enif_make_uint64(msg_env, snap.seq),
     };
     ERL_NIF_TERM payload;
     enif_make_map_from_arrays(msg_env, keys, vals, 5, &payload);
-    ERL_NIF_TERM msg = enif_make_tuple3(msg_env, enif_make_atom(msg_env, "pinch"),
-                                        enif_make_copy(msg_env, tag), payload);
-    enif_send(NULL, &pid, msg_env, msg);
+    ERL_NIF_TERM msg =
+        enif_make_tuple3(msg_env, enif_make_atom(msg_env, "pinch"), snap.tag, payload);
+    enif_send(NULL, &snap.pid, msg_env, msg);
     enif_free_env(msg_env);
 }
 
@@ -473,33 +585,31 @@ static void mob_send_rotate(int handle, double degrees, double velocity, const c
     if (!is_phase_boundary && !mob_throttle_check(handle, degrees, 0, 16, 1.0))
         return;
 
-    enif_mutex_lock(tap_mutex);
-    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
-        enif_mutex_unlock(tap_mutex);
+    ErlNifEnv *msg_env = enif_alloc_env();
+    if (!msg_env)
+        return;
+    TapSnap snap;
+    if (!mob_snap_tap(handle, msg_env, &snap)) {
+        enif_free_env(msg_env);
         return;
     }
-    ErlNifPid pid = tap_handles[handle].pid;
-    ERL_NIF_TERM tag = tap_handles[handle].tag;
-    uint64_t seq = tap_handles[handle].seq;
-    enif_mutex_unlock(tap_mutex);
 
     uint64_t ts = mob_now_ns() / 1000000ULL;
-    ErlNifEnv *msg_env = enif_alloc_env();
     ERL_NIF_TERM keys[5] = {
         enif_make_atom(msg_env, "degrees"), enif_make_atom(msg_env, "velocity"),
         enif_make_atom(msg_env, "phase"),   enif_make_atom(msg_env, "ts"),
         enif_make_atom(msg_env, "seq"),
     };
     ERL_NIF_TERM vals[5] = {
-        enif_make_double(msg_env, degrees), enif_make_double(msg_env, velocity),
-        enif_make_atom(msg_env, phase),     enif_make_uint64(msg_env, ts),
-        enif_make_uint64(msg_env, seq),
+        enif_make_double(msg_env, degrees),  enif_make_double(msg_env, velocity),
+        enif_make_atom(msg_env, phase),      enif_make_uint64(msg_env, ts),
+        enif_make_uint64(msg_env, snap.seq),
     };
     ERL_NIF_TERM payload;
     enif_make_map_from_arrays(msg_env, keys, vals, 5, &payload);
-    ERL_NIF_TERM msg = enif_make_tuple3(msg_env, enif_make_atom(msg_env, "rotate"),
-                                        enif_make_copy(msg_env, tag), payload);
-    enif_send(NULL, &pid, msg_env, msg);
+    ERL_NIF_TERM msg =
+        enif_make_tuple3(msg_env, enif_make_atom(msg_env, "rotate"), snap.tag, payload);
+    enif_send(NULL, &snap.pid, msg_env, msg);
     enif_free_env(msg_env);
 }
 
@@ -507,18 +617,16 @@ static void mob_send_pointer_move(int handle, double x, double y) {
     if (!mob_throttle_check(handle, x, y, 33, 4.0))
         return;
 
-    enif_mutex_lock(tap_mutex);
-    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
-        enif_mutex_unlock(tap_mutex);
+    ErlNifEnv *msg_env = enif_alloc_env();
+    if (!msg_env)
+        return;
+    TapSnap snap;
+    if (!mob_snap_tap(handle, msg_env, &snap)) {
+        enif_free_env(msg_env);
         return;
     }
-    ErlNifPid pid = tap_handles[handle].pid;
-    ERL_NIF_TERM tag = tap_handles[handle].tag;
-    uint64_t seq = tap_handles[handle].seq;
-    enif_mutex_unlock(tap_mutex);
 
     uint64_t ts = mob_now_ns() / 1000000ULL;
-    ErlNifEnv *msg_env = enif_alloc_env();
     ERL_NIF_TERM keys[4] = {
         enif_make_atom(msg_env, "x"),
         enif_make_atom(msg_env, "y"),
@@ -529,13 +637,13 @@ static void mob_send_pointer_move(int handle, double x, double y) {
         enif_make_double(msg_env, x),
         enif_make_double(msg_env, y),
         enif_make_uint64(msg_env, ts),
-        enif_make_uint64(msg_env, seq),
+        enif_make_uint64(msg_env, snap.seq),
     };
     ERL_NIF_TERM payload;
     enif_make_map_from_arrays(msg_env, keys, vals, 4, &payload);
-    ERL_NIF_TERM msg = enif_make_tuple3(msg_env, enif_make_atom(msg_env, "pointer_move"),
-                                        enif_make_copy(msg_env, tag), payload);
-    enif_send(NULL, &pid, msg_env, msg);
+    ERL_NIF_TERM msg =
+        enif_make_tuple3(msg_env, enif_make_atom(msg_env, "pointer_move"), snap.tag, payload);
+    enif_send(NULL, &snap.pid, msg_env, msg);
     enif_free_env(msg_env);
 }
 
@@ -576,21 +684,19 @@ void mob_handle_back(void) {
 // Called from MobNode onChange blocks when an input widget fires.
 
 static void mob_send_change(int handle, ERL_NIF_TERM value_term) {
-    enif_mutex_lock(tap_mutex);
-    if (handle < 0 || handle >= tap_handle_next || !tap_handles[handle].tag_env) {
-        enif_mutex_unlock(tap_mutex);
+    ErlNifEnv *msg_env = enif_alloc_env();
+    if (!msg_env)
+        return;
+    TapSnap snap;
+    if (!mob_snap_change_tap(handle, msg_env, &snap)) {
+        enif_free_env(msg_env);
         return;
     }
-    ErlNifPid pid = tap_handles[handle].pid;
-    ERL_NIF_TERM tag = tap_handles[handle].tag;
-    enif_mutex_unlock(tap_mutex);
 
     mob_note_ui_event();
-    ErlNifEnv *msg_env = enif_alloc_env();
-    ERL_NIF_TERM msg =
-        enif_make_tuple3(msg_env, enif_make_atom(msg_env, "change"), enif_make_copy(msg_env, tag),
-                         enif_make_copy(msg_env, value_term));
-    enif_send(NULL, &pid, msg_env, msg);
+    ERL_NIF_TERM msg = enif_make_tuple3(msg_env, enif_make_atom(msg_env, "change"), snap.tag,
+                                        enif_make_copy(msg_env, value_term));
+    enif_send(NULL, &snap.pid, msg_env, msg);
     enif_free_env(msg_env);
 }
 
@@ -2111,9 +2217,18 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     // Commit the freshly-built tap table: register_tap wrote this frame's
     // handlers into 1 - tap_active; make that table active now so events for the
     // new tree resolve against it (readers see a consistent pair under the lock).
+    TapHandle *previous = tap_tables[tap_active];
+    TapHandle *build = tap_tables[1 - tap_active];
+    for (int slot = 0; slot < tap_build_count; slot++) {
+        if (slot < tap_handle_next && previous[slot].tag_env &&
+            previous[slot].pid.pid == build[slot].pid.pid &&
+            enif_compare(previous[slot].tag, build[slot].tag) == 0)
+            build[slot].identity_start_generation = previous[slot].identity_start_generation;
+    }
     tap_active = 1 - tap_active;
     tap_handles = tap_tables[tap_active];
     tap_handle_next = tap_build_count;
+    tap_table_generations[tap_active] = tap_build_generation;
     enif_mutex_unlock(tap_mutex);
 
     // A non-"none" transition is what makes MobViewModel bump navVersion, and
@@ -2169,10 +2284,24 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
         return enif_make_int(env, -1);
     }
     TapHandle *build = tap_tables[1 - tap_active];
-    int handle = tap_build_count++;
-    build[handle].pid = pid;
-    build[handle].tag_env = enif_alloc_env();
-    build[handle].tag = enif_make_copy(build[handle].tag_env, tag_term);
+    int slot = tap_build_count;
+    int handle = mob_encode_event_handle(tap_build_generation, slot);
+    if (handle < 0) {
+        enif_mutex_unlock(tap_mutex);
+        LOGE(@"register_tap: invalid generation %u", tap_build_generation);
+        return enif_make_int(env, -1);
+    }
+    ErlNifEnv *tag_env = enif_alloc_env();
+    if (!tag_env) {
+        enif_mutex_unlock(tap_mutex);
+        LOGE(@"register_tap: unable to allocate tag environment");
+        return enif_make_atom(env, "error");
+    }
+    build[slot].pid = pid;
+    build[slot].tag_env = tag_env;
+    build[slot].tag = enif_make_copy(build[slot].tag_env, tag_term);
+    build[slot].identity_start_generation = tap_build_generation;
+    tap_build_count++;
     enif_mutex_unlock(tap_mutex);
 
     return enif_make_int(env, handle);
@@ -2182,6 +2311,8 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
 
 static ERL_NIF_TERM nif_clear_taps(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     enif_mutex_lock(tap_mutex);
+    tap_build_generation = mob_next_handle_generation(tap_build_generation);
+    tap_table_generations[1 - tap_active] = 0;
     // Prepare the INACTIVE (building) table for a fresh frame; leave the active
     // table intact so concurrent mob_send_* keep resolving the last committed
     // frame. The freshly built table is swapped in at set_root.
@@ -6753,6 +6884,7 @@ static ERL_NIF_TERM nif_webview_go_back(ErlNifEnv *env, int argc, const ERL_NIF_
 
 typedef struct {
     ErlNifPid pid;
+    uint32_t generation;
     int active;
 } ComponentHandle;
 
@@ -6773,10 +6905,13 @@ static ERL_NIF_TERM nif_register_component(ErlNifEnv *env, int argc, const ERL_N
     enif_mutex_lock(component_mutex);
     for (int i = 0; i < MAX_COMPONENT_HANDLES; i++) {
         if (!component_handles[i].active) {
+            component_handles[i].generation =
+                mob_next_handle_generation(component_handles[i].generation);
+            int handle = mob_encode_event_handle(component_handles[i].generation, i);
             component_handles[i].pid = pid;
             component_handles[i].active = 1;
             enif_mutex_unlock(component_mutex);
-            return enif_make_tuple2(env, enif_make_atom(env, "ok"), enif_make_int(env, i));
+            return enif_make_tuple2(env, enif_make_atom(env, "ok"), enif_make_int(env, handle));
         }
     }
     enif_mutex_unlock(component_mutex);
@@ -6786,11 +6921,18 @@ static ERL_NIF_TERM nif_register_component(ErlNifEnv *env, int argc, const ERL_N
 
 static ERL_NIF_TERM nif_deregister_component(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     int handle;
-    if (!enif_get_int(env, argv[0], &handle) || handle < 0 || handle >= MAX_COMPONENT_HANDLES)
+    uint32_t generation;
+    int slot;
+    if (!enif_get_int(env, argv[0], &handle) ||
+        !mob_decode_event_handle(handle, &generation, &slot))
         return enif_make_badarg(env);
 
     enif_mutex_lock(component_mutex);
-    component_handles[handle].active = 0;
+    if (!component_handles[slot].active || component_handles[slot].generation != generation) {
+        enif_mutex_unlock(component_mutex);
+        return enif_make_badarg(env);
+    }
+    component_handles[slot].active = 0;
     enif_mutex_unlock(component_mutex);
     return enif_make_atom(env, "ok");
 }
@@ -6886,15 +7028,17 @@ static ERL_NIF_TERM nif_resolve_ipv4(ErlNifEnv *env, int argc, const ERL_NIF_TER
 }
 
 void mob_send_component_event(int handle, const char *event, const char *payload_json) {
-    if (handle < 0 || handle >= MAX_COMPONENT_HANDLES)
+    uint32_t generation;
+    int slot;
+    if (!mob_decode_event_handle(handle, &generation, &slot))
         return;
 
     enif_mutex_lock(component_mutex);
-    if (!component_handles[handle].active) {
+    if (!component_handles[slot].active || component_handles[slot].generation != generation) {
         enif_mutex_unlock(component_mutex);
         return;
     }
-    ErlNifPid pid = component_handles[handle].pid;
+    ErlNifPid pid = component_handles[slot].pid;
     enif_mutex_unlock(component_mutex);
 
     ErlNifEnv *env = enif_alloc_env();

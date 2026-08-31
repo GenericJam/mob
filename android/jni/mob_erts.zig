@@ -194,6 +194,7 @@ pub inline fn enif_make_uint64(env: ?*ErlNifEnv, i: u64) ERL_NIF_TERM {
 pub extern fn enif_alloc_env() ?*ErlNifEnv;
 pub extern fn enif_free_env(env: ?*ErlNifEnv) void;
 pub extern fn enif_make_copy(dst: ?*ErlNifEnv, src_term: ERL_NIF_TERM) ERL_NIF_TERM;
+pub extern fn enif_compare(lhs: ERL_NIF_TERM, rhs: ERL_NIF_TERM) c_int;
 pub extern fn enif_send(
     caller_env: ?*ErlNifEnv,
     to_pid: *const ErlNifPid,
