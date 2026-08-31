@@ -1126,6 +1126,18 @@ fn sendEvent(handle: c_int, comptime atom_name: [:0]const u8) void {
     _ = erts.enif_send(null, &pid, env, msg);
 }
 
+fn sendIdentityEvent(handle: c_int, comptime atom_name: [:0]const u8) void {
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const snap = snapChangeTap(handle, env) orelse return;
+    const msg = erts.makeTuple(env, .{
+        erts.enif_make_atom(env, atom_name.ptr),
+        snap.tag,
+    });
+    var pid = snap.pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
 /// `{:change, tag, value}` — used by the three change senders below. The
 /// value term must originate in the same env we're delivering through.
 fn sendChange(handle: c_int, value_term: erts.ERL_NIF_TERM) void {
@@ -1160,7 +1172,7 @@ pub export fn mob_send_tap(handle: c_int) callconv(.c) void {
 /// screen down — or silently drops it if the screen has a catch-all, in which
 /// case the BEAM never learns the sheet closed and can't re-present it (MOB-104).
 pub export fn mob_send_dismiss(handle: c_int) callconv(.c) void {
-    sendEvent(handle, "dismiss");
+    sendIdentityEvent(handle, "dismiss");
 }
 
 pub export fn mob_send_change_str(handle: c_int, utf8: [*:0]const u8) callconv(.c) void {
@@ -1718,6 +1730,7 @@ export fn nif_clear_taps(
     erts.enif_mutex_lock(tap_mutex);
     defer erts.enif_mutex_unlock(tap_mutex);
     tap_build_generation = tap_handle_codec.nextGeneration(tap_build_generation);
+    tap_table_generations[1 - tap_active] = 0;
     // Prepare the INACTIVE (building) table for a fresh frame; leave the active
     // table intact so concurrent mob_send_* keep resolving the last committed
     // frame. The freshly built table is swapped in at set_root.

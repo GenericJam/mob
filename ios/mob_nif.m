@@ -334,6 +334,22 @@ static void mob_send_event(int handle, const char *atom) {
     enif_free_env(msg_env);
 }
 
+static void mob_send_identity_event(int handle, const char *atom) {
+    ErlNifEnv *msg_env = enif_alloc_env();
+    if (!msg_env)
+        return;
+    TapSnap snap;
+    if (!mob_snap_change_tap(handle, msg_env, &snap)) {
+        enif_free_env(msg_env);
+        return;
+    }
+
+    mob_note_ui_event();
+    ERL_NIF_TERM msg = enif_make_tuple2(msg_env, enif_make_atom(msg_env, atom), snap.tag);
+    enif_send(NULL, &snap.pid, msg_env, msg);
+    enif_free_env(msg_env);
+}
+
 static void mob_send_focus(int handle) {
     mob_send_event(handle, "focus");
 }
@@ -347,7 +363,7 @@ static void mob_send_select(int handle) {
     mob_send_event(handle, "select");
 }
 static void mob_send_dismiss(int handle) {
-    mob_send_event(handle, "dismiss");
+    mob_send_identity_event(handle, "dismiss");
 }
 
 // IME composition. Sends {compose, tag, %{text: ..., phase: ...}} where
@@ -2268,6 +2284,7 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
 static ERL_NIF_TERM nif_clear_taps(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     enif_mutex_lock(tap_mutex);
     tap_build_generation = mob_next_handle_generation(tap_build_generation);
+    tap_table_generations[1 - tap_active] = 0;
     // Prepare the INACTIVE (building) table for a fresh frame; leave the active
     // table intact so concurrent mob_send_* keep resolving the last committed
     // frame. The freshly built table is swapped in at set_root.

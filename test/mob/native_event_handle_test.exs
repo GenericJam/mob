@@ -84,6 +84,33 @@ defmodule Mob.NativeEventHandleTest do
     assert @ios_source =~ "enif_compare(source->tag, active->tag) != 0"
   end
 
+  test "building tables are unmatchable until their generation is committed" do
+    [_, android_clear] = String.split(@android_source, "export fn nif_clear_taps", parts: 2)
+    [android_clear, _] = String.split(android_clear, "return erts.ok(env);", parts: 2)
+
+    assert android_clear =~ "tap_table_generations[1 - tap_active] = 0"
+
+    [_, ios_clear] = String.split(@ios_source, "static ERL_NIF_TERM nif_clear_taps", parts: 2)
+    [ios_clear, _] = String.split(ios_clear, "return enif_make_atom(env, \"ok\");", parts: 2)
+
+    assert ios_clear =~ "tap_table_generations[1 - tap_active] = 0"
+  end
+
+  test "animation-delayed dismissals use identity-preserving stale handling" do
+    [_, android_dismiss] =
+      String.split(@android_source, "pub export fn mob_send_dismiss", parts: 2)
+
+    [android_dismiss, _] =
+      String.split(android_dismiss, "pub export fn mob_send_change_str", parts: 2)
+
+    assert android_dismiss =~ "sendIdentityEvent(handle, \"dismiss\")"
+
+    [_, ios_dismiss] = String.split(@ios_source, "static void mob_send_dismiss", parts: 2)
+    [ios_dismiss, _] = String.split(ios_dismiss, "// IME composition", parts: 2)
+
+    assert ios_dismiss =~ "mob_send_identity_event(handle, \"dismiss\")"
+  end
+
   test "iOS copies every routed tag while holding the registry lock" do
     [_, snap] = String.split(@ios_source, "static int mob_snap_tap", parts: 2)
     [snap, _] = String.split(snap, "static int mob_snap_change_tap", parts: 2)
