@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.7.38] - 2026-08-31
+
 ### Fixed
 - **Stale native callbacks no longer route to replacement handlers.** Android
   and iOS event handles now carry their render generation, with the handler
@@ -18,15 +20,17 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   sheet dismissals may cross any number of renders while the slot's consecutive
   committed registrations retain identical PID and tag identity, preserving
   in-flight intent without permitting delivery to a replacement handler.
-  Building tables are generation-invalid
-  until committed, so stale lookup cannot observe partially rebuilt handlers.
+  Building tables are generation-invalid until committed, so stale lookup
+  cannot observe partially rebuilt handlers.
   Event tags are copied while their registry lock is held, closing the iOS and
   Android environment-lifetime race. Persistent component handles also carry a
   per-slot generation so callbacks from reclaimed slots cannot reach a new
   component. Rejections are visible in debug native logs. Generated Android
-  projects must pair this with the companion generator update that keys list
-  state independently of the full event handle. Deregistering an already-stale
-  component handle now returns `badarg` rather than silently succeeding.
+  projects must pair this with mob_new 0.4.30+, whose generated bridge keys
+  lazy-list state independently of the full event handle — older templates
+  reset list scroll position on every re-render under 0.7.38. Deregistering
+  an already-stale component handle now returns `badarg` rather than silently
+  succeeding. (#114)
 
 ## [0.7.37] - 2026-08-30
 
