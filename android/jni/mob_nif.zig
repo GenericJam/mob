@@ -994,7 +994,7 @@ const ComponentHandle = extern struct {
 var tap_tables: [2][MAX_TAP_HANDLES]TapHandle = std.mem.zeroes([2][MAX_TAP_HANDLES]TapHandle);
 var tap_active: usize = 0; // index of the table readers resolve against
 var tap_active_count: c_int = 0; // committed handle count in the active table
-var tap_active_generation: u32 = 0; // generation encoded in committed native handles
+var tap_table_generations: [2]u32 = .{ 0, 0 };
 var tap_build_count: c_int = 0; // handles registered so far into the building table
 var tap_build_generation: u32 = 0; // generation encoded while building the next tree
 var tap_mutex: ?*erts.ErlNifMutex = null;
@@ -1011,6 +1011,7 @@ var g_transition: [16]u8 = blk: {
 };
 
 var component_handles: [MAX_COMPONENT_HANDLES]ComponentHandle = @splat(std.mem.zeroes(ComponentHandle));
+var component_generations: [MAX_COMPONENT_HANDLES]u32 = @splat(0);
 var component_mutex: ?*erts.ErlNifMutex = null;
 
 /// Initialise both mutexes. Called from mob_nif.c's nif_load BEAM callback
@@ -1040,20 +1041,73 @@ const TapSnap = struct {
 fn resolveActiveTapLocked(handle: c_int) ?*TapHandle {
     const slot_index = tap_handle_codec.slotForActive(
         handle,
-        tap_active_generation,
+        tap_table_generations[tap_active],
         @intCast(tap_active_count),
     ) orelse return null;
     const tap = &tap_tables[tap_active][slot_index];
     return if (tap.tag_env == null) null else tap;
 }
 
+fn resolveGenerationTapLocked(handle: c_int) ?*TapHandle {
+    const decoded = tap_handle_codec.decode(handle) orelse return null;
+    for (0..tap_tables.len) |table_index| {
+        if (tap_table_generations[table_index] != decoded.generation) continue;
+        const tap = &tap_tables[table_index][decoded.slot];
+        return if (tap.tag_env == null) null else tap;
+    }
+    return null;
+}
+
+fn copyTap(tap: *const TapHandle, env: ?*erts.ErlNifEnv) TapSnap {
+    return .{ .pid = tap.pid, .tag = erts.enif_make_copy(env, tap.tag), .seq = tap.seq };
+}
+
 fn snapTap(handle: c_int, env: ?*erts.ErlNifEnv) ?TapSnap {
     erts.enif_mutex_lock(tap_mutex);
     const h = resolveActiveTapLocked(handle) orelse {
         erts.enif_mutex_unlock(tap_mutex);
+        logd_nif("rejected stale event handle {d}", .{handle});
         return null;
     };
-    const snap = TapSnap{ .pid = h.pid, .tag = erts.enif_make_copy(env, h.tag), .seq = h.seq };
+    const snap = copyTap(h, env);
+    erts.enif_mutex_unlock(tap_mutex);
+    return snap;
+}
+
+fn snapChangeTap(handle: c_int, env: ?*erts.ErlNifEnv) ?TapSnap {
+    erts.enif_mutex_lock(tap_mutex);
+    if (resolveActiveTapLocked(handle)) |active| {
+        const snap = copyTap(active, env);
+        erts.enif_mutex_unlock(tap_mutex);
+        return snap;
+    }
+
+    const decoded = tap_handle_codec.decode(handle) orelse {
+        erts.enif_mutex_unlock(tap_mutex);
+        logd_nif("rejected stale event handle {d}", .{handle});
+        return null;
+    };
+    const source = resolveGenerationTapLocked(handle) orelse {
+        erts.enif_mutex_unlock(tap_mutex);
+        logd_nif("rejected stale event handle {d}", .{handle});
+        return null;
+    };
+    const active = if (decoded.slot < @as(usize, @intCast(tap_active_count)))
+        &tap_tables[tap_active][decoded.slot]
+    else {
+        erts.enif_mutex_unlock(tap_mutex);
+        logd_nif("rejected stale event handle {d}", .{handle});
+        return null;
+    };
+    if (active.tag_env == null or source.pid.pid != active.pid.pid or
+        erts.enif_compare(source.tag, active.tag) != 0)
+    {
+        erts.enif_mutex_unlock(tap_mutex);
+        logd_nif("rejected stale event handle {d}", .{handle});
+        return null;
+    }
+
+    const snap = copyTap(active, env);
     erts.enif_mutex_unlock(tap_mutex);
     return snap;
 }
@@ -1077,7 +1131,7 @@ fn sendEvent(handle: c_int, comptime atom_name: [:0]const u8) void {
 fn sendChange(handle: c_int, value_term: erts.ERL_NIF_TERM) void {
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
-    const snap = snapTap(handle, env) orelse return;
+    const snap = snapChangeTap(handle, env) orelse return;
     const msg = erts.makeTuple(env, .{
         erts.enif_make_atom(env, "change"),
         snap.tag,
@@ -1483,18 +1537,28 @@ pub export fn mob_send_scrolled_past(handle: c_int) callconv(.c) void {
 
 // ── Component event sender ──────────────────────────────────────────────
 
+fn decodeComponentHandle(handle: c_int) ?usize {
+    const decoded = tap_handle_codec.decode(handle) orelse return null;
+    if (decoded.slot >= MAX_COMPONENT_HANDLES or
+        component_generations[decoded.slot] != decoded.generation or
+        component_handles[decoded.slot].active == 0)
+    {
+        return null;
+    }
+    return decoded.slot;
+}
+
 pub export fn mob_send_component_event(
     handle: c_int,
     event: [*:0]const u8,
     payload_json: [*:0]const u8,
 ) callconv(.c) void {
-    if (handle < 0 or handle >= @as(c_int, @intCast(MAX_COMPONENT_HANDLES))) return;
     erts.enif_mutex_lock(component_mutex);
-    const slot = &component_handles[@intCast(handle)];
-    if (slot.active == 0) {
+    const slot_index = decodeComponentHandle(handle) orelse {
         erts.enif_mutex_unlock(component_mutex);
         return;
-    }
+    };
+    const slot = &component_handles[slot_index];
     const pid_copy = slot.pid;
     erts.enif_mutex_unlock(component_mutex);
 
@@ -1574,7 +1638,7 @@ export fn nif_set_root(
     // any send racing this swap sees a complete table on either side.
     tap_active = 1 - tap_active;
     tap_active_count = tap_build_count;
-    tap_active_generation = tap_build_generation;
+    tap_table_generations[tap_active] = tap_build_generation;
     erts.enif_mutex_unlock(tap_mutex);
     const transition_cstr: [*:0]const u8 = @ptrCast(&transition);
 
@@ -1629,8 +1693,10 @@ export fn nif_register_tap(
     }
 
     const slot_index: usize = @intCast(tap_build_count);
-    const handle = tap_handle_codec.encode(tap_build_generation, slot_index) orelse
+    const handle = tap_handle_codec.encode(tap_build_generation, slot_index) orelse {
+        loge_nif("register_tap: invalid generation {d}", .{tap_build_generation});
         return erts.enif_make_int(env, -1);
+    };
     tap_build_count += 1;
     const slot = &tap_tables[1 - tap_active][slot_index];
     slot.pid = pid;
@@ -1718,9 +1784,11 @@ export fn nif_register_component(
     var i: usize = 0;
     while (i < MAX_COMPONENT_HANDLES) : (i += 1) {
         if (component_handles[i].active == 0) {
+            component_generations[i] = tap_handle_codec.nextGeneration(component_generations[i]);
+            const handle = tap_handle_codec.encode(component_generations[i], i) orelse unreachable;
             component_handles[i].pid = pid;
             component_handles[i].active = 1;
-            return erts.makeTuple(env, .{ erts.atom(env, "ok"), erts.enif_make_int(env, @intCast(i)) });
+            return erts.makeTuple(env, .{ erts.atom(env, "ok"), erts.enif_make_int(env, handle) });
         }
     }
     return erts.errorTuple(env, erts.atom(env, "component_slots_exhausted"));
@@ -1735,14 +1803,13 @@ export fn nif_deregister_component(
 ) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     var handle: c_int = 0;
-    if (erts.enif_get_int(env, argv[0], &handle) == 0 or
-        handle < 0 or
-        handle >= @as(c_int, @intCast(MAX_COMPONENT_HANDLES)))
-    {
-        return erts.badarg(env);
-    }
+    if (erts.enif_get_int(env, argv[0], &handle) == 0) return erts.badarg(env);
     erts.enif_mutex_lock(component_mutex);
-    component_handles[@intCast(handle)].active = 0;
+    const slot_index = decodeComponentHandle(handle) orelse {
+        erts.enif_mutex_unlock(component_mutex);
+        return erts.badarg(env);
+    };
+    component_handles[slot_index].active = 0;
     erts.enif_mutex_unlock(component_mutex);
     return erts.ok(env);
 }
@@ -1758,6 +1825,10 @@ const NIF_LOG_TAG: [*:0]const u8 = "MobNIF";
 
 inline fn logi_nif(comptime fmt: []const u8, args: anytype) void {
     jni.logWrite(jni.ANDROID_LOG_INFO, NIF_LOG_TAG, fmt, args);
+}
+
+inline fn logd_nif(comptime fmt: []const u8, args: anytype) void {
+    jni.logWrite(jni.ANDROID_LOG_DEBUG, NIF_LOG_TAG, fmt, args);
 }
 
 inline fn loge_nif(comptime fmt: []const u8, args: anytype) void {

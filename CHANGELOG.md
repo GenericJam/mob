@@ -10,6 +10,20 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **Stale native callbacks no longer route to replacement handlers.** Android
+  and iOS event handles now carry their render generation, with the handler
+  table, count, and generation committed atomically. Taps and gestures from an
+  old native tree are rejected; text, toggle, and slider changes may cross one
+  render only when the retained and current registrations have identical PID
+  and tag identity, preserving in-flight input without permitting misroutes.
+  Event tags are copied while their registry lock is held, closing the iOS and
+  Android environment-lifetime race. Persistent component handles also carry a
+  per-slot generation so callbacks from reclaimed slots cannot reach a new
+  component. Rejections are visible in debug native logs. Generated Android
+  projects must pair this with the companion generator update that keys list
+  state independently of the full event handle.
+
 ## [0.7.37] - 2026-08-30
 
 ### Added
