@@ -966,6 +966,10 @@ const TapHandle = extern struct {
     pid: erts.ErlNifPid,
     tag_env: ?*erts.ErlNifEnv,
     tag: erts.ERL_NIF_TERM,
+    // First generation in the current consecutive run of identical PID/tag
+    // registrations at this slot. Identity events can safely outlive the two
+    // physical tables while their route remains unchanged.
+    identity_start_generation: u32,
 
     // ── Batch 5 throttle state — populated by mob_set_throttle_config ──
     throttle_ms: c_int,
@@ -1048,16 +1052,6 @@ fn resolveActiveTapLocked(handle: c_int) ?*TapHandle {
     return if (tap.tag_env == null) null else tap;
 }
 
-fn resolveGenerationTapLocked(handle: c_int) ?*TapHandle {
-    const decoded = tap_handle_codec.decode(handle) orelse return null;
-    for (0..tap_tables.len) |table_index| {
-        if (tap_table_generations[table_index] != decoded.generation) continue;
-        const tap = &tap_tables[table_index][decoded.slot];
-        return if (tap.tag_env == null) null else tap;
-    }
-    return null;
-}
-
 fn copyTap(tap: *const TapHandle, env: ?*erts.ErlNifEnv) TapSnap {
     return .{ .pid = tap.pid, .tag = erts.enif_make_copy(env, tap.tag), .seq = tap.seq };
 }
@@ -1087,11 +1081,6 @@ fn snapChangeTap(handle: c_int, env: ?*erts.ErlNifEnv) ?TapSnap {
         logd_nif("rejected stale event handle {d}", .{handle});
         return null;
     };
-    const source = resolveGenerationTapLocked(handle) orelse {
-        erts.enif_mutex_unlock(tap_mutex);
-        logd_nif("rejected stale event handle {d}", .{handle});
-        return null;
-    };
     const active = if (decoded.slot < @as(usize, @intCast(tap_active_count)))
         &tap_tables[tap_active][decoded.slot]
     else {
@@ -1099,9 +1088,11 @@ fn snapChangeTap(handle: c_int, env: ?*erts.ErlNifEnv) ?TapSnap {
         logd_nif("rejected stale event handle {d}", .{handle});
         return null;
     };
-    if (active.tag_env == null or source.pid.pid != active.pid.pid or
-        erts.enif_compare(source.tag, active.tag) != 0)
-    {
+    if (active.tag_env == null or !tap_handle_codec.generationWithinIdentity(
+        decoded.generation,
+        active.identity_start_generation,
+        tap_table_generations[tap_active],
+    )) {
         erts.enif_mutex_unlock(tap_mutex);
         logd_nif("rejected stale event handle {d}", .{handle});
         return null;
@@ -1648,6 +1639,20 @@ export fn nif_set_root(
     // handlers into 1 - tap_active, so make that table active now. Events for
     // the new tree (delivered to Compose just below) resolve against it, and
     // any send racing this swap sees a complete table on either side.
+    const previous = &tap_tables[tap_active];
+    const build = &tap_tables[1 - tap_active];
+    var slot_index: usize = 0;
+    while (slot_index < @as(usize, @intCast(tap_build_count))) : (slot_index += 1) {
+        const current = &build[slot_index];
+        if (slot_index < @as(usize, @intCast(tap_active_count))) {
+            const prior = &previous[slot_index];
+            if (prior.tag_env != null and prior.pid.pid == current.pid.pid and
+                erts.enif_compare(prior.tag, current.tag) == 0)
+            {
+                current.identity_start_generation = prior.identity_start_generation;
+            }
+        }
+    }
     tap_active = 1 - tap_active;
     tap_active_count = tap_build_count;
     tap_table_generations[tap_active] = tap_build_generation;
@@ -1709,11 +1714,16 @@ export fn nif_register_tap(
         loge_nif("register_tap: invalid generation {d}", .{tap_build_generation});
         return erts.enif_make_int(env, -1);
     };
-    tap_build_count += 1;
+    const tag_env = erts.enif_alloc_env() orelse {
+        loge_nif("register_tap: unable to allocate tag environment", .{});
+        return erts.atom(env, "error");
+    };
     const slot = &tap_tables[1 - tap_active][slot_index];
     slot.pid = pid;
-    slot.tag_env = erts.enif_alloc_env() orelse return erts.atom(env, "error");
+    slot.tag_env = tag_env;
     slot.tag = erts.enif_make_copy(slot.tag_env, tag_term);
+    slot.identity_start_generation = tap_build_generation;
+    tap_build_count += 1;
     return erts.enif_make_int(env, handle);
 }
 

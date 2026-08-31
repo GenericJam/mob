@@ -77,6 +77,10 @@ typedef struct {
     ErlNifPid pid;
     ErlNifEnv *tag_env; // persistent env owning tag; NULL when slot is free
     ERL_NIF_TERM tag;
+    // First generation in the current consecutive run of identical PID/tag
+    // registrations at this slot. Identity events can safely outlive the two
+    // physical tables while their route remains unchanged.
+    uint32_t identity_start_generation;
 
     // ── Batch 5 throttle state — populated by mob_set_throttle_config ──
     int throttle_ms; // 0 = no throttle (raw firing)
@@ -107,6 +111,23 @@ static ErlNifMutex *tap_mutex = NULL;
 
 static uint32_t mob_next_handle_generation(uint32_t generation) {
     return generation == 0 || generation >= MAX_EVENT_GENERATION ? 1 : generation + 1;
+}
+
+static uint32_t mob_generation_age(uint32_t active_generation, uint32_t prior_generation) {
+    return active_generation >= prior_generation
+               ? active_generation - prior_generation
+               : MAX_EVENT_GENERATION - prior_generation + active_generation;
+}
+
+static int mob_generation_within_identity(uint32_t handle_generation,
+                                          uint32_t identity_start_generation,
+                                          uint32_t active_generation) {
+    if (handle_generation == 0 || handle_generation > MAX_EVENT_GENERATION ||
+        identity_start_generation == 0 || identity_start_generation > MAX_EVENT_GENERATION ||
+        active_generation == 0 || active_generation > MAX_EVENT_GENERATION)
+        return 0;
+    return mob_generation_age(active_generation, handle_generation) <=
+           mob_generation_age(active_generation, identity_start_generation);
 }
 
 static int mob_encode_event_handle(uint32_t generation, int slot) {
@@ -140,20 +161,6 @@ static TapHandle *mob_resolve_active_tap_locked(int handle) {
     return &tap_handles[slot];
 }
 
-static TapHandle *mob_resolve_generation_tap_locked(int handle, int *slot_out) {
-    uint32_t generation;
-    int slot;
-    if (!mob_decode_event_handle(handle, &generation, &slot))
-        return NULL;
-    for (int table = 0; table < 2; table++) {
-        if (tap_table_generations[table] == generation && tap_tables[table][slot].tag_env) {
-            *slot_out = slot;
-            return &tap_tables[table][slot];
-        }
-    }
-    return NULL;
-}
-
 static int mob_snap_tap(int handle, ErlNifEnv *msg_env, TapSnap *snap) {
     enif_mutex_lock(tap_mutex);
     TapHandle *active = mob_resolve_active_tap_locked(handle);
@@ -173,11 +180,17 @@ static int mob_snap_change_tap(int handle, ErlNifEnv *msg_env, TapSnap *snap) {
     enif_mutex_lock(tap_mutex);
     TapHandle *active = mob_resolve_active_tap_locked(handle);
     if (!active) {
-        int slot = -1;
-        TapHandle *source = mob_resolve_generation_tap_locked(handle, &slot);
+        uint32_t generation;
+        int slot;
+        if (!mob_decode_event_handle(handle, &generation, &slot)) {
+            enif_mutex_unlock(tap_mutex);
+            LOGD(@"rejected stale event handle %d", handle);
+            return 0;
+        }
         active = slot >= 0 && slot < tap_handle_next ? &tap_handles[slot] : NULL;
-        if (!source || !active || !active->tag_env || source->pid.pid != active->pid.pid ||
-            enif_compare(source->tag, active->tag) != 0) {
+        if (!active || !active->tag_env ||
+            !mob_generation_within_identity(generation, active->identity_start_generation,
+                                            tap_table_generations[tap_active])) {
             enif_mutex_unlock(tap_mutex);
             LOGD(@"rejected stale event handle %d", handle);
             return 0;
@@ -2204,6 +2217,14 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     // Commit the freshly-built tap table: register_tap wrote this frame's
     // handlers into 1 - tap_active; make that table active now so events for the
     // new tree resolve against it (readers see a consistent pair under the lock).
+    TapHandle *previous = tap_tables[tap_active];
+    TapHandle *build = tap_tables[1 - tap_active];
+    for (int slot = 0; slot < tap_build_count; slot++) {
+        if (slot < tap_handle_next && previous[slot].tag_env &&
+            previous[slot].pid.pid == build[slot].pid.pid &&
+            enif_compare(previous[slot].tag, build[slot].tag) == 0)
+            build[slot].identity_start_generation = previous[slot].identity_start_generation;
+    }
     tap_active = 1 - tap_active;
     tap_handles = tap_tables[tap_active];
     tap_handle_next = tap_build_count;
@@ -2263,17 +2284,24 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
         return enif_make_int(env, -1);
     }
     TapHandle *build = tap_tables[1 - tap_active];
-    int slot = tap_build_count++;
+    int slot = tap_build_count;
     int handle = mob_encode_event_handle(tap_build_generation, slot);
     if (handle < 0) {
-        tap_build_count--;
         enif_mutex_unlock(tap_mutex);
         LOGE(@"register_tap: invalid generation %u", tap_build_generation);
         return enif_make_int(env, -1);
     }
+    ErlNifEnv *tag_env = enif_alloc_env();
+    if (!tag_env) {
+        enif_mutex_unlock(tap_mutex);
+        LOGE(@"register_tap: unable to allocate tag environment");
+        return enif_make_atom(env, "error");
+    }
     build[slot].pid = pid;
-    build[slot].tag_env = enif_alloc_env();
+    build[slot].tag_env = tag_env;
     build[slot].tag = enif_make_copy(build[slot].tag_env, tag_term);
+    build[slot].identity_start_generation = tap_build_generation;
+    tap_build_count++;
     enif_mutex_unlock(tap_mutex);
 
     return enif_make_int(env, handle);

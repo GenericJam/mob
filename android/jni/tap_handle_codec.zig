@@ -32,6 +32,29 @@ pub fn nextGeneration(generation: u32) u32 {
     return if (generation == 0 or generation >= max_generation) 1 else generation + 1;
 }
 
+pub fn generationWithinIdentity(
+    handle_generation: u32,
+    identity_start_generation: u32,
+    active_generation: u32,
+) bool {
+    if (handle_generation == 0 or handle_generation > max_generation or
+        identity_start_generation == 0 or identity_start_generation > max_generation or
+        active_generation == 0 or active_generation > max_generation)
+    {
+        return false;
+    }
+
+    return generationAge(active_generation, handle_generation) <=
+        generationAge(active_generation, identity_start_generation);
+}
+
+fn generationAge(active_generation: u32, prior_generation: u32) u32 {
+    return if (active_generation >= prior_generation)
+        active_generation - prior_generation
+    else
+        max_generation - prior_generation + active_generation;
+}
+
 test "round trips every slot through a positive generation-tagged handle" {
     for (0..slot_count) |slot| {
         const handle = encode(42, slot).?;
@@ -61,4 +84,15 @@ test "generation wraps to one instead of producing invalid handles" {
     try std.testing.expectEqual(@as(u32, 2), nextGeneration(1));
     try std.testing.expectEqual(@as(u32, 1), nextGeneration(max_generation));
     try std.testing.expectEqual(@as(u32, 1), nextGeneration(0));
+}
+
+test "identity range spans multiple renders and resets on replacement" {
+    try std.testing.expect(generationWithinIdentity(10, 10, 15));
+    try std.testing.expect(generationWithinIdentity(12, 10, 15));
+    try std.testing.expect(generationWithinIdentity(15, 10, 15));
+    try std.testing.expect(!generationWithinIdentity(9, 10, 15));
+
+    try std.testing.expect(generationWithinIdentity(max_generation, max_generation - 1, 2));
+    try std.testing.expect(generationWithinIdentity(1, max_generation - 1, 2));
+    try std.testing.expect(!generationWithinIdentity(max_generation - 2, max_generation - 1, 2));
 }
