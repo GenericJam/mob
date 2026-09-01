@@ -244,13 +244,15 @@ defmodule Mob.Renderer do
     nif.clear_taps()
     nif.set_transition(transition)
 
-    json =
-      tree
-      |> prepare(nif, platform, ctx)
-      |> :json.encode()
-      |> IO.iodata_to_binary()
+    prepared = Mob.RenderStats.time(:prepare_us, fn -> prepare(tree, nif, platform, ctx) end)
 
-    nif.set_root(json)
+    json =
+      Mob.RenderStats.time(:encode_us, fn ->
+        prepared |> :json.encode() |> IO.iodata_to_binary()
+      end)
+
+    Mob.RenderStats.time(:set_root_us, fn -> nif.set_root(json) end)
+    Mob.RenderStats.finish(prepared, byte_size(json))
     {:ok, :json_tree}
   end
 
