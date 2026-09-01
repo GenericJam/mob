@@ -352,6 +352,8 @@ defmodule Mob.Screen.Server do
       Mob.ComponentRegistry.reconcile(self(), active_component_keys)
     end)
 
+    Mob.RenderStats.hand_off(state.ref)
+
     if activation_token && function_exported?(Mob.Sender, :render, 6) do
       Mob.Sender.render(state.ref, tree, platform, state.nif, transition, activation_token)
     else

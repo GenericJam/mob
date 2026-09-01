@@ -8,6 +8,22 @@ defmodule Mob.RenderStats do
   expansion, in JSON encoding, or inside `set_root` — and the four candidate
   fixes attack four different ones of those.
 
+  ## A frame spans two processes
+
+  This is the thing that makes the implementation less obvious than it looks.
+  `Mob.Screen.Server.paint/4` runs the user's `render/1`, the expansion passes
+  and the component reconcile in the **screen's** process — then hands the tree
+  to `Mob.Sender` as a *cast*, so `prepare`, `:json.encode` and `set_root` run
+  in the **sender's** process. A process-dictionary accumulator started by the
+  screen is simply not there when the renderer looks for it, and the first cut
+  of this module recorded nothing at all on device for exactly that reason.
+
+  So the screen times its stages, `hand_off/1` sends the partial frame to the
+  sender, and the sender resumes it before committing. Frames the sender drops
+  — superseded by a newer tree, or belonging to a screen that is not active —
+  are recorded with `committed: false` rather than discarded, because BEAM-side
+  work that gets thrown away is worth knowing about.
+
   ## Cost when disabled
 
   A `:persistent_term` read and an immediate return. No process, no ETS lookup,
@@ -56,10 +72,21 @@ defmodule Mob.RenderStats do
   @frame {__MODULE__, :frame}
   @max_frames 500
 
-  @doc "Start recording. Idempotent."
+  @doc """
+  Start recording. Idempotent.
+
+  Starts a process to own the ETS table. Without one the table belongs to
+  whoever called `enable/0` first — over `:rpc.call/4` that is a transient
+  process, so the table dies the instant enabling returns and every later write
+  goes nowhere.
+  """
   @spec enable() :: :ok
   def enable do
-    ensure_table()
+    case GenServer.start(__MODULE__, [], name: __MODULE__) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
+
     :persistent_term.put(@flag, true)
     :ok
   end
@@ -78,16 +105,21 @@ defmodule Mob.RenderStats do
   @doc "Discard every recorded frame."
   @spec reset() :: :ok
   def reset do
-    ensure_table()
-    :ets.delete_all_objects(@table)
+    if :ets.whereis(@table) != :undefined, do: :ets.delete_all_objects(@table)
     :ok
   end
 
   @doc "Recorded frames, newest first."
   @spec frames() :: [map()]
   def frames do
-    ensure_table()
+    if :ets.whereis(@table) == :undefined do
+      []
+    else
+      read_frames()
+    end
+  end
 
+  defp read_frames do
     @table
     |> :ets.tab2list()
     |> Enum.sort_by(&elem(&1, 0), :desc)
@@ -160,6 +192,60 @@ defmodule Mob.RenderStats do
     end
   end
 
+  @doc """
+  Take the frame in progress out of this process, for handing to another.
+
+  Returns `nil` when disabled or when no frame is open.
+  """
+  @spec take_frame() :: map() | nil
+  def take_frame, do: Process.delete(@frame)
+
+  @doc """
+  Hand the frame in progress to `Mob.Sender`, which finishes it.
+
+  Sent as its own cast rather than threaded through `Mob.Sender.render/5,6`:
+  those are the shipped render entry points and one of them is already probed
+  with `function_exported?/3` for version skew, so widening them to carry
+  measurement scaffolding would be the wrong trade. Ordering holds because both
+  messages come from the same process to the same mailbox.
+  """
+  @spec hand_off(term()) :: :ok
+  def hand_off(ref) do
+    case take_frame() do
+      nil -> :ok
+      frame -> GenServer.cast(Mob.Sender, {:render_stats, ref, frame})
+    end
+  end
+
+  @doc "Install a frame taken from another process."
+  @spec resume_frame(map() | nil) :: :ok
+  def resume_frame(nil), do: :ok
+  def resume_frame(frame), do: Process.put(@frame, frame) && :ok
+
+  @doc """
+  Record a frame whose tree was never committed.
+
+  A superseded or inactive tree still cost the BEAM everything up to the
+  hand-off, and a render pipeline that throws away half its work is a finding
+  rather than a detail.
+  """
+  @spec drop_frame(map() | nil) :: :ok
+  def drop_frame(nil), do: :ok
+
+  def drop_frame(frame) do
+    store(
+      frame
+      |> Map.drop([:started])
+      |> Map.merge(%{
+        total_us: now() - frame.started,
+        nodes: nil,
+        taps: nil,
+        bytes: 0,
+        committed: false
+      })
+    )
+  end
+
   @doc "Add a measured value to the frame in progress."
   @spec add(atom(), number()) :: :ok
   def add(key, value) do
@@ -191,7 +277,13 @@ defmodule Mob.RenderStats do
         record =
           frame
           |> Map.drop([:started])
-          |> Map.merge(%{total_us: total_us, nodes: nodes, taps: taps, bytes: bytes})
+          |> Map.merge(%{
+            total_us: total_us,
+            nodes: nodes,
+            taps: taps,
+            bytes: bytes,
+            committed: true
+          })
 
         store(record)
     end
@@ -202,7 +294,14 @@ defmodule Mob.RenderStats do
   defp now, do: System.monotonic_time(:microsecond)
 
   defp store(record) do
-    ensure_table()
+    if :ets.whereis(@table) == :undefined do
+      :ok
+    else
+      do_store(record)
+    end
+  end
+
+  defp do_store(record) do
     :ets.insert(@table, {System.unique_integer([:monotonic]), record})
 
     # Ring rather than unbounded: this runs on a memory-constrained device and a
@@ -258,16 +357,13 @@ defmodule Mob.RenderStats do
     Enum.at(sorted, index)
   end
 
-  defp ensure_table do
-    case :ets.whereis(@table) do
-      :undefined ->
-        :ets.new(@table, [:named_table, :public, :ordered_set, write_concurrency: true])
-        :ok
+  # ── Table owner ───────────────────────────────────────────────────────────
 
-      _tid ->
-        :ok
-    end
-  rescue
-    ArgumentError -> :ok
+  use GenServer
+
+  @impl GenServer
+  def init(_opts) do
+    :ets.new(@table, [:named_table, :public, :ordered_set, write_concurrency: true])
+    {:ok, %{}}
   end
 end

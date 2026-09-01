@@ -186,6 +186,149 @@ defmodule Mob.RenderStatsTest do
     end
   end
 
+  describe "a frame that crosses the screen/sender boundary" do
+    # The bug this exists to prevent: paint/4 opens the frame in the SCREEN
+    # process, then hands the tree to Mob.Sender as a cast, so prepare, encode
+    # and set_root run in the SENDER process. A process-dictionary accumulator
+    # does not travel, and the first version of this module recorded nothing at
+    # all on device because of it.
+    defmodule StubNif do
+      def clear_taps, do: :ok
+      def set_transition(_), do: :ok
+      def register_tap(_), do: 0
+      def set_root(_json), do: :ok
+    end
+
+    setup do
+      for name <- [Mob.Sender], pid = Process.whereis(name), do: GenServer.stop(pid)
+      {:ok, sender} = Mob.Sender.start_link(active: :the_screen)
+      on_exit(fn -> if Process.alive?(sender), do: GenServer.stop(sender) end)
+
+      RenderStats.enable()
+      RenderStats.reset()
+      :ok
+    end
+
+    defp paint_from_another_process(ref) do
+      # Stands in for Mob.Screen.Server.paint/4: time the screen-side stages,
+      # hand the frame over, then cast the render — from a process that is not
+      # the sender.
+      task =
+        Task.async(fn ->
+          RenderStats.start_frame(Some.Screen, :none)
+          RenderStats.time(:render_us, fn -> :ok end)
+          RenderStats.hand_off(ref)
+          Mob.Sender.render(ref, %{type: :text, props: %{}, children: []}, :ios, StubNif, :none)
+        end)
+
+      Task.await(task)
+      Mob.Sender.sync()
+    end
+
+    test "the frame survives the hand-off and records every stage" do
+      paint_from_another_process(:the_screen)
+
+      assert [frame] = RenderStats.frames()
+      assert frame.screen == Some.Screen
+      assert frame.committed == true
+
+      for stage <- [:render_us, :prepare_us, :encode_us, :set_root_us] do
+        assert is_integer(Map.get(frame, stage)),
+               "#{stage} missing — the frame did not survive the process hop"
+      end
+    end
+
+    test "records the payload the sender actually encoded" do
+      paint_from_another_process(:the_screen)
+      assert [%{bytes: bytes, nodes: 1}] = RenderStats.frames()
+      assert bytes > 0
+    end
+
+    test "a tree the sender drops is recorded as uncommitted, not lost" do
+      # Its BEAM-side cost was paid either way; a pipeline throwing away half its
+      # work is a finding rather than a detail.
+      paint_from_another_process(:some_other_screen)
+
+      assert [%{committed: false, screen: Some.Screen}] = RenderStats.frames()
+    end
+  end
+
+  describe "through the real paint path" do
+    # The test above proves the hand-off mechanism works. This one proves
+    # Mob.Screen.Server.paint/4 actually uses it — removing the hand_off call
+    # from paint/4 passes the mechanism test and fails this one, which is the
+    # difference between testing a function and testing the system.
+    defmodule RealNif do
+      def platform, do: :android
+      def safe_area, do: {0.0, 0.0, 0.0, 0.0}
+      def take_launch_notification, do: :none
+      def clear_taps, do: :ok
+      def set_transition(_), do: :ok
+      def register_tap(_), do: 0
+      def set_root(_json), do: :ok
+    end
+
+    defmodule CounterScreen do
+      use Mob.Screen
+      def mount(_p, _s, socket), do: {:ok, Mob.Socket.assign(socket, :n, 0)}
+
+      def render(assigns) do
+        %{type: :text, props: %{text: "n=#{assigns.n}"}, children: []}
+      end
+
+      def handle_event("bump", _, socket),
+        do: {:noreply, Mob.Socket.assign(socket, :n, socket.assigns.n + 1)}
+    end
+
+    defmodule DemoApp do
+      @behaviour Mob.App
+      import Mob.App
+      def navigation(_), do: stack(:home, root: Mob.RenderStatsTest.CounterScreen)
+    end
+
+    setup do
+      services = [Mob.Sender, Mob.Listener, Mob.ComponentRegistry, Mob.Nav.Registry]
+      for name <- services, pid = Process.whereis(name), do: safe_stop(pid)
+
+      {:ok, _} = Mob.ComponentRegistry.start_link()
+      {:ok, _} = Mob.Nav.Registry.start_link(DemoApp)
+
+      RenderStats.enable()
+      RenderStats.reset()
+
+      {:ok, router} = Mob.Router.start_root(CounterScreen, %{}, nif: RealNif)
+
+      on_exit(fn ->
+        safe_stop(router)
+        for name <- services, pid = Process.whereis(name), do: safe_stop(pid)
+      end)
+
+      %{router: router}
+    end
+
+    defp safe_stop(pid) do
+      GenServer.stop(pid)
+    catch
+      :exit, _ -> :ok
+    end
+
+    test "a real render records a complete frame", %{router: router} do
+      RenderStats.reset()
+      Mob.Screen.dispatch(router, "bump", %{})
+      Mob.Sender.sync()
+
+      assert [frame | _] = RenderStats.frames()
+      assert frame.screen == CounterScreen
+      assert frame.committed == true
+      assert frame.nodes == 1
+
+      for stage <- [:render_us, :expand_us, :reconcile_us, :prepare_us, :encode_us, :set_root_us] do
+        assert is_integer(Map.get(frame, stage)),
+               "#{stage} was not recorded through the real paint path"
+      end
+    end
+  end
+
   describe "bounded storage" do
     test "keeps the most recent frames and drops the oldest" do
       # A long measurement session on a memory-constrained device must not grow

@@ -222,6 +222,13 @@ defmodule Mob.Sender do
     {:noreply, %{state | active: ref, reserved_transition: nil}}
   end
 
+  def handle_cast({:render_stats, ref, frame}, state) do
+    frames = Map.get(state, :frames, %{})
+    # A frame already held for this ref belongs to a tree this one supersedes.
+    Mob.RenderStats.drop_frame(Map.get(frames, ref))
+    {:noreply, Map.put(state, :frames, Map.put(frames, ref, frame))}
+  end
+
   def handle_cast({:render, ref, tree, platform, nif, transition}, state) do
     handle_cast({:render, ref, tree, platform, nif, transition, nil}, state)
   end
@@ -281,15 +288,27 @@ defmodule Mob.Sender do
   def handle_info(_message, state), do: {:noreply, state}
 
   defp flush(state) do
+    frames = Map.get(state, :frames, %{})
+
     case Map.fetch(state.pending, state.active) do
-      {:ok, payload} -> commit(payload)
-      :error -> :ok
+      {:ok, payload} ->
+        Mob.RenderStats.resume_frame(Map.get(frames, state.active))
+        commit(payload)
+
+      :error ->
+        :ok
     end
+
+    # Whatever is left belonged to a tree that was never committed. Its BEAM-side
+    # cost was still paid, so record it rather than losing it.
+    frames
+    |> Map.drop(if(Map.has_key?(state.pending, state.active), do: [state.active], else: []))
+    |> Enum.each(fn {_ref, frame} -> Mob.RenderStats.drop_frame(frame) end)
 
     # Everything else waiting belongs to a screen that is not active. Dropping
     # it is deliberate: by the time such a screen becomes active it will have
     # re-rendered, so committing a queued tree would only show a stale frame.
-    %{state | pending: %{}}
+    state |> Map.put(:frames, %{}) |> Map.put(:pending, %{})
   end
 
   defp commit({tree, platform, nif, transition}) do
