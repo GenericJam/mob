@@ -1659,8 +1659,6 @@ export fn nif_set_root(
             }
         }
     }
-    tap_table_used[@intCast(1 - tap_active)] = @intCast(tap_build_count);
-
     if (tap_exhausted_count > 0) {
         // One line per frame rather than one per overflowing node. The count is
         // the useful number: it says how many interactive elements are silently
@@ -1748,6 +1746,14 @@ export fn nif_register_tap(
     slot.tag = erts.enif_make_copy(slot.tag_env, tag_term);
     slot.identity_start_generation = tap_build_generation;
     tap_build_count += 1;
+    // The high-water mark has to be raised HERE, not in set_root. clear_taps
+    // frees exactly `used` slots, and a frame can register taps and then never
+    // reach set_root — Mob.Renderer.render/4 calls clear_taps, then prepare,
+    // then :json.encode, then set_root, and Mob.Sender.commit/1 rescues anything
+    // that raises in between. Recording the mark only at set_root left those
+    // slots' tag_envs uncleared and unreachable: one leaked ErlNifEnv per tap,
+    // per failed frame, forever, on a path deliberately designed to survive.
+    tap_table_used[@intCast(1 - tap_active)] = @intCast(tap_build_count);
     return erts.enif_make_int(env, handle);
 }
 
@@ -1790,6 +1796,11 @@ export fn nif_clear_taps(
     }
     tap_table_used[@intCast(1 - tap_active)] = 0;
     tap_build_count = 0;
+    // Reset here, not only in set_root. set_root reports and clears the count,
+    // but a frame that overflows and then never reaches set_root would otherwise
+    // carry its overflow into the next frame's report — which claims to describe
+    // "this frame". clear_taps is the one entry point every frame runs.
+    tap_exhausted_count = 0;
     return erts.ok(env);
 }
 

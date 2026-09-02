@@ -12,11 +12,23 @@ defmodule Mob.NativeBoxAccessibilityTest do
     assert header =~ "NSString *accessibilityLabel"
     assert header =~ "NSString *accessibilityRole"
     assert header =~ "BOOL disabled"
-    assert nif =~ ~s|props[@"accessibility_label"]|
+    # The deserialiser resolves prop keys to slots in one pass rather than
+    # probing each key, so the contract is "accessibility_label" being in the slot table
+    # AND the node builder reading that slot.
+    assert nif =~ ~s|@"accessibility_label"|
+    assert nif =~ "pv[MOB_PROP_accessibility_label]"
     assert nif =~ "node.accessibilityLabel = accessibilityLabel"
-    assert nif =~ ~s|props[@"accessibility_role"]|
+    # The deserialiser resolves prop keys to slots in one pass rather than
+    # probing each key, so the contract is "accessibility_role" being in the slot table
+    # AND the node builder reading that slot.
+    assert nif =~ ~s|@"accessibility_role"|
+    assert nif =~ "pv[MOB_PROP_accessibility_role]"
     assert nif =~ "node.accessibilityRole = accessibilityRole"
-    assert nif =~ ~s|props[@"disabled"]|
+    # The deserialiser resolves prop keys to slots in one pass rather than
+    # probing each key, so the contract is "disabled" being in the slot table
+    # AND the node builder reading that slot.
+    assert nif =~ ~s|@"disabled"|
+    assert nif =~ "pv[MOB_PROP_disabled]"
     assert nif =~ "node.disabled = [disabled boolValue]"
   end
 
