@@ -790,6 +790,7 @@ typedef NS_ENUM(NSUInteger, MobPropKey) {
     MOB_PROP_height,
     MOB_PROP_id,
     MOB_PROP_italic,
+    MOB_PROP_lazy,
     MOB_PROP_keyboard,
     MOB_PROP_letter_spacing,
     MOB_PROP_line_height,
@@ -863,108 +864,120 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
     static NSDictionary<NSString *, NSNumber *> *slots = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-      NSString *const names[MOB_PROP__COUNT] = {@"accessibility_id",
-                                                @"accessibility_label",
-                                                @"accessibility_role",
-                                                @"active",
-                                                @"align",
-                                                @"allow",
-                                                @"autoplay",
-                                                @"axis",
-                                                @"background",
-                                                @"border_color",
-                                                @"border_width",
-                                                @"color",
-                                                @"component_handle",
-                                                @"content_mode",
-                                                @"controls",
-                                                @"corner_radius",
-                                                @"detents",
-                                                @"disabled",
-                                                @"drag_indicator_color",
-                                                @"drag_indicator_height",
-                                                @"drag_indicator_rail_height",
-                                                @"drag_indicator_width",
-                                                @"draw",
-                                                @"facing",
-                                                @"fade_on_scroll",
-                                                @"fill_height",
-                                                @"fill_width",
-                                                @"font",
-                                                @"font_weight",
-                                                @"glass",
-                                                @"height",
-                                                @"id",
-                                                @"italic",
-                                                @"keyboard",
-                                                @"letter_spacing",
-                                                @"line_height",
-                                                @"loop",
-                                                @"max",
-                                                @"min",
-                                                @"module",
-                                                @"name",
-                                                @"offset_x",
-                                                @"offset_y",
-                                                @"on_blur",
-                                                @"on_change",
-                                                @"on_compose",
-                                                @"on_dismiss",
-                                                @"on_double_tap",
-                                                @"on_drag",
-                                                @"on_end_reached",
-                                                @"on_focus",
-                                                @"on_long_press",
-                                                @"on_pinch",
-                                                @"on_pointer_move",
-                                                @"on_rotate",
-                                                @"on_scroll",
-                                                @"on_scroll_began",
-                                                @"on_scroll_ended",
-                                                @"on_scroll_settled",
-                                                @"on_scrolled_past",
-                                                @"on_select",
-                                                @"on_submit",
-                                                @"on_swipe",
-                                                @"on_swipe_down",
-                                                @"on_swipe_left",
-                                                @"on_swipe_right",
-                                                @"on_swipe_up",
-                                                @"on_tab_select",
-                                                @"on_tap",
-                                                @"on_top_reached",
-                                                @"padding",
-                                                @"padding_bottom",
-                                                @"padding_left",
-                                                @"padding_right",
-                                                @"padding_top",
-                                                @"parallax",
-                                                @"placeholder",
-                                                @"placeholder_color",
-                                                @"return_key",
-                                                @"scrolled_past_threshold",
-                                                @"secure",
-                                                @"shader",
-                                                @"show_indicator",
-                                                @"show_url",
-                                                @"size",
-                                                @"src",
-                                                @"sticky_when_scrolled_past",
-                                                @"tabs",
-                                                @"text",
-                                                @"text_align",
-                                                @"text_color",
-                                                @"text_size",
-                                                @"thickness",
-                                                @"title",
-                                                @"uniforms",
-                                                @"url",
-                                                @"value",
-                                                @"weight",
-                                                @"width"};
+      // Designated initializers: each entry names the slot it fills, so the
+      // enum and this table cannot drift apart. They are two independently
+      // ordered lists of 99 strings joined by index — insert a key mid-enum and
+      // append it here, the natural mistake when the two are a hundred lines
+      // apart, and every slot after the insertion point reads a different
+      // prop's value on every node. This makes that unrepresentable.
+      NSString *const names[MOB_PROP__COUNT] = {
+          [MOB_PROP_accessibility_id] = @"accessibility_id",
+          [MOB_PROP_accessibility_label] = @"accessibility_label",
+          [MOB_PROP_accessibility_role] = @"accessibility_role",
+          [MOB_PROP_active] = @"active",
+          [MOB_PROP_align] = @"align",
+          [MOB_PROP_allow] = @"allow",
+          [MOB_PROP_autoplay] = @"autoplay",
+          [MOB_PROP_axis] = @"axis",
+          [MOB_PROP_background] = @"background",
+          [MOB_PROP_border_color] = @"border_color",
+          [MOB_PROP_border_width] = @"border_width",
+          [MOB_PROP_color] = @"color",
+          [MOB_PROP_component_handle] = @"component_handle",
+          [MOB_PROP_content_mode] = @"content_mode",
+          [MOB_PROP_controls] = @"controls",
+          [MOB_PROP_corner_radius] = @"corner_radius",
+          [MOB_PROP_detents] = @"detents",
+          [MOB_PROP_disabled] = @"disabled",
+          [MOB_PROP_drag_indicator_color] = @"drag_indicator_color",
+          [MOB_PROP_drag_indicator_height] = @"drag_indicator_height",
+          [MOB_PROP_drag_indicator_rail_height] = @"drag_indicator_rail_height",
+          [MOB_PROP_drag_indicator_width] = @"drag_indicator_width",
+          [MOB_PROP_draw] = @"draw",
+          [MOB_PROP_facing] = @"facing",
+          [MOB_PROP_fade_on_scroll] = @"fade_on_scroll",
+          [MOB_PROP_fill_height] = @"fill_height",
+          [MOB_PROP_fill_width] = @"fill_width",
+          [MOB_PROP_font] = @"font",
+          [MOB_PROP_font_weight] = @"font_weight",
+          [MOB_PROP_glass] = @"glass",
+          [MOB_PROP_height] = @"height",
+          [MOB_PROP_id] = @"id",
+          [MOB_PROP_italic] = @"italic",
+          [MOB_PROP_lazy] = @"lazy",
+          [MOB_PROP_keyboard] = @"keyboard",
+          [MOB_PROP_letter_spacing] = @"letter_spacing",
+          [MOB_PROP_line_height] = @"line_height",
+          [MOB_PROP_loop] = @"loop",
+          [MOB_PROP_max] = @"max",
+          [MOB_PROP_min] = @"min",
+          [MOB_PROP_module] = @"module",
+          [MOB_PROP_name] = @"name",
+          [MOB_PROP_offset_x] = @"offset_x",
+          [MOB_PROP_offset_y] = @"offset_y",
+          [MOB_PROP_on_blur] = @"on_blur",
+          [MOB_PROP_on_change] = @"on_change",
+          [MOB_PROP_on_compose] = @"on_compose",
+          [MOB_PROP_on_dismiss] = @"on_dismiss",
+          [MOB_PROP_on_double_tap] = @"on_double_tap",
+          [MOB_PROP_on_drag] = @"on_drag",
+          [MOB_PROP_on_end_reached] = @"on_end_reached",
+          [MOB_PROP_on_focus] = @"on_focus",
+          [MOB_PROP_on_long_press] = @"on_long_press",
+          [MOB_PROP_on_pinch] = @"on_pinch",
+          [MOB_PROP_on_pointer_move] = @"on_pointer_move",
+          [MOB_PROP_on_rotate] = @"on_rotate",
+          [MOB_PROP_on_scroll] = @"on_scroll",
+          [MOB_PROP_on_scroll_began] = @"on_scroll_began",
+          [MOB_PROP_on_scroll_ended] = @"on_scroll_ended",
+          [MOB_PROP_on_scroll_settled] = @"on_scroll_settled",
+          [MOB_PROP_on_scrolled_past] = @"on_scrolled_past",
+          [MOB_PROP_on_select] = @"on_select",
+          [MOB_PROP_on_submit] = @"on_submit",
+          [MOB_PROP_on_swipe] = @"on_swipe",
+          [MOB_PROP_on_swipe_down] = @"on_swipe_down",
+          [MOB_PROP_on_swipe_left] = @"on_swipe_left",
+          [MOB_PROP_on_swipe_right] = @"on_swipe_right",
+          [MOB_PROP_on_swipe_up] = @"on_swipe_up",
+          [MOB_PROP_on_tab_select] = @"on_tab_select",
+          [MOB_PROP_on_tap] = @"on_tap",
+          [MOB_PROP_on_top_reached] = @"on_top_reached",
+          [MOB_PROP_padding] = @"padding",
+          [MOB_PROP_padding_bottom] = @"padding_bottom",
+          [MOB_PROP_padding_left] = @"padding_left",
+          [MOB_PROP_padding_right] = @"padding_right",
+          [MOB_PROP_padding_top] = @"padding_top",
+          [MOB_PROP_parallax] = @"parallax",
+          [MOB_PROP_placeholder] = @"placeholder",
+          [MOB_PROP_placeholder_color] = @"placeholder_color",
+          [MOB_PROP_return_key] = @"return_key",
+          [MOB_PROP_scrolled_past_threshold] = @"scrolled_past_threshold",
+          [MOB_PROP_secure] = @"secure",
+          [MOB_PROP_shader] = @"shader",
+          [MOB_PROP_show_indicator] = @"show_indicator",
+          [MOB_PROP_show_url] = @"show_url",
+          [MOB_PROP_size] = @"size",
+          [MOB_PROP_src] = @"src",
+          [MOB_PROP_sticky_when_scrolled_past] = @"sticky_when_scrolled_past",
+          [MOB_PROP_tabs] = @"tabs",
+          [MOB_PROP_text] = @"text",
+          [MOB_PROP_text_align] = @"text_align",
+          [MOB_PROP_text_color] = @"text_color",
+          [MOB_PROP_text_size] = @"text_size",
+          [MOB_PROP_thickness] = @"thickness",
+          [MOB_PROP_title] = @"title",
+          [MOB_PROP_uniforms] = @"uniforms",
+          [MOB_PROP_url] = @"url",
+          [MOB_PROP_value] = @"value",
+          [MOB_PROP_weight] = @"weight",
+          [MOB_PROP_width] = @"width"};
       NSMutableDictionary *m = [NSMutableDictionary dictionaryWithCapacity:MOB_PROP__COUNT];
-      for (NSUInteger i = 0; i < MOB_PROP__COUNT; i++)
+      for (NSUInteger i = 0; i < MOB_PROP__COUNT; i++) {
+          // A gap means an enum entry with no name: that prop would never
+          // resolve and would read as absent on every node, silently.
+          NSCAssert(names[i] != nil, @"MobPropKey %lu has no name", (unsigned long)i);
           m[names[i]] = @(i);
+      }
       slots = [m copy];
     });
     return slots;
@@ -1471,6 +1484,10 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         id useGlass = pv[MOB_PROP_glass];
         if (useGlass)
             node.useGlass = [useGlass boolValue];
+
+        id lazyContent = pv[MOB_PROP_lazy];
+        if ([lazyContent isKindOfClass:[NSNumber class]])
+            node.lazyContent = [lazyContent boolValue];
 
         id fillWidth = pv[MOB_PROP_fill_width];
         if (fillWidth)
@@ -2477,15 +2494,12 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
             enif_compare(previous[slot].tag, build[slot].tag) == 0)
             build[slot].identity_start_generation = previous[slot].identity_start_generation;
     }
-    if (tap_exhausted_count > 0) {
-        // One line per frame rather than one per overflowing node. The count is
-        // the useful number anyway: it says how many interactive elements are
-        // silently inert, which the per-call line never made obvious.
-        LOGE(@"register_tap: pool exhausted (cap=%d) — %d interactive element(s) in this "
-             @"frame have no handler and will not respond",
-             MAX_TAP_HANDLES, tap_exhausted_count);
-        tap_exhausted_count = 0;
-    }
+    // Snapshot now, log after the mutex is released. NSLog writes synchronously
+    // to the system log, and holding tap_mutex across it would block concurrent
+    // mob_send_* on the main thread — reintroducing, once per frame, exactly the
+    // cost this whole change removed from the per-call path.
+    int exhausted_this_frame = tap_exhausted_count;
+    tap_exhausted_count = 0;
 
     tap_active = 1 - tap_active;
     tap_handles = tap_tables[tap_active];
@@ -2504,6 +2518,15 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     // reject them when both screens tag the same :id.)
     if (strcmp(transition, "none") != 0)
         mob_bump_frame_generation();
+
+    if (exhausted_this_frame > 0) {
+        // One line per frame rather than one per overflowing node. The count is
+        // the useful number anyway: it says how many interactive elements are
+        // silently inert, which the per-call line never made obvious.
+        LOGE(@"register_tap: pool exhausted (cap=%d) — %d interactive element(s) in this "
+             @"frame have no handler and will not respond",
+             MAX_TAP_HANDLES, exhausted_this_frame);
+    }
 
     NSString *transitionStr = [NSString stringWithUTF8String:transition];
     [[MobViewModel shared] setRoot:node transition:transitionStr];

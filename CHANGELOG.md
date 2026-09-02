@@ -25,13 +25,19 @@ epic. Nothing here has shipped to Hex.
   why `total_us` must not be compared against a frame budget.
 
 ### Performance
-- **`:scroll` builds its content lazily** (MOB-128). A column that is the direct
-  content of a scroll now uses `LazyVStack` rather than `VStack`, so only the
-  rows on screen are built. Measured on the Android side of this change (a Moto
-  G Power), the main-thread cost of a 200-row screen drops from 141 ms to 82 ms
-  and becomes flat in list length where it previously grew. The iOS change is
-  verified to render identically but its win is **not** independently measured —
-  see `decisions/2026-09-02-lazy-scroll-on-ios.md`.
+- **`:scroll` can build its content lazily, with `lazy: true`** (MOB-128). A
+  column that is the direct content of a **vertical** scroll uses `LazyVStack`
+  rather than `VStack`, so only the rows on screen are built. Opt-in: rows below
+  the fold are never built, so `Mob.Test.element_frames` / `tap_id` cannot
+  address them and `scroll_to(:bottom)` under-scrolls, exactly as for
+  `lazy_list`. A `row` under a horizontal scroll, and anything deeper than a
+  scroll's direct child, stay eager.
+
+  This is the **iOS** half. It is verified to render identically to the eager
+  path but its win is **not** independently measured on iOS — the equivalent
+  Android change (in `mob_new`) measures a 500-row screen going from 498.9 ms to
+  115.8 ms of main-thread work per frame. See
+  `decisions/2026-09-02-lazy-scroll-on-ios.md`.
 - **iOS `set_root` is 47% faster on a dense screen** (MOB-135). The native
   deserialiser probed ~100 prop keys into every node's props regardless of node
   type — 104 probe sites, 99 distinct keys, 8 type guards — to read the three to

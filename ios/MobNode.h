@@ -175,6 +175,8 @@ NS_ASSUME_NONNULL_BEGIN
 // Layout behaviour
 @property(nonatomic) CGFloat layoutWeight; // positive = expand on a row/column's main axis
 @property(nonatomic) BOOL fillWidth;       // fill parent width (default NO; button default YES)
+// scroll only: build content lazily (LazyVStack). Opt-in — see MOB-128.
+@property(nonatomic) BOOL lazyContent;
 @property(nonatomic)
     BOOL fillHeight; // fill parent height (default NO) — used for full-screen overlays/dialogs
 @property(nonatomic) CGFloat cornerRadius; // rounded corners in pt (default 0)

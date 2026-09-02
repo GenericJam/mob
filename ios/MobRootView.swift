@@ -247,10 +247,16 @@ extension MobNode {
 struct MobNodeView: View {
     let node: MobNode
     private let layoutWeightAxis: MobLayoutWeightAxis?
-    // Set only for the direct children of a `scroll`. A column/row that is the
-    // content of a scroll builds its children lazily; everywhere else the stacks
-    // stay eager, because laziness costs setup and only pays when most children
-    // are off screen.
+    // Set only for the direct children of a VERTICAL `scroll` that opted in with
+    // `lazy: true`. Everywhere else the stacks stay eager.
+    //
+    // Opt-in because laziness has observable consequences beyond speed: rows
+    // below the fold are never built, so they never register a frame and
+    // `Mob.Test.element_frames` / `tap_id` cannot address them, and a
+    // `LazyVStack`'s `contentSize` only reflects built rows — so
+    // `scroll_to(:bottom)` under-scrolls and `screenshot_tour` truncates.
+    // `lazy_list` already makes that trade explicitly; silently applying it to
+    // every scroll would change harness behaviour under apps that never asked.
     private let lazyContainer: Bool
 
     init(
@@ -401,15 +407,20 @@ struct MobNodeView: View {
                 ScrollView(axes, showsIndicators: node.showIndicator) {
                     if isHorizontal {
                         HStack(alignment: .top, spacing: 0) {
+                            // Never lazy here. A LazyVStack under a HORIZONTAL
+                            // ScrollView would be lazy on the wrong axis: the
+                            // vertical axis is bounded and never scrolls, so
+                            // anything below the fold would never be built at
+                            // all rather than built on demand.
                             ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
-                                MobNodeView(node: child, lazyContainer: true)
+                                MobNodeView(node: child)
                             }
                         }
                         .frame(maxHeight: .infinity, alignment: .topLeading)
                     } else {
                         VStack(alignment: .leading, spacing: 0) {
                             ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
-                                MobNodeView(node: child, lazyContainer: true)
+                                MobNodeView(node: child, lazyContainer: node.lazyContent)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)

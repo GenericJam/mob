@@ -199,7 +199,7 @@ defmodule Mob.MixProject do
           Mob.Audio,
           Mob.Motion
         ],
-        "Testing & Debugging": [Mob.Test, Mob.ScreenCase],
+        "Testing & Debugging": [Mob.Test, Mob.ScreenCase, Mob.RenderStats],
         Tooling: [Mob.Formatter],
         Internals: [Mob.Dist, Mob.NativeLogger, Mob.List, Mob.Sigil]
       ]

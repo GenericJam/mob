@@ -198,7 +198,11 @@ defmodule Mob.Sender do
         Mob.RenderStats.drop_frame(frame)
         rest
 
-      {nil, rest} ->
+      # Anything else is a pending entry written by a previous version of this
+      # module. mob's dev loop reloads code onto a running BEAM, so the sender
+      # can meet state it did not write; crashing here would take down the one
+      # process every screen renders through.
+      {_other, rest} ->
         rest
     end
   end
@@ -346,7 +350,10 @@ defmodule Mob.Sender do
     # it is deliberate: by the time such a screen becomes active it will have
     # re-rendered, so committing a queued tree would only show a stale frame.
     # Their BEAM-side cost was still paid, so record it rather than losing it.
-    Enum.each(rest, fn {_ref, {_t, _p, _n, _tr, frame}} -> Mob.RenderStats.drop_frame(frame) end)
+    Enum.each(rest, fn
+      {_ref, {_t, _p, _n, _tr, frame}} -> Mob.RenderStats.drop_frame(frame)
+      {_ref, _pre_reload_shape} -> :ok
+    end)
 
     # Staged frames survive a flush. The render cast that pairs a staged frame
     # with its tree may still be in the mailbox behind the `:flush` message, so

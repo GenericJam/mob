@@ -121,7 +121,13 @@ defmodule Mob.RenderStats do
     end
   end
 
-  @doc "Stop recording. Frames already collected are kept."
+  @doc """
+  Stop recording. Frames already collected are kept.
+
+  Also clears `verify_taps/1`, so a later `enable/0` starts with the cross-check
+  off. Both are switches this module owns, and leaving a diagnostic armed across
+  an enable/disable cycle is the more surprising of the two behaviours.
+  """
   @spec disable() :: :ok
   def disable do
     :persistent_term.put(@flag, false)

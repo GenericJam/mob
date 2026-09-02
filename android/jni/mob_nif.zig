@@ -1659,21 +1659,28 @@ export fn nif_set_root(
             }
         }
     }
-    if (tap_exhausted_count > 0) {
-        // One line per frame rather than one per overflowing node. The count is
-        // the useful number: it says how many interactive elements are silently
-        // inert, which the per-call line never made obvious.
-        loge_nif(
-            "register_tap: pool exhausted (cap={d}) — {d} interactive element(s) in this frame have no handler and will not respond",
-            .{ MAX_TAP_HANDLES, tap_exhausted_count },
-        );
-        tap_exhausted_count = 0;
-    }
+    // Snapshot now, log after the mutex is released. The log call writes
+    // synchronously, and holding tap_mutex across it would block concurrent
+    // mob_send_* — reintroducing, once per frame, exactly the cost this change
+    // removed from the per-call path.
+    const exhausted_this_frame = tap_exhausted_count;
+    tap_exhausted_count = 0;
 
     tap_active = 1 - tap_active;
     tap_active_count = tap_build_count;
     tap_table_generations[tap_active] = tap_build_generation;
     erts.enif_mutex_unlock(tap_mutex);
+
+    if (exhausted_this_frame > 0) {
+        // One line per frame rather than one per overflowing node. The count is
+        // the useful number: it says how many interactive elements are silently
+        // inert, which the per-call line never made obvious.
+        loge_nif(
+            "register_tap: pool exhausted (cap={d}) — {d} interactive element(s) in this frame have no handler and will not respond",
+            .{ MAX_TAP_HANDLES, exhausted_this_frame },
+        );
+    }
+
     const transition_cstr: [*:0]const u8 = @ptrCast(&transition);
 
     var attached: c_int = 0;

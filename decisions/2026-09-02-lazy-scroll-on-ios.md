@@ -18,8 +18,22 @@ screen. Only the dedicated `lazyList` node type used `LazyVStack`.
 
 ## Decision
 
-A column that is the direct content of a `scroll` builds its children with
-`LazyVStack` instead of `VStack`. Everywhere else the stacks stay eager.
+A column that is the direct content of a **vertical** `scroll` builds its
+children with `LazyVStack` instead of `VStack`, **when that scroll opted in with
+`lazy: true`**. Everywhere else the stacks stay eager.
+
+**Opt-in**, matching Android, because laziness has observable consequences
+beyond speed. Rows below the fold are never built, so they never register a
+frame and `Mob.Test.element_frames` / `tap_id` cannot address them. And a
+`LazyVStack`'s `contentSize` reflects only built rows and grows as you scroll,
+so `nif_scroll_info`'s `contentSize - bounds` under-reports: `scroll_to(:bottom)`
+under-scrolls and `screenshot_tour/3` truncates. `lazy_list` already makes that
+trade explicitly; applying it silently to every scroll would change harness
+behaviour under apps that never asked for it.
+
+**Vertical only.** A `LazyVStack` under a horizontal `ScrollView` would be lazy
+on the wrong axis — the vertical axis there is bounded and never scrolls, so
+rows below the fold would never be built at all rather than built on demand.
 
 **The column is made lazy, not the scroll's own stack.** Mob screens are written
 `scroll > column > rows`, so the scroll's own stack has exactly one child and
