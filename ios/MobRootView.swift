@@ -247,17 +247,39 @@ extension MobNode {
 struct MobNodeView: View {
     let node: MobNode
     private let layoutWeightAxis: MobLayoutWeightAxis?
+    // Set only for the direct children of a VERTICAL `scroll` that opted in with
+    // `lazy: true`. Everywhere else the stacks stay eager.
+    //
+    // Opt-in because laziness has observable consequences beyond speed: rows
+    // below the fold are never built, so they never register a frame and
+    // `Mob.Test.element_frames` / `tap_id` cannot address them, and a
+    // `LazyVStack`'s `contentSize` only reflects built rows — so
+    // `scroll_to(:bottom)` under-scrolls and `screenshot_tour` truncates.
+    // `lazy_list` already makes that trade explicitly; silently applying it to
+    // every scroll would change harness behaviour under apps that never asked.
+    private let lazyContainer: Bool
 
-    init(node: MobNode, layoutWeightAxis: MobLayoutWeightAxis? = nil) {
+    init(
+        node: MobNode,
+        layoutWeightAxis: MobLayoutWeightAxis? = nil,
+        lazyContainer: Bool = false
+    ) {
         self.node = node
         self.layoutWeightAxis = layoutWeightAxis
+        self.lazyContainer = lazyContainer
     }
 
     var body: some View {
         Group {
             switch node.nodeType {
             case .column:
-                VStack(alignment: .leading, spacing: 0) {
+                // Mob screens are written scroll > column > rows, so the column
+                // inside a scroll is where the rows actually live. Making the
+                // scroll's own stack lazy would buy nothing — this is the stack
+                // that has 200 children. Rendering the column itself lazily keeps
+                // every one of its modifiers below intact, which flattening the
+                // column away would not.
+                MobEitherStack(lazy: lazyContainer, alignment: .leading) {
                     ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
                         MobNodeView(node: child, layoutWeightAxis: .vertical)
                     }
@@ -385,12 +407,21 @@ struct MobNodeView: View {
                 ScrollView(axes, showsIndicators: node.showIndicator) {
                     if isHorizontal {
                         HStack(alignment: .top, spacing: 0) {
-                            ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in MobNodeView(node: child) }
+                            // Never lazy here. A LazyVStack under a HORIZONTAL
+                            // ScrollView would be lazy on the wrong axis: the
+                            // vertical axis is bounded and never scrolls, so
+                            // anything below the fold would never be built at
+                            // all rather than built on demand.
+                            ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
+                                MobNodeView(node: child)
+                            }
                         }
                         .frame(maxHeight: .infinity, alignment: .topLeading)
                     } else {
                         VStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in MobNodeView(node: child) }
+                            ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
+                                MobNodeView(node: child, lazyContainer: node.lazyContent)
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -2023,5 +2054,33 @@ struct MobScrollObserver: ViewModifier {
                     }
                 }
             }
+    }
+}
+
+// A VStack that can be lazy without duplicating the call site. SwiftUI has no
+// way to pick between VStack and LazyVStack at runtime inside one expression,
+// and @ViewBuilder's `if` produces two different view identities — which is
+// fine here because `lazy` is fixed for a given node's position in the tree.
+struct MobEitherStack<Content: View>: View {
+    let lazy: Bool
+    let alignment: HorizontalAlignment
+    @ViewBuilder let content: Content
+
+    init(
+        lazy: Bool,
+        alignment: HorizontalAlignment,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.lazy = lazy
+        self.alignment = alignment
+        self.content = content()
+    }
+
+    var body: some View {
+        if lazy {
+            LazyVStack(alignment: alignment, spacing: 0) { content }
+        } else {
+            VStack(alignment: alignment, spacing: 0) { content }
+        }
     }
 }

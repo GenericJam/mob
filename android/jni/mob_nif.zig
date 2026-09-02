@@ -996,6 +996,12 @@ const ComponentHandle = extern struct {
 // after a row of buttons). With the swap a concurrent send always sees a
 // complete table (old or new), never a partial one.
 var tap_tables: [2][MAX_TAP_HANDLES]TapHandle = std.mem.zeroes([2][MAX_TAP_HANDLES]TapHandle);
+// How many slots of each table were actually written, so clearTaps only walks
+// those rather than the whole cap on every frame.
+var tap_table_used: [2]usize = .{ 0, 0 };
+// Exhausted registrations in the frame being built. Counted rather than logged
+// per call — see the note in register_tap.
+var tap_exhausted_count: c_int = 0;
 var tap_active: usize = 0; // index of the table readers resolve against
 var tap_active_count: c_int = 0; // committed handle count in the active table
 var tap_table_generations: [2]u32 = .{ 0, 0 };
@@ -1653,10 +1659,28 @@ export fn nif_set_root(
             }
         }
     }
+    // Snapshot now, log after the mutex is released. The log call writes
+    // synchronously, and holding tap_mutex across it would block concurrent
+    // mob_send_* — reintroducing, once per frame, exactly the cost this change
+    // removed from the per-call path.
+    const exhausted_this_frame = tap_exhausted_count;
+    tap_exhausted_count = 0;
+
     tap_active = 1 - tap_active;
     tap_active_count = tap_build_count;
     tap_table_generations[tap_active] = tap_build_generation;
     erts.enif_mutex_unlock(tap_mutex);
+
+    if (exhausted_this_frame > 0) {
+        // One line per frame rather than one per overflowing node. The count is
+        // the useful number: it says how many interactive elements are silently
+        // inert, which the per-call line never made obvious.
+        loge_nif(
+            "register_tap: pool exhausted (cap={d}) — {d} interactive element(s) in this frame have no handler and will not respond",
+            .{ MAX_TAP_HANDLES, exhausted_this_frame },
+        );
+    }
+
     const transition_cstr: [*:0]const u8 = @ptrCast(&transition);
 
     var attached: c_int = 0;
@@ -1705,7 +1729,12 @@ export fn nif_register_tap(
         // no-op on an out-of-range handle, so -1 is a safe "no handler
         // wired up" sentinel here — the interactive prop silently does
         // nothing instead of taking the screen down.
-        loge_nif("register_tap: pool exhausted (cap={d}) — returning unhandled sentinel", .{MAX_TAP_HANDLES});
+        // Deliberately not logged here. This is reached once per interactive
+        // node beyond the cap — measured on iOS at 359 times per frame on a
+        // 200-row screen — and the log call writes synchronously. On iOS that
+        // logging alone was 47% of the frame. Reported once per frame from
+        // set_root instead.
+        tap_exhausted_count += 1;
         return erts.enif_make_int(env, -1);
     }
 
@@ -1724,6 +1753,14 @@ export fn nif_register_tap(
     slot.tag = erts.enif_make_copy(slot.tag_env, tag_term);
     slot.identity_start_generation = tap_build_generation;
     tap_build_count += 1;
+    // The high-water mark has to be raised HERE, not in set_root. clear_taps
+    // frees exactly `used` slots, and a frame can register taps and then never
+    // reach set_root — Mob.Renderer.render/4 calls clear_taps, then prepare,
+    // then :json.encode, then set_root, and Mob.Sender.commit/1 rescues anything
+    // that raises in between. Recording the mark only at set_root left those
+    // slots' tag_envs uncleared and unreachable: one leaked ErlNifEnv per tap,
+    // per failed frame, forever, on a path deliberately designed to survive.
+    tap_table_used[@intCast(1 - tap_active)] = @intCast(tap_build_count);
     return erts.enif_make_int(env, handle);
 }
 
@@ -1746,7 +1783,8 @@ export fn nif_clear_taps(
     // frame. The freshly built table is swapped in at set_root.
     const build = &tap_tables[1 - tap_active];
     var i: usize = 0;
-    while (i < MAX_TAP_HANDLES) : (i += 1) {
+    const used = tap_table_used[@intCast(1 - tap_active)];
+    while (i < used) : (i += 1) {
         const h = &build[i];
         if (h.tag_env != null) {
             erts.enif_free_env(h.tag_env);
@@ -1763,7 +1801,13 @@ export fn nif_clear_taps(
         h.last_y = 0;
         h.seq = 0;
     }
+    tap_table_used[@intCast(1 - tap_active)] = 0;
     tap_build_count = 0;
+    // Reset here, not only in set_root. set_root reports and clears the count,
+    // but a frame that overflows and then never reaches set_root would otherwise
+    // carry its overflow into the next frame's report — which claims to describe
+    // "this frame". clear_taps is the one entry point every frame runs.
+    tap_exhausted_count = 0;
     return erts.ok(env);
 }
 

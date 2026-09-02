@@ -334,15 +334,25 @@ defmodule Mob.Screen.Server do
     platform = socket.__mob__.platform
     list_renderers = Map.get(socket.__mob__, :list_renderers, %{})
 
-    {tree, active_component_keys} =
-      state.module.render(socket.assigns)
-      # Third expansion pass FIRST: pure-Elixir composites may themselves emit
-      # <List> nodes / native_view components for the later passes.
-      |> Mob.Composite.expand(self())
-      |> Mob.List.expand(list_renderers, self())
-      |> Mob.Component.expand(self(), platform)
+    Mob.RenderStats.start_frame(state.module, transition)
 
-    Mob.ComponentRegistry.reconcile(self(), active_component_keys)
+    raw = Mob.RenderStats.time(:render_us, fn -> state.module.render(socket.assigns) end)
+
+    {tree, active_component_keys} =
+      Mob.RenderStats.time(:expand_us, fn ->
+        raw
+        # Third expansion pass FIRST: pure-Elixir composites may themselves emit
+        # <List> nodes / native_view components for the later passes.
+        |> Mob.Composite.expand(self())
+        |> Mob.List.expand(list_renderers, self())
+        |> Mob.Component.expand(self(), platform)
+      end)
+
+    Mob.RenderStats.time(:reconcile_us, fn ->
+      Mob.ComponentRegistry.reconcile(self(), active_component_keys)
+    end)
+
+    Mob.RenderStats.hand_off(state.ref)
 
     if activation_token && function_exported?(Mob.Sender, :render, 6) do
       Mob.Sender.render(state.ref, tree, platform, state.nif, transition, activation_token)

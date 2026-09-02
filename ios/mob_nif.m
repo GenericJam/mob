@@ -106,6 +106,14 @@ static TapHandle *tap_handles = tap_tables[0]; // active table (readers use this
 static int tap_handle_next = 0;                // active committed count (readers' bound)
 static int tap_build_count = 0;                // cursor into the building table
 static uint32_t tap_table_generations[2] = {0, 0};
+// How many slots of each table were actually written, so clear_taps only walks
+// those. Walking all MAX_TAP_HANDLES every frame is wasted work at any cap and
+// would scale with the cap if it were ever raised.
+static int tap_table_used[2] = {0, 0};
+// Exhausted registrations in the frame being built. Counted rather than logged
+// per call: a dense screen overflows the pool hundreds of times per frame, and
+// NSLog is a synchronous write to the system log.
+static int tap_exhausted_count = 0;
 static uint32_t tap_build_generation = 0;
 static ErlNifMutex *tap_mutex = NULL;
 
@@ -735,6 +743,246 @@ static UIColor *color_from_argb(long argb) {
     return [UIColor colorWithRed:r green:g blue:b alpha:a];
 }
 
+// ── Prop key dispatch ────────────────────────────────────────────────────────
+// mob_node_from_dict used to probe every one of these keys into a node's
+// `props` dictionary, for every node, regardless of node type: ~100 hashed
+// lookups to retrieve the three to five props a typical node actually carries.
+// Measured at 5.9ms of a 7.7ms set_root on a 1627-node tree — more than four
+// times what parsing the whole JSON payload cost in the first place.
+//
+// Instead the node's own props are enumerated once, each key resolved to a
+// slot, and the deserialiser reads slots. The statement order below is
+// unchanged, so the three places where prop precedence depends on it (text
+// before value for a text field, generic width/height before canvas, generic
+// corner_radius before sheet) behave exactly as they did. That is the reason
+// for an indexed array rather than a switch inside the enumeration.
+typedef NS_ENUM(NSUInteger, MobPropKey) {
+    MOB_PROP_accessibility_id,
+    MOB_PROP_accessibility_label,
+    MOB_PROP_accessibility_role,
+    MOB_PROP_active,
+    MOB_PROP_align,
+    MOB_PROP_allow,
+    MOB_PROP_autoplay,
+    MOB_PROP_axis,
+    MOB_PROP_background,
+    MOB_PROP_border_color,
+    MOB_PROP_border_width,
+    MOB_PROP_color,
+    MOB_PROP_component_handle,
+    MOB_PROP_content_mode,
+    MOB_PROP_controls,
+    MOB_PROP_corner_radius,
+    MOB_PROP_detents,
+    MOB_PROP_disabled,
+    MOB_PROP_drag_indicator_color,
+    MOB_PROP_drag_indicator_height,
+    MOB_PROP_drag_indicator_rail_height,
+    MOB_PROP_drag_indicator_width,
+    MOB_PROP_draw,
+    MOB_PROP_facing,
+    MOB_PROP_fade_on_scroll,
+    MOB_PROP_fill_height,
+    MOB_PROP_fill_width,
+    MOB_PROP_font,
+    MOB_PROP_font_weight,
+    MOB_PROP_glass,
+    MOB_PROP_height,
+    MOB_PROP_id,
+    MOB_PROP_italic,
+    MOB_PROP_lazy,
+    MOB_PROP_keyboard,
+    MOB_PROP_letter_spacing,
+    MOB_PROP_line_height,
+    MOB_PROP_loop,
+    MOB_PROP_max,
+    MOB_PROP_min,
+    MOB_PROP_module,
+    MOB_PROP_name,
+    MOB_PROP_offset_x,
+    MOB_PROP_offset_y,
+    MOB_PROP_on_blur,
+    MOB_PROP_on_change,
+    MOB_PROP_on_compose,
+    MOB_PROP_on_dismiss,
+    MOB_PROP_on_double_tap,
+    MOB_PROP_on_drag,
+    MOB_PROP_on_end_reached,
+    MOB_PROP_on_focus,
+    MOB_PROP_on_long_press,
+    MOB_PROP_on_pinch,
+    MOB_PROP_on_pointer_move,
+    MOB_PROP_on_rotate,
+    MOB_PROP_on_scroll,
+    MOB_PROP_on_scroll_began,
+    MOB_PROP_on_scroll_ended,
+    MOB_PROP_on_scroll_settled,
+    MOB_PROP_on_scrolled_past,
+    MOB_PROP_on_select,
+    MOB_PROP_on_submit,
+    MOB_PROP_on_swipe,
+    MOB_PROP_on_swipe_down,
+    MOB_PROP_on_swipe_left,
+    MOB_PROP_on_swipe_right,
+    MOB_PROP_on_swipe_up,
+    MOB_PROP_on_tab_select,
+    MOB_PROP_on_tap,
+    MOB_PROP_on_top_reached,
+    MOB_PROP_padding,
+    MOB_PROP_padding_bottom,
+    MOB_PROP_padding_left,
+    MOB_PROP_padding_right,
+    MOB_PROP_padding_top,
+    MOB_PROP_parallax,
+    MOB_PROP_placeholder,
+    MOB_PROP_placeholder_color,
+    MOB_PROP_return_key,
+    MOB_PROP_scrolled_past_threshold,
+    MOB_PROP_secure,
+    MOB_PROP_shader,
+    MOB_PROP_show_indicator,
+    MOB_PROP_show_url,
+    MOB_PROP_size,
+    MOB_PROP_src,
+    MOB_PROP_sticky_when_scrolled_past,
+    MOB_PROP_tabs,
+    MOB_PROP_text,
+    MOB_PROP_text_align,
+    MOB_PROP_text_color,
+    MOB_PROP_text_size,
+    MOB_PROP_thickness,
+    MOB_PROP_title,
+    MOB_PROP_uniforms,
+    MOB_PROP_url,
+    MOB_PROP_value,
+    MOB_PROP_weight,
+    MOB_PROP_width,
+    MOB_PROP__COUNT
+};
+
+static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
+    static NSDictionary<NSString *, NSNumber *> *slots = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+      // Designated initializers: each entry names the slot it fills, so the
+      // enum and this table cannot drift apart. They are two independently
+      // ordered lists of 99 strings joined by index — insert a key mid-enum and
+      // append it here, the natural mistake when the two are a hundred lines
+      // apart, and every slot after the insertion point reads a different
+      // prop's value on every node. This makes that unrepresentable.
+      NSString *const names[MOB_PROP__COUNT] = {
+          [MOB_PROP_accessibility_id] = @"accessibility_id",
+          [MOB_PROP_accessibility_label] = @"accessibility_label",
+          [MOB_PROP_accessibility_role] = @"accessibility_role",
+          [MOB_PROP_active] = @"active",
+          [MOB_PROP_align] = @"align",
+          [MOB_PROP_allow] = @"allow",
+          [MOB_PROP_autoplay] = @"autoplay",
+          [MOB_PROP_axis] = @"axis",
+          [MOB_PROP_background] = @"background",
+          [MOB_PROP_border_color] = @"border_color",
+          [MOB_PROP_border_width] = @"border_width",
+          [MOB_PROP_color] = @"color",
+          [MOB_PROP_component_handle] = @"component_handle",
+          [MOB_PROP_content_mode] = @"content_mode",
+          [MOB_PROP_controls] = @"controls",
+          [MOB_PROP_corner_radius] = @"corner_radius",
+          [MOB_PROP_detents] = @"detents",
+          [MOB_PROP_disabled] = @"disabled",
+          [MOB_PROP_drag_indicator_color] = @"drag_indicator_color",
+          [MOB_PROP_drag_indicator_height] = @"drag_indicator_height",
+          [MOB_PROP_drag_indicator_rail_height] = @"drag_indicator_rail_height",
+          [MOB_PROP_drag_indicator_width] = @"drag_indicator_width",
+          [MOB_PROP_draw] = @"draw",
+          [MOB_PROP_facing] = @"facing",
+          [MOB_PROP_fade_on_scroll] = @"fade_on_scroll",
+          [MOB_PROP_fill_height] = @"fill_height",
+          [MOB_PROP_fill_width] = @"fill_width",
+          [MOB_PROP_font] = @"font",
+          [MOB_PROP_font_weight] = @"font_weight",
+          [MOB_PROP_glass] = @"glass",
+          [MOB_PROP_height] = @"height",
+          [MOB_PROP_id] = @"id",
+          [MOB_PROP_italic] = @"italic",
+          [MOB_PROP_lazy] = @"lazy",
+          [MOB_PROP_keyboard] = @"keyboard",
+          [MOB_PROP_letter_spacing] = @"letter_spacing",
+          [MOB_PROP_line_height] = @"line_height",
+          [MOB_PROP_loop] = @"loop",
+          [MOB_PROP_max] = @"max",
+          [MOB_PROP_min] = @"min",
+          [MOB_PROP_module] = @"module",
+          [MOB_PROP_name] = @"name",
+          [MOB_PROP_offset_x] = @"offset_x",
+          [MOB_PROP_offset_y] = @"offset_y",
+          [MOB_PROP_on_blur] = @"on_blur",
+          [MOB_PROP_on_change] = @"on_change",
+          [MOB_PROP_on_compose] = @"on_compose",
+          [MOB_PROP_on_dismiss] = @"on_dismiss",
+          [MOB_PROP_on_double_tap] = @"on_double_tap",
+          [MOB_PROP_on_drag] = @"on_drag",
+          [MOB_PROP_on_end_reached] = @"on_end_reached",
+          [MOB_PROP_on_focus] = @"on_focus",
+          [MOB_PROP_on_long_press] = @"on_long_press",
+          [MOB_PROP_on_pinch] = @"on_pinch",
+          [MOB_PROP_on_pointer_move] = @"on_pointer_move",
+          [MOB_PROP_on_rotate] = @"on_rotate",
+          [MOB_PROP_on_scroll] = @"on_scroll",
+          [MOB_PROP_on_scroll_began] = @"on_scroll_began",
+          [MOB_PROP_on_scroll_ended] = @"on_scroll_ended",
+          [MOB_PROP_on_scroll_settled] = @"on_scroll_settled",
+          [MOB_PROP_on_scrolled_past] = @"on_scrolled_past",
+          [MOB_PROP_on_select] = @"on_select",
+          [MOB_PROP_on_submit] = @"on_submit",
+          [MOB_PROP_on_swipe] = @"on_swipe",
+          [MOB_PROP_on_swipe_down] = @"on_swipe_down",
+          [MOB_PROP_on_swipe_left] = @"on_swipe_left",
+          [MOB_PROP_on_swipe_right] = @"on_swipe_right",
+          [MOB_PROP_on_swipe_up] = @"on_swipe_up",
+          [MOB_PROP_on_tab_select] = @"on_tab_select",
+          [MOB_PROP_on_tap] = @"on_tap",
+          [MOB_PROP_on_top_reached] = @"on_top_reached",
+          [MOB_PROP_padding] = @"padding",
+          [MOB_PROP_padding_bottom] = @"padding_bottom",
+          [MOB_PROP_padding_left] = @"padding_left",
+          [MOB_PROP_padding_right] = @"padding_right",
+          [MOB_PROP_padding_top] = @"padding_top",
+          [MOB_PROP_parallax] = @"parallax",
+          [MOB_PROP_placeholder] = @"placeholder",
+          [MOB_PROP_placeholder_color] = @"placeholder_color",
+          [MOB_PROP_return_key] = @"return_key",
+          [MOB_PROP_scrolled_past_threshold] = @"scrolled_past_threshold",
+          [MOB_PROP_secure] = @"secure",
+          [MOB_PROP_shader] = @"shader",
+          [MOB_PROP_show_indicator] = @"show_indicator",
+          [MOB_PROP_show_url] = @"show_url",
+          [MOB_PROP_size] = @"size",
+          [MOB_PROP_src] = @"src",
+          [MOB_PROP_sticky_when_scrolled_past] = @"sticky_when_scrolled_past",
+          [MOB_PROP_tabs] = @"tabs",
+          [MOB_PROP_text] = @"text",
+          [MOB_PROP_text_align] = @"text_align",
+          [MOB_PROP_text_color] = @"text_color",
+          [MOB_PROP_text_size] = @"text_size",
+          [MOB_PROP_thickness] = @"thickness",
+          [MOB_PROP_title] = @"title",
+          [MOB_PROP_uniforms] = @"uniforms",
+          [MOB_PROP_url] = @"url",
+          [MOB_PROP_value] = @"value",
+          [MOB_PROP_weight] = @"weight",
+          [MOB_PROP_width] = @"width"};
+      NSMutableDictionary *m = [NSMutableDictionary dictionaryWithCapacity:MOB_PROP__COUNT];
+      for (NSUInteger i = 0; i < MOB_PROP__COUNT; i++) {
+          // A gap means an enum entry with no name: that prop would never
+          // resolve and would read as absent on every node, silently.
+          NSCAssert(names[i] != nil, @"MobPropKey %lu has no name", (unsigned long)i);
+          m[names[i]] = @(i);
+      }
+      slots = [m copy];
+    });
+    return slots;
+}
+
 static MobNode *mob_node_from_dict(NSDictionary *dict) {
     if (![dict isKindOfClass:[NSDictionary class]])
         return nil;
@@ -790,8 +1038,25 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         node.nodeType = MobNodeTypeSheet;
 
     NSDictionary *props = dict[@"props"];
+
+    // One pass over the props this node actually has, rather than one probe per
+    // key it might have had. Unknown keys are ignored, exactly as an absent
+    // probe was. A nil or non-dictionary `props` leaves every slot nil, which is
+    // what `props[@"..."]` returned before.
+    id pv[MOB_PROP__COUNT];
+    memset(pv, 0, sizeof(pv));
+
     if ([props isKindOfClass:[NSDictionary class]]) {
-        id text = props[@"text"];
+        NSDictionary<NSString *, NSNumber *> *slots = mob_prop_slots();
+        for (NSString *key in props) {
+            NSNumber *slot = slots[key];
+            if (slot)
+                pv[slot.unsignedIntegerValue] = props[key];
+        }
+    }
+
+    if ([props isKindOfClass:[NSDictionary class]]) {
+        id text = pv[MOB_PROP_text];
         if (text)
             node.text = [text isKindOfClass:[NSString class]] ? text : [text description];
 
@@ -800,59 +1065,59 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         // to `node.text` so MobTextField sees it as initialText. If both
         // `text:` and `value:` are passed, `value:` wins.
         if (node.nodeType == MobNodeTypeTextField) {
-            id valueText = props[@"value"];
+            id valueText = pv[MOB_PROP_value];
             if (valueText)
                 node.text = [valueText isKindOfClass:[NSString class]] ? valueText
                                                                        : [valueText description];
         }
 
-        id padding = props[@"padding"];
+        id padding = pv[MOB_PROP_padding];
         if (padding)
             node.padding = [padding doubleValue];
 
-        id paddingTop = props[@"padding_top"];
+        id paddingTop = pv[MOB_PROP_padding_top];
         if (paddingTop)
             node.paddingTop = [paddingTop doubleValue];
-        id paddingRight = props[@"padding_right"];
+        id paddingRight = pv[MOB_PROP_padding_right];
         if (paddingRight)
             node.paddingRight = [paddingRight doubleValue];
-        id paddingBottom = props[@"padding_bottom"];
+        id paddingBottom = pv[MOB_PROP_padding_bottom];
         if (paddingBottom)
             node.paddingBottom = [paddingBottom doubleValue];
-        id paddingLeft = props[@"padding_left"];
+        id paddingLeft = pv[MOB_PROP_padding_left];
         if (paddingLeft)
             node.paddingLeft = [paddingLeft doubleValue];
 
-        id textSize = props[@"text_size"];
+        id textSize = pv[MOB_PROP_text_size];
         if (textSize)
             node.textSize = [textSize doubleValue];
 
-        id fontFamily = props[@"font"];
+        id fontFamily = pv[MOB_PROP_font];
         if ([fontFamily isKindOfClass:[NSString class]])
             node.fontFamily = fontFamily;
-        id fontWeight = props[@"font_weight"];
+        id fontWeight = pv[MOB_PROP_font_weight];
         if (fontWeight)
             node.fontWeight = [fontWeight description];
-        id textAlign = props[@"text_align"];
+        id textAlign = pv[MOB_PROP_text_align];
         if (textAlign)
             node.textAlign = [textAlign description];
-        id italic = props[@"italic"];
+        id italic = pv[MOB_PROP_italic];
         if (italic)
             node.italic = [italic boolValue];
-        id lineHeight = props[@"line_height"];
+        id lineHeight = pv[MOB_PROP_line_height];
         if (lineHeight)
             node.lineHeight = [lineHeight doubleValue];
-        id letterSpacing = props[@"letter_spacing"];
+        id letterSpacing = pv[MOB_PROP_letter_spacing];
         if (letterSpacing)
             node.letterSpacing = [letterSpacing doubleValue];
 
-        id tabDefs = props[@"tabs"];
+        id tabDefs = pv[MOB_PROP_tabs];
         if ([tabDefs isKindOfClass:[NSArray class]])
             node.tabDefs = tabDefs;
-        id activeTab = props[@"active"];
+        id activeTab = pv[MOB_PROP_active];
         if (activeTab)
             node.activeTab = [activeTab description];
-        id onTabSelect = props[@"on_tab_select"];
+        id onTabSelect = pv[MOB_PROP_on_tab_select];
         if (onTabSelect && [onTabSelect isKindOfClass:[NSNumber class]]) {
             int handle = [onTabSelect intValue];
             node.onTabSelect = ^(NSString *tabId) {
@@ -860,63 +1125,63 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id bg = props[@"background"];
+        id bg = pv[MOB_PROP_background];
         if (bg)
             node.backgroundColor = color_from_argb((long)[bg longLongValue]);
 
-        id borderColor = props[@"border_color"];
+        id borderColor = pv[MOB_PROP_border_color];
         if (borderColor)
             node.borderColor = color_from_argb((long)[borderColor longLongValue]);
 
-        id borderWidth = props[@"border_width"];
+        id borderWidth = pv[MOB_PROP_border_width];
         if (borderWidth)
             node.borderWidth = [borderWidth doubleValue];
 
-        id textColor = props[@"text_color"];
+        id textColor = pv[MOB_PROP_text_color];
         if (textColor)
             node.textColor = color_from_argb((long)[textColor longLongValue]);
 
-        id color = props[@"color"];
+        id color = pv[MOB_PROP_color];
         if (color)
             node.color = color_from_argb((long)[color longLongValue]);
 
-        id thickness = props[@"thickness"];
+        id thickness = pv[MOB_PROP_thickness];
         if (thickness)
             node.thickness = [thickness doubleValue];
 
-        id fixedSize = props[@"size"];
+        id fixedSize = pv[MOB_PROP_size];
         if (fixedSize)
             node.fixedSize = [fixedSize doubleValue];
 
-        id axis = props[@"axis"];
+        id axis = pv[MOB_PROP_axis];
         if ([axis isKindOfClass:[NSString class]])
             node.axis = axis;
 
         // `align` plays two roles depending on node type — the Mob renderer
         // sets the same string and the iOS side picks the relevant
         // interpretation per case (rowAlign for HStack, boxAlign for ZStack).
-        id alignProp = props[@"align"];
+        id alignProp = pv[MOB_PROP_align];
         if ([alignProp isKindOfClass:[NSString class]]) {
             node.rowAlign = alignProp;
             node.boxAlign = alignProp;
         }
 
-        id offsetX = props[@"offset_x"];
+        id offsetX = pv[MOB_PROP_offset_x];
         if (offsetX)
             node.offsetX = [offsetX doubleValue];
-        id offsetY = props[@"offset_y"];
+        id offsetY = pv[MOB_PROP_offset_y];
         if (offsetY)
             node.offsetY = [offsetY doubleValue];
 
-        id showIndicator = props[@"show_indicator"];
+        id showIndicator = pv[MOB_PROP_show_indicator];
         if (showIndicator)
             node.showIndicator = [showIndicator boolValue];
 
-        id value = props[@"value"];
+        id value = pv[MOB_PROP_value];
         if (value)
             node.value = [value doubleValue];
 
-        id onTap = props[@"on_tap"];
+        id onTap = pv[MOB_PROP_on_tap];
         if (onTap && [onTap isKindOfClass:[NSNumber class]]) {
             int handle = [onTap intValue];
             node.onTap = ^{
@@ -924,7 +1189,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id placeholder = props[@"placeholder"];
+        id placeholder = pv[MOB_PROP_placeholder];
         if (placeholder)
             node.placeholder = [placeholder isKindOfClass:[NSString class]]
                                    ? placeholder
@@ -933,25 +1198,25 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         // Icon name — logical key (e.g. "settings"), resolved to an SF Symbol
         // by MobIconView at render time. iOS-only string parsing here.
         if (node.nodeType == MobNodeTypeIcon) {
-            id iconName = props[@"name"];
+            id iconName = pv[MOB_PROP_name];
             if (iconName)
                 node.iconName =
                     [iconName isKindOfClass:[NSString class]] ? iconName : [iconName description];
         }
 
-        id keyboardType = props[@"keyboard"];
+        id keyboardType = pv[MOB_PROP_keyboard];
         if ([keyboardType isKindOfClass:[NSString class]])
             node.keyboardTypeStr = keyboardType;
 
-        id returnKey = props[@"return_key"];
+        id returnKey = pv[MOB_PROP_return_key];
         if ([returnKey isKindOfClass:[NSString class]])
             node.returnKeyStr = returnKey;
 
-        id secure = props[@"secure"];
+        id secure = pv[MOB_PROP_secure];
         if ([secure isKindOfClass:[NSNumber class]])
             node.isSecure = [secure boolValue];
 
-        id onFocus = props[@"on_focus"];
+        id onFocus = pv[MOB_PROP_on_focus];
         if (onFocus && [onFocus isKindOfClass:[NSNumber class]]) {
             int handle = [onFocus intValue];
             node.onFocus = ^{
@@ -959,7 +1224,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onBlur = props[@"on_blur"];
+        id onBlur = pv[MOB_PROP_on_blur];
         if (onBlur && [onBlur isKindOfClass:[NSNumber class]]) {
             int handle = [onBlur intValue];
             node.onBlur = ^{
@@ -967,7 +1232,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onSubmit = props[@"on_submit"];
+        id onSubmit = pv[MOB_PROP_on_submit];
         if (onSubmit && [onSubmit isKindOfClass:[NSNumber class]]) {
             int handle = [onSubmit intValue];
             node.onSubmit = ^{
@@ -975,7 +1240,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onCompose = props[@"on_compose"];
+        id onCompose = pv[MOB_PROP_on_compose];
         if (onCompose && [onCompose isKindOfClass:[NSNumber class]]) {
             int handle = [onCompose intValue];
             node.onCompose = ^(NSString *text, NSString *phase) {
@@ -984,7 +1249,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onSelect = props[@"on_select"];
+        id onSelect = pv[MOB_PROP_on_select];
         if (onSelect && [onSelect isKindOfClass:[NSNumber class]]) {
             int handle = [onSelect intValue];
             node.onSelect = ^{
@@ -993,7 +1258,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         }
 
         // ── Gestures (Batch 4) ──
-        id onLongPress = props[@"on_long_press"];
+        id onLongPress = pv[MOB_PROP_on_long_press];
         if (onLongPress && [onLongPress isKindOfClass:[NSNumber class]]) {
             int handle = [onLongPress intValue];
             node.onLongPress = ^{
@@ -1001,7 +1266,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onDoubleTap = props[@"on_double_tap"];
+        id onDoubleTap = pv[MOB_PROP_on_double_tap];
         if (onDoubleTap && [onDoubleTap isKindOfClass:[NSNumber class]]) {
             int handle = [onDoubleTap intValue];
             node.onDoubleTap = ^{
@@ -1009,7 +1274,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onSwipe = props[@"on_swipe"];
+        id onSwipe = pv[MOB_PROP_on_swipe];
         if (onSwipe && [onSwipe isKindOfClass:[NSNumber class]]) {
             int handle = [onSwipe intValue];
             node.onSwipe = ^(NSString *direction) {
@@ -1017,7 +1282,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onSwipeLeft = props[@"on_swipe_left"];
+        id onSwipeLeft = pv[MOB_PROP_on_swipe_left];
         if (onSwipeLeft && [onSwipeLeft isKindOfClass:[NSNumber class]]) {
             int handle = [onSwipeLeft intValue];
             node.onSwipeLeft = ^{
@@ -1025,7 +1290,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onSwipeRight = props[@"on_swipe_right"];
+        id onSwipeRight = pv[MOB_PROP_on_swipe_right];
         if (onSwipeRight && [onSwipeRight isKindOfClass:[NSNumber class]]) {
             int handle = [onSwipeRight intValue];
             node.onSwipeRight = ^{
@@ -1033,7 +1298,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onSwipeUp = props[@"on_swipe_up"];
+        id onSwipeUp = pv[MOB_PROP_on_swipe_up];
         if (onSwipeUp && [onSwipeUp isKindOfClass:[NSNumber class]]) {
             int handle = [onSwipeUp intValue];
             node.onSwipeUp = ^{
@@ -1041,7 +1306,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onSwipeDown = props[@"on_swipe_down"];
+        id onSwipeDown = pv[MOB_PROP_on_swipe_down];
         if (onSwipeDown && [onSwipeDown isKindOfClass:[NSNumber class]]) {
             int handle = [onSwipeDown intValue];
             node.onSwipeDown = ^{
@@ -1065,7 +1330,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         }                                                                                          \
     } while (0)
 
-        id onScroll = props[@"on_scroll"];
+        id onScroll = pv[MOB_PROP_on_scroll];
         if ([onScroll isKindOfClass:[NSNumber class]]) {
             int handle = [onScroll intValue];
             MOB_APPLY_THROTTLE(handle, @"scroll_config");
@@ -1076,7 +1341,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onDrag = props[@"on_drag"];
+        id onDrag = pv[MOB_PROP_on_drag];
         if ([onDrag isKindOfClass:[NSNumber class]]) {
             int handle = [onDrag intValue];
             MOB_APPLY_THROTTLE(handle, @"drag_config");
@@ -1085,7 +1350,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onPinch = props[@"on_pinch"];
+        id onPinch = pv[MOB_PROP_on_pinch];
         if ([onPinch isKindOfClass:[NSNumber class]]) {
             int handle = [onPinch intValue];
             MOB_APPLY_THROTTLE(handle, @"pinch_config");
@@ -1094,7 +1359,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onRotate = props[@"on_rotate"];
+        id onRotate = pv[MOB_PROP_on_rotate];
         if ([onRotate isKindOfClass:[NSNumber class]]) {
             int handle = [onRotate intValue];
             MOB_APPLY_THROTTLE(handle, @"rotate_config");
@@ -1103,7 +1368,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onPointerMove = props[@"on_pointer_move"];
+        id onPointerMove = pv[MOB_PROP_on_pointer_move];
         if ([onPointerMove isKindOfClass:[NSNumber class]]) {
             int handle = [onPointerMove intValue];
             MOB_APPLY_THROTTLE(handle, @"pointer_config");
@@ -1115,7 +1380,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 #undef MOB_APPLY_THROTTLE
 
         // ── Batch 5 Tier 2: semantic single-fire scroll events ──
-        id onScrollBegan = props[@"on_scroll_began"];
+        id onScrollBegan = pv[MOB_PROP_on_scroll_began];
         if ([onScrollBegan isKindOfClass:[NSNumber class]]) {
             int handle = [onScrollBegan intValue];
             node.onScrollBegan = ^{
@@ -1123,7 +1388,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onScrollEnded = props[@"on_scroll_ended"];
+        id onScrollEnded = pv[MOB_PROP_on_scroll_ended];
         if ([onScrollEnded isKindOfClass:[NSNumber class]]) {
             int handle = [onScrollEnded intValue];
             node.onScrollEnded = ^{
@@ -1131,7 +1396,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onScrollSettled = props[@"on_scroll_settled"];
+        id onScrollSettled = pv[MOB_PROP_on_scroll_settled];
         if ([onScrollSettled isKindOfClass:[NSNumber class]]) {
             int handle = [onScrollSettled intValue];
             node.onScrollSettled = ^{
@@ -1139,7 +1404,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onTopReached = props[@"on_top_reached"];
+        id onTopReached = pv[MOB_PROP_on_top_reached];
         if ([onTopReached isKindOfClass:[NSNumber class]]) {
             int handle = [onTopReached intValue];
             node.onTopReached = ^{
@@ -1147,120 +1412,124 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             };
         }
 
-        id onScrolledPast = props[@"on_scrolled_past"];
+        id onScrolledPast = pv[MOB_PROP_on_scrolled_past];
         if ([onScrolledPast isKindOfClass:[NSNumber class]]) {
             int handle = [onScrolledPast intValue];
             node.onScrolledPast = ^{
               mob_send_scrolled_past(handle);
             };
         }
-        id scrolledPastThreshold = props[@"scrolled_past_threshold"];
+        id scrolledPastThreshold = pv[MOB_PROP_scrolled_past_threshold];
         if (scrolledPastThreshold) {
             node.scrolledPastThreshold = [scrolledPastThreshold doubleValue];
         }
 
         // ── Batch 5 Tier 3: native-side scroll-driven UI configs ──
         // Pass-through to the SwiftUI layer; never round-trips to BEAM.
-        id parallax = props[@"parallax"];
+        id parallax = pv[MOB_PROP_parallax];
         if ([parallax isKindOfClass:[NSDictionary class]]) {
             node.parallaxConfig = parallax;
         }
-        id fadeOnScroll = props[@"fade_on_scroll"];
+        id fadeOnScroll = pv[MOB_PROP_fade_on_scroll];
         if ([fadeOnScroll isKindOfClass:[NSDictionary class]]) {
             node.fadeOnScrollConfig = fadeOnScroll;
         }
-        id stickyConfig = props[@"sticky_when_scrolled_past"];
+        id stickyConfig = pv[MOB_PROP_sticky_when_scrolled_past];
         if ([stickyConfig isKindOfClass:[NSDictionary class]]) {
             node.stickyWhenScrolledPastConfig = stickyConfig;
         }
 
-        id checked = props[@"value"];
+        id checked = pv[MOB_PROP_value];
         if (checked && node.nodeType == MobNodeTypeToggle) {
             // value is a boolean atom serialised as "true"/"false"
             node.checked = [[checked description] isEqualToString:@"true"] ||
                            ([checked isKindOfClass:[NSNumber class]] && [checked boolValue]);
         }
 
-        id minVal = props[@"min"];
+        id minVal = pv[MOB_PROP_min];
         if (minVal)
             node.minValue = [minVal doubleValue];
 
-        id maxVal = props[@"max"];
+        id maxVal = pv[MOB_PROP_max];
         if (maxVal)
             node.maxValue = [maxVal doubleValue];
 
-        id src = props[@"src"];
+        id src = pv[MOB_PROP_src];
         if ([src isKindOfClass:[NSString class]])
             node.src = src;
 
-        id contentMode = props[@"content_mode"];
+        id contentMode = pv[MOB_PROP_content_mode];
         if ([contentMode isKindOfClass:[NSString class]])
             node.contentModeStr = contentMode;
 
-        id fixedWidth = props[@"width"];
+        id fixedWidth = pv[MOB_PROP_width];
         if (fixedWidth)
             node.fixedWidth = [fixedWidth doubleValue];
 
-        id fixedHeight = props[@"height"];
+        id fixedHeight = pv[MOB_PROP_height];
         if (fixedHeight)
             node.fixedHeight = [fixedHeight doubleValue];
 
-        id layoutWeight = props[@"weight"];
+        id layoutWeight = pv[MOB_PROP_weight];
         if (layoutWeight)
             node.layoutWeight = [layoutWeight doubleValue];
 
-        id cornerRadius = props[@"corner_radius"];
+        id cornerRadius = pv[MOB_PROP_corner_radius];
         if (cornerRadius)
             node.cornerRadius = [cornerRadius doubleValue];
 
         // Liquid Glass opt-in — set by Mob.Renderer when the active theme
         // has `glass: true`. MobBox swaps a solid background for
         // `.glassEffect()` on iOS 26+, or `.ultraThinMaterial` on iOS 17–25.
-        id useGlass = props[@"glass"];
+        id useGlass = pv[MOB_PROP_glass];
         if (useGlass)
             node.useGlass = [useGlass boolValue];
 
-        id fillWidth = props[@"fill_width"];
+        id lazyContent = pv[MOB_PROP_lazy];
+        if ([lazyContent isKindOfClass:[NSNumber class]])
+            node.lazyContent = [lazyContent boolValue];
+
+        id fillWidth = pv[MOB_PROP_fill_width];
         if (fillWidth)
             node.fillWidth = [fillWidth boolValue];
 
-        id fillHeight = props[@"fill_height"];
+        id fillHeight = pv[MOB_PROP_fill_height];
         if (fillHeight)
             node.fillHeight = [fillHeight boolValue];
 
-        id placeholderColor = props[@"placeholder_color"];
+        id placeholderColor = pv[MOB_PROP_placeholder_color];
         if (placeholderColor)
             node.placeholderColor = color_from_argb((long)[placeholderColor longLongValue]);
 
-        id videoAutoplay = props[@"autoplay"];
+        id videoAutoplay = pv[MOB_PROP_autoplay];
         if (videoAutoplay)
             node.videoAutoplay = [videoAutoplay boolValue];
-        id videoLoop = props[@"loop"];
+        id videoLoop = pv[MOB_PROP_loop];
         if (videoLoop)
             node.videoLoop = [videoLoop boolValue];
-        id videoControls = props[@"controls"];
+        id videoControls = pv[MOB_PROP_controls];
         if (videoControls)
             node.videoControls = [videoControls boolValue];
 
-        id cameraFacing = props[@"facing"];
+        id cameraFacing = pv[MOB_PROP_facing];
         if ([cameraFacing isKindOfClass:[NSString class]])
             node.cameraFacing = cameraFacing;
 
         // canvas props
-        id canvasDraw = props[@"draw"];
+        id canvasDraw = pv[MOB_PROP_draw];
         if ([canvasDraw isKindOfClass:[NSArray class]])
             node.canvasOps = canvasDraw;
-        id canvasW = props[@"width"];
+        id canvasW = pv[MOB_PROP_width];
         if (canvasW && node.nodeType == MobNodeTypeCanvas)
             node.canvasWidth = [canvasW doubleValue];
-        id canvasH = props[@"height"];
+        id canvasH = pv[MOB_PROP_height];
         if (canvasH && node.nodeType == MobNodeTypeCanvas)
             node.canvasHeight = [canvasH doubleValue];
 
         // gpu_view props: shader (string OR %{ios: "..."} map) + uniforms map.
         // Map form is the "I already have hand-tuned MSL" escape hatch.
         if (node.nodeType == MobNodeTypeGpuView) {
-            id shader = props[@"shader"];
+            id shader = pv[MOB_PROP_shader];
             if ([shader isKindOfClass:[NSString class]]) {
                 node.gpuShaderMSL = shader;
             } else if ([shader isKindOfClass:[NSDictionary class]]) {
@@ -1269,7 +1538,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
                     node.gpuShaderMSL = iosShader;
             }
 
-            id uniforms = props[@"uniforms"];
+            id uniforms = pv[MOB_PROP_uniforms];
             if ([uniforms isKindOfClass:[NSArray class]] ||
                 [uniforms isKindOfClass:[NSDictionary class]])
                 node.gpuUniforms = uniforms;
@@ -1287,29 +1556,29 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         // needs its own sentinel here (unlike other node types, where 0 and
         // unset render identically).
         if (node.nodeType == MobNodeTypeSheet) {
-            id sheetCornerRadius = props[@"corner_radius"];
+            id sheetCornerRadius = pv[MOB_PROP_corner_radius];
             if (sheetCornerRadius)
                 node.sheetCornerRadius = [sheetCornerRadius doubleValue];
 
-            id detents = props[@"detents"];
+            id detents = pv[MOB_PROP_detents];
             if ([detents isKindOfClass:[NSArray class]])
                 node.sheetDetents = detents;
 
-            id indicatorColor = props[@"drag_indicator_color"];
+            id indicatorColor = pv[MOB_PROP_drag_indicator_color];
             if (indicatorColor)
                 node.dragIndicatorColor = color_from_argb((long)[indicatorColor longLongValue]);
 
-            id indicatorWidth = props[@"drag_indicator_width"];
+            id indicatorWidth = pv[MOB_PROP_drag_indicator_width];
             if (indicatorWidth)
                 node.dragIndicatorWidth = [indicatorWidth doubleValue];
-            id indicatorHeight = props[@"drag_indicator_height"];
+            id indicatorHeight = pv[MOB_PROP_drag_indicator_height];
             if (indicatorHeight)
                 node.dragIndicatorHeight = [indicatorHeight doubleValue];
-            id indicatorRailHeight = props[@"drag_indicator_rail_height"];
+            id indicatorRailHeight = pv[MOB_PROP_drag_indicator_rail_height];
             if (indicatorRailHeight)
                 node.dragIndicatorRailHeight = [indicatorRailHeight doubleValue];
 
-            id onDismiss = props[@"on_dismiss"];
+            id onDismiss = pv[MOB_PROP_on_dismiss];
             if (onDismiss && [onDismiss isKindOfClass:[NSNumber class]]) {
                 int handle = [onDismiss intValue];
                 node.onDismiss = ^{
@@ -1319,33 +1588,33 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         }
 
         // webview props
-        id webViewUrl = props[@"url"];
+        id webViewUrl = pv[MOB_PROP_url];
         if ([webViewUrl isKindOfClass:[NSString class]])
             node.webViewUrl = webViewUrl;
-        id webViewAllow = props[@"allow"];
+        id webViewAllow = pv[MOB_PROP_allow];
         if ([webViewAllow isKindOfClass:[NSString class]])
             node.webViewAllow = webViewAllow;
-        id webViewShowUrl = props[@"show_url"];
+        id webViewShowUrl = pv[MOB_PROP_show_url];
         if (webViewShowUrl)
             node.webViewShowUrl = [webViewShowUrl boolValue];
-        id webViewTitle = props[@"title"];
+        id webViewTitle = pv[MOB_PROP_title];
         if ([webViewTitle isKindOfClass:[NSString class]])
             node.webViewTitle = webViewTitle;
 
         // native_view props
-        id nativeViewModule = props[@"module"];
+        id nativeViewModule = pv[MOB_PROP_module];
         if ([nativeViewModule isKindOfClass:[NSString class]])
             node.nativeViewModule = nativeViewModule;
-        id nativeViewId = props[@"id"];
+        id nativeViewId = pv[MOB_PROP_id];
         if ([nativeViewId isKindOfClass:[NSString class]])
             node.nativeViewId = nativeViewId;
-        id nativeViewHandle = props[@"component_handle"];
+        id nativeViewHandle = pv[MOB_PROP_component_handle];
         if (nativeViewHandle)
             node.nativeViewHandle = [nativeViewHandle intValue];
         if (node.nodeType == MobNodeTypeNativeView)
             node.nativeViewProps = props;
 
-        id onEndReached = props[@"on_end_reached"];
+        id onEndReached = pv[MOB_PROP_on_end_reached];
         if (onEndReached && [onEndReached isKindOfClass:[NSNumber class]]) {
             int handle = [onEndReached intValue];
             node.onTap = ^{
@@ -1356,7 +1625,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         // For slider, value is the initial position (re-uses node.value property)
         // text_field initial text re-uses node.text property
 
-        id onChange = props[@"on_change"];
+        id onChange = pv[MOB_PROP_on_change];
         if (onChange && [onChange isKindOfClass:[NSNumber class]]) {
             int handle = [onChange intValue];
             switch (node.nodeType) {
@@ -1380,22 +1649,22 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             }
         }
 
-        id accessibilityId = props[@"accessibility_id"];
+        id accessibilityId = pv[MOB_PROP_accessibility_id];
         if ([accessibilityId isKindOfClass:[NSString class]]) {
             node.accessibilityId = accessibilityId;
         }
 
-        id accessibilityLabel = props[@"accessibility_label"];
+        id accessibilityLabel = pv[MOB_PROP_accessibility_label];
         if ([accessibilityLabel isKindOfClass:[NSString class]]) {
             node.accessibilityLabel = accessibilityLabel;
         }
 
-        id accessibilityRole = props[@"accessibility_role"];
+        id accessibilityRole = pv[MOB_PROP_accessibility_role];
         if ([accessibilityRole isKindOfClass:[NSString class]]) {
             node.accessibilityRole = accessibilityRole;
         }
 
-        id disabled = props[@"disabled"];
+        id disabled = pv[MOB_PROP_disabled];
         if ([disabled isKindOfClass:[NSNumber class]]) {
             node.disabled = [disabled boolValue];
         }
@@ -2225,6 +2494,13 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
             enif_compare(previous[slot].tag, build[slot].tag) == 0)
             build[slot].identity_start_generation = previous[slot].identity_start_generation;
     }
+    // Snapshot now, log after the mutex is released. NSLog writes synchronously
+    // to the system log, and holding tap_mutex across it would block concurrent
+    // mob_send_* on the main thread — reintroducing, once per frame, exactly the
+    // cost this whole change removed from the per-call path.
+    int exhausted_this_frame = tap_exhausted_count;
+    tap_exhausted_count = 0;
+
     tap_active = 1 - tap_active;
     tap_handles = tap_tables[tap_active];
     tap_handle_next = tap_build_count;
@@ -2242,6 +2518,15 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     // reject them when both screens tag the same :id.)
     if (strcmp(transition, "none") != 0)
         mob_bump_frame_generation();
+
+    if (exhausted_this_frame > 0) {
+        // One line per frame rather than one per overflowing node. The count is
+        // the useful number anyway: it says how many interactive elements are
+        // silently inert, which the per-call line never made obvious.
+        LOGE(@"register_tap: pool exhausted (cap=%d) — %d interactive element(s) in this "
+             @"frame have no handler and will not respond",
+             MAX_TAP_HANDLES, exhausted_this_frame);
+    }
 
     NSString *transitionStr = [NSString stringWithUTF8String:transition];
     [[MobViewModel shared] setRoot:node transition:transitionStr];
@@ -2269,6 +2554,11 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
 
     enif_mutex_lock(tap_mutex);
     if (tap_build_count >= MAX_TAP_HANDLES) {
+        // Counted under the mutex, like the Zig side: set_root reads and resets
+        // this under the same lock. Mob.Sender serialises every caller today, so
+        // an unguarded read-modify-write would be benign — but nothing else in
+        // this file leans on that, and it should not start here.
+        tap_exhausted_count++;
         enif_mutex_unlock(tap_mutex);
         // MOB-100 follow-up: this used to be enif_make_badarg(env), which
         // crashed Mob.Renderer.render/3 (and the whole screen process) the
@@ -2279,8 +2569,11 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
         // mob_send_tap et al. above), so -1 is a safe "no handler wired up"
         // sentinel here — the interactive prop silently does nothing
         // instead of taking the screen down.
-        LOGE(@"register_tap: pool exhausted (cap=%d) — returning unhandled sentinel",
-             MAX_TAP_HANDLES);
+        // Deliberately not logged here. This is reached once per interactive
+        // node beyond the cap — measured at 359 times per frame on a 200-row
+        // screen — and NSLog writes synchronously to the system log. That
+        // logging alone was 13ms of a 27ms frame, 47% of the whole frame. The
+        // count is reported once per frame from set_root instead.
         return enif_make_int(env, -1);
     }
     TapHandle *build = tap_tables[1 - tap_active];
@@ -2302,6 +2595,14 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
     build[slot].tag = enif_make_copy(build[slot].tag_env, tag_term);
     build[slot].identity_start_generation = tap_build_generation;
     tap_build_count++;
+    // The high-water mark has to be raised HERE, not in set_root. clear_taps
+    // frees exactly `used` slots, and a frame can register taps and then never
+    // reach set_root — Mob.Renderer.render/4 calls clear_taps, then prepare,
+    // then :json.encode, then set_root, and Mob.Sender.commit/1 rescues anything
+    // that raises in between. Recording the mark only at set_root left those
+    // slots' tag_envs uncleared and unreachable: one leaked ErlNifEnv per tap,
+    // per failed frame, forever, on a path deliberately designed to survive.
+    tap_table_used[1 - tap_active] = tap_build_count;
     enif_mutex_unlock(tap_mutex);
 
     return enif_make_int(env, handle);
@@ -2317,7 +2618,8 @@ static ERL_NIF_TERM nif_clear_taps(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
     // table intact so concurrent mob_send_* keep resolving the last committed
     // frame. The freshly built table is swapped in at set_root.
     TapHandle *build = tap_tables[1 - tap_active];
-    for (int i = 0; i < MAX_TAP_HANDLES; i++) {
+    int used = tap_table_used[1 - tap_active];
+    for (int i = 0; i < used; i++) {
         if (build[i].tag_env) {
             enif_free_env(build[i].tag_env);
             build[i].tag_env = NULL;
@@ -2333,6 +2635,12 @@ static ERL_NIF_TERM nif_clear_taps(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
         build[i].last_y = 0;
         build[i].seq = 0;
     }
+    tap_table_used[1 - tap_active] = 0;
+    // Reset here, not only in set_root. set_root reports and clears the count,
+    // but a frame that overflows and then never reaches set_root would otherwise
+    // carry its overflow into the next frame's report — which claims to describe
+    // "this frame". clear_taps is the one entry point every frame runs.
+    tap_exhausted_count = 0;
     tap_build_count = 0;
     enif_mutex_unlock(tap_mutex);
     return enif_make_atom(env, "ok");

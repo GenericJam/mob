@@ -74,7 +74,11 @@ defmodule Mob.Sender do
   """
   @type screen_ref :: reference() | atom()
 
-  defstruct active: nil, pending: %{}, reserved_transition: nil, activation_gate: nil
+  defstruct active: nil,
+            pending: %{},
+            reserved_transition: nil,
+            activation_gate: nil,
+            frames: %{}
 
   @doc "Start the sender. Named, so there is exactly one."
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -183,6 +187,26 @@ defmodule Mob.Sender do
     {:ok, %__MODULE__{active: Keyword.get(opts, :active)}}
   end
 
+  # Drop a queued tree AND record its frame. Both activation paths throw a
+  # pending tree away, and the frame paired with it measured real BEAM work that
+  # produced no pixels — which is exactly what `committed: false` is for. Losing
+  # it here would make the meter undercount dropped frames at navigation
+  # boundaries, the transitions MOB-124 is most interested in.
+  defp discard_pending(pending, ref) do
+    case Map.pop(pending, ref) do
+      {{_tree, _platform, _nif, _transition, frame}, rest} ->
+        Mob.RenderStats.drop_frame(frame)
+        rest
+
+      # Anything else is a pending entry written by a previous version of this
+      # module. mob's dev loop reloads code onto a running BEAM, so the sender
+      # can meet state it did not write; crashing here would take down the one
+      # process every screen renders through.
+      {_other, rest} ->
+        rest
+    end
+  end
+
   @impl GenServer
   def handle_call({:activate, ref, transition}, _from, state) do
     reserved_transition = if transition == :none, do: nil, else: {ref, transition}
@@ -190,7 +214,7 @@ defmodule Mob.Sender do
     # An inactive screen may have queued a repaint just before activation.
     # That tree predates the navigation boundary and must not become the first
     # frame of the newly active screen; the router requests a fresh paint next.
-    pending = Map.delete(state.pending, ref)
+    pending = discard_pending(state.pending, ref)
 
     {:reply, :ok,
      %{state | active: ref, pending: pending, reserved_transition: reserved_transition}}
@@ -202,7 +226,7 @@ defmodule Mob.Sender do
     state =
       state
       |> Map.put(:active, ref)
-      |> Map.put(:pending, Map.delete(state.pending, ref))
+      |> Map.put(:pending, discard_pending(state.pending, ref))
       |> Map.put(:reserved_transition, nil)
       |> Map.put(:activation_gate, {ref, token, transition})
 
@@ -222,6 +246,16 @@ defmodule Mob.Sender do
     {:noreply, %{state | active: ref, reserved_transition: nil}}
   end
 
+  # Staged, not paired: the screen process casts its stats immediately before the
+  # render they describe, so this frame belongs to the very next `:render` for
+  # `ref`. Pairing happens there, not here, so that a frame and the tree it
+  # measured travel together through coalescing and flush.
+  def handle_cast({:render_stats, ref, frame}, state) do
+    # A frame already staged for this ref described a render that never arrived.
+    Mob.RenderStats.drop_frame(Map.get(state.frames, ref))
+    {:noreply, %{state | frames: Map.put(state.frames, ref, frame)}}
+  end
+
   def handle_cast({:render, ref, tree, platform, nif, transition}, state) do
     handle_cast({:render, ref, tree, platform, nif, transition, nil}, state)
   end
@@ -230,16 +264,20 @@ defmodule Mob.Sender do
         {:render, ref, tree, platform, nif, transition, activation_token},
         %{activation_gate: {ref, expected_token, reserved}} = state
       ) do
+    {frame, frames} = Map.pop(state.frames, ref)
+
     if activation_token == expected_token do
       transition = if transition == :none, do: reserved, else: transition
-      pending = Map.put(state.pending, ref, {tree, platform, nif, transition})
+      pending = put_pending(state.pending, ref, {tree, platform, nif, transition, frame})
       send(self(), :flush)
-      {:noreply, %{state | pending: pending, activation_gate: nil}}
+      {:noreply, %{state | pending: pending, activation_gate: nil, frames: frames}}
     else
       # This render began before the router activated the screen. The router's
       # tokened paint follows it from the same screen process, so dropping it
       # prevents a stale target frame from consuming the navigation boundary.
-      {:noreply, state}
+      # Its frame goes with it, or it would be resumed against a later tree.
+      Mob.RenderStats.drop_frame(frame)
+      {:noreply, %{state | frames: frames}}
     end
   end
 
@@ -252,9 +290,25 @@ defmodule Mob.Sender do
     {transition, reserved_transition} =
       take_transition(state.pending, state.reserved_transition, ref, transition)
 
-    pending = Map.put(state.pending, ref, {tree, platform, nif, transition})
+    {frame, frames} = Map.pop(state.frames, ref)
+    pending = put_pending(state.pending, ref, {tree, platform, nif, transition, frame})
     send(self(), :flush)
-    {:noreply, %{state | pending: pending, reserved_transition: reserved_transition}}
+
+    {:noreply,
+     %{state | pending: pending, reserved_transition: reserved_transition, frames: frames}}
+  end
+
+  # A superseded tree's frame is real work that was paid for but never shown.
+  defp put_pending(pending, ref, payload) do
+    case Map.fetch(pending, ref) do
+      {:ok, {_tree, _platform, _nif, _transition, superseded}} ->
+        Mob.RenderStats.drop_frame(superseded)
+
+      :error ->
+        :ok
+    end
+
+    Map.put(pending, ref, payload)
   end
 
   defp take_transition(pending, {ref, reserved}, ref, :none),
@@ -268,7 +322,7 @@ defmodule Mob.Sender do
 
   defp carry_transition(pending, ref, :none) do
     case Map.fetch(pending, ref) do
-      {:ok, {_tree, _platform, _nif, superseded}} -> superseded
+      {:ok, {_tree, _platform, _nif, superseded, _frame}} -> superseded
       :error -> :none
     end
   end
@@ -281,15 +335,55 @@ defmodule Mob.Sender do
   def handle_info(_message, state), do: {:noreply, state}
 
   defp flush(state) do
-    case Map.fetch(state.pending, state.active) do
-      {:ok, payload} -> commit(payload)
-      :error -> :ok
+    {committed, rest} = Map.pop(state.pending, state.active)
+
+    case committed do
+      {tree, platform, nif, transition, frame} ->
+        Mob.RenderStats.resume_frame(frame)
+        commit({tree, platform, nif, transition})
+
+      nil ->
+        :ok
     end
 
     # Everything else waiting belongs to a screen that is not active. Dropping
     # it is deliberate: by the time such a screen becomes active it will have
     # re-rendered, so committing a queued tree would only show a stale frame.
-    %{state | pending: %{}}
+    # Their BEAM-side cost was still paid, so record it rather than losing it.
+    Enum.each(rest, fn
+      {_ref, {_t, _p, _n, _tr, frame}} -> Mob.RenderStats.drop_frame(frame)
+      {_ref, _pre_reload_shape} -> :ok
+    end)
+
+    # Staged frames survive a flush. The render cast that pairs a staged frame
+    # with its tree may still be in the mailbox behind the `:flush` message, so
+    # clearing here would throw away a frame whose render is about to arrive.
+    #
+    # They are not self-limiting, though. A screen process killed between
+    # `hand_off/1` and `Mob.Sender.render/5` — a narrow window, but a real one —
+    # leaves an entry no later cast will ever claim, and nothing else removes it.
+    # Sweeping by age bounds the map and records the work rather than losing it.
+    %{state | pending: %{}, frames: sweep_stale(state.frames)}
+  end
+
+  # A staged frame is claimed by the render cast that follows it from the same
+  # process, so anything still waiting after this long belongs to a screen that
+  # is never going to send one.
+  @stale_frame_us 5_000_000
+
+  defp sweep_stale(frames) when map_size(frames) == 0, do: frames
+
+  defp sweep_stale(frames) do
+    cutoff = System.monotonic_time(:microsecond) - @stale_frame_us
+
+    Enum.reduce(frames, frames, fn {ref, frame}, acc ->
+      if is_map(frame) and Map.get(frame, :started, cutoff) < cutoff do
+        Mob.RenderStats.drop_frame(frame)
+        Map.delete(acc, ref)
+      else
+        acc
+      end
+    end)
   end
 
   defp commit({tree, platform, nif, transition}) do

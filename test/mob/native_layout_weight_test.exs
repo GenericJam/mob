@@ -12,7 +12,11 @@ defmodule Mob.NativeLayoutWeightTest do
 
     assert header =~ "CGFloat layoutWeight"
     assert implementation =~ "_layoutWeight = 0.0"
-    assert nif =~ ~s|props[@"weight"]|
+    # The deserialiser resolves prop keys to slots in one pass rather than
+    # probing each key, so the contract is "weight" being in the slot table
+    # AND the node builder reading that slot.
+    assert nif =~ ~s|@"weight"|
+    assert nif =~ "pv[MOB_PROP_weight]"
     assert nif =~ "node.layoutWeight = [layoutWeight doubleValue]"
   end
 

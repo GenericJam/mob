@@ -244,13 +244,15 @@ defmodule Mob.Renderer do
     nif.clear_taps()
     nif.set_transition(transition)
 
-    json =
-      tree
-      |> prepare(nif, platform, ctx)
-      |> :json.encode()
-      |> IO.iodata_to_binary()
+    prepared = Mob.RenderStats.time(:prepare_us, fn -> prepare(tree, nif, platform, ctx) end)
 
-    nif.set_root(json)
+    json =
+      Mob.RenderStats.time(:encode_us, fn ->
+        prepared |> :json.encode() |> IO.iodata_to_binary()
+      end)
+
+    Mob.RenderStats.time(:set_root_us, fn -> nif.set_root(json) end)
+    Mob.RenderStats.finish(prepared, byte_size(json))
     {:ok, :json_tree}
   end
 
@@ -259,7 +261,17 @@ defmodule Mob.Renderer do
   # hard-wired screen process in one place instead of ~35. Mob.Listener.handler/1
   # returns the target unchanged when no listener is running, which is what the
   # renderer's own tests rely on. See Mob.Listener.
-  defp register_handler(nif, target), do: nif.register_tap(Mob.Listener.handler(target))
+  defp register_handler(nif, target) do
+    # Timed separately from the rest of prepare: prepare dominates the frame on
+    # a dense screen, and it does two very different jobs — pure-Elixir prop and
+    # theme resolution, and one register_tap NIF call per interactive node.
+    # Which of the two it is decides what the fix even looks like.
+    # Resolve outside the timed closure: Mob.Listener.handler/1 does a whereis
+    # and a tuple allocation, which is not the NIF and is a meaningful share of
+    # the sub-microsecond per-call baseline this number is compared against.
+    handler = Mob.Listener.handler(target)
+    Mob.RenderStats.accumulate(:register_tap_us, fn -> nif.register_tap(handler) end)
+  end
 
   @doc "Return the full color palette map (token → ARGB integer)."
   @spec colors() :: %{atom() => non_neg_integer()}

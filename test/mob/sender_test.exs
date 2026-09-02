@@ -143,6 +143,151 @@ defmodule Mob.SenderTest do
     end
   end
 
+  describe "render stats travel with the tree they measured" do
+    # The screen process casts its frame separately from the render it
+    # describes. Binding the two when the render cast is dequeued — rather than
+    # looking the frame up again at flush time — is what keeps a frame from
+    # being attributed to a tree it did not measure.
+    setup do
+      Mob.RenderStats.enable()
+      Mob.RenderStats.reset()
+      on_exit(fn -> Mob.RenderStats.disable() end)
+      :ok
+    end
+
+    defp labelled_frame(screen) do
+      Mob.RenderStats.start_frame(screen, :none)
+      Mob.RenderStats.take_frame()
+    end
+
+    defp recorded do
+      for f <- Mob.RenderStats.frames(), do: {f.screen, f.committed}
+    end
+
+    test "a superseded tree's frame is dropped, not committed against the newer tree" do
+      state = %Sender{active: :home}
+
+      {:noreply, state} = Sender.handle_cast({:render_stats, :home, labelled_frame(A)}, state)
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :home, tree("first"), :ios, RecordingNif, :none}, state)
+
+      {:noreply, state} = Sender.handle_cast({:render_stats, :home, labelled_frame(B)}, state)
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :home, tree("second"), :ios, RecordingNif, :none}, state)
+
+      {:noreply, _state} = Sender.handle_info(:flush, state)
+
+      assert [json] = committed_texts()
+      assert json =~ "second"
+      assert Enum.sort(recorded()) == [{A, false}, {B, true}]
+    end
+
+    test "a flush between a frame and its render does not pair it with the older tree" do
+      # Mailbox: stats(A), render(treeA), stats(B), flush, render(treeB). The
+      # flush is what `Mob.Sender.sync/1` triggers, and it is called from the
+      # router — a different process — so it can land anywhere. Resolving the
+      # frame at flush time committed treeA while holding frame B.
+      state = %Sender{active: :home}
+
+      {:noreply, state} = Sender.handle_cast({:render_stats, :home, labelled_frame(A)}, state)
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :home, tree("treeA"), :ios, RecordingNif, :none}, state)
+
+      {:noreply, state} = Sender.handle_cast({:render_stats, :home, labelled_frame(B)}, state)
+      {:noreply, state} = Sender.handle_info(:flush, state)
+
+      assert [first] = committed_texts()
+      assert first =~ "treeA"
+      assert recorded() == [{A, true}]
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :home, tree("treeB"), :ios, RecordingNif, :none}, state)
+
+      {:noreply, _state} = Sender.handle_info(:flush, state)
+
+      assert [_, second] = committed_texts()
+      assert second =~ "treeB"
+      assert Enum.sort(recorded()) == [{A, true}, {B, true}]
+    end
+
+    test "activating a screen records the queued frame it throws away" do
+      # Both activation paths delete a pending tree: it predates the navigation
+      # boundary and must not become the new screen's first frame. The BEAM work
+      # that built it was still paid for, and navigation boundaries are exactly
+      # the transitions this epic is measuring, so it has to be recorded.
+      state = %Sender{active: :other}
+
+      {:noreply, state} = Sender.handle_cast({:render_stats, :home, labelled_frame(A)}, state)
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :home, tree("stale"), :ios, RecordingNif, :none}, state)
+
+      {:reply, :ok, state} = Sender.handle_call({:activate, :home, :push}, self(), state)
+
+      assert state.pending == %{}
+      assert recorded() == [{A, false}]
+    end
+
+    test "activate_frame records the queued frame it throws away" do
+      state = %Sender{active: :other}
+
+      {:noreply, state} = Sender.handle_cast({:render_stats, :home, labelled_frame(A)}, state)
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :home, tree("stale"), :ios, RecordingNif, :none}, state)
+
+      {:reply, _token, state} =
+        Sender.handle_call({:activate_frame, :home, :push}, self(), state)
+
+      assert state.pending == %{}
+      assert recorded() == [{A, false}]
+    end
+
+    test "a staged frame whose render never arrives is swept, not leaked" do
+      # A screen killed between hand_off/1 and Mob.Sender.render/5 leaves a
+      # staged frame no cast will ever claim. Nothing else removes it, so the
+      # map grew without bound and the work was silently lost rather than
+      # recorded as dropped.
+      old = %{started: System.monotonic_time(:microsecond) - 10_000_000, screen: Dead}
+      state = %Sender{active: :home, frames: %{dead_ref: old}}
+
+      {:noreply, state} = Sender.handle_info(:flush, state)
+
+      assert state.frames == %{}
+      assert recorded() == [{Dead, false}]
+    end
+
+    test "a freshly staged frame survives a flush" do
+      # The render that pairs it may still be in the mailbox behind :flush.
+      state = %Sender{active: :home, frames: %{live_ref: labelled_frame(A)}}
+
+      {:noreply, state} = Sender.handle_info(:flush, state)
+
+      assert Map.has_key?(state.frames, :live_ref)
+      assert recorded() == []
+    end
+
+    test "a render dropped by the activation gate drops its frame with it" do
+      # The gate returns state untouched on a token mismatch. A frame staged for
+      # that ref would otherwise sit there until some later render claimed it.
+      state = %Sender{active: :home, activation_gate: {:home, :expected, :push}}
+
+      {:noreply, state} = Sender.handle_cast({:render_stats, :home, labelled_frame(A)}, state)
+
+      {:noreply, state} =
+        Sender.handle_cast(
+          {:render, :home, tree("stale"), :ios, RecordingNif, :none, :wrong_token},
+          state
+        )
+
+      assert state.frames == %{}
+      assert recorded() == [{A, false}]
+    end
+  end
+
   describe "coalescing preserves the transition" do
     test "an immediate first paint cannot overtake its navigation transition" do
       start_sender(:home)
