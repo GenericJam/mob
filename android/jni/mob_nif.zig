@@ -996,6 +996,12 @@ const ComponentHandle = extern struct {
 // after a row of buttons). With the swap a concurrent send always sees a
 // complete table (old or new), never a partial one.
 var tap_tables: [2][MAX_TAP_HANDLES]TapHandle = std.mem.zeroes([2][MAX_TAP_HANDLES]TapHandle);
+// How many slots of each table were actually written, so clearTaps only walks
+// those rather than the whole cap on every frame.
+var tap_table_used: [2]usize = .{ 0, 0 };
+// Exhausted registrations in the frame being built. Counted rather than logged
+// per call — see the note in register_tap.
+var tap_exhausted_count: c_int = 0;
 var tap_active: usize = 0; // index of the table readers resolve against
 var tap_active_count: c_int = 0; // committed handle count in the active table
 var tap_table_generations: [2]u32 = .{ 0, 0 };
@@ -1653,6 +1659,19 @@ export fn nif_set_root(
             }
         }
     }
+    tap_table_used[@intCast(1 - tap_active)] = @intCast(tap_build_count);
+
+    if (tap_exhausted_count > 0) {
+        // One line per frame rather than one per overflowing node. The count is
+        // the useful number: it says how many interactive elements are silently
+        // inert, which the per-call line never made obvious.
+        loge_nif(
+            "register_tap: pool exhausted (cap={d}) — {d} interactive element(s) in this frame have no handler and will not respond",
+            .{ MAX_TAP_HANDLES, tap_exhausted_count },
+        );
+        tap_exhausted_count = 0;
+    }
+
     tap_active = 1 - tap_active;
     tap_active_count = tap_build_count;
     tap_table_generations[tap_active] = tap_build_generation;
@@ -1705,7 +1724,12 @@ export fn nif_register_tap(
         // no-op on an out-of-range handle, so -1 is a safe "no handler
         // wired up" sentinel here — the interactive prop silently does
         // nothing instead of taking the screen down.
-        loge_nif("register_tap: pool exhausted (cap={d}) — returning unhandled sentinel", .{MAX_TAP_HANDLES});
+        // Deliberately not logged here. This is reached once per interactive
+        // node beyond the cap — measured on iOS at 359 times per frame on a
+        // 200-row screen — and the log call writes synchronously. On iOS that
+        // logging alone was 47% of the frame. Reported once per frame from
+        // set_root instead.
+        tap_exhausted_count += 1;
         return erts.enif_make_int(env, -1);
     }
 
@@ -1746,7 +1770,8 @@ export fn nif_clear_taps(
     // frame. The freshly built table is swapped in at set_root.
     const build = &tap_tables[1 - tap_active];
     var i: usize = 0;
-    while (i < MAX_TAP_HANDLES) : (i += 1) {
+    const used = tap_table_used[@intCast(1 - tap_active)];
+    while (i < used) : (i += 1) {
         const h = &build[i];
         if (h.tag_env != null) {
             erts.enif_free_env(h.tag_env);
@@ -1763,6 +1788,7 @@ export fn nif_clear_taps(
         h.last_y = 0;
         h.seq = 0;
     }
+    tap_table_used[@intCast(1 - tap_active)] = 0;
     tap_build_count = 0;
     return erts.ok(env);
 }
