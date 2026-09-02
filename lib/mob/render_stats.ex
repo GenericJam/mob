@@ -26,14 +26,17 @@ defmodule Mob.RenderStats do
 
   ## Cost when disabled
 
-  A `:persistent_term` read and an immediate return. No process, no ETS lookup,
-  no allocation. `:persistent_term.get/2` is a direct read of an immutable term
-  with no copying, which is why it is the right switch for something on the
-  frame path.
+  `time/2` reads a `:persistent_term` and returns; `accumulate/2` reads the
+  process dictionary and returns. Neither allocates a record.
 
-  Measured: 49 ns per call, six calls per frame — 0.29 us against a ~378 us
-  frame, or 0.08%. That is the number that matters, because unlike the recording
-  path this one ships and runs on every frame of every app.
+  The honest cost is dominated by `accumulate/2`, not by the six `time/2` sites:
+  it wraps every `register_tap` call, so it runs once per *registered handler* —
+  615 times on the 200-row benchmark, not six. It also allocates a closure the
+  direct call did not. Measured on a development Mac, 29.2 ns per call before
+  and 35.8 ns after, so ~4 us per dense frame here and plausibly 20-40 us on a
+  phone. Against a 27 ms frame that is under 0.2%, but it is not free, and it
+  ships on every frame of every app. Note also that pdict lookup cost grows with
+  dictionary size (14.6 ns at ~10 entries, 30.3 ns at 200).
 
   ## Using it
 
@@ -80,15 +83,22 @@ defmodule Mob.RenderStats do
   process, so the table dies the instant enabling returns and every later write
   goes nowhere.
   """
-  @spec enable() :: :ok
+  @spec enable() :: :ok | {:error, term()}
   def enable do
     case GenServer.start(__MODULE__, [], name: __MODULE__) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-    end
+      {:ok, _pid} ->
+        :persistent_term.put(@flag, true)
+        :ok
 
-    :persistent_term.put(@flag, true)
-    :ok
+      {:error, {:already_started, _pid}} ->
+        :persistent_term.put(@flag, true)
+        :ok
+
+      {:error, reason} ->
+        # Leave the flag off rather than recording into a table that does not
+        # exist: `store/1` would silently succeed and every frame would vanish.
+        {:error, reason}
+    end
   end
 
   @doc "Stop recording. Frames already collected are kept."
@@ -151,13 +161,23 @@ defmodule Mob.RenderStats do
           :total_us
         ]
 
+        # Percentiles come from committed frames only. A dropped frame never ran
+        # prepare/encode/set_root, and its total_us is screen-side work plus
+        # however long it waited in the sender — pooling the two makes a p50
+        # that describes neither. The counts stay visible so `frames: 40` can
+        # never be read as 40 rendered frames when 31 of them were thrown away.
+        {committed, dropped} = Enum.split_with(frames, & &1.committed)
+
         %{
           frames: length(frames),
+          committed: length(committed),
+          dropped: length(dropped),
           screens: frames |> Enum.map(& &1.screen) |> Enum.uniq(),
-          nodes: percentiles(frames, :nodes),
-          taps: percentiles(frames, :taps),
-          bytes: percentiles(frames, :bytes),
-          stages: Map.new(stages, &{&1, percentiles(frames, &1)})
+          nodes: percentiles(committed, :nodes),
+          taps: percentiles(committed, :taps),
+          bytes: percentiles(committed, :bytes),
+          stages: Map.new(stages, &{&1, percentiles(committed, &1)}),
+          dropped_total_us: percentiles(dropped, :total_us)
         }
     end
   end
@@ -221,8 +241,20 @@ defmodule Mob.RenderStats do
 
   @doc "Install a frame taken from another process."
   @spec resume_frame(map() | nil) :: :ok
-  def resume_frame(nil), do: :ok
-  def resume_frame(frame), do: Process.put(@frame, frame) && :ok
+  def resume_frame(nil) do
+    # Erase, not no-op. `finish/2` is the only thing that clears the key, and it
+    # is skipped whenever the render raises — a path `Mob.Sender.commit/1`
+    # exists specifically to rescue. A leftover frame would otherwise be resumed
+    # against a later, unrelated tree and recorded with a total_us that is
+    # mostly the gap between two frames.
+    Process.delete(@frame)
+    :ok
+  end
+
+  def resume_frame(frame) do
+    Process.put(@frame, frame)
+    :ok
+  end
 
   @doc """
   Record a frame whose tree was never committed.
@@ -235,6 +267,10 @@ defmodule Mob.RenderStats do
   def drop_frame(nil), do: :ok
 
   def drop_frame(frame) do
+    if enabled?(), do: do_drop_frame(frame), else: :ok
+  end
+
+  defp do_drop_frame(frame) do
     store(
       frame
       |> Map.drop([:started])
@@ -242,7 +278,7 @@ defmodule Mob.RenderStats do
         total_us: now() - frame.started,
         nodes: nil,
         taps: nil,
-        bytes: 0,
+        bytes: nil,
         committed: false
       })
     )
@@ -256,8 +292,8 @@ defmodule Mob.RenderStats do
   """
   @spec accumulate(atom(), (-> result)) :: result when result: term()
   def accumulate(key, fun) do
-    case Process.get(@frame) do
-      nil ->
+    case enabled?() && Process.get(@frame) do
+      frame when not is_map(frame) ->
         fun.()
 
       frame ->
@@ -281,8 +317,12 @@ defmodule Mob.RenderStats do
   @spec add(atom(), number()) :: :ok
   def add(key, value) do
     case Process.get(@frame) do
-      nil -> :ok
-      frame -> Process.put(@frame, Map.put(frame, key, value)) && :ok
+      nil ->
+        :ok
+
+      frame ->
+        Process.put(@frame, Map.put(frame, key, value))
+        :ok
     end
   end
 
@@ -294,8 +334,11 @@ defmodule Mob.RenderStats do
   """
   @spec finish(term(), non_neg_integer()) :: :ok
   def finish(tree, bytes) do
-    case Process.get(@frame) do
-      nil ->
+    case enabled?() && Process.get(@frame) do
+      frame when not is_map(frame) ->
+        # Still clear: recording may have been disabled mid-frame, and a frame
+        # left behind would be resumed against a later tree.
+        Process.delete(@frame)
         :ok
 
       frame ->
@@ -347,29 +390,37 @@ defmodule Mob.RenderStats do
     :ok
   end
 
-  # The prepared tree is a map with string keys by this point. An interactive
-  # node is one whose props carry a handle, which the renderer has already
-  # turned into an integer.
+  # The prepared tree is a map with string keys by this point. Every handler prop
+  # holds a handle the renderer got from one `register_tap` call, so counting
+  # handle-valued props counts NIF calls. Counting interactive *nodes* instead
+  # would undercount: one node carrying `on_tap` and `on_long_press` makes two
+  # calls. `taps` is therefore directly comparable to `register_tap_us_n`, and
+  # the two disagreeing means one of them has a bug.
   defp count(node, {nodes, taps}) when is_map(node) do
-    taps = taps + if(interactive?(node), do: 1, else: 0)
     children = Map.get(node, "children") || Map.get(node, :children) || []
-    Enum.reduce(children, {nodes + 1, taps}, &count/2)
+    Enum.reduce(children, {nodes + 1, taps + handle_count(node)}, &count/2)
   end
 
   defp count(_other, acc), do: acc
 
+  # Every prop `Mob.Renderer.register_handler/2` writes. Kept exhaustive on
+  # purpose: a missing name silently undercounts, which is how the first version
+  # of this reported 1 tap on a tree that made 12 calls.
   @handle_props MapSet.new(~w(on_tap on_change on_focus on_blur on_submit on_dismiss on_select
                      on_scroll on_drag on_pinch on_rotate on_long_press on_double_tap
-                     on_swipe on_compose on_end_reached on_tab_select on_pointer_move))
+                     on_swipe on_swipe_left on_swipe_right on_swipe_up on_swipe_down
+                     on_compose on_end_reached on_tab_select on_pointer_move
+                     on_scroll_began on_scroll_ended on_scroll_settled on_top_reached
+                     on_scrolled_past))
 
-  # Walk the node's own props rather than probing for all eighteen handler
-  # names: a node carries a handful of props, so this turns ~18 map lookups per
-  # node into ~4 set lookups. On a 780-node tree that is the difference between
-  # the meter costing more than the render and costing a fraction of it.
-  defp interactive?(node) do
+  # Walk the node's own props rather than probing for all handler names: a node
+  # carries a handful of props, so this turns ~27 map lookups per node into ~4
+  # set lookups. On a 780-node tree that is the difference between the meter
+  # costing more than the render and costing a fraction of it.
+  defp handle_count(node) do
     props = Map.get(node, "props") || Map.get(node, :props) || %{}
 
-    Enum.any?(props, fn {key, value} ->
+    Enum.count(props, fn {key, value} ->
       is_integer(value) and MapSet.member?(@handle_props, key)
     end)
   end
@@ -383,10 +434,17 @@ defmodule Mob.RenderStats do
     end
   end
 
+  # Nearest-rank: the smallest value at or above the q-th fraction of the sample.
+  # `round/1` here would return one rank too high at every q — a p50 that is the
+  # 60th percentile at n=10, and a p95 that is literally the worst frame for any
+  # n under 21, which is exactly the range a short measurement run lands in.
   defp at(sorted, q) do
-    index = min(round(q * length(sorted)), length(sorted) - 1)
+    n = length(sorted)
+    index = clamp(ceil(q * n) - 1, 0, n - 1)
     Enum.at(sorted, index)
   end
+
+  defp clamp(value, low, high), do: value |> max(low) |> min(high)
 
   # ── Table owner ───────────────────────────────────────────────────────────
 

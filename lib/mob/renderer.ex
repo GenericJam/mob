@@ -266,9 +266,11 @@ defmodule Mob.Renderer do
     # a dense screen, and it does two very different jobs — pure-Elixir prop and
     # theme resolution, and one register_tap NIF call per interactive node.
     # Which of the two it is decides what the fix even looks like.
-    Mob.RenderStats.accumulate(:register_tap_us, fn ->
-      nif.register_tap(Mob.Listener.handler(target))
-    end)
+    # Resolve outside the timed closure: Mob.Listener.handler/1 does a whereis
+    # and a tuple allocation, which is not the NIF and is a meaningful share of
+    # the sub-microsecond per-call baseline this number is compared against.
+    handler = Mob.Listener.handler(target)
+    Mob.RenderStats.accumulate(:register_tap_us, fn -> nif.register_tap(handler) end)
   end
 
   @doc "Return the full color palette map (token → ARGB integer)."

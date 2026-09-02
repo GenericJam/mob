@@ -167,6 +167,50 @@ defmodule Mob.RenderStatsTest do
       assert summary.stages.render_us.max == 500
     end
 
+    test "p50 is the median and p95 is not just the maximum" do
+      # Ranks, on distinct values, so an off-by-one cannot hide. The previous
+      # version of this file used nine identical values and could not fail.
+      # `round/1` instead of `ceil/1` gives p50 == 11 and p95 == 20 here: every
+      # reported median one rank high, and every p95 equal to the single worst
+      # frame for any run under ~21 frames.
+      for us <- 1..20 do
+        RenderStats.start_frame(S, :none)
+        RenderStats.add(:render_us, us)
+        RenderStats.finish(%{}, 0)
+      end
+
+      %{p50: p50, p95: p95, max: max} = RenderStats.summary().stages.render_us
+
+      assert p50 == 10
+      assert p95 == 19
+      assert max == 20
+    end
+
+    test "percentiles exclude frames that were never committed" do
+      # A dropped frame never ran prepare/encode/set_root and its total_us is
+      # mostly queueing. Pooling it with real frames makes a p50 that describes
+      # neither, and `bytes: 0` for a drop would drag the byte percentiles to
+      # zero while still reading as a measurement.
+      RenderStats.start_frame(S, :none)
+      RenderStats.add(:render_us, 100)
+      RenderStats.finish(%{}, 5000)
+
+      for _ <- 1..9 do
+        RenderStats.start_frame(S, :none)
+        RenderStats.add(:render_us, 1)
+        RenderStats.drop_frame(RenderStats.take_frame())
+      end
+
+      summary = RenderStats.summary()
+
+      assert summary.frames == 10
+      assert summary.committed == 1
+      assert summary.dropped == 9
+      assert summary.bytes == %{p50: 5000, p95: 5000, max: 5000}
+      assert summary.stages.render_us.p50 == 100
+      assert %{p50: _, p95: _, max: _} = summary.dropped_total_us
+    end
+
     test "lists the screens measured" do
       RenderStats.start_frame(A, :none)
       RenderStats.finish(%{}, 0)
@@ -343,6 +387,103 @@ defmodule Mob.RenderStatsTest do
       frames = RenderStats.frames()
       assert length(frames) <= 500
       assert hd(frames).screen == :s520, "newest must survive"
+    end
+  end
+
+  describe "tap counting" do
+    setup do
+      RenderStats.enable()
+      :ok
+    end
+
+    defp node_with(props), do: %{"type" => "row", "props" => props, "children" => []}
+
+    test "counts register_tap calls, not interactive nodes" do
+      # One node carrying three handlers makes three NIF calls. Counting nodes
+      # reported 1 here, which made `taps` disagree with `register_tap_us_n`
+      # and put the per-call cost derived from it out by the same factor.
+      RenderStats.start_frame(S, :none)
+
+      RenderStats.finish(
+        node_with(%{"on_tap" => 1, "on_long_press" => 2, "on_double_tap" => 3}),
+        0
+      )
+
+      assert [%{taps: 3}] = RenderStats.frames()
+    end
+
+    test "counts the scroll and swipe handlers the renderer registers" do
+      # These nine were missing from the original prop set, so any scrolling
+      # screen — the exact case MOB-128 is about — undercounted silently.
+      props =
+        Map.new(
+          ~w(on_swipe_left on_swipe_right on_swipe_up on_swipe_down on_scroll_began
+             on_scroll_ended on_scroll_settled on_top_reached on_scrolled_past),
+          &{&1, 7}
+        )
+
+      RenderStats.start_frame(S, :none)
+      RenderStats.finish(node_with(props), 0)
+
+      assert [%{taps: 9}] = RenderStats.frames()
+    end
+
+    test "agrees with the count accumulate/2 observes" do
+      # The two are independent: one walks the finished tree, the other counts
+      # calls as they happen. They are in the same summary, so a disagreement
+      # means one is wrong and nobody can tell which.
+      RenderStats.start_frame(S, :none)
+      for _ <- 1..3, do: RenderStats.accumulate(:register_tap_us, fn -> :ok end)
+      RenderStats.finish(node_with(%{"on_tap" => 1, "on_change" => 2, "on_blur" => 3}), 0)
+
+      assert [%{taps: 3, register_tap_us_n: 3}] = RenderStats.frames()
+    end
+  end
+
+  describe "recording stops when disabled mid-frame" do
+    test "finish/2 records nothing and leaves no frame behind" do
+      # Only time/2 checked the flag, so an operator who disabled the meter
+      # kept getting records for any frame already in flight.
+      RenderStats.enable()
+      RenderStats.start_frame(S, :none)
+      RenderStats.disable()
+      RenderStats.finish(%{}, 777)
+
+      RenderStats.enable()
+      assert RenderStats.frames() == []
+      assert RenderStats.take_frame() == nil
+    end
+
+    test "accumulate/2 still runs the function" do
+      RenderStats.enable()
+      RenderStats.start_frame(S, :none)
+      RenderStats.disable()
+      assert RenderStats.accumulate(:register_tap_us, fn -> :computed end) == :computed
+    end
+  end
+
+  describe "resume_frame/1" do
+    setup do
+      RenderStats.enable()
+      :ok
+    end
+
+    test "clears a leftover frame rather than no-opping" do
+      # A render that raises skips finish/2 and leaves its frame in the process
+      # dictionary. Treating resume_frame(nil) as a no-op let that frame be
+      # closed against the next tree, producing one record spanning two frames
+      # whose total_us is mostly the gap between them.
+      # No start_frame in between: that is the shape of the real path. The
+      # sender resumes whatever frame the screen handed it — nil, when the
+      # previous render raised before hand_off — and then commits, and the
+      # commit's finish/2 is what closes the frame in the pdict.
+      RenderStats.start_frame(StaleScreen, :push)
+      RenderStats.add(:render_us, 999)
+
+      RenderStats.resume_frame(nil)
+      RenderStats.finish(%{"type" => "text", "props" => %{}, "children" => []}, 1234)
+
+      assert RenderStats.frames() == []
     end
   end
 end
