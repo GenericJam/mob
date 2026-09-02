@@ -7,6 +7,70 @@ defmodule Mob.NativeEventHandleTest do
   @android_source File.read!(Path.expand("../../android/jni/mob_nif.zig", __DIR__))
   @ios_source File.read!(Path.expand("../../ios/mob_nif.m", __DIR__))
 
+  @codec_source File.read!(Path.expand("../../android/jni/tap_handle_codec.zig", __DIR__))
+
+  test "the two handle codecs agree on the bit split" do
+    # iOS reimplements the encoding by hand while Android derives it from
+    # tap_handle_codec. They are independent implementations of one wire format,
+    # and drift between them routes a native event to the wrong process — or to
+    # a live slot that belongs to something else. Nothing else pins them
+    # together, so this does.
+    assert @codec_source =~ "pub const slot_bits: u5 = 12"
+    assert @codec_source =~ "pub const slot_count: usize = 1 << slot_bits"
+
+    assert @codec_source =~
+             "pub const max_generation: u32 = (1 << (31 - @as(u32, slot_bits))) - 1"
+
+    # 12 slot bits and a 19-bit generation, spelled out literally on the iOS side.
+    assert @ios_source =~ "#define MOB_TAP_SLOT_LIMIT 4096"
+    assert @ios_source =~ "#define MAX_EVENT_GENERATION 0x7ffffU"
+    assert @ios_source =~ "(generation << 12) | (uint32_t)slot"
+    assert @ios_source =~ "raw >> 12"
+    assert @ios_source =~ "raw & 0xfffU"
+
+    # And Android's ceiling is the codec's, not a second literal.
+    assert @android_source =~ "const MAX_TAP_HANDLES: usize = tap_handle_codec.slot_count"
+  end
+
+  test "register_tap grows the table before caching a pointer into it" do
+    # The tables are realloc-grown, so a pointer taken before the grow is a
+    # use-after-realloc. This is the one ordering the growth design depends on
+    # and it is invisible at a glance, since both statements read the same
+    # global.
+    [_, ios_register] =
+      String.split(@ios_source, "static ERL_NIF_TERM nif_register_tap", parts: 2)
+
+    [ios_register, _] = String.split(ios_register, "// ── NIF: clear_taps/0", parts: 2)
+
+    {ios_grow, _} = :binary.match(ios_register, "mob_tap_grow_locked(")
+    {ios_cache, _} = :binary.match(ios_register, "TapHandle *build = tap_tables[")
+    assert ios_grow < ios_cache
+
+    [_, android_register] = String.split(@android_source, "export fn nif_register_tap", parts: 2)
+    [android_register, _] = String.split(android_register, "// nif_clear_taps/0", parts: 2)
+
+    {android_grow, _} = :binary.match(android_register, "tapGrowLocked(")
+    {android_deref, _} = :binary.match(android_register, "tap_tables[1 - tap_active].?")
+    assert android_grow < android_deref
+  end
+
+  test "set_root commits no more slots than the tables can hold" do
+    # Only clear_taps resets tap_build_count, so a set_root without an
+    # intervening clear_taps carries a stale count. When the tables were a fixed
+    # 256 that was merely wrong; with two heap allocations of possibly different
+    # sizes an unbounded loop reads and then writes past the end of the smaller.
+    assert @ios_source =~
+             "int committed = tap_build_count < build_cap ? tap_build_count : build_cap"
+
+    assert @ios_source =~ "tap_handle_next = committed;"
+    assert @android_source =~ "const committed = if (wanted < build_cap) wanted else build_cap"
+    assert @android_source =~ "tap_active_count = @intCast(committed);"
+
+    # And a second set_root commits an empty table rather than re-committing.
+    [_, ios_set_root] = String.split(@ios_source, "static ERL_NIF_TERM nif_set_root", parts: 2)
+    assert String.contains?(ios_set_root, "tap_build_count = 0;")
+  end
+
   test "Android event handles carry the render generation" do
     assert @android_source =~ ~s|const tap_handle_codec = @import("tap_handle_codec.zig")|
     assert @android_source =~ "var tap_table_generations: [2]u32"
@@ -32,7 +96,11 @@ defmodule Mob.NativeEventHandleTest do
     [commit, _] = String.split(commit, "erts.enif_mutex_unlock(tap_mutex);", parts: 2)
 
     assert commit =~ "tap_active = 1 - tap_active"
-    assert commit =~ "tap_active_count = tap_build_count"
+    # The count comes from `committed`, not `tap_build_count`: the tables are
+    # grown on demand and can differ in size, so the commit is clamped to what
+    # the table being published actually holds (MOB-133). The property this test
+    # exists for is unchanged — all three land under one lock.
+    assert commit =~ "tap_active_count = @intCast(committed)"
     assert commit =~ "tap_table_generations[tap_active] = tap_build_generation"
   end
 

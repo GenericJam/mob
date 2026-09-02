@@ -995,7 +995,41 @@ const ComponentHandle = extern struct {
 // table and got dropped — worse the later a widget registered (e.g. a canvas
 // after a row of buttons). With the swap a concurrent send always sees a
 // complete table (old or new), never a partial one.
-var tap_tables: [2][MAX_TAP_HANDLES]TapHandle = std.mem.zeroes([2][MAX_TAP_HANDLES]TapHandle);
+// Grown on demand rather than fixed. These were 256 entries, and a 200-row list
+// overran that: every interactive element past the cap got the -1 "no handler"
+// sentinel and silently stopped responding. A fixed array big enough for that
+// case would be ~700 KB resident in every app, nearly all of which register a
+// few dozen handles, so it is allocated to fit instead. MAX_TAP_HANDLES is the
+// ceiling the handle encoding can address, not a target.
+var tap_tables: [2]?[*]TapHandle = .{ null, null };
+var tap_table_capacity: [2]usize = .{ 0, 0 };
+const TAP_INITIAL_CAPACITY: usize = 256;
+
+/// Grow one table to hold at least `needed` slots. Caller holds tap_mutex,
+/// which is what makes this safe: every reader resolves under the same lock, so
+/// nobody can hold a pointer into a table while it moves. Only the table being
+/// built is grown mid-frame; the active one is untouched until the swap.
+fn tapGrowLocked(which: usize, needed: usize) bool {
+    if (needed <= tap_table_capacity[which]) return true;
+    if (needed > MAX_TAP_HANDLES) return false;
+
+    var cap = if (tap_table_capacity[which] == 0) TAP_INITIAL_CAPACITY else tap_table_capacity[which];
+    while (cap < needed) cap *= 2;
+    if (cap > MAX_TAP_HANDLES) cap = MAX_TAP_HANDLES;
+
+    const bytes = cap * @sizeOf(TapHandle);
+    const grown = jni.realloc(@ptrCast(tap_tables[which]), bytes) orelse return false;
+    const table: [*]TapHandle = @ptrCast(@alignCast(grown));
+
+    // Zero the new tail: clearTaps and the resolvers key off tag_env being null
+    // to decide a slot is free, and realloc leaves it uninitialised.
+    var i = tap_table_capacity[which];
+    while (i < cap) : (i += 1) table[i] = std.mem.zeroes(TapHandle);
+
+    tap_tables[which] = table;
+    tap_table_capacity[which] = cap;
+    return true;
+}
 // How many slots of each table were actually written, so clearTaps only walks
 // those rather than the whole cap on every frame.
 var tap_table_used: [2]usize = .{ 0, 0 };
@@ -1054,7 +1088,7 @@ fn resolveActiveTapLocked(handle: c_int) ?*TapHandle {
         tap_table_generations[tap_active],
         @intCast(tap_active_count),
     ) orelse return null;
-    const tap = &tap_tables[tap_active][slot_index];
+    const tap = &(tap_tables[tap_active] orelse return null)[slot_index];
     return if (tap.tag_env == null) null else tap;
 }
 
@@ -1087,8 +1121,13 @@ fn snapChangeTap(handle: c_int, env: ?*erts.ErlNifEnv) ?TapSnap {
         logd_nif("rejected stale event handle {d}", .{handle});
         return null;
     };
+    // `.?` rather than `orelse return null`: this function unlocks explicitly on
+    // every path (no defer), so an early return here would leave tap_mutex held
+    // and freeze every later tap, gesture and render. The unwrap is safe because
+    // tap_active_count is only ever set from a build count that a successful
+    // tapGrowLocked produced, so a nonzero count implies the table exists.
     const active = if (decoded.slot < @as(usize, @intCast(tap_active_count)))
-        &tap_tables[tap_active][decoded.slot]
+        &(tap_tables[tap_active].?)[decoded.slot]
     else {
         erts.enif_mutex_unlock(tap_mutex);
         logd_nif("rejected stale event handle {d}", .{handle});
@@ -1645,17 +1684,33 @@ export fn nif_set_root(
     // handlers into 1 - tap_active, so make that table active now. Events for
     // the new tree (delivered to Compose just below) resolve against it, and
     // any send racing this swap sees a complete table on either side.
-    const previous = &tap_tables[tap_active];
-    const build = &tap_tables[1 - tap_active];
-    var slot_index: usize = 0;
-    while (slot_index < @as(usize, @intCast(tap_build_count))) : (slot_index += 1) {
-        const current = &build[slot_index];
-        if (slot_index < @as(usize, @intCast(tap_active_count))) {
-            const prior = &previous[slot_index];
-            if (prior.tag_env != null and prior.pid.pid == current.pid.pid and
-                erts.enif_compare(prior.tag, current.tag) == 0)
-            {
-                current.identity_start_generation = prior.identity_start_generation;
+    // Bound the commit by what the tables can actually hold, not by
+    // tap_build_count alone. Only clear_taps resets that count, so a set_root
+    // arriving without an intervening clear_taps carries the previous frame's
+    // value — harmless when both tables were a fixed 256, but the two are now
+    // separate allocations that can differ in size, and an unbounded loop reads
+    // (and later writes, once tap_active_count is set from it) past the end of
+    // whichever is smaller.
+    const build_cap = tap_table_capacity[@intCast(1 - tap_active)];
+    const prev_cap = tap_table_capacity[@intCast(tap_active)];
+    const wanted = @as(usize, @intCast(tap_build_count));
+    const committed = if (wanted < build_cap) wanted else build_cap;
+
+    // Both tables are null until the first register_tap allocates them; a frame
+    // with no interactive nodes never does, and has nothing to carry over.
+    if (tap_tables[1 - tap_active]) |build| {
+        var slot_index: usize = 0;
+        while (slot_index < committed) : (slot_index += 1) {
+            const current = &build[slot_index];
+            if (tap_tables[tap_active]) |previous| {
+                if (slot_index < @as(usize, @intCast(tap_active_count)) and slot_index < prev_cap) {
+                    const prior = &previous[slot_index];
+                    if (prior.tag_env != null and prior.pid.pid == current.pid.pid and
+                        erts.enif_compare(prior.tag, current.tag) == 0)
+                    {
+                        current.identity_start_generation = prior.identity_start_generation;
+                    }
+                }
             }
         }
     }
@@ -1667,8 +1722,12 @@ export fn nif_set_root(
     tap_exhausted_count = 0;
 
     tap_active = 1 - tap_active;
-    tap_active_count = tap_build_count;
+    tap_active_count = @intCast(committed);
     tap_table_generations[tap_active] = tap_build_generation;
+    // Reset here as well as in clear_taps, so a second set_root without an
+    // intervening clear_taps commits an empty table rather than re-committing
+    // this frame's handlers against whatever the other table now holds.
+    tap_build_count = 0;
     erts.enif_mutex_unlock(tap_mutex);
 
     if (exhausted_this_frame > 0) {
@@ -1719,7 +1778,9 @@ export fn nif_register_tap(
 
     erts.enif_mutex_lock(tap_mutex);
     defer erts.enif_mutex_unlock(tap_mutex);
-    if (tap_build_count >= @as(c_int, @intCast(MAX_TAP_HANDLES))) {
+    if (tap_build_count >= @as(c_int, @intCast(MAX_TAP_HANDLES)) or
+        !tapGrowLocked(@intCast(1 - tap_active), @as(usize, @intCast(tap_build_count)) + 1))
+    {
         // MOB-100 follow-up: this used to be erts.badarg(env), which
         // crashed Mob.Renderer.render/3 (and the whole screen process) the
         // same way a full component pool used to crash Mob.ComponentServer
@@ -1747,7 +1808,7 @@ export fn nif_register_tap(
         loge_nif("register_tap: unable to allocate tag environment", .{});
         return erts.atom(env, "error");
     };
-    const slot = &tap_tables[1 - tap_active][slot_index];
+    const slot = &(tap_tables[1 - tap_active].?)[slot_index];
     slot.pid = pid;
     slot.tag_env = tag_env;
     slot.tag = erts.enif_make_copy(slot.tag_env, tag_term);
@@ -1781,9 +1842,15 @@ export fn nif_clear_taps(
     // Prepare the INACTIVE (building) table for a fresh frame; leave the active
     // table intact so concurrent mob_send_* keep resolving the last committed
     // frame. The freshly built table is swapped in at set_root.
-    const build = &tap_tables[1 - tap_active];
     var i: usize = 0;
     const used = tap_table_used[@intCast(1 - tap_active)];
+    const build = tap_tables[1 - tap_active] orelse {
+        // Never allocated, so nothing to free and nothing to reset.
+        tap_table_used[@intCast(1 - tap_active)] = 0;
+        tap_build_count = 0;
+        tap_exhausted_count = 0;
+        return erts.ok(env);
+    };
     while (i < used) : (i += 1) {
         const h = &build[i];
         if (h.tag_env != null) {

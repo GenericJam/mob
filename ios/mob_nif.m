@@ -68,10 +68,21 @@ void mob_set_startup_error(const char *error) {
 }
 
 // ── Tap handle registry ───────────────────────────────────────────────────────
-// Cleared before every render. Max 256 tappable elements per frame.
-
-#define MAX_TAP_HANDLES 256
-#define MAX_EVENT_GENERATION 0x7fffffU
+// Cleared before every render.
+//
+// The tables GROW ON DEMAND rather than being a fixed array. They used to be
+// 256 entries, and a 200-row list overran that: every interactive element past
+// the cap got the -1 "no handler" sentinel and silently stopped responding —
+// 359 of 615 on the screen that surfaced this. A fixed array big enough for
+// that case would be ~700 KB resident in every app, nearly all of which
+// register a few dozen handles, so it is allocated to fit instead.
+//
+// MOB_TAP_SLOT_LIMIT is the ceiling the handle encoding can address (12 slot
+// bits), not a target. Beyond it the sentinel path still applies and set_root
+// still reports the count once per frame.
+#define MOB_TAP_SLOT_LIMIT 4096
+#define MOB_TAP_INITIAL_CAPACITY 256
+#define MAX_EVENT_GENERATION 0x7ffffU
 
 typedef struct {
     ErlNifPid pid;
@@ -100,14 +111,15 @@ typedef struct {
 // the INACTIVE table via register_tap (tap_build_count) and set_root swaps it in
 // atomically under tap_mutex, so a concurrent high-frequency send (drag/scroll)
 // never observes a half-rebuilt table.
-static TapHandle tap_tables[2][MAX_TAP_HANDLES];
+static TapHandle *tap_tables[2] = {NULL, NULL};
+static int tap_table_capacity[2] = {0, 0};
 static int tap_active = 0;
-static TapHandle *tap_handles = tap_tables[0]; // active table (readers use this)
-static int tap_handle_next = 0;                // active committed count (readers' bound)
-static int tap_build_count = 0;                // cursor into the building table
+static TapHandle *tap_handles = NULL; // active table (readers use this)
+static int tap_handle_next = 0;       // active committed count (readers' bound)
+static int tap_build_count = 0;       // cursor into the building table
 static uint32_t tap_table_generations[2] = {0, 0};
 // How many slots of each table were actually written, so clear_taps only walks
-// those. Walking all MAX_TAP_HANDLES every frame is wasted work at any cap and
+// those. Walking the whole table every frame is wasted work at any cap and
 // would scale with the cap if it were ever raised.
 static int tap_table_used[2] = {0, 0};
 // Exhausted registrations in the frame being built. Counted rather than logged
@@ -138,18 +150,52 @@ static int mob_generation_within_identity(uint32_t handle_generation,
            mob_generation_age(active_generation, identity_start_generation);
 }
 
+// Grow one table to hold at least `needed` slots. Caller holds tap_mutex, which
+// is what makes this safe: every reader of tap_handles resolves under the same
+// lock, so no one can be holding a pointer into a table while it moves.
+//
+// Only the table being built is ever grown mid-frame; the active table is left
+// alone until the swap in set_root repoints tap_handles at it.
+static int mob_tap_grow_locked(int which, int needed) {
+    if (needed <= tap_table_capacity[which])
+        return 1;
+    if (needed > MOB_TAP_SLOT_LIMIT)
+        return 0;
+
+    int cap = tap_table_capacity[which] ? tap_table_capacity[which] : MOB_TAP_INITIAL_CAPACITY;
+    while (cap < needed)
+        cap *= 2;
+    if (cap > MOB_TAP_SLOT_LIMIT)
+        cap = MOB_TAP_SLOT_LIMIT;
+
+    TapHandle *grown = realloc(tap_tables[which], (size_t)cap * sizeof(TapHandle));
+    if (!grown)
+        return 0;
+    // Zero the new tail: clear_taps and the resolvers both key off tag_env
+    // being NULL to decide a slot is free, and realloc leaves it uninitialised.
+    memset(grown + tap_table_capacity[which], 0,
+           (size_t)(cap - tap_table_capacity[which]) * sizeof(TapHandle));
+
+    tap_tables[which] = grown;
+    tap_table_capacity[which] = cap;
+    if (which == tap_active)
+        tap_handles = grown;
+    return 1;
+}
+
 static int mob_encode_event_handle(uint32_t generation, int slot) {
-    if (generation == 0 || generation > MAX_EVENT_GENERATION || slot < 0 || slot >= MAX_TAP_HANDLES)
+    if (generation == 0 || generation > MAX_EVENT_GENERATION || slot < 0 ||
+        slot >= MOB_TAP_SLOT_LIMIT)
         return -1;
-    return (int)((generation << 8) | (uint32_t)slot);
+    return (int)((generation << 12) | (uint32_t)slot);
 }
 
 static int mob_decode_event_handle(int handle, uint32_t *generation, int *slot) {
     if (handle <= 0)
         return 0;
     uint32_t raw = (uint32_t)handle;
-    *generation = raw >> 8;
-    *slot = (int)(raw & 0xffU);
+    *generation = raw >> 12;
+    *slot = (int)(raw & 0xfffU);
     return *generation != 0;
 }
 
@@ -2488,11 +2534,33 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     // new tree resolve against it (readers see a consistent pair under the lock).
     TapHandle *previous = tap_tables[tap_active];
     TapHandle *build = tap_tables[1 - tap_active];
-    for (int slot = 0; slot < tap_build_count; slot++) {
-        if (slot < tap_handle_next && previous[slot].tag_env &&
-            previous[slot].pid.pid == build[slot].pid.pid &&
-            enif_compare(previous[slot].tag, build[slot].tag) == 0)
-            build[slot].identity_start_generation = previous[slot].identity_start_generation;
+
+    // Bound the commit by what the tables can actually hold, not by
+    // tap_build_count alone.
+    //
+    // Only clear_taps resets tap_build_count, so a set_root that arrives without
+    // an intervening clear_taps carries the previous frame's count. That used to
+    // be merely wrong — both tables were a fixed 256, so the worst case was
+    // committing the wrong handlers. Now the two tables are separate heap
+    // allocations that can differ in size, and an unbounded loop over a stale
+    // count reads (and, once tap_handle_next is set from it, writes) past the
+    // end of whichever is smaller.
+    //
+    // Mob.Sender is the single writer today, so this needs two screens racing
+    // clear/register/set_root to reach — the race Mob.Sender's own moduledoc
+    // describes, whose documented consequence is a mixed-up table. It should
+    // stay a correctness bug, not become memory corruption.
+    int build_cap = tap_table_capacity[1 - tap_active];
+    int prev_cap = tap_table_capacity[tap_active];
+    int committed = tap_build_count < build_cap ? tap_build_count : build_cap;
+
+    if (build) {
+        for (int slot = 0; slot < committed; slot++) {
+            if (previous && slot < tap_handle_next && slot < prev_cap && previous[slot].tag_env &&
+                previous[slot].pid.pid == build[slot].pid.pid &&
+                enif_compare(previous[slot].tag, build[slot].tag) == 0)
+                build[slot].identity_start_generation = previous[slot].identity_start_generation;
+        }
     }
     // Snapshot now, log after the mutex is released. NSLog writes synchronously
     // to the system log, and holding tap_mutex across it would block concurrent
@@ -2503,8 +2571,12 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
 
     tap_active = 1 - tap_active;
     tap_handles = tap_tables[tap_active];
-    tap_handle_next = tap_build_count;
+    tap_handle_next = committed;
     tap_table_generations[tap_active] = tap_build_generation;
+    // Reset here as well as in clear_taps, so a second set_root without an
+    // intervening clear_taps commits an empty table rather than re-committing
+    // this frame's handlers against whatever the other table now holds.
+    tap_build_count = 0;
     enif_mutex_unlock(tap_mutex);
 
     // A non-"none" transition is what makes MobViewModel bump navVersion, and
@@ -2525,7 +2597,7 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
         // silently inert, which the per-call line never made obvious.
         LOGE(@"register_tap: pool exhausted (cap=%d) — %d interactive element(s) in this "
              @"frame have no handler and will not respond",
-             MAX_TAP_HANDLES, exhausted_this_frame);
+             MOB_TAP_SLOT_LIMIT, exhausted_this_frame);
     }
 
     NSString *transitionStr = [NSString stringWithUTF8String:transition];
@@ -2553,7 +2625,8 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
     }
 
     enif_mutex_lock(tap_mutex);
-    if (tap_build_count >= MAX_TAP_HANDLES) {
+    if (tap_build_count >= MOB_TAP_SLOT_LIMIT ||
+        !mob_tap_grow_locked(1 - tap_active, tap_build_count + 1)) {
         // Counted under the mutex, like the Zig side: set_root reads and resets
         // this under the same lock. Mob.Sender serialises every caller today, so
         // an unguarded read-modify-write would be benign — but nothing else in
@@ -2563,7 +2636,7 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
         // MOB-100 follow-up: this used to be enif_make_badarg(env), which
         // crashed Mob.Renderer.render/3 (and the whole screen process) the
         // same way a full component pool used to crash Mob.ComponentServer
-        // — an unvirtualized long list or big form with >MAX_TAP_HANDLES
+        // — an unvirtualized long list or big form with >MOB_TAP_SLOT_LIMIT
         // interactive elements would hit this on every render. Every
         // mob_send_* sender already no-ops on an out-of-range handle (see
         // mob_send_tap et al. above), so -1 is a safe "no handler wired up"

@@ -10,6 +10,22 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **Interactive elements past the 256th no longer silently stop responding**
+  (MOB-133). The tap registry was a fixed 256-entry pair of tables and the
+  handle encoding gave slots only 8 bits, so every element past that got the
+  `-1` "no handler" sentinel — it still rendered, still looked tappable, and did
+  nothing. On a 200-row list that was **359 of 615** elements. Slots now get 12
+  bits (4096) and the tables are allocated to fit, starting at the old 256 and
+  doubling on demand, so no app pays for capacity it does not use. Verified on
+  both platforms by tapping an element past the old cap and watching the counter
+  move — Android row #188 (slot ~564) and iOS row #92 (slot ~283). See
+  `decisions/2026-09-02-tap-tables-grow-on-demand.md`.
+
+  The generation field drops from 23 bits to 19 to pay for the slot bits: at
+  60 fps that is ~2.4 hours before it wraps, and the wrap was already handled
+  modularly.
+
 Everything below is unreleased work from the MOB-124 rendering-performance
 epic. Nothing here has shipped to Hex.
 
