@@ -25,6 +25,13 @@ epic. Nothing here has shipped to Hex.
   why `total_us` must not be compared against a frame budget.
 
 ### Performance
+- **`:scroll` builds its content lazily** (MOB-128). A column that is the direct
+  content of a scroll now uses `LazyVStack` rather than `VStack`, so only the
+  rows on screen are built. Measured on the Android side of this change (a Moto
+  G Power), the main-thread cost of a 200-row screen drops from 141 ms to 82 ms
+  and becomes flat in list length where it previously grew. The iOS change is
+  verified to render identically but its win is **not** independently measured —
+  see `decisions/2026-09-02-lazy-scroll-on-ios.md`.
 - **iOS `set_root` is 47% faster on a dense screen** (MOB-135). The native
   deserialiser probed ~100 prop keys into every node's props regardless of node
   type — 104 probe sites, 99 distinct keys, 8 type guards — to read the three to
