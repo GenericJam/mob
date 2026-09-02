@@ -213,6 +213,63 @@ defmodule Mob.SenderTest do
       assert Enum.sort(recorded()) == [{A, true}, {B, true}]
     end
 
+    test "activating a screen records the queued frame it throws away" do
+      # Both activation paths delete a pending tree: it predates the navigation
+      # boundary and must not become the new screen's first frame. The BEAM work
+      # that built it was still paid for, and navigation boundaries are exactly
+      # the transitions this epic is measuring, so it has to be recorded.
+      state = %Sender{active: :other}
+
+      {:noreply, state} = Sender.handle_cast({:render_stats, :home, labelled_frame(A)}, state)
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :home, tree("stale"), :ios, RecordingNif, :none}, state)
+
+      {:reply, :ok, state} = Sender.handle_call({:activate, :home, :push}, self(), state)
+
+      assert state.pending == %{}
+      assert recorded() == [{A, false}]
+    end
+
+    test "activate_frame records the queued frame it throws away" do
+      state = %Sender{active: :other}
+
+      {:noreply, state} = Sender.handle_cast({:render_stats, :home, labelled_frame(A)}, state)
+
+      {:noreply, state} =
+        Sender.handle_cast({:render, :home, tree("stale"), :ios, RecordingNif, :none}, state)
+
+      {:reply, _token, state} =
+        Sender.handle_call({:activate_frame, :home, :push}, self(), state)
+
+      assert state.pending == %{}
+      assert recorded() == [{A, false}]
+    end
+
+    test "a staged frame whose render never arrives is swept, not leaked" do
+      # A screen killed between hand_off/1 and Mob.Sender.render/5 leaves a
+      # staged frame no cast will ever claim. Nothing else removes it, so the
+      # map grew without bound and the work was silently lost rather than
+      # recorded as dropped.
+      old = %{started: System.monotonic_time(:microsecond) - 10_000_000, screen: Dead}
+      state = %Sender{active: :home, frames: %{dead_ref: old}}
+
+      {:noreply, state} = Sender.handle_info(:flush, state)
+
+      assert state.frames == %{}
+      assert recorded() == [{Dead, false}]
+    end
+
+    test "a freshly staged frame survives a flush" do
+      # The render that pairs it may still be in the mailbox behind :flush.
+      state = %Sender{active: :home, frames: %{live_ref: labelled_frame(A)}}
+
+      {:noreply, state} = Sender.handle_info(:flush, state)
+
+      assert Map.has_key?(state.frames, :live_ref)
+      assert recorded() == []
+    end
+
     test "a render dropped by the activation gate drops its frame with it" do
       # The gate returns state untouched on a token mismatch. A frame staged for
       # that ref would otherwise sit there until some later render claimed it.

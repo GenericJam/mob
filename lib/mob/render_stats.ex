@@ -55,23 +55,43 @@ defmodule Mob.RenderStats do
   * `expand_us` — `Mob.Composite`, `Mob.List` and `Mob.Component` expansion
   * `reconcile_us` — `Mob.ComponentRegistry.reconcile/2`
   * `prepare_us` — the renderer's tree walk: prop resolution, theme token
-    lookup, and one `register_tap` per interactive node
+    lookup, and one `register_tap` per handler prop
+  * `register_tap_us` — the `register_tap` calls alone. **Nested inside
+    `prepare_us`**, not a sibling of it; adding the two double-counts.
   * `encode_us` — `:json.encode` plus `iodata_to_binary`
   * `set_root_us` — the `set_root` NIF as seen from the BEAM, so it includes the
     dirty-scheduler hop, which is the honest number from the caller's side
 
-  `nodes` and `taps` are counted by a walk of the prepared tree that runs
-  **after** every timed stage and after `total_us` is stamped, so it cannot
-  inflate any of them.
+  Each percentile carries the `n` it was computed over, because the stages do
+  not share a population: `register_tap_us` exists only on frames that
+  registered a handler, so a run mixing dense and tap-free screens computes it
+  over a much smaller sample than `prepare_us`. Comparing their p50s without
+  looking at `n` compares two different sets of frames.
 
-  That walk is not free: measured on a ~780-node tree, recording costs about
-  40% on top of the frame. The per-stage numbers stay honest because each is
-  timed in isolation, but do not compare an *enabled* `total_us` against a frame
-  budget — measure the stages, not the meter.
+  `taps` is the number of `register_tap` calls, taken from the counter
+  `accumulate/2` maintains — not from a walk. `nodes` still needs a walk of the
+  prepared tree, which runs **after** every timed stage and after `total_us` is
+  stamped, so it cannot inflate any of them. `verify_taps/1` adds a second walk
+  that recounts handle-valued props into `taps_walked`, as a cross-check.
+
+  ## What `total_us` is not
+
+  It is stamped in the screen process before `render/1` and closed in the sender
+  after `set_root`, so it spans two `GenServer.cast`s and however long the frame
+  waited in the sender's mailbox — and it includes the meter's own cost. On a
+  physical device it has been observed exceeding an externally measured frame by
+  several milliseconds, which is only possible because it covers time outside
+  the frame.
+
+  Use it within a single run, never against a frame budget and never to compare
+  configurations. For that, sum the stages, or measure from outside: drive one
+  render and block on `Mob.Sender.sync/1`. The per-stage numbers are honest
+  because each is timed in isolation.
   """
 
   @table __MODULE__
   @flag {__MODULE__, :enabled}
+  @verify {__MODULE__, :verify_taps}
   @frame {__MODULE__, :frame}
   @max_frames 500
 
@@ -105,8 +125,29 @@ defmodule Mob.RenderStats do
   @spec disable() :: :ok
   def disable do
     :persistent_term.put(@flag, false)
+    :persistent_term.put(@verify, false)
     :ok
   end
+
+  @doc """
+  Also walk each finished tree and record `taps_walked`, an independent count of
+  the handle-valued props in it.
+
+  Off by default, and deliberately so: the walk costs about 120 ns per node —
+  90% of the meter's whole overhead on a dense screen — to recompute a number
+  `register_tap_us_n` already has. Turn it on when the question is whether the
+  counting itself is right, not when the question is where the time goes. A
+  `taps_walked` that disagrees with `taps` means one of the two is buggy.
+  """
+  @spec verify_taps(boolean()) :: :ok
+  def verify_taps(on?) when is_boolean(on?) do
+    :persistent_term.put(@verify, on?)
+    :ok
+  end
+
+  @doc "Whether the tap cross-check walk is on."
+  @spec verify_taps?() :: boolean()
+  def verify_taps?, do: :persistent_term.get(@verify, false)
 
   @doc "Whether recording is on."
   @spec enabled?() :: boolean()
@@ -149,13 +190,16 @@ defmodule Mob.RenderStats do
         %{frames: 0}
 
       frames ->
+        # Durations only. `register_tap_us_n` is a count, and a count with a p50
+        # sitting in a map of microseconds invites being read as one. Note also
+        # that `register_tap_us` is nested INSIDE `prepare_us` — the two must not
+        # be added together.
         stages = [
           :render_us,
           :expand_us,
           :reconcile_us,
           :prepare_us,
           :register_tap_us,
-          :register_tap_us_n,
           :encode_us,
           :set_root_us,
           :total_us
@@ -177,6 +221,8 @@ defmodule Mob.RenderStats do
           taps: percentiles(committed, :taps),
           bytes: percentiles(committed, :bytes),
           stages: Map.new(stages, &{&1, percentiles(committed, &1)}),
+          register_tap_calls: percentiles(committed, :register_tap_us_n),
+          taps_walked: percentiles(committed, :taps_walked),
           dropped_total_us: percentiles(dropped, :total_us)
         }
     end
@@ -346,7 +392,15 @@ defmodule Mob.RenderStats do
         # Stamp the total BEFORE walking the tree, or the count inflates the
         # number it is meant to describe.
         total_us = now() - frame.started
-        {nodes, taps} = count(tree, {0, 0})
+        nodes = count_nodes(tree, 0)
+
+        # `register_tap_us_n` is an exact count of the NIF calls, incremented as
+        # they happen and costing nothing extra. Walking the finished tree to
+        # recount them was 90% of the meter's entire overhead — 120 ns per node,
+        # nearly all of it the per-node prop scan — to reproduce a number already
+        # in hand. The walk survives as an opt-in cross-check (`verify_taps`),
+        # because the two disagreeing is how a counting bug announces itself.
+        taps = Map.get(frame, :register_tap_us_n, 0)
 
         record =
           frame
@@ -358,6 +412,11 @@ defmodule Mob.RenderStats do
             bytes: bytes,
             committed: true
           })
+
+        record =
+          if verify_taps?(),
+            do: Map.put(record, :taps_walked, count_handles(tree, 0)),
+            else: record
 
         store(record)
     end
@@ -396,12 +455,19 @@ defmodule Mob.RenderStats do
   # would undercount: one node carrying `on_tap` and `on_long_press` makes two
   # calls. `taps` is therefore directly comparable to `register_tap_us_n`, and
   # the two disagreeing means one of them has a bug.
-  defp count(node, {nodes, taps}) when is_map(node) do
+  defp count_nodes(node, acc) when is_map(node) do
     children = Map.get(node, "children") || Map.get(node, :children) || []
-    Enum.reduce(children, {nodes + 1, taps + handle_count(node)}, &count/2)
+    Enum.reduce(children, acc + 1, &count_nodes/2)
   end
 
-  defp count(_other, acc), do: acc
+  defp count_nodes(_other, acc), do: acc
+
+  defp count_handles(node, acc) when is_map(node) do
+    children = Map.get(node, "children") || Map.get(node, :children) || []
+    Enum.reduce(children, acc + handle_count(node), &count_handles/2)
+  end
+
+  defp count_handles(_other, acc), do: acc
 
   # Every prop `Mob.Renderer.register_handler/2` writes. Kept exhaustive on
   # purpose: a missing name silently undercounts, which is how the first version
@@ -429,8 +495,16 @@ defmodule Mob.RenderStats do
     values = frames |> Enum.map(&Map.get(&1, key)) |> Enum.reject(&is_nil/1) |> Enum.sort()
 
     case values do
-      [] -> nil
-      _ -> %{p50: at(values, 0.5), p95: at(values, 0.95), max: List.last(values)}
+      [] ->
+        nil
+
+      _ ->
+        # `n` travels with the numbers because stages do not share a sample.
+        # `register_tap_us` only exists on frames that registered a handler, so a
+        # run mixing dense and tap-free screens computes it over a different (and
+        # much smaller) population than `prepare_us` — which reads as
+        # "register_tap costs 50x prepare" unless the counts are visible.
+        %{n: length(values), p50: at(values, 0.5), p95: at(values, 0.95), max: List.last(values)}
     end
   end
 

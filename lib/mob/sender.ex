@@ -187,6 +187,22 @@ defmodule Mob.Sender do
     {:ok, %__MODULE__{active: Keyword.get(opts, :active)}}
   end
 
+  # Drop a queued tree AND record its frame. Both activation paths throw a
+  # pending tree away, and the frame paired with it measured real BEAM work that
+  # produced no pixels — which is exactly what `committed: false` is for. Losing
+  # it here would make the meter undercount dropped frames at navigation
+  # boundaries, the transitions MOB-124 is most interested in.
+  defp discard_pending(pending, ref) do
+    case Map.pop(pending, ref) do
+      {{_tree, _platform, _nif, _transition, frame}, rest} ->
+        Mob.RenderStats.drop_frame(frame)
+        rest
+
+      {nil, rest} ->
+        rest
+    end
+  end
+
   @impl GenServer
   def handle_call({:activate, ref, transition}, _from, state) do
     reserved_transition = if transition == :none, do: nil, else: {ref, transition}
@@ -194,7 +210,7 @@ defmodule Mob.Sender do
     # An inactive screen may have queued a repaint just before activation.
     # That tree predates the navigation boundary and must not become the first
     # frame of the newly active screen; the router requests a fresh paint next.
-    pending = Map.delete(state.pending, ref)
+    pending = discard_pending(state.pending, ref)
 
     {:reply, :ok,
      %{state | active: ref, pending: pending, reserved_transition: reserved_transition}}
@@ -206,7 +222,7 @@ defmodule Mob.Sender do
     state =
       state
       |> Map.put(:active, ref)
-      |> Map.put(:pending, Map.delete(state.pending, ref))
+      |> Map.put(:pending, discard_pending(state.pending, ref))
       |> Map.put(:reserved_transition, nil)
       |> Map.put(:activation_gate, {ref, token, transition})
 
@@ -335,9 +351,32 @@ defmodule Mob.Sender do
     # Staged frames survive a flush. The render cast that pairs a staged frame
     # with its tree may still be in the mailbox behind the `:flush` message, so
     # clearing here would throw away a frame whose render is about to arrive.
-    # The map is bounded anyway: one entry per live screen ref, drop-replaced by
-    # the next stats cast for the same ref.
-    %{state | pending: %{}}
+    #
+    # They are not self-limiting, though. A screen process killed between
+    # `hand_off/1` and `Mob.Sender.render/5` — a narrow window, but a real one —
+    # leaves an entry no later cast will ever claim, and nothing else removes it.
+    # Sweeping by age bounds the map and records the work rather than losing it.
+    %{state | pending: %{}, frames: sweep_stale(state.frames)}
+  end
+
+  # A staged frame is claimed by the render cast that follows it from the same
+  # process, so anything still waiting after this long belongs to a screen that
+  # is never going to send one.
+  @stale_frame_us 5_000_000
+
+  defp sweep_stale(frames) when map_size(frames) == 0, do: frames
+
+  defp sweep_stale(frames) do
+    cutoff = System.monotonic_time(:microsecond) - @stale_frame_us
+
+    Enum.reduce(frames, frames, fn {ref, frame}, acc ->
+      if is_map(frame) and Map.get(frame, :started, cutoff) < cutoff do
+        Mob.RenderStats.drop_frame(frame)
+        Map.delete(acc, ref)
+      else
+        acc
+      end
+    end)
   end
 
   defp commit({tree, platform, nif, transition}) do

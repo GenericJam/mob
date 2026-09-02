@@ -107,6 +107,12 @@ defmodule Mob.RenderStatsTest do
 
   describe "counting the prepared tree" do
     setup do
+      RenderStats.verify_taps(true)
+      on_exit(fn -> RenderStats.verify_taps(false) end)
+      :ok
+    end
+
+    setup do
       RenderStats.enable()
       :ok
     end
@@ -127,7 +133,7 @@ defmodule Mob.RenderStatsTest do
       RenderStats.start_frame(S, :none)
       RenderStats.finish(tree([leaf(%{"on_tap" => 0}), leaf(), leaf(%{"on_change" => 3})]), 0)
 
-      assert [%{taps: 2}] = RenderStats.frames()
+      assert [%{taps_walked: 2}] = RenderStats.frames()
     end
 
     test "an unresolved handler is not counted as a tap" do
@@ -135,7 +141,7 @@ defmodule Mob.RenderStatsTest do
       RenderStats.start_frame(S, :none)
       RenderStats.finish(tree([leaf(%{"on_tap" => -1}), leaf(%{"on_tap" => self()})]), 0)
 
-      assert [%{taps: 1}] = RenderStats.frames(), "only the integer handle counts"
+      assert [%{taps_walked: 1}] = RenderStats.frames(), "only the integer handle counts"
     end
 
     test "records the payload size it was given" do
@@ -206,7 +212,7 @@ defmodule Mob.RenderStatsTest do
       assert summary.frames == 10
       assert summary.committed == 1
       assert summary.dropped == 9
-      assert summary.bytes == %{p50: 5000, p95: 5000, max: 5000}
+      assert summary.bytes == %{n: 1, p50: 5000, p95: 5000, max: 5000}
       assert summary.stages.render_us.p50 == 100
       assert %{p50: _, p95: _, max: _} = summary.dropped_total_us
     end
@@ -392,6 +398,12 @@ defmodule Mob.RenderStatsTest do
 
   describe "tap counting" do
     setup do
+      RenderStats.verify_taps(true)
+      on_exit(fn -> RenderStats.verify_taps(false) end)
+      :ok
+    end
+
+    setup do
       RenderStats.enable()
       :ok
     end
@@ -409,7 +421,7 @@ defmodule Mob.RenderStatsTest do
         0
       )
 
-      assert [%{taps: 3}] = RenderStats.frames()
+      assert [%{taps_walked: 3}] = RenderStats.frames()
     end
 
     test "counts the scroll and swipe handlers the renderer registers" do
@@ -425,7 +437,7 @@ defmodule Mob.RenderStatsTest do
       RenderStats.start_frame(S, :none)
       RenderStats.finish(node_with(props), 0)
 
-      assert [%{taps: 9}] = RenderStats.frames()
+      assert [%{taps_walked: 9}] = RenderStats.frames()
     end
 
     test "agrees with the count accumulate/2 observes" do
@@ -436,7 +448,55 @@ defmodule Mob.RenderStatsTest do
       for _ <- 1..3, do: RenderStats.accumulate(:register_tap_us, fn -> :ok end)
       RenderStats.finish(node_with(%{"on_tap" => 1, "on_change" => 2, "on_blur" => 3}), 0)
 
-      assert [%{taps: 3, register_tap_us_n: 3}] = RenderStats.frames()
+      assert [%{taps: 3, taps_walked: 3, register_tap_us_n: 3}] = RenderStats.frames()
+    end
+  end
+
+  describe "taps come from the call counter, not a tree walk" do
+    setup do
+      RenderStats.enable()
+      :ok
+    end
+
+    test "taps is recorded without walking the tree for handles" do
+      # The walk was 90% of the meter's overhead, recomputing a number
+      # accumulate/2 already had. With the cross-check off, a tree full of
+      # handle-valued props contributes nothing to `taps` — only real calls do.
+      RenderStats.start_frame(S, :none)
+      for _ <- 1..4, do: RenderStats.accumulate(:register_tap_us, fn -> :ok end)
+
+      RenderStats.finish(
+        %{"type" => "row", "props" => %{"on_tap" => 1, "on_blur" => 2}, "children" => []},
+        0
+      )
+
+      assert [frame] = RenderStats.frames()
+      assert frame.taps == 4
+      refute Map.has_key?(frame, :taps_walked)
+    end
+
+    test "a frame that registered nothing reports zero rather than crashing" do
+      # accumulate/2 never ran, so :register_tap_us_n is absent from the frame.
+      RenderStats.start_frame(S, :none)
+      RenderStats.finish(%{"type" => "text", "props" => %{}, "children" => []}, 0)
+
+      assert [%{taps: 0}] = RenderStats.frames()
+    end
+
+    test "percentiles carry the sample size they were computed over" do
+      # Stages do not share a population: register_tap_us only exists on frames
+      # that registered a handler. Without n, a p50 over one frame and a p50 over
+      # forty read identically.
+      for i <- 1..4 do
+        RenderStats.start_frame(S, :none)
+        RenderStats.add(:render_us, i)
+        if i == 1, do: RenderStats.accumulate(:register_tap_us, fn -> :ok end)
+        RenderStats.finish(%{}, 0)
+      end
+
+      summary = RenderStats.summary()
+      assert summary.stages.render_us.n == 4
+      assert summary.stages.register_tap_us.n == 1
     end
   end
 
