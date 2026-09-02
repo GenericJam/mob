@@ -8,7 +8,7 @@ defmodule Mob.Sender do
   `ios/mob_nif.m` (the Android side in `android/jni/mob_nif.zig` is the same
   shape):
 
-      static TapHandle tap_tables[2][MAX_TAP_HANDLES];
+      static TapHandle *tap_tables[2];   // grown on demand, see MOB-133
       static int tap_active = 0;
       static int tap_build_count = 0;   // cursor into the BUILDING table
 

@@ -19,7 +19,8 @@ defmodule Mob.RendererTest do
     def reset,
       do: Agent.update(__MODULE__, fn _ -> %{calls: [], tap_next: 0, tap_result: :allocate} end)
 
-    # :exhausted simulates a full MAX_TAP_HANDLES pool (MOB-100 follow-up) —
+    # :exhausted simulates a full tap pool (MOB-100 follow-up) — the tables
+    # grow on demand now, but MOB_TAP_SLOT_LIMIT is still a ceiling —
     # both native sides now return the -1 "unhandled" sentinel instead of
     # badarg when the pool is full, since every mob_send_* sender already
     # no-ops on an out-of-range handle.

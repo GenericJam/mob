@@ -105,6 +105,7 @@ pub fn nowNs() i64 {
 // the NDK clang link step anyway, so calling malloc/free directly is
 // equivalent and skips the link-time guard.
 pub extern fn malloc(size: usize) ?*anyopaque;
+pub extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 pub extern fn free(ptr: ?*anyopaque) void;
 pub extern fn strlen(s: [*:0]const u8) usize;
 pub extern fn strdup(s: [*:0]const u8) ?[*:0]u8;
