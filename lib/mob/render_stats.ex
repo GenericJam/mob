@@ -144,6 +144,8 @@ defmodule Mob.RenderStats do
           :expand_us,
           :reconcile_us,
           :prepare_us,
+          :register_tap_us,
+          :register_tap_us_n,
           :encode_us,
           :set_root_us,
           :total_us
@@ -244,6 +246,35 @@ defmodule Mob.RenderStats do
         committed: false
       })
     )
+  end
+
+  @doc """
+  Time `fun` and add it to a running total for this frame.
+
+  For work that happens many times per frame — one `register_tap` per
+  interactive node — where the sum is what matters, not each call.
+  """
+  @spec accumulate(atom(), (-> result)) :: result when result: term()
+  def accumulate(key, fun) do
+    case Process.get(@frame) do
+      nil ->
+        fun.()
+
+      frame ->
+        t0 = now()
+        result = fun.()
+        elapsed = now() - t0
+        count_key = :"#{key}_n"
+
+        Process.put(
+          @frame,
+          frame
+          |> Map.update(key, elapsed, &(&1 + elapsed))
+          |> Map.update(count_key, 1, &(&1 + 1))
+        )
+
+        result
+    end
   end
 
   @doc "Add a measured value to the frame in progress."

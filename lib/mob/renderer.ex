@@ -261,7 +261,15 @@ defmodule Mob.Renderer do
   # hard-wired screen process in one place instead of ~35. Mob.Listener.handler/1
   # returns the target unchanged when no listener is running, which is what the
   # renderer's own tests rely on. See Mob.Listener.
-  defp register_handler(nif, target), do: nif.register_tap(Mob.Listener.handler(target))
+  defp register_handler(nif, target) do
+    # Timed separately from the rest of prepare: prepare dominates the frame on
+    # a dense screen, and it does two very different jobs — pure-Elixir prop and
+    # theme resolution, and one register_tap NIF call per interactive node.
+    # Which of the two it is decides what the fix even looks like.
+    Mob.RenderStats.accumulate(:register_tap_us, fn ->
+      nif.register_tap(Mob.Listener.handler(target))
+    end)
+  end
 
   @doc "Return the full color palette map (token → ARGB integer)."
   @spec colors() :: %{atom() => non_neg_integer()}
