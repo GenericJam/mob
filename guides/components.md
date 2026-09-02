@@ -787,15 +787,20 @@ end
 
 ### Handle limits
 
-The native layer stores event handlers in fixed-size pools, per committed
-frame:
+The native layer stores event handlers per committed frame:
 
-- **256 interactive handles per frame.** Every `on_tap`, `on_change`,
-  `on_focus`, etc. in the rendered tree registers one handle. Past the cap,
-  the element still renders but its handler is silently unwired (a native
-  error is logged); it does not crash the screen. In practice only an
-  unvirtualized long list or a very large form gets there — use `:list` /
-  `:lazy_list` for long content.
+- **4096 interactive handles per frame.** Every `on_tap`, `on_change`,
+  `on_focus`, etc. in the rendered tree registers one handle. The tables grow
+  on demand — they start small and are allocated to fit — so an app that uses
+  a few dozen handles pays for a few dozen. Past 4096 the element still renders
+  but its handler is silently unwired, and the count of unwired elements is
+  logged once per frame; it does not crash the screen.
+
+  This was 256 until MOB-133, which is low enough that an ordinary long list
+  reached it: a 200-row list with three interactive elements per row left more
+  than half of them inert. If you are anywhere near the current limit, prefer
+  `:list` / `:lazy_list`, or `lazy: true` on a `:scroll`, so only what is on
+  screen registers at all.
 - **256 native component slots.** `Mob.UI.native_view/2` / `Mob.Component`
   instances each take a slot. A full pool returns
   `{:error, :component_slots_exhausted}`; the framework logs and fails just

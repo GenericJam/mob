@@ -29,12 +29,21 @@ Two changes, and they have to happen together.
 
 **The handle encoding gives slots 12 bits instead of 8.** A handle is a positive
 `int32`, so there are 31 bits to divide. Slots go from 256 to **4096** and the
-generation drops from 23 bits to 19. That trade is what the split costs: at
-60 fps, 2^19 frames is about 2.4 hours of continuous rendering before the
-generation wraps, and `generationAge` is modular so a wrap is handled rather
-than merely survived. A handle is only meaningful for the frame it was minted in
-(or a run of frames where its PID and tag are unchanged), so hours of headroom
-is ample.
+generation drops from 23 bits to 19. That trade is what the split costs, and it is worth
+stating precisely rather than waving at.
+
+At 60 fps, 2^19 frames is about **2.4 hours** of continuous rendering before the
+generation wraps — down from 38.8 hours with 23 bits, a 16x reduction. After a
+full cycle a stale handle is *numerically identical* to a fresh one, so
+`slotForActive`'s exact-generation match cannot tell them apart. `generationAge`
+being modular makes the arithmetic correct across the wrap; it does **not**
+prevent that alias, and an earlier draft of this record implied it did.
+
+What keeps it theoretical is that reaching it needs the UI layer to hold a
+handle unused for a full cycle — which `mob_unregister_frame` and the frame
+generation machinery already work against — and a handle is only meaningful for
+the frame it was minted in, or a run of frames where its PID and tag are
+unchanged. Small, real, and accepted; not covered.
 
 **The tables are allocated to fit rather than declared at the ceiling.** A fixed
 4096-entry pair would be roughly 700 KB resident in every app, and almost every

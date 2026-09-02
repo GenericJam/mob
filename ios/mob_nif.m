@@ -2534,11 +2534,33 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     // new tree resolve against it (readers see a consistent pair under the lock).
     TapHandle *previous = tap_tables[tap_active];
     TapHandle *build = tap_tables[1 - tap_active];
-    for (int slot = 0; slot < tap_build_count; slot++) {
-        if (slot < tap_handle_next && previous[slot].tag_env &&
-            previous[slot].pid.pid == build[slot].pid.pid &&
-            enif_compare(previous[slot].tag, build[slot].tag) == 0)
-            build[slot].identity_start_generation = previous[slot].identity_start_generation;
+
+    // Bound the commit by what the tables can actually hold, not by
+    // tap_build_count alone.
+    //
+    // Only clear_taps resets tap_build_count, so a set_root that arrives without
+    // an intervening clear_taps carries the previous frame's count. That used to
+    // be merely wrong — both tables were a fixed 256, so the worst case was
+    // committing the wrong handlers. Now the two tables are separate heap
+    // allocations that can differ in size, and an unbounded loop over a stale
+    // count reads (and, once tap_handle_next is set from it, writes) past the
+    // end of whichever is smaller.
+    //
+    // Mob.Sender is the single writer today, so this needs two screens racing
+    // clear/register/set_root to reach — the race Mob.Sender's own moduledoc
+    // describes, whose documented consequence is a mixed-up table. It should
+    // stay a correctness bug, not become memory corruption.
+    int build_cap = tap_table_capacity[1 - tap_active];
+    int prev_cap = tap_table_capacity[tap_active];
+    int committed = tap_build_count < build_cap ? tap_build_count : build_cap;
+
+    if (build) {
+        for (int slot = 0; slot < committed; slot++) {
+            if (previous && slot < tap_handle_next && slot < prev_cap && previous[slot].tag_env &&
+                previous[slot].pid.pid == build[slot].pid.pid &&
+                enif_compare(previous[slot].tag, build[slot].tag) == 0)
+                build[slot].identity_start_generation = previous[slot].identity_start_generation;
+        }
     }
     // Snapshot now, log after the mutex is released. NSLog writes synchronously
     // to the system log, and holding tap_mutex across it would block concurrent
@@ -2549,8 +2571,12 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
 
     tap_active = 1 - tap_active;
     tap_handles = tap_tables[tap_active];
-    tap_handle_next = tap_build_count;
+    tap_handle_next = committed;
     tap_table_generations[tap_active] = tap_build_generation;
+    // Reset here as well as in clear_taps, so a second set_root without an
+    // intervening clear_taps commits an empty table rather than re-committing
+    // this frame's handlers against whatever the other table now holds.
+    tap_build_count = 0;
     enif_mutex_unlock(tap_mutex);
 
     // A non-"none" transition is what makes MobViewModel bump navVersion, and

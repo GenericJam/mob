@@ -1121,8 +1121,13 @@ fn snapChangeTap(handle: c_int, env: ?*erts.ErlNifEnv) ?TapSnap {
         logd_nif("rejected stale event handle {d}", .{handle});
         return null;
     };
+    // `.?` rather than `orelse return null`: this function unlocks explicitly on
+    // every path (no defer), so an early return here would leave tap_mutex held
+    // and freeze every later tap, gesture and render. The unwrap is safe because
+    // tap_active_count is only ever set from a build count that a successful
+    // tapGrowLocked produced, so a nonzero count implies the table exists.
     const active = if (decoded.slot < @as(usize, @intCast(tap_active_count)))
-        &(tap_tables[tap_active] orelse return null)[decoded.slot]
+        &(tap_tables[tap_active].?)[decoded.slot]
     else {
         erts.enif_mutex_unlock(tap_mutex);
         logd_nif("rejected stale event handle {d}", .{handle});
@@ -1679,14 +1684,26 @@ export fn nif_set_root(
     // handlers into 1 - tap_active, so make that table active now. Events for
     // the new tree (delivered to Compose just below) resolve against it, and
     // any send racing this swap sees a complete table on either side.
+    // Bound the commit by what the tables can actually hold, not by
+    // tap_build_count alone. Only clear_taps resets that count, so a set_root
+    // arriving without an intervening clear_taps carries the previous frame's
+    // value — harmless when both tables were a fixed 256, but the two are now
+    // separate allocations that can differ in size, and an unbounded loop reads
+    // (and later writes, once tap_active_count is set from it) past the end of
+    // whichever is smaller.
+    const build_cap = tap_table_capacity[@intCast(1 - tap_active)];
+    const prev_cap = tap_table_capacity[@intCast(tap_active)];
+    const wanted = @as(usize, @intCast(tap_build_count));
+    const committed = if (wanted < build_cap) wanted else build_cap;
+
     // Both tables are null until the first register_tap allocates them; a frame
     // with no interactive nodes never does, and has nothing to carry over.
     if (tap_tables[1 - tap_active]) |build| {
         var slot_index: usize = 0;
-        while (slot_index < @as(usize, @intCast(tap_build_count))) : (slot_index += 1) {
+        while (slot_index < committed) : (slot_index += 1) {
             const current = &build[slot_index];
             if (tap_tables[tap_active]) |previous| {
-                if (slot_index < @as(usize, @intCast(tap_active_count))) {
+                if (slot_index < @as(usize, @intCast(tap_active_count)) and slot_index < prev_cap) {
                     const prior = &previous[slot_index];
                     if (prior.tag_env != null and prior.pid.pid == current.pid.pid and
                         erts.enif_compare(prior.tag, current.tag) == 0)
@@ -1705,8 +1722,12 @@ export fn nif_set_root(
     tap_exhausted_count = 0;
 
     tap_active = 1 - tap_active;
-    tap_active_count = tap_build_count;
+    tap_active_count = @intCast(committed);
     tap_table_generations[tap_active] = tap_build_generation;
+    // Reset here as well as in clear_taps, so a second set_root without an
+    // intervening clear_taps commits an empty table rather than re-committing
+    // this frame's handlers against whatever the other table now holds.
+    tap_build_count = 0;
     erts.enif_mutex_unlock(tap_mutex);
 
     if (exhausted_this_frame > 0) {
