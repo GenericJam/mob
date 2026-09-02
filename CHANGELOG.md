@@ -10,6 +10,65 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+Everything below is unreleased work from the MOB-124 rendering-performance
+epic. Nothing here has shipped to Hex.
+
+### Added
+- **`Mob.RenderStats` — per-frame render instrumentation** (MOB-125). Records
+  the user's `render/1`, tree expansion, component reconcile, the renderer's
+  prepare walk, `register_tap`, `:json.encode`, and `set_root` as seen from the
+  BEAM, plus node count, `register_tap` call count and payload bytes. Off by
+  default behind a `:persistent_term` flag; readable over dist with
+  `Mob.RenderStats.summary/0`, which reports p50/p95/max with the sample size
+  `n` per stage. `verify_taps/1` enables an opt-in second walk that cross-checks
+  the tap count. See `decisions/2026-09-01-render-instrumentation.md`, including
+  why `total_us` must not be compared against a frame budget.
+
+### Performance
+- **iOS `set_root` is 47% faster on a dense screen** (MOB-135). The native
+  deserialiser probed ~100 prop keys into every node's props regardless of node
+  type — 104 probe sites, 99 distinct keys, 8 type guards — to read the three to
+  five props a node actually carries. It now enumerates each node's own props
+  once and resolves keys to slots. On a 200-row screen (1627 nodes, 207 KB):
+  `set_root` 7625 → 4040 µs, whole frame 13002 → 9403 µs. Purely
+  native-internal; no wire-format change.
+- **`register_tap` no longer logs once per exhausted call** (MOB-133). On a
+  screen with more than `MAX_TAP_HANDLES` (256) interactive elements, the
+  exhaustion path called `NSLog` synchronously per overflowing node — 359 times
+  per frame on a 200-row screen, 13 ms of a 27 ms frame. The count is now
+  reported once per frame from `set_root`, taking `register_tap` from 13004 µs
+  to 81 µs.
+- **`clear_taps` frees only the slots that were used**, instead of walking all
+  256 every frame.
+
+### Fixed
+- **`ErlNifEnv` leak on the rescued render path** (MOB-133). Bounding
+  `clear_taps` by a high-water mark that only `set_root` wrote leaked one
+  `ErlNifEnv` per tap, per frame, whenever a render raised between `clear_taps`
+  and `set_root` — a path `Mob.Sender.commit/1` deliberately rescues, so it
+  accumulated silently. `register_tap` now maintains the mark. See
+  `decisions/2026-09-02-register-tap-owns-the-table-high-water-mark.md`.
+- **`tap_exhausted_count` no longer leaks across frames.** It was reset only
+  inside `set_root`'s reporting branch, so a frame that overflowed and then
+  failed carried its count into the next frame's report. Reset in `clear_taps`
+  now. The iOS increment also moved inside the tap mutex, matching Zig.
+- **`Mob.Sender` no longer discards render-stat frames at navigation
+  boundaries.** Both activation paths deleted a queued tree and threw its
+  measurement away with it, so dropped frames were undercounted at exactly the
+  transitions the epic measures.
+- **Staged render-stat frames are swept by age**, so a screen killed between
+  `hand_off/1` and `Mob.Sender.render/5` cannot leave an entry nothing claims.
+
+### Known issues (found while measuring, not fixed here)
+- **Throttle/debounce config never reaches native on either platform**
+  (MOB-134). iOS calls `mob_set_throttle_config` from the prop deserialiser, but
+  resolves the handle against the pre-swap tap table, so it always misses;
+  Android never calls it at all. Gestures behave as if every app used the
+  built-in defaults.
+- **256-element interactive cap still bites** (MOB-133). A 200-row screen
+  registers 615 handlers; 359 of them get handle `-1` and silently do not
+  respond. Only the logging was fixed.
+
 ## [0.7.38] - 2026-08-31
 
 ### Fixed
