@@ -542,6 +542,18 @@ defmodule Mob.Renderer do
       {:draw, ops} when is_list(ops) ->
         [{"draw", Enum.map(ops, &encode_canvas_op(&1, ctx))}]
 
+      # `:id` is node identity on both platforms, and they must agree on it.
+      # iOS reads it as an NSString and ignores anything else; Android
+      # canonicalises any JSON value. So `id: user.id` with an integer — the
+      # most natural way to write it — keyed rows on Android and fell back to
+      # positional on iOS, silently, which is the exact bug MOB-127 exists to
+      # fix. Coerce once here so the platforms cannot disagree.
+      {:id, value} when is_binary(value) ->
+        [{"id", value}]
+
+      {:id, value} when is_atom(value) or is_number(value) ->
+        [{"id", to_string(value)}]
+
       {key, value} ->
         [{Atom.to_string(key), resolve_token(key, value, ctx)}]
     end)

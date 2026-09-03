@@ -1696,6 +1696,10 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         id nativeViewModule = pv[MOB_PROP_module];
         if ([nativeViewModule isKindOfClass:[NSString class]])
             node.nativeViewModule = nativeViewModule;
+        // The author's `:id`, for EVERY node type — the name is historical and
+        // misleading. It is the node identity ForEach keys on (MOB-127) and
+        // what MobFrameTracker registers under; only nativeViewProps below is
+        // actually gated on the node being a native_view.
         id nativeViewId = pv[MOB_PROP_id];
         if ([nativeViewId isKindOfClass:[NSString class]])
             node.nativeViewId = nativeViewId;
@@ -1738,13 +1742,6 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             default:
                 break;
             }
-        }
-
-        // The author's :id, for every node type. nativeViewId below reads the
-        // same prop but only for native_view; this is what ForEach keys on.
-        id nodeId = pv[MOB_PROP_id];
-        if ([nodeId isKindOfClass:[NSString class]]) {
-            node.nodeId = nodeId;
         }
 
         id accessibilityId = pv[MOB_PROP_accessibility_id];

@@ -20,21 +20,40 @@ defmodule Mob.NativeChildIdentityTest do
     refute @ios =~ "node.childNodes.enumerated()), id: \\.offset"
   end
 
-  test "every childNodes ForEach goes through the identity helper" do
-    # Count them rather than spot-check: a new ForEach added later with
-    # positional keys is the regression this guards.
-    helper_uses =
+  test "no ForEach iterates childNodes directly" do
+    # Not a hard-coded count. The earlier version asserted "== 7", which failed
+    # on any legitimate new container AND passed for the regression it named:
+    # `ForEach(node.childNodes) { child in ... }` compiles, because MobNode has
+    # a pre-existing Identifiable conformance returning ObjectIdentifier — a
+    # brand-new identity every frame, since nodes are re-allocated from JSON on
+    # every set_root. That is strictly worse than positional keying, and the
+    # count test waved it through.
+    unkeyed = ~r/ForEach\(\s*(Array\()?node\.childNodes/ |> Regex.scan(@ios) |> length()
+    assert unkeyed == 0, "#{unkeyed} ForEach still iterates childNodes directly"
+
+    identified =
       @ios |> String.split("ForEach(mobIdentifiedChildren(node.childNodes))") |> length()
 
-    assert helper_uses - 1 == 7, "expected 7 identified child lists, found #{helper_uses - 1}"
+    assert identified - 1 >= 7, "the identified child lists should still be there"
   end
 
-  test "the author's :id reaches MobNode for every node type" do
-    # It previously reached native only as nativeViewId, and only for
-    # native_view nodes, so there was nothing for ForEach to key on.
-    assert @header =~ "@property(nonatomic, copy, nullable) NSString *nodeId;"
-    assert @nif =~ "id nodeId = pv[MOB_PROP_id];"
-    assert @nif =~ "node.nodeId = nodeId;"
+  test "the author's :id is coerced to a String before it leaves Elixir" do
+    # iOS reads :id as an NSString and ignores anything else; Android
+    # canonicalises any JSON value. Without this, `id: user.id` with an integer
+    # keyed rows on Android and fell back to positional on iOS — silently, for
+    # the most natural way to write it.
+    renderer = File.read!(Path.expand("../../lib/mob/renderer.ex", __DIR__))
+    assert renderer =~ ~s|{:id, value} when is_atom(value) or is_number(value) ->|
+    assert renderer =~ ~s|[{"id", to_string(value)}]|
+  end
+
+  test "the identity ForEach keys on is populated for every node type" do
+    # nativeViewId is the author's :id despite its name — only nativeViewProps
+    # is gated on the node being a native_view. An earlier version of this
+    # change added a second, identical property for the same prop.
+    refute @header =~ "NSString *nodeId;"
+    assert @nif =~ "id nativeViewId = pv[MOB_PROP_id];"
+    assert @ios =~ "if let authored = child.nativeViewId, !authored.isEmpty {"
   end
 
   test "authored ids and positions cannot collide" do
@@ -54,6 +73,6 @@ defmodule Mob.NativeChildIdentityTest do
   test "an empty id is treated as absent" do
     # `id: ""` would otherwise give every unnamed-but-present sibling the same
     # key.
-    assert @ios =~ "let authored = child.nodeId, !authored.isEmpty"
+    assert @ios =~ "let authored = child.nativeViewId, !authored.isEmpty"
   end
 end

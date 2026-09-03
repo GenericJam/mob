@@ -657,19 +657,19 @@ private struct MobFrameTracker: ViewModifier {
                             .onChange(of: geo.frame(in: .global), initial: true) { _, frame in
                                 record(id, frame)
                             }
-                            // Kept after MOB-127, deliberately. Children now
-                            // key on their author `:id` when they have one
-                            // (mobIdentifiedChildren), so a tracker on a named
-                            // node IS bound to one id for its lifetime and this
-                            // no longer fires for it. Unnamed nodes still fall
-                            // back to position, and for those the original
-                            // hazard stands: delete an item and every later id
-                            // shifts down under a tracker that keeps its
-                            // identity. Its frame value may be unchanged
-                            // (equal-height rows), so nothing else here would
-                            // fire, and the id just taken over would keep the
-                            // previous occupant's entry — or lose it entirely to
-                            // the departing tracker's .onDisappear.
+                            // Kept after MOB-127, but not for the reason the
+                            // original comment gave. A tracker only exists when
+                            // the node HAS an id (the `if let` above), and named
+                            // children now keep their identity across an insert
+                            // — so the ordinary shift-under-a-tracker case is
+                            // gone. What remains is the duplicate-id fallback:
+                            // those keys embed a position, so they genuinely do
+                            // move between nodes when a duplicated id's list
+                            // shrinks. The hazard is the same — a frame value
+                            // may be unchanged (equal-height rows), so nothing
+                            // else here fires, and the id just taken over keeps
+                            // the previous occupant's entry, or loses it to the
+                            // departing tracker's .onDisappear.
                             .onChange(of: id) { _, newId in
                                 record(newId, geo.frame(in: .global))
                             }
@@ -1177,7 +1177,15 @@ private struct MobTabView: View {
             get: { activeId },
             set: { newId in node.onTabSelect?(newId) }
         )) {
-            ForEach(Array(tabs.enumerated()), id: \.offset) { index, tab in
+            // Keyed on the tab's own id, not on position. This ForEach does
+            // iterate child nodes (the subscript below), so toggling a
+            // conditional tab shifted every later tab's whole content subtree
+            // into its neighbour's identity — text-field buffers and scroll
+            // positions discarded, and every named node in those subtrees
+            // re-registered with the frame registry.
+            ForEach(mobIdentifiedTabs(tabs)) { item in
+                let index = item.index
+                let tab = item.tab
                 if index < node.childNodes.count {
                     let child = node.childNodes[index]
                     MobNodeView(node: child)
@@ -1983,24 +1991,48 @@ struct MobScrollObserverGate: ViewModifier {
     }
 }
 
-// MobScrollObserver wires SwiftUI's onScrollGeometryChange (iOS 18+) to the
-// MobNode closures populated by mob_nif.m. Throttling and delta-thresholding
-// happen native-side in mob_send_scroll, so this modifier just forwards every
-// geometry change. End-of-scroll is detected by a debounced "no motion for N
-// ms" timer.
 /// A child paired with a stable identity for `ForEach`.
 ///
 /// Positional identity (`id: \.offset`) means an insert or delete makes every
 /// later row a different view as far as SwiftUI is concerned, so it is rebuilt
-/// rather than patched. That is what MOB-127 is about, and it is also why
-/// MobFrameTracker carries an `.onChange(of: id)`: with rows shifting under it,
-/// a tracker is not bound to one id for its lifetime.
+/// rather than patched. That is what MOB-127 is about.
 ///
 /// Author `:id` when the node has one, position otherwise. The two are prefixed
 /// differently so an author id of "3" cannot collide with position 3. A
 /// repeated id falls back to including the position, because SwiftUI requires
 /// ForEach ids to be unique and misbehaves quietly when they are not — which
 /// would be a worse bug than the one being fixed.
+/// A tab paired with a stable identity.
+///
+/// Tabs are dictionaries rather than MobNodes, so they cannot go through
+/// mobIdentifiedChildren — but the ForEach over them subscripts childNodes, so
+/// positional keying there discards a whole tab's content subtree when the tab
+/// list changes. Same rules as the child helper, including the duplicate
+/// fallback: two unkeyed tabs must not share a key.
+struct MobIdentifiedTab: Identifiable {
+    let id: String
+    let index: Int
+    let tab: [String: Any]
+}
+
+func mobIdentifiedTabs(_ tabs: [[String: Any]]) -> [MobIdentifiedTab] {
+    var seen = Set<String>()
+    seen.reserveCapacity(tabs.count)
+
+    return tabs.enumerated().map { index, tab in
+        var key: String
+        if let authored = tab["id"] as? String, !authored.isEmpty {
+            key = "i\u{1}" + authored
+        } else {
+            key = "p\u{1}\(index)"
+        }
+        if !seen.insert(key).inserted {
+            key = "d\u{1}\(index)\u{1}" + key
+        }
+        return MobIdentifiedTab(id: key, index: index, tab: tab)
+    }
+}
+
 struct MobIdentifiedChild: Identifiable {
     let id: String
     let index: Int
@@ -2013,7 +2045,7 @@ func mobIdentifiedChildren(_ children: [MobNode]) -> [MobIdentifiedChild] {
 
     return children.enumerated().map { index, child in
         var key: String
-        if let authored = child.nodeId, !authored.isEmpty {
+        if let authored = child.nativeViewId, !authored.isEmpty {
             key = "i\u{1}" + authored
         } else {
             key = "p\u{1}\(index)"
@@ -2025,6 +2057,11 @@ func mobIdentifiedChildren(_ children: [MobNode]) -> [MobIdentifiedChild] {
     }
 }
 
+// MobScrollObserver wires SwiftUI's onScrollGeometryChange (iOS 18+) to the
+// MobNode closures populated by mob_nif.m. Throttling and delta-thresholding
+// happen native-side in mob_send_scroll, so this modifier just forwards every
+// geometry change. End-of-scroll is detected by a debounced "no motion for N
+// ms" timer.
 @available(iOS 18.0, *)
 struct MobScrollObserver: ViewModifier {
     let node: MobNode
