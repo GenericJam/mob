@@ -10,6 +10,54 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+Rendering-performance epic (MOB-124). Measured first, then fixed what the
+measurements showed. Pairs with mob_new 0.4.30+ for the Android halves.
+
+### Added
+- **`Mob.RenderStats`** — per-frame timing for the render pipeline, readable
+  from a connected node. A frame spans two processes (the screen runs
+  `render/1`, expansion and reconcile; the sender runs prepare, JSON encoding
+  and `set_root`), so the screen times its stages and hands the partial frame
+  off to the sender to finish. Frames the sender drops are recorded with
+  `committed: false` rather than discarded, because BEAM-side work that gets
+  thrown away is worth knowing about. Disabled by default; `enable/0` then
+  `summary/0` for percentiles per stage, `frames/0` for the raw records.
+
+  Every proposal in the epic was a guess without it: nobody knew whether a
+  dense screen spent its time in `render/1`, in expansion, in JSON encoding or
+  inside `set_root`, and the candidate fixes attacked four different ones of
+  those (MOB-124).
+
+### Fixed
+- **Tap tables grow on demand instead of capping at 256** — a screen with more
+  than 256 interactive elements silently lost handlers past the cap: the
+  elements rendered and looked tappable but were inert, with no error. The
+  tables now grow, and an exhausted pool logs once per frame with the count of
+  affected elements rather than once per node (MOB-133).
+- **Throttle config applies to the table being built, not the live one
+  (iOS)** — `set_root` writes handlers into the inactive table and then swaps,
+  but the throttle configuration was being applied to the *active* table, so a
+  screen's own throttle settings landed on the outgoing screen's handlers and
+  the incoming ones ran unthrottled for their first frame (MOB-134).
+- **An unchanged tree no longer repaints** — rendering was driven by message
+  arrival rather than by state change, so any message a screen received
+  produced a full paint even when it changed nothing. The screen now
+  fingerprints the rendered tree together with the current theme and skips the
+  paint when neither moved. Only `forward/2` may skip; skipped frames are
+  recorded through `Mob.RenderStats` with `reason: :unchanged` so they stay
+  visible rather than vanishing (MOB-140).
+- **Children keep their identity across list edits (iOS)** — children of every
+  container were keyed on their position, so inserting or removing a row made
+  each following row adopt the previous occupant's view state: typed text,
+  scroll offset, focus and in-flight animations all shifted by one. Children
+  now key on the author's `:id` when there is one, falling back to position
+  when there is not, so nothing changes for code that never opted in. Numeric
+  ids are coerced to strings so `id: 1` works the same as `id: "1"`.
+
+  Applies to column, row, box, both scroll axes, the lazy list, the sheet body
+  and the tab bar. Paired with mob_new 0.4.30+ for the Compose half; both
+  platforms use the same key derivation (MOB-127).
+
 ## [0.7.31] - 2026-08-27
 
 ### Added
