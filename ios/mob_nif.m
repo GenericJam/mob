@@ -215,6 +215,27 @@ static TapHandle *mob_resolve_active_tap_locked(int handle) {
     return &tap_handles[slot];
 }
 
+// Resolve a handle against the table currently being BUILT, not the active one.
+//
+// Needed because throttle config arrives during deserialisation. set_root walks
+// the JSON — populating the building table's config as it goes — and only swaps
+// that table in ~50 lines later. The handles in that JSON therefore carry
+// tap_build_generation, while mob_resolve_active_tap_locked compares against
+// tap_table_generations[tap_active], which is still the PREVIOUS frame's
+// generation (nif_clear_taps zeroed the building slot's). Every lookup returned
+// NULL and every `if (tap)` body was skipped, silently, on every frame — so an
+// app's throttle/debounce settings never reached a live slot and only the
+// built-in defaults ever applied (MOB-134).
+static TapHandle *mob_resolve_build_tap_locked(int handle) {
+    uint32_t generation;
+    int slot;
+    TapHandle *build = tap_tables[1 - tap_active];
+    if (!build || !mob_decode_event_handle(handle, &generation, &slot) ||
+        generation != tap_build_generation || slot >= tap_build_count || !build[slot].tag_env)
+        return NULL;
+    return &build[slot];
+}
+
 static int mob_snap_tap(int handle, ErlNifEnv *msg_env, TapSnap *snap) {
     enif_mutex_lock(tap_mutex);
     TapHandle *active = mob_resolve_active_tap_locked(handle);
@@ -270,7 +291,12 @@ static uint64_t mob_now_ns(void) {
 static void mob_set_throttle_config(int handle, int throttle_ms, int debounce_ms,
                                     double delta_threshold, int leading, int trailing) {
     enif_mutex_lock(tap_mutex);
-    TapHandle *tap = mob_resolve_active_tap_locked(handle);
+    // Building table first: the only caller is the set_root prop deserialiser,
+    // which runs before the swap. The active-table fallback keeps any future
+    // caller outside a build working.
+    TapHandle *tap = mob_resolve_build_tap_locked(handle);
+    if (!tap)
+        tap = mob_resolve_active_tap_locked(handle);
     if (tap) {
         tap->throttle_ms = throttle_ms;
         tap->debounce_ms = debounce_ms;
