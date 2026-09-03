@@ -972,6 +972,12 @@ const TapHandle = extern struct {
     identity_start_generation: u32,
 
     // ── Batch 5 throttle state — populated by mob_set_throttle_config ──
+    // Set once the app has actually configured this slot. Without it, 0 is
+    // ambiguous: `throttle: 0` is a documented escape hatch meaning "raw firing
+    // rate", but a zeroed slot also means "never configured, use the default".
+    // Mob.Event.Throttle documents `throttle: 0` and has a doctest for it, so
+    // the one value a user reaches for was the one that could not be expressed.
+    throttle_configured: c_int,
     throttle_ms: c_int,
     debounce_ms: c_int,
     delta_threshold: f64,
@@ -1024,7 +1030,14 @@ fn tapGrowLocked(which: usize, needed: usize) bool {
     // Zero the new tail: clearTaps and the resolvers key off tag_env being null
     // to decide a slot is free, and realloc leaves it uninitialised.
     var i = tap_table_capacity[which];
-    while (i < cap) : (i += 1) table[i] = std.mem.zeroes(TapHandle);
+    while (i < cap) : (i += 1) {
+        table[i] = std.mem.zeroes(TapHandle);
+        // leading/trailing are the two fields whose "unset" value is 1, not 0.
+        // clearTaps resets them to 1 for reused slots, so without this a slot's
+        // default would depend on whether it arrived by growth or by reuse.
+        table[i].leading = 1;
+        table[i].trailing = 1;
+    }
 
     tap_tables[which] = table;
     tap_table_capacity[which] = cap;
@@ -1331,6 +1344,7 @@ pub export fn mob_set_throttle_config(
     erts.enif_mutex_lock(tap_mutex);
     defer erts.enif_mutex_unlock(tap_mutex);
     const h = resolveActiveTapLocked(handle) orelse return;
+    h.throttle_configured = 1;
     h.throttle_ms = throttle_ms;
     h.debounce_ms = debounce_ms;
     h.delta_threshold = delta_threshold;
@@ -1347,8 +1361,11 @@ fn throttleCheck(handle: c_int, x: f64, y: f64, default_throttle_ms: i32, defaul
     defer erts.enif_mutex_unlock(tap_mutex);
     const h = resolveActiveTapLocked(handle) orelse return false;
 
-    const throttle_ms: i32 = if (h.throttle_ms != 0) h.throttle_ms else default_throttle_ms;
-    const delta_threshold: f64 = if (h.delta_threshold > 0) h.delta_threshold else default_delta;
+    // An unconfigured slot takes the built-in default; a configured one takes
+    // what the app asked for, including 0 (raw) for either field.
+    const configured = h.throttle_configured != 0;
+    const throttle_ms: i32 = if (configured) h.throttle_ms else default_throttle_ms;
+    const delta_threshold: f64 = if (configured) h.delta_threshold else default_delta;
 
     const now_ns = jni.nowNs();
     const dx = x - h.last_x;
@@ -1858,6 +1875,7 @@ export fn nif_clear_taps(
             h.tag_env = null;
         }
         // Reset throttle state — slots get reused across renders.
+        h.throttle_configured = 0;
         h.throttle_ms = 0;
         h.debounce_ms = 0;
         h.delta_threshold = 0;

@@ -223,4 +223,75 @@ defmodule Mob.NativeEventHandleTest do
     assert @android_source =~ "rejected stale event handle"
     assert @ios_source =~ "rejected stale event handle"
   end
+
+  test "throttle config lands in the table being BUILT, not the active one" do
+    # mob_set_throttle_config is only reached from the set_root prop
+    # deserialiser, which runs while the frame is still being built — the swap
+    # is ~50 lines later. Resolving against the active table compares the
+    # handle's tap_build_generation against the PREVIOUS frame's generation, so
+    # every lookup returned NULL and every config was dropped, silently, on
+    # every frame (MOB-134).
+    assert @ios_source =~ "static TapHandle *mob_resolve_build_tap_locked(int handle)"
+    assert @ios_source =~ "generation != tap_build_generation || slot >= tap_build_count"
+    assert @ios_source =~ "TapHandle *tap = mob_resolve_build_tap_locked(handle);"
+  end
+
+  test "a configured throttle of 0 is distinguishable from an unconfigured slot" do
+    # `throttle: 0` is a documented escape hatch meaning "raw firing rate", with
+    # a doctest in Mob.Event.Throttle. A zeroed slot also means "never
+    # configured". Keying the check on the value itself cannot tell them apart,
+    # so the one value a user reaches for was the one that could not be
+    # expressed — on both platforms.
+    for src <- [@ios_source, @android_source] do
+      assert src =~ "throttle_configured"
+    end
+
+    assert @ios_source =~ "h->throttle_configured ? h->throttle_ms : default_throttle_ms"
+    assert @ios_source =~ "h->throttle_configured ? h->delta_threshold : default_delta"
+    assert @android_source =~ "const configured = h.throttle_configured != 0;"
+    refute @android_source =~ "if (h.throttle_ms != 0) h.throttle_ms else"
+  end
+
+  test "nothing between register_tap and the swap clobbers the throttle fields" do
+    # The build-table lookup above is only safe because of an ordering that is
+    # invisible at a glance: clear_taps zeroes the building table at the TOP of
+    # the frame, register_tap writes only routing fields, and the swap loop
+    # copies only identity_start_generation. A reasonable-looking "zero the slot
+    # before writing it" tidy-up in register_tap silently reverts MOB-134.
+    register_body =
+      @ios_source
+      |> String.split("static ERL_NIF_TERM nif_register_tap(")
+      |> Enum.at(1)
+      |> String.split("\n}\n")
+      |> Enum.at(0)
+
+    refute register_body =~ "throttle_ms"
+    refute register_body =~ "delta_threshold"
+    refute register_body =~ "last_emit_ns"
+
+    # …and the swap copies identity only.
+    # Bounded by the for-loop's own closing brace pair. A looser boundary runs
+    # off the end of nif_set_root and swallows the rest of the file, which then
+    # trivially contains "throttle".
+    swap_body =
+      @ios_source
+      |> String.split("for (int slot = 0; slot < committed; slot++) {")
+      |> Enum.at(1)
+      |> String.split("\n        }\n    }")
+      |> Enum.at(0)
+
+    assert swap_body =~ "identity_start_generation"
+    refute swap_body =~ "throttle"
+  end
+
+  test "grown slots and reused slots agree on the leading/trailing default" do
+    # clear_taps resets both to 1; a realloc'd tail is memset to 0. Without
+    # matching them, a slot's default depends on whether it arrived by growth or
+    # by reuse — dead while nothing reads them, and a bug nobody re-derives on
+    # the day something does.
+    assert @ios_source =~ "grown[i].leading = 1;"
+    assert @ios_source =~ "grown[i].trailing = 1;"
+    assert @android_source =~ "table[i].leading = 1;"
+    assert @android_source =~ "table[i].trailing = 1;"
+  end
 end
