@@ -296,7 +296,7 @@ defmodule Mob.Screen.Server do
     case take_nav_action(socket) do
       {nil, socket} ->
         state = %{state | socket: socket}
-        {:noreply, %{state | socket: paint(state, :none)}}
+        {:noreply, %{state | socket: repaint_if_changed(state)}}
 
       {action, socket} ->
         send(state.owner, {:nav_action, action, self()})
@@ -324,12 +324,30 @@ defmodule Mob.Screen.Server do
     end
   end
 
-  defp paint(state, transition, mode \\ :async, activation_token \\ nil)
+  defp paint(state, transition, mode \\ :async, activation_token \\ nil),
+    do: do_paint(state, transition, mode, activation_token, false)
 
-  defp paint(%{render_mode: :no_render} = state, _transition, _mode, _activation_token),
+  # The ONLY path that may skip. Everything else — mount, activation, every
+  # navigation, hot reload, a :sync caller — paints unconditionally.
+  #
+  # That restriction is what makes this safe rather than clever. The router
+  # paints with `transition: :none` on every push, pop and reset (the transition
+  # rides on the activation, not the paint), and the activation token is
+  # conditional on `activation_frame_supported?/0`, the hot-code-push fallback.
+  # So neither the transition nor the token is a reliable "this is a navigation"
+  # signal. Popping back to a resident screen whose tree has not changed would
+  # otherwise skip its repaint and leave the pushed screen's tree on display.
+  #
+  # It also sidesteps Mob.Sender dropping frames for non-active screens: a
+  # background screen's fingerprint may describe a tree that was never
+  # committed, but it cannot act on that, because becoming active goes through
+  # the router and therefore through an unconditional paint.
+  defp repaint_if_changed(state), do: do_paint(state, :none, :async, nil, true)
+
+  defp do_paint(%{render_mode: :no_render} = state, _transition, _mode, _token, _skippable),
     do: state.socket
 
-  defp paint(state, transition, mode, activation_token) do
+  defp do_paint(state, transition, mode, activation_token, skippable) do
     socket = ensure_safe_area(state.socket, state.socket.__mob__.platform, state.nif)
     platform = socket.__mob__.platform
     list_renderers = Map.get(socket.__mob__, :list_renderers, %{})
@@ -352,18 +370,81 @@ defmodule Mob.Screen.Server do
       Mob.ComponentRegistry.reconcile(self(), active_component_keys)
     end)
 
-    Mob.RenderStats.hand_off(state.ref)
+    fingerprint = fingerprint(tree)
 
-    if activation_token && function_exported?(Mob.Sender, :render, 6) do
-      Mob.Sender.render(state.ref, tree, platform, state.nif, transition, activation_token)
+    if skippable and Map.get(socket.__mob__, :last_frame) == fingerprint do
+      # The platform is already showing exactly this tree. Everything below —
+      # clear_taps, a register_tap per interactive node, serialisation, set_root
+      # and the native tree rebuild — would reproduce what is on screen.
+      #
+      # Not a rare case: forward/2 repaints after EVERY handle_info, whether or
+      # not the message changed anything, so a 30 Hz scroll handler drove 30 full
+      # renders per second. It also fed a feedback loop — each render calls
+      # clear_taps, which zeroes the per-handle throttle state, so the native
+      # throttle was defeated by the very events it throttled. MOB-134 measured
+      # 68 vs 69 events for a throttled and an unthrottled handler delivered to a
+      # screen, against 33 vs 5 for the same handlers delivered to a plain
+      # process.
+      #
+      # Recorded as an uncommitted frame rather than dropped silently, so the
+      # meter says how many repaints were skipped.
+      # Tagged. drop_frame/1 already records uncommitted frames — superseded,
+      # inactive, discarded at a navigation — and skips now vastly outnumber all
+      # of them: at 30 Hz the 500-entry ring is entirely no-op skips within ~17
+      # seconds, evicting exactly the committed frames and navigation-boundary
+      # drops MOB-124 is trying to measure. The reason keeps them separable.
+      Mob.RenderStats.take_frame()
+      |> then(fn
+        nil -> nil
+        frame -> Map.put(frame, :reason, :unchanged)
+      end)
+      |> Mob.RenderStats.drop_frame()
+
+      socket
     else
-      Mob.Sender.render(state.ref, tree, platform, state.nif, transition)
+      Mob.RenderStats.hand_off(state.ref)
+
+      if activation_token && function_exported?(Mob.Sender, :render, 6) do
+        Mob.Sender.render(state.ref, tree, platform, state.nif, transition, activation_token)
+      else
+        Mob.Sender.render(state.ref, tree, platform, state.nif, transition)
+      end
+
+      if mode == :sync, do: Mob.Sender.sync(:infinity)
+
+      socket
+      |> Mob.Socket.put_mob(:last_frame, fingerprint)
+      |> Mob.Socket.put_root_view(:json_tree)
     end
-
-    if mode == :sync, do: Mob.Sender.sync(:infinity)
-
-    Mob.Socket.put_root_view(socket, :json_tree)
   end
+
+  # What the next frame is compared against.
+  #
+  # Includes the theme, because the tree alone is not enough: token resolution
+  # (`:on_background` -> ARGB), the font default, the type scale, spacing and
+  # radii all happen in Mob.Renderer, which runs DOWNSTREAM of this comparison.
+  # A screen written the idiomatic way — `text_color: :on_background` —
+  # produces a byte-identical tree before and after `Mob.Theme.set/1`, so
+  # comparing the tree alone skips the repaint and leaves the old palette on
+  # screen. Worse than nothing: Mob.Theme.set/1 pushes the resolved palette to
+  # native itself, so theme-driven surfaces would follow while every
+  # explicitly-tokened node did not — a half-themed screen.
+  #
+  # A hash rather than the tree itself. Retaining the expanded tree per live
+  # screen roughly doubles steady-state footprint on a list screen — Mob.List
+  # materialises a wrapper plus the rendered row per item — for screens the user
+  # cannot even see, and it would be copied across process boundaries by
+  # Mob.Screen.Server.socket/1, i.e. over dist on every Mob.Test.assigns/1.
+  # The trade, stated accurately: ~1 in 4 billion per message that a frame
+  # collides with the previous one and its repaint is skipped. It is NOT
+  # self-healing. On a collision `last_frame` still holds the OLD tree's hash
+  # while the new tree is what render produces, so every subsequent frame
+  # rendering that same new tree — the normal case, since changed state stays
+  # changed — hashes identically and is skipped again. The screen stays wrong
+  # until the tree moves to a third value, which on a settled screen can mean
+  # until the next user interaction. Any interaction produces one, so it
+  # recovers in practice, but "one dropped frame" would be the wrong summary.
+  defp fingerprint(tree), do: :erlang.phash2({tree, Mob.Theme.current()}, 4_294_967_296)
 
   defp initial_safe_area(:render, nif) do
     {t, r, b, l} = nif.safe_area()
