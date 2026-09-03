@@ -542,16 +542,18 @@ defmodule Mob.Renderer do
       {:draw, ops} when is_list(ops) ->
         [{"draw", Enum.map(ops, &encode_canvas_op(&1, ctx))}]
 
-      # `:id` is node identity on both platforms, and they must agree on it.
-      # iOS reads it as an NSString and ignores anything else; Android
-      # canonicalises any JSON value. So `id: user.id` with an integer — the
-      # most natural way to write it — keyed rows on Android and fell back to
-      # positional on iOS, silently, which is the exact bug MOB-127 exists to
-      # fix. Coerce once here so the platforms cannot disagree.
-      {:id, value} when is_binary(value) ->
-        [{"id", value}]
-
-      {:id, value} when is_atom(value) or is_number(value) ->
+      # `:id` is node identity on both platforms and they must agree on it.
+      # iOS reads it as an NSString and ignores anything else, so a numeric id —
+      # `id: user.id`, the most natural way to write it — keyed rows on Android
+      # and fell back to positional on iOS. Coerced once here so the two cannot
+      # disagree.
+      #
+      # Numbers ONLY. `:json.encode/1` already stringifies bare atoms (`:foo`
+      # arrives as "foo"), so including atoms would change nothing for them
+      # while widening `true`/`false` from a JSON boolean — which both platforms
+      # correctly reject — into the real id "true", and `nil` from "nil" into "".
+      # That would hand ids to nodes the author never named.
+      {:id, value} when is_number(value) ->
         [{"id", to_string(value)}]
 
       {key, value} ->

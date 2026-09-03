@@ -43,8 +43,13 @@ defmodule Mob.NativeChildIdentityTest do
     # keyed rows on Android and fell back to positional on iOS — silently, for
     # the most natural way to write it.
     renderer = File.read!(Path.expand("../../lib/mob/renderer.ex", __DIR__))
-    assert renderer =~ ~s|{:id, value} when is_atom(value) or is_number(value) ->|
+    assert renderer =~ ~s|{:id, value} when is_number(value) ->|
     assert renderer =~ ~s|[{"id", to_string(value)}]|
+
+    # Numbers only. :json.encode already stringifies bare atoms, so widening to
+    # is_atom would turn `true` from a JSON boolean both platforms reject into
+    # the real id "true", and `nil` into "" — handing ids to unnamed nodes.
+    refute renderer =~ ~s|{:id, value} when is_atom(value)|
   end
 
   test "the identity ForEach keys on is populated for every node type" do
@@ -74,5 +79,30 @@ defmodule Mob.NativeChildIdentityTest do
     # `id: ""` would otherwise give every unnamed-but-present sibling the same
     # key.
     assert @ios =~ "let authored = child.nativeViewId, !authored.isEmpty"
+  end
+
+  test "the tab bar keys on the tab's own id" do
+    # This ForEach subscripts node.childNodes, so positional keying discards a
+    # whole tab's content subtree when the tab list changes — toggling a
+    # conditional "Admin" tab shifts every later tab's state into its
+    # neighbour's. It was left positional in the first version of this change on
+    # the false premise that it iterated only dictionaries.
+    assert @ios =~ "ForEach(mobIdentifiedTabs(tabs))"
+    refute @ios =~ "ForEach(Array(tabs.enumerated()), id: \\.offset)"
+  end
+
+  test "tab identities follow the same rules as child identities" do
+    # Same prefixes and the same duplicate fallback: two unkeyed tabs must not
+    # share a key. An earlier attempt gave every unkeyed tab the same constant.
+    body =
+      @ios
+      |> String.split("func mobIdentifiedTabs(")
+      |> Enum.at(1)
+      |> String.split("\n}\n")
+      |> Enum.at(0)
+
+    assert body =~ ~s|key = "i\\u{1}" + authored|
+    assert body =~ ~s|key = "p\\u{1}\\(index)"|
+    assert body =~ "if !seen.insert(key).inserted"
   end
 end

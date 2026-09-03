@@ -659,10 +659,14 @@ private struct MobFrameTracker: ViewModifier {
                             }
                             // Kept after MOB-127, but not for the reason the
                             // original comment gave. A tracker only exists when
-                            // the node HAS an id (the `if let` above), and named
-                            // children now keep their identity across an insert
-                            // — so the ordinary shift-under-a-tracker case is
-                            // gone. What remains is the duplicate-id fallback:
+                            // the node HAS an id (the `if let` above), so the
+                            // "unnamed nodes still shift" rationale was wrong in
+                            // both directions. Two cases remain. A tracked node
+                            // nested inside an UNNAMED repeated row still shifts
+                            // wholesale, because the row itself keys by
+                            // position — the documented mis-use, where `:id` is
+                            // put on something inside the repeated element
+                            // rather than on it. And the duplicate-id fallback:
                             // those keys embed a position, so they genuinely do
                             // move between nodes when a duplicated id's list
                             // shrinks. The hazard is the same — a frame value
@@ -1991,17 +1995,6 @@ struct MobScrollObserverGate: ViewModifier {
     }
 }
 
-/// A child paired with a stable identity for `ForEach`.
-///
-/// Positional identity (`id: \.offset`) means an insert or delete makes every
-/// later row a different view as far as SwiftUI is concerned, so it is rebuilt
-/// rather than patched. That is what MOB-127 is about.
-///
-/// Author `:id` when the node has one, position otherwise. The two are prefixed
-/// differently so an author id of "3" cannot collide with position 3. A
-/// repeated id falls back to including the position, because SwiftUI requires
-/// ForEach ids to be unique and misbehaves quietly when they are not — which
-/// would be a worse bug than the one being fixed.
 /// A tab paired with a stable identity.
 ///
 /// Tabs are dictionaries rather than MobNodes, so they cannot go through
@@ -2033,6 +2026,17 @@ func mobIdentifiedTabs(_ tabs: [[String: Any]]) -> [MobIdentifiedTab] {
     }
 }
 
+/// A child paired with a stable identity for `ForEach`.
+///
+/// Positional identity (`id: \.offset`) means an insert or delete makes every
+/// later row a different view as far as SwiftUI is concerned, so it is rebuilt
+/// rather than patched. That is what MOB-127 is about.
+///
+/// Author `:id` when the node has one, position otherwise. The two are prefixed
+/// differently so an author id of "3" cannot collide with position 3. A
+/// repeated id falls back to including the position, because SwiftUI requires
+/// ForEach ids to be unique and misbehaves quietly when they are not — which
+/// would be a worse bug than the one being fixed.
 struct MobIdentifiedChild: Identifiable {
     let id: String
     let index: Int
