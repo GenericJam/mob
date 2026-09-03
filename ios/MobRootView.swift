@@ -280,8 +280,8 @@ struct MobNodeView: View {
                 // every one of its modifiers below intact, which flattening the
                 // column away would not.
                 MobEitherStack(lazy: lazyContainer, alignment: .leading) {
-                    ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
-                        MobNodeView(node: child, layoutWeightAxis: .vertical)
+                    ForEach(mobIdentifiedChildren(node.childNodes)) { item in
+                        MobNodeView(node: item.node, layoutWeightAxis: .vertical)
                     }
                 }
                 // fill_height: true lets a column flex to fill its parent so children
@@ -307,8 +307,8 @@ struct MobNodeView: View {
                     }
                 }()
                 HStack(alignment: alignment, spacing: 0) {
-                    ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
-                        MobNodeView(node: child, layoutWeightAxis: .horizontal)
+                    ForEach(mobIdentifiedChildren(node.childNodes)) { item in
+                        MobNodeView(node: item.node, layoutWeightAxis: .horizontal)
                     }
                 }
                 // Without maxWidth: .infinity an HStack hugs its content.
@@ -412,15 +412,15 @@ struct MobNodeView: View {
                             // vertical axis is bounded and never scrolls, so
                             // anything below the fold would never be built at
                             // all rather than built on demand.
-                            ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
-                                MobNodeView(node: child)
+                            ForEach(mobIdentifiedChildren(node.childNodes)) { item in
+                                MobNodeView(node: item.node)
                             }
                         }
                         .frame(maxHeight: .infinity, alignment: .topLeading)
                     } else {
                         VStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
-                                MobNodeView(node: child, lazyContainer: node.lazyContent)
+                            ForEach(mobIdentifiedChildren(node.childNodes)) { item in
+                                MobNodeView(node: item.node, lazyContainer: node.lazyContent)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -480,10 +480,10 @@ struct MobNodeView: View {
             case .lazyList:
                 ScrollView(.vertical, showsIndicators: true) {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(node.childNodes.enumerated()), id: \.offset) { index, child in
-                            MobNodeView(node: child)
+                        ForEach(mobIdentifiedChildren(node.childNodes)) { item in
+                            MobNodeView(node: item.node)
                                 .onAppear {
-                                    if index == node.childNodes.count - 1 {
+                                    if item.index == node.childNodes.count - 1 {
                                         node.onTap?()
                                     }
                                 }
@@ -657,16 +657,23 @@ private struct MobFrameTracker: ViewModifier {
                             .onChange(of: geo.frame(in: .global), initial: true) { _, frame in
                                 record(id, frame)
                             }
-                            // Every ForEach in this file keys children by index
-                            // (`id: \.offset`) while the registry is keyed by
-                            // :id, so a tracker is NOT bound to one id for its
-                            // lifetime — delete an item and every later id
-                            // shifts down a position under a tracker that keeps
-                            // its identity. Its frame value may be unchanged
-                            // (equal-height rows), so nothing else here would
-                            // fire and the id we just took over would keep the
-                            // previous occupant's entry — or lose it entirely to
-                            // the departing tracker's .onDisappear.
+                            // Kept after MOB-127, but not for the reason the
+                            // original comment gave. A tracker only exists when
+                            // the node HAS an id (the `if let` above), so the
+                            // "unnamed nodes still shift" rationale was wrong in
+                            // both directions. Two cases remain. A tracked node
+                            // nested inside an UNNAMED repeated row still shifts
+                            // wholesale, because the row itself keys by
+                            // position — the documented mis-use, where `:id` is
+                            // put on something inside the repeated element
+                            // rather than on it. And the duplicate-id fallback:
+                            // those keys embed a position, so they genuinely do
+                            // move between nodes when a duplicated id's list
+                            // shrinks. The hazard is the same — a frame value
+                            // may be unchanged (equal-height rows), so nothing
+                            // else here fires, and the id just taken over keeps
+                            // the previous occupant's entry, or loses it to the
+                            // departing tracker's .onDisappear.
                             .onChange(of: id) { _, newId in
                                 record(newId, geo.frame(in: .global))
                             }
@@ -786,8 +793,8 @@ private struct MobBox: View {
         let alignment: Alignment = boxAlignmentFromString(node.boxAlign)
 
         let stack = ZStack(alignment: alignment) {
-            ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
-                MobNodeView(node: child)
+            ForEach(mobIdentifiedChildren(node.childNodes)) { item in
+                MobNodeView(node: item.node)
             }
         }
 
@@ -1174,7 +1181,15 @@ private struct MobTabView: View {
             get: { activeId },
             set: { newId in node.onTabSelect?(newId) }
         )) {
-            ForEach(Array(tabs.enumerated()), id: \.offset) { index, tab in
+            // Keyed on the tab's own id, not on position. This ForEach does
+            // iterate child nodes (the subscript below), so toggling a
+            // conditional tab shifted every later tab's whole content subtree
+            // into its neighbour's identity — text-field buffers and scroll
+            // positions discarded, and every named node in those subtrees
+            // re-registered with the frame registry.
+            ForEach(mobIdentifiedTabs(tabs)) { item in
+                let index = item.index
+                let tab = item.tab
                 if index < node.childNodes.count {
                     let child = node.childNodes[index]
                     MobNodeView(node: child)
@@ -1650,8 +1665,8 @@ private struct MobSheetView: View {
 
     private var sheetBody: some View {
         VStack(spacing: 0) {
-            ForEach(Array(node.childNodes.enumerated()), id: \.offset) { _, child in
-                MobNodeView(node: child)
+            ForEach(mobIdentifiedChildren(node.childNodes)) { item in
+                MobNodeView(node: item.node)
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1977,6 +1992,72 @@ struct MobScrollObserverGate: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// A tab paired with a stable identity.
+///
+/// Tabs are dictionaries rather than MobNodes, so they cannot go through
+/// mobIdentifiedChildren — but the ForEach over them subscripts childNodes, so
+/// positional keying there discards a whole tab's content subtree when the tab
+/// list changes. Same rules as the child helper, including the duplicate
+/// fallback: two unkeyed tabs must not share a key.
+struct MobIdentifiedTab: Identifiable {
+    let id: String
+    let index: Int
+    let tab: [String: Any]
+}
+
+func mobIdentifiedTabs(_ tabs: [[String: Any]]) -> [MobIdentifiedTab] {
+    var seen = Set<String>()
+    seen.reserveCapacity(tabs.count)
+
+    return tabs.enumerated().map { index, tab in
+        var key: String
+        if let authored = tab["id"] as? String, !authored.isEmpty {
+            key = "i\u{1}" + authored
+        } else {
+            key = "p\u{1}\(index)"
+        }
+        if !seen.insert(key).inserted {
+            key = "d\u{1}\(index)\u{1}" + key
+        }
+        return MobIdentifiedTab(id: key, index: index, tab: tab)
+    }
+}
+
+/// A child paired with a stable identity for `ForEach`.
+///
+/// Positional identity (`id: \.offset`) means an insert or delete makes every
+/// later row a different view as far as SwiftUI is concerned, so it is rebuilt
+/// rather than patched. That is what MOB-127 is about.
+///
+/// Author `:id` when the node has one, position otherwise. The two are prefixed
+/// differently so an author id of "3" cannot collide with position 3. A
+/// repeated id falls back to including the position, because SwiftUI requires
+/// ForEach ids to be unique and misbehaves quietly when they are not — which
+/// would be a worse bug than the one being fixed.
+struct MobIdentifiedChild: Identifiable {
+    let id: String
+    let index: Int
+    let node: MobNode
+}
+
+func mobIdentifiedChildren(_ children: [MobNode]) -> [MobIdentifiedChild] {
+    var seen = Set<String>()
+    seen.reserveCapacity(children.count)
+
+    return children.enumerated().map { index, child in
+        var key: String
+        if let authored = child.nativeViewId, !authored.isEmpty {
+            key = "i\u{1}" + authored
+        } else {
+            key = "p\u{1}\(index)"
+        }
+        if !seen.insert(key).inserted {
+            key = "d\u{1}\(index)\u{1}" + key
+        }
+        return MobIdentifiedChild(id: key, index: index, node: child)
     }
 }
 

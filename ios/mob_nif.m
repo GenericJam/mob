@@ -1696,6 +1696,10 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         id nativeViewModule = pv[MOB_PROP_module];
         if ([nativeViewModule isKindOfClass:[NSString class]])
             node.nativeViewModule = nativeViewModule;
+        // The author's `:id`, for EVERY node type — the name is historical and
+        // misleading. It is the node identity ForEach keys on (MOB-127) and
+        // what MobFrameTracker registers under; only nativeViewProps below is
+        // actually gated on the node being a native_view.
         id nativeViewId = pv[MOB_PROP_id];
         if ([nativeViewId isKindOfClass:[NSString class]])
             node.nativeViewId = nativeViewId;
