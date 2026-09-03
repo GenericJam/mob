@@ -535,4 +535,114 @@ defmodule Mob.RenderStats do
     :ets.new(@table, [:named_table, :public, :ordered_set, write_concurrency: true])
     {:ok, %{}}
   end
+
+  # ── Native frame timing ───────────────────────────────────────────────────
+  #
+  # Everything above measures the BEAM half of a frame. `set_root_us` closes
+  # when `nif_set_root` returns, and on iOS that is the moment the new tree is
+  # handed to the main thread, not the moment it is on screen: the SwiftUI
+  # build, layout and display all happen afterwards. The same is true of
+  # Compose on Android. So the native half of every frame has been invisible to
+  # this module since it was written, which is the gap MOB-126 ran into.
+  #
+  # These functions read a native-side ring buffer of main-thread busy time per
+  # applied tree. They are a separate window from `frames/0` on purpose: the
+  # native sample completes asynchronously, well after the BEAM frame it belongs
+  # to has been committed and recorded, so correlating the two would mean
+  # threading an identifier through the wire for a number that is only ever read
+  # by a human deciding whether an optimisation is worth building.
+
+  @doc """
+  Turn native frame timing on, and clear the sample window.
+
+  Off by default. When off, the native side pays one atomic load per
+  `set_root`; the timestamps and the run loop observer are downstream of that
+  check.
+
+  Returns `{:error, :unsupported}` on a platform whose native half has not
+  implemented it yet, and on the host, where there is no native side at all.
+  """
+  @spec native_enable(module()) :: :ok | {:error, :unsupported}
+  def native_enable(nif \\ :mob_nif), do: native_call(nif, :native_stats_enable, [true])
+
+  @doc "Turn native frame timing off. Recorded samples stay readable."
+  @spec native_disable(module()) :: :ok | {:error, :unsupported}
+  def native_disable(nif \\ :mob_nif), do: native_call(nif, :native_stats_enable, [false])
+
+  @doc """
+  Native frame samples, newest first.
+
+  Each sample is `%{apply_us: float(), transition: String.t(), seq: integer()}`.
+  `apply_us` is main-thread busy time from the tree being applied to the run
+  loop going idle, so read it as an upper bound on that frame's native cost
+  rather than as an attribution: anything else queued on the main thread in the
+  same window is inside it.
+  """
+  @spec native_frames(module()) :: {:ok, map()} | {:error, :unsupported | term()}
+  def native_frames(nif \\ :mob_nif) do
+    case native_call(nif, :native_stats, []) do
+      {:error, reason} -> {:error, reason}
+      json when is_binary(json) -> decode_native(json)
+      other -> {:error, other}
+    end
+  end
+
+  @doc """
+  Percentiles of native apply time, split by transition.
+
+  Split because the two populations answer different questions and pooling them
+  hides both: a `"none"` sample is a steady-state re-render into an existing
+  view tree, while `"push"`, `"pop"` and `"reset"` each rebuild the whole tree
+  because the root carries a new identity. The size of that difference is
+  exactly what MOB-126 and MOB-129 are arguing about.
+
+  `dropped` is how many samples scrolled out of the native ring buffer. When it
+  is above zero the percentiles describe the tail of the run, not all of it.
+  """
+  @spec native_summary(module()) :: map() | {:error, :unsupported | term()}
+  def native_summary(nif \\ :mob_nif) do
+    case native_frames(nif) do
+      {:error, reason} ->
+        {:error, reason}
+
+      {:ok, %{"samples" => []} = payload} ->
+        %{samples: 0, recorded: payload["recorded"], dropped: payload["dropped"]}
+
+      {:ok, payload} ->
+        samples = payload["samples"]
+
+        %{
+          samples: length(samples),
+          recorded: payload["recorded"],
+          dropped: payload["dropped"],
+          enabled: payload["enabled"],
+          apply_us:
+            samples
+            |> Enum.group_by(& &1["transition"])
+            |> Map.new(fn {transition, group} ->
+              {transition, percentiles(Enum.map(group, &%{apply_us: &1["apply_us"]}), :apply_us)}
+            end)
+        }
+    end
+  end
+
+  # A NIF that the running platform has not implemented raises UndefinedFunction
+  # (host, where :mob_nif is absent) or ErlangError :nif_not_loaded (a device
+  # whose native half lacks this function). Both mean the same thing to a
+  # caller, and neither should take down whatever is reading stats.
+  defp native_call(nif, fun, args) do
+    apply(nif, fun, args)
+  rescue
+    UndefinedFunctionError -> {:error, :unsupported}
+    ErlangError -> {:error, :unsupported}
+  end
+
+  defp decode_native(json) do
+    case :json.decode(json) do
+      %{"samples" => _} = payload -> {:ok, payload}
+      other -> {:error, {:unexpected_payload, other}}
+    end
+  rescue
+    _ -> {:error, :bad_json}
+  end
 end
