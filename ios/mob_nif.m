@@ -94,7 +94,14 @@ typedef struct {
     uint32_t identity_start_generation;
 
     // ── Batch 5 throttle state — populated by mob_set_throttle_config ──
-    int throttle_ms; // 0 = no throttle (raw firing)
+    // Set once the app has actually configured this slot. Without it, 0 is
+    // ambiguous: `throttle: 0` is a documented escape hatch meaning "raw firing
+    // rate", but a zeroed slot also means "never configured, use the default",
+    // and the check cannot tell them apart. Mob.Event.Throttle documents
+    // `throttle: 0` and has a doctest for it, so the one value a user reaches
+    // for was the one value that could not be expressed.
+    int throttle_configured;
+    int throttle_ms; // 0 = no throttle (raw firing), when throttle_configured
     int debounce_ms; // 0 = no debounce
     double delta_threshold;
     int leading;           // 1 = emit first event of burst
@@ -175,6 +182,15 @@ static int mob_tap_grow_locked(int which, int needed) {
     // being NULL to decide a slot is free, and realloc leaves it uninitialised.
     memset(grown + tap_table_capacity[which], 0,
            (size_t)(cap - tap_table_capacity[which]) * sizeof(TapHandle));
+
+    // …then restore the two fields whose "unset" value is 1, not 0. clear_taps
+    // resets leading/trailing to 1 for reused slots, so without this a slot's
+    // default would depend on whether it arrived by growth or by reuse. Nobody
+    // re-derives that when these finally get a reader.
+    for (int i = tap_table_capacity[which]; i < cap; i++) {
+        grown[i].leading = 1;
+        grown[i].trailing = 1;
+    }
 
     tap_tables[which] = grown;
     tap_table_capacity[which] = cap;
@@ -298,6 +314,7 @@ static void mob_set_throttle_config(int handle, int throttle_ms, int debounce_ms
     if (!tap)
         tap = mob_resolve_active_tap_locked(handle);
     if (tap) {
+        tap->throttle_configured = 1;
         tap->throttle_ms = throttle_ms;
         tap->debounce_ms = debounce_ms;
         tap->delta_threshold = delta_threshold;
@@ -322,8 +339,10 @@ static int mob_throttle_check(int handle, double x, double y, int default_thrott
         return 0;
     }
 
-    int throttle_ms = h->throttle_ms ? h->throttle_ms : default_throttle_ms;
-    double delta_threshold = h->delta_threshold > 0 ? h->delta_threshold : default_delta;
+    // An unconfigured slot takes the built-in default; a configured one takes
+    // what the app asked for, including 0 (raw) for either field.
+    int throttle_ms = h->throttle_configured ? h->throttle_ms : default_throttle_ms;
+    double delta_threshold = h->throttle_configured ? h->delta_threshold : default_delta;
 
     uint64_t now_ns = mob_now_ns();
     double dx = x - h->last_x;
@@ -2724,6 +2743,7 @@ static ERL_NIF_TERM nif_clear_taps(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
             build[i].tag_env = NULL;
         }
         // Reset throttle state — slots get reused across renders.
+        build[i].throttle_configured = 0;
         build[i].throttle_ms = 0;
         build[i].debounce_ms = 0;
         build[i].delta_threshold = 0;

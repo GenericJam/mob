@@ -71,3 +71,47 @@ handlers to a plain process instead of the screen gives the 33-vs-5 above.
 That feedback loop is a MOB-124-shaped problem (per-frame handle churn, and
 rendering driven by message arrival rather than by state change) and is
 recorded on the issue rather than worked around here.
+
+## Addendum: `throttle: 0` could not be expressed either
+
+Review of this change surfaced a second, independent reason config did not work
+— one that would have survived the fix above and made it look ineffective.
+
+Both `mob_throttle_check` and the Zig `throttleCheck` used **zero as the "unset"
+sentinel**:
+
+```c
+int throttle_ms = h->throttle_ms ? h->throttle_ms : default_throttle_ms;
+```
+
+`Mob.Event.Throttle` documents `on_scroll: {pid, tag, throttle: 0}` as the raw
+escape hatch, with a doctest, and `renderer.ex` repeats it. So the one value an
+app reaches for to *disable* throttling was the one value that collided with
+"never configured" and silently produced the default instead. The iOS struct
+comment even said `// 0 = no throttle (raw firing)` — the code contradicted its
+own documented intent.
+
+Fixed with an explicit `throttle_configured` flag on both platforms, set by
+`mob_set_throttle_config` and cleared by `clear_taps` alongside the rest of the
+per-handle throttle state. An unconfigured slot takes the built-in default; a
+configured one takes what the app asked for, including 0.
+
+Verified on the Pixel 8 emulator, three scroll nodes and one gesture each:
+
+```
+A default 33ms                20 events
+B configured 500ms             4 events
+C raw (throttle: 0, delta: 0) 41 events
+```
+
+C is the case that could not previously exist — before this it was
+indistinguishable from A.
+
+**Scope, stated plainly.** This makes `throttle` and `delta` work.
+`debounce_ms`, `leading` and `trailing` are carried on the wire, stored by
+`mob_set_throttle_config`, and **read by nothing** on either platform. The
+original framing of MOB-134 ("throttle/debounce config never reaches native")
+is therefore only half fixed: debounce still does not work, because nothing
+implements it. `leading`/`trailing` defaults were at least made consistent —
+`clear_taps` sets them to 1 while a freshly grown slot was memset to 0, so a
+slot's default depended on whether it arrived by growth or reuse.
