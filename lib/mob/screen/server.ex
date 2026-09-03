@@ -352,17 +352,60 @@ defmodule Mob.Screen.Server do
       Mob.ComponentRegistry.reconcile(self(), active_component_keys)
     end)
 
-    Mob.RenderStats.hand_off(state.ref)
-
-    if activation_token && function_exported?(Mob.Sender, :render, 6) do
-      Mob.Sender.render(state.ref, tree, platform, state.nif, transition, activation_token)
+    if unchanged?(socket, tree, transition, mode, activation_token) do
+      # The platform is already showing exactly this tree. Everything below —
+      # clear_taps, a register_tap per interactive node, serialisation, set_root
+      # and the native tree rebuild — would reproduce what is on screen.
+      #
+      # Not a rare case: forward/2 repaints after EVERY handle_info, whether or
+      # not the message changed anything, so a 30 Hz scroll handler drove 30 full
+      # renders per second. It also fed a feedback loop — each render calls
+      # clear_taps, which zeroes the per-handle throttle state, so the native
+      # throttle was defeated by the very events it throttled. MOB-134 measured
+      # 68 vs 69 events for a throttled and an unthrottled handler delivered to a
+      # screen, against 33 vs 5 for the same handlers delivered to a plain
+      # process.
+      #
+      # Recorded as an uncommitted frame rather than dropped silently, so the
+      # meter says how many repaints were skipped.
+      Mob.RenderStats.take_frame() |> Mob.RenderStats.drop_frame()
+      socket
     else
-      Mob.Sender.render(state.ref, tree, platform, state.nif, transition)
+      Mob.RenderStats.hand_off(state.ref)
+
+      if activation_token && function_exported?(Mob.Sender, :render, 6) do
+        Mob.Sender.render(state.ref, tree, platform, state.nif, transition, activation_token)
+      else
+        Mob.Sender.render(state.ref, tree, platform, state.nif, transition)
+      end
+
+      if mode == :sync, do: Mob.Sender.sync(:infinity)
+
+      socket
+      |> Mob.Socket.put_mob(:last_tree, tree)
+      |> Mob.Socket.put_root_view(:json_tree)
     end
+  end
 
-    if mode == :sync, do: Mob.Sender.sync(:infinity)
-
-    Mob.Socket.put_root_view(socket, :json_tree)
+  # Compare the EXPANDED tree, not the assigns.
+  #
+  # Assign comparison is the LiveView model and would be cheaper, but it is
+  # wrong here: render/1 may legitimately read state that is not in assigns —
+  # Mob.Theme.set/1 is the obvious one, and a handler that changes the theme
+  # without assigning anything must still repaint. Running render and comparing
+  # its output keeps every such input honest, and still removes the expensive
+  # half: the native crossing dominates, per MOB-124's own measurements.
+  #
+  # The tree is comparable across frames because handles are assigned later,
+  # inside Mob.Renderer — at this point interactive nodes still carry their
+  # `{pid, tag}`, which is stable for a screen.
+  defp unchanged?(socket, tree, transition, mode, activation_token) do
+    # A navigation always paints: the transition is the point, and the native
+    # side keys view identity on it. An activation token must reach native for
+    # the same reason. A :sync caller is waiting on a flush, so it takes the
+    # slow path even when nothing changed.
+    transition == :none and mode == :async and is_nil(activation_token) and
+      Map.get(socket.__mob__, :last_tree) == tree
   end
 
   defp initial_safe_area(:render, nif) do
