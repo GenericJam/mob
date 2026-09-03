@@ -87,16 +87,49 @@ epic. Nothing here has shipped to Hex.
   transitions the epic measures.
 - **Staged render-stat frames are swept by age**, so a screen killed between
   `hand_off/1` and `Mob.Sender.render/5` cannot leave an entry nothing claims.
+- **Throttle/debounce config now reaches native** (MOB-134). iOS resolved the
+  handle against the *pre-swap* tap table, so a screen's throttle settings were
+  applied to the outgoing screen's handlers and its own ran unthrottled;
+  Android never sent the config at all. iOS now resolves against the table
+  being built, and Android sends it per composition. Gestures finally honour
+  what the app asked for instead of always using the built-in defaults. See
+  `decisions/2026-09-02-throttle-config-targets-the-building-table.md` and
+  `decisions/2026-09-03-android-throttle-config-per-composition.md`. Needs
+  mob_new 0.4.31+ for the Android half.
+- **An unchanged tree no longer repaints** (MOB-140). Rendering was driven by
+  message arrival rather than by state change, so any message a screen received
+  produced a full paint even when it changed nothing — a periodic tick, a
+  presence update, a reply a screen ignored. The screen now fingerprints the
+  rendered tree together with the current theme and skips the paint when
+  neither moved. The theme is part of the fingerprint because token resolution
+  happens downstream in `Mob.Renderer`, so a tree that is identical pre-
+  resolution can still render differently after a theme change.
+
+  Only `forward/2` may skip; every other paint path is unconditional. Skips are
+  recorded through `Mob.RenderStats` with `reason: :unchanged` rather than
+  vanishing, so a screen that stops updating stays diagnosable. See
+  `decisions/2026-09-03-skip-the-repaint-when-the-tree-is-unchanged.md`.
+- **Children keep their identity across list edits** (MOB-127). Children of
+  every container were keyed on their position, so inserting or removing a row
+  made each following row adopt the previous occupant's view state: typed text,
+  scroll offset, focus and in-flight animations all shifted by one. Children
+  now key on the author's `:id` when there is one and on position when there is
+  not, so nothing changes for code that never opted in. An authored id and a
+  positional key live in separate namespaces, so an author whose id is literally
+  `"3"` cannot collide with position 3, and a duplicate id falls back to
+  position rather than merging two rows. Numeric ids are coerced to strings, so
+  `id: 1` behaves as `id: "1"`.
+
+  Covers column, row, box, both scroll axes, the lazy list, the sheet body and
+  the tab bar. The coercion is scoped to top-level props, so an id nested
+  inside a prop value — `tabs: [%{id: 1}]` — still falls back to positional.
+  Needs mob_new 0.4.31+ for the Compose half; both platforms derive keys
+  identically. See `decisions/2026-09-03-children-key-on-author-id.md`.
 
 ### Known issues (found while measuring, not fixed here)
-- **Throttle/debounce config never reaches native on either platform**
-  (MOB-134). iOS calls `mob_set_throttle_config` from the prop deserialiser, but
-  resolves the handle against the pre-swap tap table, so it always misses;
-  Android never calls it at all. Gestures behave as if every app used the
-  built-in defaults.
-- **256-element interactive cap still bites** (MOB-133). A 200-row screen
-  registers 615 handlers; 359 of them get handle `-1` and silently do not
-  respond. Only the logging was fixed.
+- *(none outstanding — the two recorded here, MOB-133's 256-element cap and
+  MOB-134's unreachable throttle config, were both fixed in this same
+  unreleased window and are described under Fixed above.)*
 
 ## [0.7.38] - 2026-08-31
 
