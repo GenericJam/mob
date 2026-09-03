@@ -18,12 +18,16 @@ defmodule Mob.Socket do
   @type t :: %__MODULE__{
           assigns: map(),
           __mob__: %{
-            screen: module() | nil,
-            platform: platform(),
-            root_view: term(),
-            view_tree: map(),
-            nav_stack: list(),
-            nav_action: term()
+            required(:screen) => module() | nil,
+            required(:platform) => platform(),
+            required(:root_view) => term(),
+            required(:view_tree) => map(),
+            required(:nav_stack) => list(),
+            required(:nav_action) => term(),
+            # Written by Mob.Screen.Server rather than by the struct default, so
+            # both are optional. The render path reads :last_frame every message.
+            optional(:last_frame) => non_neg_integer(),
+            optional(:list_renderers) => map()
           }
         }
 

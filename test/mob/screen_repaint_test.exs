@@ -194,13 +194,17 @@ defmodule Mob.ScreenRepaintTest do
     assert renders() - before == 1
   end
 
-  test "the theme is part of the comparison, not just the tree", %{screen: screen} do
-    # Belt and braces alongside the :theme message test above. The fixture uses
-    # `text_color: :on_background` — a TOKEN — because token resolution happens
-    # in Mob.Renderer, downstream of the comparison. An earlier version of this
-    # file baked `Mob.Theme.current().background` into the tree instead, which
-    # made the theme test pass against an implementation that ignored the theme
-    # entirely. That is the one shape real screens do not use.
-    assert File.read!(__ENV__.file) =~ "text_color: :on_background"
+  test "the fixture uses a theme TOKEN, which is what makes test 4 meaningful",
+       %{screen: _screen} do
+    # Asserted against the rendered tree, not the source file. The first version
+    # of this test grepped its own file for "text_color: :on_background" — which
+    # its own explanatory comment contained, so it could not fail. In a change
+    # whose credibility rests on its tests, that is the wrong kind of cargo.
+    #
+    # Why it matters: token resolution happens in Mob.Renderer, downstream of the
+    # fingerprint. If the fixture baked a resolved ARGB in instead — as an earlier
+    # version did, via Mob.Theme.current().background — test 4 would pass against
+    # an implementation that ignored the theme entirely.
+    assert Screen.render(%{count: 0}).props.text_color == :on_background
   end
 end

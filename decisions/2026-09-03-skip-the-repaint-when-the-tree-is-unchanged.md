@@ -107,3 +107,36 @@ different change, and the honest place to look next is whether a screen needs
 to run `render/1` at all for a message it ignored. It also does not address the
 per-frame handle churn itself — handles are still re-registered on every frame
 that does paint, which is MOB-124's subject.
+
+## What this does not do
+
+Recorded because each is a render input that lives outside the fingerprint, or
+a cost the headline numbers do not show.
+
+* **`render/1` and the expansion passes still run on every message.** Only the
+  native crossing is skipped. Whether a screen should run `render/1` at all for
+  a message it ignored is a separate question.
+
+* **Per-frame handle churn is untouched.** Handles are still re-registered on
+  every frame that does paint; that is MOB-124's subject.
+
+* **The listener pid is not in the key.** `Mob.Renderer.register_handler/2`
+  resolves tap targets through `Mob.Listener.handler/1`, a `Process.whereis`.
+  If the listener dies and restarts it gets a new pid, the committed tap table
+  still names the dead one, and every control on screen is inert. Previously
+  the next message repainted and re-registered, self-healing in one message; an
+  unchanged tree now never re-registers. Narrow — the listener is started once
+  and is not supervised for restart — but it is the same class as the theme bug
+  above, and closing the theme half does not close this one.
+
+* **A frame the sender rescued is still recorded as displayed.**
+  `Mob.Sender.commit/1` rescues a raising render in the sender process, after
+  the screen has already written `last_frame`. Nothing propagates back. Mostly
+  benign, since re-rendering the same tree would raise again, but the
+  observable change is that `[mob] render failed` now logs once instead of once
+  per message — a screen wedged by an unencodable prop goes quiet.
+
+* **Every painting frame pays an extra full tree traversal.** `phash2` over the
+  expanded tree runs whether or not the frame is skipped: roughly 70 ns/node
+  here, so ~15-150 µs on a 200-2000 node screen. A clear win when it skips,
+  pure added cost when it does not.

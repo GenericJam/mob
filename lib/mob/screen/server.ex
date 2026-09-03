@@ -388,7 +388,18 @@ defmodule Mob.Screen.Server do
       #
       # Recorded as an uncommitted frame rather than dropped silently, so the
       # meter says how many repaints were skipped.
-      Mob.RenderStats.take_frame() |> Mob.RenderStats.drop_frame()
+      # Tagged. drop_frame/1 already records uncommitted frames — superseded,
+      # inactive, discarded at a navigation — and skips now vastly outnumber all
+      # of them: at 30 Hz the 500-entry ring is entirely no-op skips within ~17
+      # seconds, evicting exactly the committed frames and navigation-boundary
+      # drops MOB-124 is trying to measure. The reason keeps them separable.
+      Mob.RenderStats.take_frame()
+      |> then(fn
+        nil -> nil
+        frame -> Map.put(frame, :reason, :unchanged)
+      end)
+      |> Mob.RenderStats.drop_frame()
+
       socket
     else
       Mob.RenderStats.hand_off(state.ref)
@@ -424,8 +435,15 @@ defmodule Mob.Screen.Server do
   # materialises a wrapper plus the rendered row per item — for screens the user
   # cannot even see, and it would be copied across process boundaries by
   # Mob.Screen.Server.socket/1, i.e. over dist on every Mob.Test.assigns/1.
-  # The trade is a ~1-in-4-billion chance that two consecutive frames collide
-  # and one repaint is skipped; the next actual change repaints normally.
+  # The trade, stated accurately: ~1 in 4 billion per message that a frame
+  # collides with the previous one and its repaint is skipped. It is NOT
+  # self-healing. On a collision `last_frame` still holds the OLD tree's hash
+  # while the new tree is what render produces, so every subsequent frame
+  # rendering that same new tree — the normal case, since changed state stays
+  # changed — hashes identically and is skipped again. The screen stays wrong
+  # until the tree moves to a third value, which on a settled screen can mean
+  # until the next user interaction. Any interaction produces one, so it
+  # recovers in practice, but "one dropped frame" would be the wrong summary.
   defp fingerprint(tree), do: :erlang.phash2({tree, Mob.Theme.current()}, 4_294_967_296)
 
   defp initial_safe_area(:render, nif) do
