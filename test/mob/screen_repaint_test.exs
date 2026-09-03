@@ -41,7 +41,7 @@ defmodule Mob.ScreenRepaintTest do
     def render(assigns) do
       %{
         type: :text,
-        props: %{text: "#{assigns.count}", text_color: Mob.Theme.current().background},
+        props: %{text: "#{assigns.count}", text_color: :on_background},
         children: []
       }
     end
@@ -78,16 +78,28 @@ defmodule Mob.ScreenRepaintTest do
         pid
       end
 
+    # Capture the theme that was actually in force. Restoring Mob.Theme.Dark
+    # instead would INSTALL a theme nobody set — Mob.Theme.default/0 is
+    # %Mob.Theme{}, not Dark — and later tests in the same run would then
+    # resolve colours against it.
+    theme_before = Mob.Theme.current()
+
     {:ok, router} = Mob.Router.start_root(Screen, %{}, nif: CountingNif)
     screen = Mob.Screen.get_screen_pid(router)
 
     on_exit(fn ->
       stop_safely(router)
       for pid <- started, do: stop_safely(pid)
-      Mob.Theme.set(Mob.Theme.Dark)
+      # Mob.Router.start_root starts Mob.Listener when render_mode is :render,
+      # globally named and unlinked. Leaving it running makes Mob.Renderer route
+      # every later tap through it, so other files see {listener_pid, {:mob_route,
+      # ...}} where they assert {pid, tag}. Two renderer_test cases failed that
+      # way, and only when the files happened to run in the wrong order.
+      if pid = Process.whereis(Mob.Listener), do: stop_safely(pid)
+      Mob.Theme.set(theme_before)
     end)
 
-    settle()
+    settle(screen)
     %{screen: screen}
   end
 
@@ -97,20 +109,21 @@ defmodule Mob.ScreenRepaintTest do
     :exit, _ -> :ok
   end
 
-  # Mob.Sender.render is a cast, so the count lags the send. Wait for the
-  # counter to stop moving rather than calling Mob.Sender.sync/1 — a sync that
-  # exits (Sender restarted, or not the one this ref belongs to) is swallowed by
-  # the catch and reads the counter too early, which turns every "must repaint"
-  # assertion into a silent false failure. That happened while writing this.
-  defp settle(tries \\ 20) do
-    before = renders()
-    Process.sleep(25)
-
-    cond do
-      tries == 0 -> :ok
-      renders() != before -> settle(tries - 1)
-      true -> :ok
-    end
+  # Deterministic, not timing-based.
+  #
+  # A poll that waits for the counter to stop moving returns immediately on the
+  # "must not repaint" tests — the counter never moves — so it never confirms
+  # the screen even processed the message. Those assertions would then be
+  # satisfied by "nothing has happened yet", which is the flake direction that
+  # silently stops testing anything.
+  #
+  # Instead: a call to the screen proves it handled the message and issued its
+  # render cast (calls are ordered behind the send), and a call to the sender
+  # proves the cast was processed.
+  defp settle(screen) do
+    _ = Mob.Screen.Server.socket(screen)
+    Mob.Sender.sync(:infinity)
+    :ok
   end
 
   defp renders, do: :ets.lookup_element(@counts, :set_root, 2, 0)
@@ -118,7 +131,7 @@ defmodule Mob.ScreenRepaintTest do
   defp after_sending(screen, msg) do
     before = renders()
     send(screen, msg)
-    settle()
+    settle(screen)
     renders() - before
   end
 
@@ -147,13 +160,47 @@ defmodule Mob.ScreenRepaintTest do
   test "repeated no-op messages stay at zero", %{screen: screen} do
     before = renders()
     for _ <- 1..25, do: send(screen, :noop)
-    settle()
+    settle(screen)
     assert renders() - before == 0
   end
 
   test "a real change after no-ops still lands", %{screen: screen} do
     for _ <- 1..5, do: send(screen, :noop)
-    settle()
+    settle(screen)
     assert after_sending(screen, :bump) == 1
+  end
+
+  test "an explicit render request always paints, even with an unchanged tree", %{screen: screen} do
+    # The router paints with `transition: :none` on every push, pop and reset —
+    # the transition rides on the activation, not the paint — and the activation
+    # token is conditional on activation_frame_supported?/0, the hot-code-push
+    # fallback. So neither is a reliable "this is a navigation" signal, and a pop
+    # back to a resident screen whose tree has not changed must not be skipped:
+    # the user would tap back and keep looking at the screen they left.
+    #
+    # Only forward/2 may skip. This pins that.
+    before = renders()
+    Mob.Screen.Server.render(screen, :none)
+    settle(screen)
+    assert renders() - before == 1
+  end
+
+  test "a sync render always paints", %{screen: screen} do
+    # A :sync caller is waiting on a flush; skipping would return before the
+    # frame it is waiting for exists.
+    before = renders()
+    Mob.Screen.Server.render_sync(screen, :none)
+    settle(screen)
+    assert renders() - before == 1
+  end
+
+  test "the theme is part of the comparison, not just the tree", %{screen: screen} do
+    # Belt and braces alongside the :theme message test above. The fixture uses
+    # `text_color: :on_background` — a TOKEN — because token resolution happens
+    # in Mob.Renderer, downstream of the comparison. An earlier version of this
+    # file baked `Mob.Theme.current().background` into the tree instead, which
+    # made the theme test pass against an implementation that ignored the theme
+    # entirely. That is the one shape real screens do not use.
+    assert File.read!(__ENV__.file) =~ "text_color: :on_background"
   end
 end

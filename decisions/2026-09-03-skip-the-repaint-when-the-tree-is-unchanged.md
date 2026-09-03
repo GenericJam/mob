@@ -31,30 +31,50 @@ handler's own delivery caused a repaint.
 
 ## Decision
 
-Compare the expanded tree against the last one committed, and skip the native
-crossing when they are equal.
+Fingerprint each frame as `phash2({expanded_tree, Mob.Theme.current()})` and
+skip the native crossing when it matches the last one committed.
 
-**Compare the tree, not the assigns.** Assign comparison is the LiveView model
-and would be cheaper, but it is wrong here: `render/1` in this framework may
-legitimately read state that is not in assigns. `Mob.Theme.set/1` is the
-obvious one — a handler that changes the theme without assigning anything must
-still repaint, and an assigns-based check would leave the old theme on screen.
-Running `render/1` and comparing its output keeps every such input honest.
+Three things in that sentence were arrived at the hard way.
 
-It still removes the expensive half. Per MOB-124's own measurements the native
-crossing dominates; `render` + expand are Elixir-side and comparatively cheap.
+**The theme has to be in the key.** The first version compared the expanded
+tree alone, on the reasoning that `render/1` may read state outside assigns and
+running it keeps those inputs honest. That reasoning was wrong, and review
+caught it. Token resolution — `:on_background` to ARGB, the font default, the
+type scale, spacing, radii — happens in `Mob.Renderer`, **downstream** of this
+comparison. A screen written the idiomatic way produces a byte-identical tree
+before and after `Mob.Theme.set/1`, so the repaint was skipped and the old
+palette stayed on screen. Worse than nothing: `Mob.Theme.set/1` pushes the
+resolved palette to native itself, so theme-driven surfaces would follow while
+every explicitly-tokened node did not — a half-themed screen. The test that
+was supposed to cover this passed only because the fixture baked
+`Mob.Theme.current().background` into the tree, which is the one shape real
+screens do not use.
 
-The tree is comparable across frames because handles are assigned later, inside
-`Mob.Renderer`. At the comparison point interactive nodes still carry their
-`{pid, tag}`, which is stable for the life of a screen.
+**Only `forward/2` may skip.** Every other paint — mount, activation, every
+navigation, hot reload, a `:sync` caller — is unconditional. The obvious guard
+(`transition != :none`) turns out to guard nothing: the router paints with
+`:none` on every push, pop and reset, because the transition rides on the
+*activation*, not the paint. And the activation token, which does distinguish
+them, is conditional on `activation_frame_supported?/0` — the hot-code-push
+fallback. So on that fallback path, popping back to a resident screen whose
+tree had not changed would skip its repaint and leave the pushed screen's tree
+on display. Restricting the skip to the message path removes the whole class,
+and also sidesteps `Mob.Sender` dropping frames for non-active screens: a
+background screen's fingerprint may describe a tree that was never committed,
+but it cannot act on that, because becoming active goes through the router and
+therefore through an unconditional paint.
 
-Three cases always paint, regardless: a navigation (the transition is the
-point, and the native side keys view identity on it), an activation token
-(it has to reach native), and a `:sync` caller (it is waiting on a flush).
+**A hash, not the tree.** Retaining the expanded tree per live screen roughly
+doubles steady-state footprint on a list screen — `Mob.List` materialises a
+wrapper plus the rendered row per item — for screens the user cannot see, and
+it would be copied across process boundaries by `Mob.Screen.Server.socket/1`,
+i.e. over dist on every `Mob.Test.assigns/1`. The trade is a ~1-in-4-billion
+chance that two consecutive frames collide and one repaint is skipped; the next
+actual change repaints normally.
 
 A skipped repaint is recorded via `Mob.RenderStats.drop_frame/1` as an
-uncommitted frame rather than dropped silently, so the meter says how many
-repaints were skipped.
+uncommitted frame rather than dropped silently, so the meter reports how many
+were skipped.
 
 ## Consequences
 
@@ -69,11 +89,17 @@ B configured 500ms    4 events
 
 Against 68 vs 69 for the same shape before.
 
-Six tests count `set_root` at a stub NIF rather than inferring from the code,
-and cover both directions: a no-op message, re-assigning the same value, a real
-change, and a change `render/1` reads from outside assigns. Mutation-checked —
-restoring the unconditional repaint fails exactly the three "must not repaint"
-tests and leaves the three "must repaint" ones passing.
+Nine tests count `set_root` at a stub NIF rather than inferring from the code,
+covering both directions: a no-op message, re-assigning the same value, a real
+change, a theme change read from outside assigns, and an explicit render or
+`:sync` render with an unchanged tree. Three mutations checked, each failing
+exactly the tests that should catch it: restoring the unconditional repaint,
+letting explicit renders skip, and dropping the theme from the fingerprint.
+
+The fixture deliberately uses `text_color: :on_background` — a token — because
+the earlier fixture baked a resolved colour in and made the theme test pass
+against an implementation that ignored the theme entirely. A test asserts the
+fixture still uses the token.
 
 **What this does not do.** It does not make an unchanged tree free: `render/1`
 and the expansion passes still run on every message. Making *those* cheap is a
