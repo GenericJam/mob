@@ -1740,6 +1740,13 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             }
         }
 
+        // The author's :id, for every node type. nativeViewId below reads the
+        // same prop but only for native_view; this is what ForEach keys on.
+        id nodeId = pv[MOB_PROP_id];
+        if ([nodeId isKindOfClass:[NSString class]]) {
+            node.nodeId = nodeId;
+        }
+
         id accessibilityId = pv[MOB_PROP_accessibility_id];
         if ([accessibilityId isKindOfClass:[NSString class]]) {
             node.accessibilityId = accessibilityId;

@@ -238,6 +238,14 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, nullable)
     NSDictionary *nativeViewProps; // full props dict forwarded to the factory
 
+// The author's `:id` prop, verbatim.
+//
+// Distinct from accessibilityId (the `:accessibility_id` prop) and from
+// nativeViewId (the same `:id`, but only read for native_view nodes). This is
+// the node identity SwiftUI keys ForEach on, so that inserting or deleting a
+// row patches its siblings instead of rebuilding them.
+@property(nonatomic, copy, nullable) NSString *nodeId;
+
 // Accessibility — identifiers support test addressing; labels and disabled
 // state describe composite controls such as tappable boxes.
 @property(nonatomic, copy, nullable) NSString *accessibilityId;

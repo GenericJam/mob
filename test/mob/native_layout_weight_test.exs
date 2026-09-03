@@ -23,8 +23,12 @@ defmodule Mob.NativeLayoutWeightTest do
   test "iOS expands weighted children on their parent's main axis" do
     source = File.read!(Path.join(@ios, "MobRootView.swift"))
 
-    assert source =~ "MobNodeView(node: child, layoutWeightAxis: .vertical)"
-    assert source =~ "MobNodeView(node: child, layoutWeightAxis: .horizontal)"
+    # `item.node` since MOB-127: children are keyed by author :id through
+    # mobIdentifiedChildren rather than by position, so the ForEach element is
+    # the identified wrapper. The property being pinned is unchanged — a column
+    # passes .vertical, a row .horizontal.
+    assert source =~ "MobNodeView(node: item.node, layoutWeightAxis: .vertical)"
+    assert source =~ "MobNodeView(node: item.node, layoutWeightAxis: .horizontal)"
     assert source =~ ".modifier(MobLayoutWeight(node: node, axis: layoutWeightAxis))"
     assert source =~ "frame(maxHeight: .infinity, alignment: .top)"
     assert source =~ "frame(maxWidth: .infinity, alignment: .leading)"
