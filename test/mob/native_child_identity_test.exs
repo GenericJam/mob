@@ -31,8 +31,14 @@ defmodule Mob.NativeChildIdentityTest do
     unkeyed = ~r/ForEach\(\s*(Array\()?node\.childNodes/ |> Regex.scan(@ios) |> length()
     assert unkeyed == 0, "#{unkeyed} ForEach still iterates childNodes directly"
 
+    # Count the derivation, not one particular spelling of it. The original
+    # version counted the inline `ForEach(mobIdentifiedChildren(...))` form and
+    # broke when MOB-141 hoisted that call into a `let` in the lazy list, even
+    # though the identity property it guards was untouched. What matters is that
+    # every container derives its children through mobIdentifiedChildren; where
+    # the call sits is a refactor's business.
     identified =
-      @ios |> String.split("ForEach(mobIdentifiedChildren(node.childNodes))") |> length()
+      @ios |> String.split("mobIdentifiedChildren(node.childNodes)") |> length()
 
     assert identified - 1 >= 7, "the identified child lists should still be there"
   end

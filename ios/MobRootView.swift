@@ -478,23 +478,7 @@ struct MobNodeView: View {
                     .padding(node.paddingEdgeInsets)
 
             case .lazyList:
-                ScrollView(.vertical, showsIndicators: true) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(mobIdentifiedChildren(node.childNodes)) { item in
-                            MobNodeView(node: item.node)
-                                .onAppear {
-                                    if item.index == node.childNodes.count - 1 {
-                                        node.onTap?()
-                                    }
-                                }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: .infinity)
-                .padding(node.paddingEdgeInsets)
-                .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
-                .ifLet(node.nativeViewId) { view, id in view.accessibilityIdentifier(id) }
+                MobLazyList(node: node)
 
             case .progress:
                 let trackColor = node.color.map { Color($0) } ?? Color.accentColor
@@ -1986,6 +1970,62 @@ final class MobImageCache {
     // mtime, so two threads that derived the same key were looking at the same
     // bytes. Holding a lock across the whole lookup would instead serialise
     // decodes onto the caller, which is the cost this cache exists to remove.
+}
+
+// ── Lazy list ────────────────────────────────────────────────────────────────
+//
+// Its own view rather than a case in MobNodeView's body, because it needs
+// @State to latch `on_end_reached` and MobNodeView renders every node in the
+// tree: an Optional<Int> on that struct is storage paid thousands of times over
+// for a thing only one node type uses.
+private struct MobLazyList: View {
+    let node: MobNode
+
+    // The child count we last fired `on_end_reached` for.
+    //
+    // Without this, the callback fires on content REPLACEMENT rather than on
+    // arrival at the end. Since MOB-127 keyed children on the author's `:id`,
+    // replacing a list's contents gives every row a new identity, so the last
+    // row's `.onAppear` runs again even though nobody scrolled. A search screen
+    // re-queried on each keystroke then fires one pagination request per
+    // keystroke, where before it fired none (MOB-141).
+    //
+    // Latching on the count is what makes this survive a replacement: only
+    // navigation changes the container's identity, so this @State outlives a
+    // new tree arriving for the same screen. Re-querying and getting twenty
+    // results again is suppressed; loading a page and going twenty to forty is
+    // not, which is exactly the pagination flow the callback exists for.
+    //
+    // What it does NOT fix: a re-query whose result count differs every time
+    // still fires once per distinct count. Distinguishing "new content, user is
+    // at the end" from "new content, user never scrolled" needs scroll
+    // position, not content identity, and the honest fix for that is to drive
+    // this from the scroll observer rather than from `.onAppear`. Handlers
+    // should still be written to be idempotent.
+    @State private var firedForCount: Int?
+
+    var body: some View {
+        let children = mobIdentifiedChildren(node.childNodes)
+
+        ScrollView(.vertical, showsIndicators: true) {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(children) { item in
+                    MobNodeView(node: item.node)
+                        .onAppear {
+                            guard item.index == children.count - 1 else { return }
+                            guard firedForCount != children.count else { return }
+                            firedForCount = children.count
+                            node.onTap?()
+                        }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: .infinity)
+        .padding(node.paddingEdgeInsets)
+        .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
+        .ifLet(node.nativeViewId) { view, id in view.accessibilityIdentifier(id) }
+    }
 }
 
 private struct MobImage: View {
