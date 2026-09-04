@@ -231,6 +231,38 @@ A vertically scrolling container.
 |------|------|-------------|
 | `padding` | number / token | Padding inside the scroll area |
 | `background` | color | Background color |
+| `lazy` | boolean | Build only the rows currently on screen. Opt-in; see below |
+
+#### `lazy: true`
+
+By default a `:scroll` builds every child up front. With `lazy: true`, a scroll
+whose direct content is a single `column` builds only what is on screen. On a
+500-row screen on a Moto G Power this takes main-thread frame cost from 498.9 ms
+to 115.8 ms (p50), and the worst frame from 1385.9 ms to 164.8 ms. Lazy cost is
+flat in list length where eager grows, so short lists gain nothing and may be
+marginally slower: this is a long-list optimisation.
+
+It is opt-in rather than automatic because laziness has consequences beyond
+speed, and all of them are silent:
+
+* **Rows below the fold are never built**, so they never register a frame.
+  `Mob.Test.element_frames/1` and `Mob.Test.tap_id/2` cannot address them.
+* **`scroll_to(:bottom)` under-scrolls**, because content size reflects only
+  what has been built.
+* **`screenshot_tour` truncates** for the same reason.
+* **Scroll position becomes index-based** rather than pixel-based.
+
+`:lazy_list` already makes that trade explicitly, which is why it is a separate
+component. Applying it silently to every `:scroll` would change harness
+behaviour under apps that never asked for it.
+
+The narrowing is deliberate: only a **vertical** scroll whose sole child is a
+plain `column` qualifies. A `row` under a horizontal scroll would be lazy on the
+wrong axis, and a child carrying `weight` needs its siblings measured, so both
+stay eager. Anything deeper than the scroll's direct child stays eager too.
+
+Available on both platforms from mob 0.7.39 / mob_new 0.4.31. An app that
+upgrades `mob` alone gets it on iOS only.
 
 ### `:spacer`
 
@@ -253,6 +285,65 @@ Inserts fixed space in a row or column, or fills available space when no `size` 
 </Row>
 """
 ```
+
+## Giving children a stable `:id`
+
+Set `:id` on the children of any container and their view state follows the
+child rather than the slot it happens to occupy.
+
+```elixir
+for user <- @users do
+  %{type: :text_field, props: %{id: user.id, text: user.name}, children: []}
+end
+```
+
+Without an `:id`, children are identified by position. Insert a row at the top
+and every row below it becomes a different view to the platform, so each one
+adopts the previous occupant's state: typed text, scroll offset, focus, and any
+in-flight animation all shift by one. With an `:id`, they move with the row.
+
+This is the same idea as `:key` in LiveView's `for` comprehensions, and the same
+failure mode when it is missing.
+
+### What it affects
+
+Anything the platform owns rather than your socket:
+
+* text a user has typed into a `:text_field` but not submitted
+* which field holds focus, and the keyboard's position in it
+* scroll offset inside a nested scroll
+* toggle and slider positions mid-drag
+* animations that are partway through
+
+Values you render from assigns are unaffected either way, because those come
+from the tree on every frame.
+
+### Rules
+
+* **An `:id` is opt-in.** A list without one keeps positional identity, so
+  nothing changes for code that never asked.
+* **Ids only need to be unique among siblings**, not app-wide.
+* **A duplicate falls back to position** for the second occurrence rather than
+  merging two rows.
+* **An authored id and a positional key cannot collide.** They live in separate
+  namespaces, so a child whose id is literally `"3"` is distinct from the child
+  at position 3.
+* **Numbers are coerced**, so `id: user.id` works with integer ids exactly as
+  `id: "#{user.id}"` would.
+
+### Limits worth knowing
+
+The coercion is scoped to top-level props. An id nested inside a prop *value* —
+`tabs: [%{id: 1}]` — is not coerced and falls back to positional.
+
+Coverage differs by platform for one component. Column, row, box, both scroll
+axes, the lazy list and the sheet body key children on both platforms from
+mob 0.7.39 / mob_new 0.4.31. **The tab bar is iOS-only**: Compose's
+`NavigationBar` still iterates tabs positionally, so reordering or inserting a
+tab moves per-tab state on Android and not on iOS.
+
+An app that upgrades `mob` without regenerating from `mob_new` gets the iOS half
+only.
 
 ## List components
 
@@ -282,7 +373,25 @@ A virtualized list that renders rows on demand. Supports `on_end_reached` for pa
 
 | Prop | Type | Description |
 |------|------|-------------|
-| `on_end_reached` | `{pid, tag}` | Fired when the user scrolls near the end: `{:tap, tag}` |
+| `on_end_reached` | `{pid, tag}` | Fired when the last row appears: `{:tap, tag}` |
+
+`on_end_reached` fires when the final row becomes visible, and is latched on the
+row count so that replacing the list's contents does not re-fire it. That
+matters because children key on `:id` (see below): replacing the contents gives
+every row a new identity, which without the latch reads as a fresh arrival at
+the end. A search screen re-queried on each keystroke would otherwise fire one
+pagination request per keystroke.
+
+The latch releases when the count changes, which is what makes pagination work:
+reach the end, load a page, the list grows, the callback re-arms. Three cases it
+does **not** cover, so write the handler to be idempotent:
+
+* a re-query whose result count differs every time still fires once per
+  distinct count;
+* a **windowed** list holding a rolling buffer at constant length fires once and
+  then never again;
+* a page load that fails or returns nothing leaves the count unchanged, so
+  scrolling away and back will not retry it.
 
 ## Content components
 
