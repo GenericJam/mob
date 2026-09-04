@@ -1779,6 +1779,215 @@ private struct MobSheetView: View {
     }
 }
 
+// ── Local-file image cache ───────────────────────────────────────────────────
+// UIImage(contentsOfFile:) reads the file and builds a CGImageSource-backed
+// image; the decompression itself is deferred to first draw, which is why
+// UIImage.preparingForDisplay() exists. Either way it is synchronous work on
+// whichever thread touches it, and unlike UIImage(named:) there is no system
+// cache behind it, so nothing survives to the next render.
+// The asset-catalogue path gets one for free; the loose-file path gets nothing.
+// Calling it from a SwiftUI `body`, as MobImage used to, means that
+// read-and-decode runs on the main thread on every evaluation of the node. That
+// is bad in the steady state and much worse across a navigation: MobRootView
+// keys its subtree on .id(currentNavVersion), so a push or a pop tears the
+// whole tree down and rebuilds it, and every local-file image on the incoming
+// screen is decoded from scratch while the transition is mid-animation. A
+// screen with a handful of photos on it is a visible stall.
+//
+// Be precise about what this does and does not fix, because the surrounding
+// issue is easy to overclaim. A first visit to a screen is a cold cache by
+// definition, so a forward push to a new screen full of images is helped not at
+// all: that stall needs downsampling, or preparingForDisplay() off the main
+// thread, and both are their own change. What goes away here is every decode
+// AFTER the first: re-rendering a screen already up, and popping back to one
+// visited before, which is the case .id(currentNavVersion) turned from free
+// into full price.
+//
+// This cache is only for the local-file branch. The http(s) branch goes through
+// AsyncImage, which is backed by URLSession's own caching, and is left alone.
+final class MobImageCache {
+    static let shared = MobImageCache()
+
+    private let cache = NSCache<NSString, UIImage>()
+
+    // path -> the key currently holding that path's image, so a rewrite can
+    // evict the entry it superseded. See image(atPath:).
+    private let keysByPath = NSCache<NSString, NSString>()
+
+    private init() {
+        cache.totalCostLimit = Self.budget()
+    }
+
+    /// How many decoded bytes we are willing to hold, scaled to the device.
+    ///
+    /// Cost is counted in decoded bytes (see decodedByteCost below). For scale,
+    /// a full-bleed image on a 3x phone is about 1290 * 2796 * 4 which is
+    /// roughly 14 MB decoded, so 64 MB holds four or five full-screen photos or
+    /// many hundreds of list thumbnails. That is comfortably more than one
+    /// screen's worth, which is what makes a back-and-forth between two screens
+    /// free without letting a Mob app spend the bulk of its footprint on images
+    /// it is not showing.
+    ///
+    /// It is a fraction of physical memory rather than a flat 64 MB because a
+    /// flat number is only defensible on the largest device it will run on.
+    /// Mob targets old hardware deliberately, and on a 2 GB iPhone a 64 MB
+    /// image cache is a real share of what the app is allowed before the
+    /// watchdog takes it, on top of a BEAM that has already reserved its own.
+    /// A sixty-fourth gives 16 MB on a 1 GB device and 32 MB on a 2 GB one, and
+    /// reaches the 64 MB ceiling from 4 GB up.
+    ///
+    /// NSCache also evicts on the system's memory-pressure notifications
+    /// independently of this number. That is a backstop, not the plan: the
+    /// documented behaviour is deliberately vague about when it fires, so the
+    /// budget has to be defensible on its own.
+    private static func budget() -> Int {
+        let physical = ProcessInfo.processInfo.physicalMemory
+        let scaled = Int(physical / 64)
+        return min(64 * 1024 * 1024, max(16 * 1024 * 1024, scaled))
+    }
+
+    /// Decoded image for a local file path, from cache when we have a current
+    /// one. Returns nil on the same inputs the uncached call returned nil for,
+    /// so the caller's placeholder fallback is unchanged.
+    func image(atPath path: String) -> UIImage? {
+        guard let key = Self.cacheKey(forPath: path) else {
+            // No usable key means no way to tell a later edit of this path from
+            // what we might already be holding, so bypass the cache entirely
+            // and do exactly what the uncached code did. This is also the
+            // missing-file path: stat fails, the decode below fails too, and
+            // the caller draws its placeholder as before.
+            return UIImage(contentsOfFile: path)
+        }
+
+        if let hit = cache.object(forKey: key) { return hit }
+
+        guard let decoded = UIImage(contentsOfFile: path) else {
+            // Deliberately no negative caching. A path can become valid later
+            // (a download landing into it, a file the app is about to write),
+            // and a remembered nil would pin the placeholder there for the life
+            // of the process. Re-attempting costs a failed open on a file that
+            // stays broken, which is much cheaper than being permanently wrong.
+            return nil
+        }
+
+        let cost = Self.decodedByteCost(decoded)
+
+        // NSCache silently DROPS an object whose cost exceeds totalCostLimit:
+        // setObject appears to succeed and the very next object(forKey:) returns
+        // nil. Verified against Foundation rather than assumed. Without this
+        // guard a full-resolution photo is re-decoded on every render exactly as
+        // before, plus a stat, and the reader has no way to tell.
+        //
+        // The numbers are not hypothetical: a 12 MP capture is 4032 * 3024 * 4,
+        // about 48.75 MB decoded, which is over the 48 MB budget of a 3 GB
+        // device and over the 32 MB of a 2 GB one. So on the very hardware the
+        // scaled budget exists to protect, the single most likely large image in
+        // a Mob app does not fit.
+        //
+        // Skipping the insert is the honest floor, not the fix. The real fix is
+        // to stop holding full-resolution bitmaps for a view that is drawing
+        // them at a fraction of the size: downsample at load with
+        // CGImageSourceCreateThumbnailAtIndex against the node's measured frame.
+        // That changes what is rendered, not just what is remembered, so it is
+        // its own change with its own verification rather than a rider here.
+        guard cost <= cache.totalCostLimit else { return decoded }
+
+        // Drop the entry this path used to have. The old key encodes the old
+        // size and mtime, so nothing can ever look it up again, but it keeps
+        // occupying budget until NSCache evicts it, and what NSCache evicts to
+        // make room is some other screen's images. A path rewritten in place
+        // over and over, which is exactly what a camera capture or a thumbnail
+        // refresh does, would otherwise push the rest of the app out of the
+        // cache one dead full-size bitmap at a time.
+        //
+        // The side table is itself an NSCache so it cannot grow without bound.
+        // Losing an entry to eviction only costs us this cleanup, degrading to
+        // the behaviour we would have had without it.
+        if let previous = keysByPath.object(forKey: path as NSString), previous != key {
+            cache.removeObject(forKey: previous)
+        }
+        keysByPath.setObject(key, forKey: path as NSString)
+
+        cache.setObject(decoded, forKey: key, cost: cost)
+        return decoded
+    }
+
+    /// Identity of a file's *contents*, as far as we can cheaply establish it.
+    private static func cacheKey(forPath path: String) -> NSString? {
+        // Keyed on (path, size, mtime) rather than on the path alone, because a
+        // file can be rewritten in place: a photo re-cropped over its original,
+        // a downloaded avatar overwritten at the same cache location. Path-only
+        // keying serves the superseded picture for the rest of the process,
+        // which is a correctness bug, not a performance one. Size is in the key
+        // as well as mtime because a rewrite inside the filesystem's timestamp
+        // granularity is not impossible, and the length usually moves when the
+        // bytes do.
+        //
+        // The price is one stat(2) per body evaluation, and that is the one
+        // syscall this change knowingly leaves on the main thread. It is the
+        // right trade: a stat on an inode the VFS already has hot is a few
+        // microseconds, against the tens of milliseconds a JPEG decode costs on
+        // the same thread, so we are buying "never stale" for roughly a
+        // thousandth of what we are saving. Both alternatives are worse: drop
+        // the stat and serve stale images, or push cache-busting onto authors
+        // by making them vary the path, which they would forget to do.
+        // Resolve first. attributesOfItem does NOT traverse a terminal symlink,
+        // while UIImage(contentsOfFile:) does, so a symlinked path would be
+        // keyed on the link's own size and mtime while being decoded from the
+        // target. Rewriting the target then leaves the key unchanged and serves
+        // the superseded image for ever, which is precisely the failure the
+        // (path, size, mtime) key exists to prevent, silently defeated for the
+        // one case where a path is most likely to be a stable alias for
+        // changing content.
+        let resolved = (path as NSString).resolvingSymlinksInPath
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: resolved) else {
+            return nil
+        }
+        // Bypass rather than substitute a default. Falling back to 0 here would
+        // silently degrade the key to path-only, which is the exact correctness
+        // bug this function exists to avoid, and it would do it invisibly. The
+        // documented policy above is that an unusable key means no caching.
+        guard
+            let size = (attrs[.size] as? NSNumber)?.uint64Value,
+            let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970
+        else {
+            return nil
+        }
+        // \u{1} separates the fields so a path ending in digits cannot run into
+        // the size and collide with a different (path, size) pair, the same
+        // trick mobIdentifiedChildren uses for its keys.
+        return "\(path)\u{1}\(size)\u{1}\(mtime)" as NSString
+    }
+
+    /// What one cached image actually costs us in memory.
+    private static func decodedByteCost(_ image: UIImage) -> Int {
+        // The decoded footprint, not the file size. A 2 MB JPEG is ~14 MB of
+        // bitmap once decoded, so budgeting by file size would let the cache
+        // hold several times the memory it believes it is holding and defeat
+        // the point of having a limit. Read it off the backing CGImage where
+        // there is one: bytesPerRow already accounts for row padding and for
+        // formats that are not four bytes per pixel. Fall back to a 4-bytes-
+        // per-pixel estimate at the image's scale for the images that have no
+        // CGImage (a CIImage-backed one, say). An estimate is fine there; the
+        // number only steers eviction.
+        if let cg = image.cgImage {
+            return cg.bytesPerRow * cg.height
+        }
+        let scale = image.scale
+        return Int(image.size.width * scale * image.size.height * scale * 4)
+    }
+
+    // Thread safety: NSCache does its own locking, and everything wrapped
+    // around it here is either pure (deriving a key string) or a filesystem
+    // read. The lookup is a check-then-insert and so is not atomic: two
+    // threads can miss on the same key and both decode. That race costs one
+    // duplicate decode and a setObject that overwrites an equal value; it
+    // cannot yield a wrong image, because the key encodes the file's size and
+    // mtime, so two threads that derived the same key were looking at the same
+    // bytes. Holding a lock across the whole lookup would instead serialise
+    // decodes onto the caller, which is the cost this cache exists to remove.
+}
+
 private struct MobImage: View {
     let node: MobNode
 
@@ -1803,7 +2012,7 @@ private struct MobImage: View {
                             placeholder
                         }
                     }
-                } else if let uiImage = UIImage(contentsOfFile: src) {
+                } else if let uiImage = MobImageCache.shared.image(atPath: src) {
                     Image(uiImage: uiImage)
                         .resizable()
                         .aspectRatio(contentMode: contentMode)
