@@ -10,6 +10,37 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Performance
+- **Navigation no longer rebuilds the whole native tree (iOS)** (MOB-129). The
+  root carried `.id(currentNavVersion)`, so every push, pop and reset destroyed
+  and rebuilt the entire SwiftUI tree. On a 1614-node screen a navigation cost
+  **235 ms** against a 65.7 ms steady-state re-render, and the whole 169 ms gap
+  was the identity change: it scales linearly with node count.
+
+  Two slots now sit at fixed positions and a navigation ping-pongs between them,
+  with the slide driven by an animated offset instead of `.transition()` —
+  which only fires on insert and removal, and insert/removal is exactly what
+  costs. A push drops to **76 ms** and a pop to **76 ms**, with the animation
+  unchanged.
+
+  The outgoing slot is deliberately kept, which gives depth-1 retention for
+  free: popping back diffs against that screen's own previous tree rather than
+  rebuilding it. A `reset` releases it, since that screen is unreachable.
+
+  Retention makes the *second* visit cheap regardless of shape. Bouncing
+  between the dense screen and a 37-node one, a pop went from 217 ms to
+  **66 ms** and a push from 26 ms to **8 ms**, because each screen returns to
+  the slot holding its own previous tree.
+
+  **What it does not do.** A first visit to a screen still builds every node
+  that does not yet exist, so a linear drill-down pays full price at each new
+  level; an alternating back-and-forth pays once per screen. It does not touch
+  the 65.7 ms steady-state floor either. And a parked screen is now alive rather than
+  destroyed, so a screen parked with a sheet, web view, video or GPU view up has
+  open issues recorded on MOB-129. Android is unchanged. See
+  `decisions/2026-09-04-two-slot-screen-presentation.md`.
+
+
 ## [0.7.39] - 2026-09-04
 
 ### Fixed

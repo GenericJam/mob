@@ -244,6 +244,28 @@ extension MobNode {
 
 // ── Recursive node renderer ────────────────────────────────────────────────
 
+extension MobNodeView: Equatable {
+    /// Reference equality on the node, which is stronger here than it looks.
+    ///
+    /// `nif_set_root` builds a completely fresh `MobNode` graph on every render,
+    /// so two renders never share a node object. An unchanged reference
+    /// therefore means this subtree was not re-sent at all — which is only true
+    /// for a slot the BEAM is not currently painting, i.e. a parked screen.
+    /// Reference equality at the root of such a subtree implies the entire
+    /// subtree is untouched, so short-circuiting it is sound rather than
+    /// merely cheap.
+    ///
+    /// Deliberately NOT a content comparison. Every interactive node's handle
+    /// prop is `(generation << 12) | slot` and `clear_taps` bumps the generation
+    /// on every render, so any content-based equality would be false for any
+    /// subtree containing a tappable node — which is most of them.
+    static func == (lhs: MobNodeView, rhs: MobNodeView) -> Bool {
+        lhs.node === rhs.node
+            && lhs.layoutWeightAxis == rhs.layoutWeightAxis
+            && lhs.lazyContainer == rhs.lazyContainer
+    }
+}
+
 struct MobNodeView: View {
     let node: MobNode
     private let layoutWeightAxis: MobLayoutWeightAxis?
@@ -1772,20 +1794,20 @@ private struct MobSheetView: View {
 // The asset-catalogue path gets one for free; the loose-file path gets nothing.
 // Calling it from a SwiftUI `body`, as MobImage used to, means that
 // read-and-decode runs on the main thread on every evaluation of the node. That
-// is bad in the steady state and much worse across a navigation: MobRootView
-// keys its subtree on .id(currentNavVersion), so a push or a pop tears the
-// whole tree down and rebuilds it, and every local-file image on the incoming
-// screen is decoded from scratch while the transition is mid-animation. A
-// screen with a handful of photos on it is a visible stall.
+// is bad in the steady state, and it used to be much worse across a navigation:
+// the root carried .id(currentNavVersion), so a push or a pop tore the whole
+// tree down and every local-file image on the incoming screen was decoded from
+// scratch mid-animation. MOB-129 removed that identity change, so a navigation
+// into a slot that already holds a similar tree now reuses the image views
+// rather than rebuilding them.
 //
 // Be precise about what this does and does not fix, because the surrounding
 // issue is easy to overclaim. A first visit to a screen is a cold cache by
 // definition, so a forward push to a new screen full of images is helped not at
 // all: that stall needs downsampling, or preparingForDisplay() off the main
 // thread, and both are their own change. What goes away here is every decode
-// AFTER the first: re-rendering a screen already up, and popping back to one
-// visited before, which is the case .id(currentNavVersion) turned from free
-// into full price.
+// AFTER the first: re-rendering a screen already up, and returning to one
+// visited before.
 //
 // This cache is only for the local-file branch. The http(s) branch goes through
 // AsyncImage, which is backed by URLSession's own caching, and is left alone.
@@ -2076,13 +2098,37 @@ private struct MobImage: View {
 public struct MobRootView: View {
     @ObservedObject var model = MobViewModel.shared
     @Environment(\.colorScheme) private var colorScheme
-    @State private var currentRoot: MobNode?
-    @State private var currentTransition: String = "none"
-    // Local mirror of model.navVersion so the .id() change happens INSIDE
-    // the withAnimation block (the model's @Published value changes via
-    // SwiftUI observation, which doesn't carry the animation context and
-    // produces a default crossfade instead of the .move transition).
-    @State private var currentNavVersion: Int = 0
+    // ── Two-slot screen presentation (MOB-129) ──────────────────────────────
+    //
+    // The root used to be one view carrying `.id(currentNavVersion)`, which
+    // destroyed and rebuilt the entire tree on every push, pop and reset.
+    // Measured on a 1614-node screen: a navigation cost 235 ms against a 65.7 ms
+    // steady-state re-render, and the whole 169 ms gap was the identity change.
+    // With identity preserved a navigation costs what a re-render costs.
+    //
+    // So navigation no longer changes identity. Two slots sit at fixed
+    // structural positions in the ZStack — that position IS their identity, and
+    // no `.id()` is needed — and a navigation ping-pongs between them: the
+    // incoming tree goes into whichever slot is not active, and the active flag
+    // moves. The slide is driven by `slotOffset` rather than by `.transition()`,
+    // because `.transition()` only fires on insert/remove and insert/remove is
+    // exactly what costs 169 ms.
+    //
+    // The outgoing slot is deliberately NOT cleared. Holding it gives depth-1
+    // retention for free: popping back puts that screen's tree into the slot
+    // that still holds its previous tree, so SwiftUI diffs rather than rebuilds.
+    // One level is where nearly all back-navigation lands, and the cost is
+    // bounded at exactly two trees rather than growing with stack depth.
+    //
+    // What this does NOT buy: a first visit to a screen whose shape differs from
+    // the outgoing one still builds every node that does not yet exist. Measured
+    // at 12-28% saving there, against 73% when the shapes match. No identity
+    // scheme avoids building nodes that were never built.
+    @State private var slots: [MobNode?] = [nil, nil]
+    @State private var activeSlot: Int = 0
+    @State private var slotOffset: [CGFloat] = [0, 0]
+    @State private var slotOpacity: [Double] = [1, 1]
+    @State private var containerWidth: CGFloat = 400
     @State private var availableSheetHeight: CGFloat = 1
 
     /// Share of the root's height a content-detent sheet may occupy at most.
@@ -2094,16 +2140,9 @@ public struct MobRootView: View {
 
     public var body: some View {
         ZStack {
-            if let root = currentRoot {
-                MobNodeView(node: root)
-                    // .id changes only on navigation (push/pop/reset), so
-                    // typing in a TextField doesn't tear the view down.
-                    // Driven by currentNavVersion (not model.navVersion)
-                    // so the change happens inside withAnimation — see
-                    // .onChange(of: model.rootVersion) below.
-                    .id(currentNavVersion)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .transition(navTransition(currentTransition))
+            if slots[0] != nil || slots[1] != nil {
+                screenSlot(0)
+                screenSlot(1)
             } else {
                 ZStack {
                     Color.black.ignoresSafeArea()
@@ -2147,39 +2186,27 @@ public struct MobRootView: View {
         // becoming an indistinguishable full-screen cover.
         .background {
             GeometryReader { geometry in
-                Color.clear.onChange(of: geometry.size.height, initial: true) { _, height in
-                    availableSheetHeight = max(1, height * Self.sheetHeightCeilingFraction)
-                }
+                Color.clear
+                    .onChange(of: geometry.size.height, initial: true) { _, height in
+                        availableSheetHeight = max(1, height * Self.sheetHeightCeilingFraction)
+                    }
+                    // The slide distance. Read from real geometry rather than
+                    // UIScreen so it is right under split view, Stage Manager
+                    // and rotation, and re-read so a parked screen's parked
+                    // offset stays off-screen after a resize.
+                    .onChange(of: geometry.size.width, initial: true) { _, width in
+                        guard width > 0 else { return }
+                        containerWidth = width
+                        for i in 0..<2 where i != activeSlot && slots[i] != nil {
+                            slotOffset[i] = slotOffset[i] < 0 ? -width : width
+                        }
+                    }
             }
         }
         .environment(\.mobAvailableSheetHeight, availableSheetHeight)
         .ignoresSafeArea(.container, edges: [.bottom, .horizontal])
         .onChange(of: model.rootVersion) {
-            let t = model.transition
-            let newRoot = model.root
-            let newNavVersion = model.navVersion
-            // Capture transition before the animation block so the modifier
-            // sees the right value when the new view is inserted.
-            currentTransition = t
-            // Log every nav transition so log-tail-based checks can verify
-            // the animation fired without resorting to video recording.
-            // Format: [MobNav] transition=<push|pop|reset|none> navVersion=<n>
-            if t != "none" {
-                NSLog("[MobNav] transition=%@ navVersion=%d", t, newNavVersion)
-            }
-            if let animation = navAnimation(t) {
-                withAnimation(animation) {
-                    currentRoot = newRoot
-                    // Apply navVersion inside withAnimation so the .id()
-                    // change carries the animation context — without this
-                    // SwiftUI replaces the view via default crossfade and
-                    // the .move transition never plays.
-                    currentNavVersion = newNavVersion
-                }
-            } else {
-                currentRoot = newRoot
-                currentNavVersion = newNavVersion
-            }
+            applyRoot(model.root, transition: model.transition, navVersion: model.navVersion)
         }
         // Notify Elixir when the OS appearance toggles so subscribers
         // (Mob.Device → Mob.Theme.Adaptive consumers) can re-resolve.
@@ -2190,22 +2217,104 @@ public struct MobRootView: View {
         }
     }
 
-    private func navTransition(_ t: String) -> AnyTransition {
+    /// One presentation slot.
+    ///
+    /// No `.id()`: the slot's fixed structural position in the ZStack is its
+    /// identity, which is the whole point — an identity that never changes is
+    /// what lets SwiftUI diff a new tree into existing views instead of
+    /// rebuilding them.
+    ///
+    /// `.equatable()` is what makes the inactive slot cheap. `nif_set_root`
+    /// allocates a fresh `MobNode` graph on every render, so the active slot's
+    /// reference always differs and its body always re-runs. The inactive slot's
+    /// reference does NOT change, because the BEAM only sends the active
+    /// screen's tree — so an equality check short-circuits its entire subtree.
+    /// Without this the inactive slot would be re-evaluated on every render of
+    /// the active one, and holding it would cost more than rebuilding it.
+    @ViewBuilder
+    private func screenSlot(_ index: Int) -> some View {
+        if let root = slots[index] {
+            MobNodeView(node: root)
+                .equatable()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .offset(x: slotOffset[index])
+                .opacity(slotOpacity[index])
+                // Explicit, not inherited from opacity. SwiftUI hit-tests over
+                // its own display list and does not necessarily honour a zero
+                // opacity the way UIKit's hitTest: honours a zero alpha, and
+                // `MobBoxSemantics` applies `.contentShape` liberally. A parked
+                // screen that can still be tapped would resolve handles from a
+                // superseded tap-table generation.
+                .allowsHitTesting(index == activeSlot)
+                .accessibilityHidden(index != activeSlot)
+        }
+    }
+
+    /// Apply a new root, either in place or as a navigation.
+    ///
+    /// A `"none"` render is the steady-state path and updates the active slot
+    /// directly: same slot, same identity, so SwiftUI diffs. That is the 65.7 ms
+    /// path a navigation now also takes.
+    private func applyRoot(_ newRoot: MobNode?, transition t: String, navVersion: Int) {
+        guard t != "none" else {
+            slots[activeSlot] = newRoot
+            return
+        }
+
+        // Log every nav transition so log-tail-based checks can verify the
+        // animation fired without resorting to video recording.
+        // Format: [MobNav] transition=<push|pop|reset|none> navVersion=<n>
+        NSLog("[MobNav] transition=%@ navVersion=%d", t, navVersion)
+
+        let incoming = 1 - activeSlot
+        let outgoing = activeSlot
+
+        // Seat the incoming tree off-screen on the side it should arrive from,
+        // OUTSIDE any animation, so the placement itself is not animated.
+        slotOffset[incoming] = enterOffset(t)
+        slotOpacity[incoming] = (t == "reset") ? 0 : 1
+        slots[incoming] = newRoot
+        activeSlot = incoming
+
+        let settle = {
+            slotOffset[incoming] = 0
+            slotOpacity[incoming] = 1
+            slotOffset[outgoing] = exitOffset(t)
+            slotOpacity[outgoing] = (t == "reset") ? 0 : 1
+        }
+
+        if let animation = navAnimation(t) {
+            withAnimation(animation, settle)
+        } else {
+            settle()
+        }
+
+        // A reset replaces the stack, so the outgoing screen is unreachable and
+        // holding it is pure cost. Push and pop keep it: that is the depth-1
+        // retention which makes popping back a diff rather than a rebuild.
+        if t == "reset" {
+            slots[outgoing] = nil
+            slotOffset[outgoing] = 0
+            slotOpacity[outgoing] = 1
+        }
+    }
+
+    /// Where an incoming screen starts, before it slides in.
+    private func enterOffset(_ t: String) -> CGFloat {
         switch t {
-        case "push":
-            return .asymmetric(
-                insertion: .move(edge: .trailing),
-                removal: .move(edge: .leading)
-            )
-        case "pop":
-            return .asymmetric(
-                insertion: .move(edge: .leading),
-                removal: .move(edge: .trailing)
-            )
-        case "reset":
-            return .opacity
-        default:
-            return .identity
+        case "push": return containerWidth
+        case "pop": return -containerWidth
+        default: return 0
+        }
+    }
+
+    /// Where an outgoing screen ends up. It stays there, parked off-screen,
+    /// until a later navigation reuses its slot.
+    private func exitOffset(_ t: String) -> CGFloat {
+        switch t {
+        case "push": return -containerWidth
+        case "pop": return containerWidth
+        default: return 0
         }
     }
 
