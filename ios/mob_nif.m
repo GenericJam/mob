@@ -6777,8 +6777,7 @@ void mob_record_native_frame(double apply_us, const char *transition) {
         // strncpy rather than strlcpy so this stays portable to the Android
         // build if the same shape is ported; the explicit terminator is what
         // strncpy does not guarantee.
-        strncpy(slot->transition, transition ? transition : "none",
-                sizeof(slot->transition) - 1);
+        strncpy(slot->transition, transition ? transition : "none", sizeof(slot->transition) - 1);
         slot->transition[sizeof(slot->transition) - 1] = '\0';
         g_native_frame_seq++;
     }
