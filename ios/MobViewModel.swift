@@ -3,6 +3,7 @@
 
 import SwiftUI
 import Combine
+import QuartzCore
 
 @objc public class MobViewModel: NSObject, ObservableObject {
     @objc public static let shared = MobViewModel()
@@ -48,13 +49,73 @@ import Combine
 
     @objc public func setRoot(_ node: MobNode?, transition: String) {
         DispatchQueue.main.async {
+            let measuring = mob_native_stats_enabled() != 0
+            let start = measuring ? CACurrentMediaTime() : 0
+
             self.transition = transition
             self.root = node
             self.rootVersion += 1
             if transition != "none" {
                 self.navVersion += 1
             }
+
+            if measuring {
+                self.measureApply(from: start, transition: transition)
+            }
         }
+    }
+
+    /// Record how long the main thread stays busy applying this tree.
+    ///
+    /// The `@Published` writes above only *schedule* SwiftUI's work. Building
+    /// the view tree, laying it out and handing it to Core Animation all happen
+    /// later in the same run loop pass, which is exactly the half
+    /// `Mob.RenderStats` cannot see: its `set_root_us` closes when `setRoot`
+    /// returns, and `setRoot` returns as soon as it has dispatched.
+    ///
+    /// A `beforeWaiting` observer is the closing bracket because it fires when
+    /// the main run loop has nothing left to do and is about to sleep, which is
+    /// after layout and display. `CATransaction.setCompletionBlock` was the
+    /// obvious alternative and is wrong here: SwiftUI's update frequently lands
+    /// in a later transaction than the one open at assignment time, so the
+    /// completion fires before the work being measured has happened.
+    ///
+    /// The order matters as much as the activity, and getting it wrong fails
+    /// silently with a plausible number. `beforeWaiting` observers run in
+    /// ascending `order`, and Core Animation's transaction-commit observer sits
+    /// at 2000000 (UIKit's post-commit handler at 2000001). SwiftUI evaluates
+    /// bodies and lays out inside that commit, so an observer at order 0 fires
+    /// *before* any of the work being measured and reports little more than the
+    /// three property assignments above. `CFIndex.max` puts this last, after
+    /// the commit, which is the only position where the closing bracket means
+    /// what the doc above says it means.
+    ///
+    /// The observer is one-shot (`repeats: false`) and removes itself, so a
+    /// burst of `set_root` calls in a single pass arms several observers that
+    /// all fire on the same idle and each records its own start. That
+    /// over-counts overlapping applies rather than losing them, which is the
+    /// safer direction for a measurement whose purpose is to justify work.
+    ///
+    /// Two known biases, both upward, both worth knowing before trusting a
+    /// tail figure. `beforeWaiting` fires only when the loop is actually about
+    /// to sleep, so a main thread under continuous load can go many iterations
+    /// without one and the sample absorbs all of it. And the observer is added
+    /// to `.commonModes`, so a run loop excursion into a mode outside that set
+    /// is reported as apply time when a common mode resumes. Read `max` and
+    /// `p95` with that in mind; a single excursion poisons both.
+    private func measureApply(from start: CFTimeInterval, transition: String) {
+        var observer: CFRunLoopObserver?
+        observer = CFRunLoopObserverCreateWithHandler(
+            kCFAllocatorDefault,
+            CFRunLoopActivity.beforeWaiting.rawValue,
+            false,
+            CFIndex.max
+        ) { obs, _ in
+            mob_record_native_frame((CACurrentMediaTime() - start) * 1_000_000, transition)
+            CFRunLoopRemoveObserver(CFRunLoopGetMain(), obs, .commonModes)
+        }
+        guard let observer else { return }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
     }
 
     @objc public func setStartupPhase(_ phase: String) {

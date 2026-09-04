@@ -58,3 +58,17 @@ void mob_unregister_frame(const char *id, uint64_t seq);
 // font names from the last Mob.Theme.set/1 (nif_set_theme in mob_nif.m
 // stores it). Empty (never nil) when no theme has set font_fallback.
 NSArray<NSString *> *mob_font_fallback(void);
+
+// Native frame timing, read back through the native_stats NIF.
+//
+// mob_native_stats_enabled() is checked on the main thread on every set_root,
+// so the disabled path must stay cheap: it is a single relaxed atomic load and
+// nothing else. MobViewModel only arms its run loop observer when this returns
+// non-zero.
+//
+// mob_record_native_frame() takes main-thread busy time in microseconds for one
+// applied tree, together with the transition that produced it ("push", "pop",
+// "reset" or "none") so navigation frames can be told apart from steady-state
+// re-renders. Implemented in mob_nif.m.
+int mob_native_stats_enabled(void);
+void mob_record_native_frame(double apply_us, const char *transition);

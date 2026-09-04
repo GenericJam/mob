@@ -6697,6 +6697,92 @@ static ERL_NIF_TERM nif_screenshot(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 }
 #endif // !MOB_RELEASE || MOB_ENABLE_SCREENSHOT
 
+// Storage and the two Swift-callable entry points live OUTSIDE the debug-only
+// harness guard below, deliberately. MobViewModel calls both on every set_root
+// with no knowledge of MOB_RELEASE: the release pipeline compiles ios/*.swift
+// without the flag and mob_nif.m with it, so defining these inside the guard
+// links fine in debug and fails every release build with an undefined symbol.
+// This file already states the rule where g_ui_event_seq is declared: "only the
+// harness reads it; the writers stay unconditional". Only the two NIFs that
+// READ the samples are gated, alongside the rest of the harness.
+
+// ── Native frame timing (the half Mob.RenderStats cannot see) ────────────────
+//
+// `Mob.RenderStats` stops at the BEAM boundary. Its `set_root_us` covers the
+// ObjC half of `nif_set_root` only — JSON parse, node construction, the tap
+// table swap — because `[MobViewModel setRoot:transition:]` dispatches to the
+// main thread and returns immediately. Everything SwiftUI then does to build,
+// lay out and display the tree happens after that measurement has closed, so
+// the entire native half of a frame has never been measured on either platform.
+//
+// That is the quantity MOB-126 and MOB-129 are arguing about: whether tearing
+// the view tree down on navigation costs enough to be worth retaining trees per
+// screen. MOB-130 says the wire-format decision must be made on evidence only.
+// None of those can be settled against a number nobody has.
+//
+// What is recorded here is **main-thread busy time**: from the instant the new
+// tree is applied to the view model to the instant the main run loop goes idle
+// again, which is after SwiftUI has built the view tree, laid it out and handed
+// it to Core Animation. That is deliberately the pessimistic reading — anything
+// else queued on the main thread in that window is counted too — because it is
+// also the honest one: a frame is dropped when the main thread is busy, whoever
+// made it busy. Treat a sample as an upper bound on this frame's native cost,
+// not as an attribution.
+//
+// Cost when disabled is one relaxed atomic load per `set_root`. The run loop
+// observer, the timestamps and the lock are all downstream of that check, so an
+// app that never enables this pays for a single integer read per navigation.
+
+#define MOB_NATIVE_FRAME_SAMPLES 240
+
+typedef struct {
+    double apply_us;
+    uint64_t seq;
+    char transition[16];
+} mob_native_frame_t;
+
+// Ring buffer. `g_native_frame_seq` counts every sample ever recorded, so a
+// reader can tell "240 samples, that is all there were" from "240 samples, and
+// 5000 more scrolled past" — the difference decides whether a percentile over
+// this window means anything.
+static mob_native_frame_t g_native_frames[MOB_NATIVE_FRAME_SAMPLES];
+static uint64_t g_native_frame_seq = 0;
+
+// Read on the main thread on every set_root, written from a NIF thread. Atomic
+// rather than lock-guarded so the disabled path costs a load and no more; the
+// relaxed ordering is fine because a sample recorded a frame either side of the
+// flag flipping is not a correctness problem.
+static _Atomic int g_native_stats_enabled = 0;
+
+static NSObject *g_native_stats_lock = nil;
+static dispatch_once_t g_native_stats_once;
+
+static NSObject *mob_native_stats_lock(void) {
+    dispatch_once(&g_native_stats_once, ^{
+      g_native_stats_lock = [NSObject new];
+    });
+    return g_native_stats_lock;
+}
+
+int mob_native_stats_enabled(void) {
+    return atomic_load_explicit(&g_native_stats_enabled, memory_order_relaxed);
+}
+
+void mob_record_native_frame(double apply_us, const char *transition) {
+    NSObject *lock = mob_native_stats_lock();
+    @synchronized(lock) {
+        mob_native_frame_t *slot = &g_native_frames[g_native_frame_seq % MOB_NATIVE_FRAME_SAMPLES];
+        slot->apply_us = apply_us;
+        slot->seq = g_native_frame_seq;
+        // strncpy rather than strlcpy so this stays portable to the Android
+        // build if the same shape is ported; the explicit terminator is what
+        // strncpy does not guarantee.
+        strncpy(slot->transition, transition ? transition : "none", sizeof(slot->transition) - 1);
+        slot->transition[sizeof(slot->transition) - 1] = '\0';
+        g_native_frame_seq++;
+    }
+}
+
 #if !MOB_RELEASE // resume the debug-only harness (sampling + scroll + element frames)
 
 // sample_region(X, Y, W, H) -> {ok, PixelW, PixelH, RGBA} | {error, Reason}
@@ -6857,6 +6943,84 @@ static ERL_NIF_TERM nif_scroll_to(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
     return ok ? enif_make_atom(env, "ok")
               : enif_make_tuple2(env, enif_make_atom(env, "error"),
                                  enif_make_atom(env, "scroll_view_not_found"));
+}
+
+// nif_native_stats_enable/1 — turn native frame timing on or off.
+//
+// Off by default. See the ring buffer above for what is measured and why the
+// disabled path is a single atomic load.
+static ERL_NIF_TERM nif_native_stats_enable(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    char flag[8] = {0};
+    if (!enif_get_atom(env, argv[0], flag, sizeof(flag), ERL_NIF_LATIN1))
+        return enif_make_badarg(env);
+
+    int on = (strcmp(flag, "true") == 0);
+    if (!on && strcmp(flag, "false") != 0)
+        return enif_make_badarg(env);
+
+    // Reset the window when enabling, so a measurement run never reports
+    // samples from an earlier one. Enabling is the natural "start measuring
+    // here" marker and callers reasonably read it that way.
+    if (on) {
+        NSObject *lock = mob_native_stats_lock();
+        @synchronized(lock) {
+            g_native_frame_seq = 0;
+        }
+    }
+    atomic_store_explicit(&g_native_stats_enabled, on, memory_order_relaxed);
+    return enif_make_atom(env, "ok");
+}
+
+// nif_native_stats/0 — JSON of the recorded native frame samples, newest first.
+//
+// {"enabled":bool,"recorded":N,"dropped":M,"samples":[{"apply_us":f,"transition":s,"seq":n},...]}
+//
+// `recorded` is every sample since the window opened; `dropped` is how many
+// scrolled out of the ring. A percentile over `samples` describes the tail of
+// the run only, and `dropped > 0` is what tells the reader that.
+static ERL_NIF_TERM nif_native_stats(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    mob_native_frame_t snapshot[MOB_NATIVE_FRAME_SAMPLES];
+    uint64_t total = 0;
+
+    // Snapshot under the lock, serialize outside it: the main thread takes this
+    // same lock once per set_root, and JSON-encoding 240 samples from a dirty
+    // scheduler while holding it would stall UI work on a thread with no QoS
+    // relationship to it. Same reasoning as nif_element_frames.
+    NSObject *lock = mob_native_stats_lock();
+    @synchronized(lock) {
+        total = g_native_frame_seq;
+        memcpy(snapshot, g_native_frames, sizeof(snapshot));
+    }
+
+    uint64_t held = total < MOB_NATIVE_FRAME_SAMPLES ? total : MOB_NATIVE_FRAME_SAMPLES;
+    NSMutableArray *samples = [NSMutableArray arrayWithCapacity:(NSUInteger)held];
+    // Newest first, matching Mob.RenderStats.frames/0.
+    for (uint64_t i = 0; i < held; i++) {
+        uint64_t seq = total - 1 - i;
+        mob_native_frame_t *f = &snapshot[seq % MOB_NATIVE_FRAME_SAMPLES];
+        [samples addObject:@{
+            @"apply_us" : @(f->apply_us),
+            @"transition" : [NSString stringWithUTF8String:f->transition] ?: @"none",
+            @"seq" : @(f->seq)
+        }];
+    }
+
+    NSDictionary *payload = @{
+        @"enabled" : @(mob_native_stats_enabled() ? YES : NO),
+        @"recorded" : @(total),
+        @"dropped" : @(total > MOB_NATIVE_FRAME_SAMPLES ? total - MOB_NATIVE_FRAME_SAMPLES : 0),
+        @"samples" : samples
+    };
+
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+    if (!jsonData)
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "encode_failed"));
+
+    ErlNifBinary bin;
+    enif_alloc_binary(jsonData.length, &bin);
+    memcpy(bin.data, jsonData.bytes, jsonData.length);
+    return enif_make_binary(env, &bin);
 }
 
 // nif_element_frames/0 — JSON {"id":[x,y,w,h],...} of tagged element frames
@@ -7783,6 +7947,8 @@ static ErlNifFunc nif_funcs[] = {
     {"scroll_info", 1, nif_scroll_info, 0},
     {"scroll_to", 3, nif_scroll_to, 0},
     {"element_frames", 0, nif_element_frames, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"native_stats", 0, nif_native_stats, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"native_stats_enable", 1, nif_native_stats_enable, 0},
 #endif
     // ── Core mob functions ───────────────────────────────────────────────────
     {"battery_level", 0, nif_battery_level, 0},

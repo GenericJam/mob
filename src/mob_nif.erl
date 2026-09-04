@@ -106,6 +106,8 @@
     scroll_info/1,
     scroll_to/3,
     element_frames/0,
+    native_stats/0,
+    native_stats_enable/1,
     %% Peripheral.VendorUsb (Android USB host; iOS returns :unsupported)
     vendor_usb_list_devices/1,
     vendor_usb_request_permission/1,
@@ -205,6 +207,8 @@
     scroll_info/1,
     scroll_to/3,
     element_frames/0,
+    native_stats/0,
+    native_stats_enable/1,
     %% Storage
     storage_dir/1,
     storage_save_to_photo_library/1,
@@ -360,6 +364,18 @@ scroll_to(_Id, _X, _Y) -> erlang:nif_error(not_loaded).
 %% every rendered node that carries an :id (logical points iOS / dp Android).
 %% Lets an agent locate + drive elements by id without a screenshot.
 element_frames() -> erlang:nif_error(not_loaded).
+
+%% native_stats() -> JSON binary of native frame timings, newest first:
+%%   {"enabled":bool,"recorded":N,"dropped":M,
+%%    "samples":[{"apply_us":F,"transition":S,"seq":N},...]}
+%% Measures main-thread busy time applying a tree, which is the half
+%% Mob.RenderStats cannot see. Off until native_stats_enable(true).
+native_stats() -> erlang:nif_error(not_loaded).
+
+%% native_stats_enable(true | false) -> ok
+%% Enabling also clears the sample window, so a run never reports samples
+%% from an earlier one.
+native_stats_enable(_On) -> erlang:nif_error(not_loaded).
 storage_dir(_Location) -> erlang:nif_error(not_loaded).
 storage_save_to_photo_library(_Path) -> erlang:nif_error(not_loaded).
 storage_save_to_media_store(_Path, _Type) -> erlang:nif_error(not_loaded).
