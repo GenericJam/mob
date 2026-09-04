@@ -233,6 +233,87 @@ forward range (e.g. 9200+) is tracked separately. Until then, the manual
 
 ---
 
+## A screen feels slow: measuring the render pipeline
+
+Before changing anything, measure. `Mob.RenderStats` records where a frame's
+time actually goes, and it is off by default because it is not free.
+
+Enable it from a connected node (`mix mob.connect`), drive the app, then read
+the summary:
+
+```elixir
+Mob.RenderStats.enable()
+# ... drive the app ...
+Mob.RenderStats.summary()
+```
+
+`summary/0` reports p50, p95 and max per stage, with the sample size `n`
+alongside, because stages do not share a population. `frames/0` returns the raw
+records, newest first, when a percentile hides what you are looking for.
+
+### What the stages mean
+
+| stage | what it covers |
+|---|---|
+| `render_us` | your `render/1` |
+| `expand_us` | `Mob.Composite`, `Mob.List` and `Mob.Component` expansion |
+| `reconcile_us` | `Mob.ComponentRegistry.reconcile/2` |
+| `prepare_us` | the renderer's tree walk: prop resolution, theme tokens, one `register_tap` per handler prop |
+| `register_tap_us` | the `register_tap` calls alone — **nested inside `prepare_us`**, so adding the two double-counts |
+| `encode_us` | `:json.encode` |
+| `set_root_us` | handing the tree to native |
+
+A frame spans two processes: the screen runs `render/1`, expansion and
+reconcile, then hands off to `Mob.Sender`, which runs prepare, encode and
+`set_root`. Frames the sender drops — superseded by a newer tree, or belonging
+to a screen that is no longer active — are recorded with `committed: false`
+rather than discarded, because BEAM-side work that gets thrown away is worth
+knowing about. `summary/0` reports the two populations separately for that
+reason.
+
+Do not compare `total_us` against a frame budget. See the moduledoc for why.
+
+### The native half
+
+`set_root_us` closes when the tree reaches the main thread, **not** when it is
+on screen. Everything the platform then does to build, lay out and display it
+happens after that measurement closed, and on a navigation that is usually the
+larger half of the frame.
+
+```elixir
+Mob.RenderStats.native_enable()
+# ... drive the app ...
+Mob.RenderStats.native_summary()
+```
+
+`native_summary/0` groups by transition, because a `"none"` sample re-renders
+into an existing view tree while `"push"`, `"pop"` and `"reset"` rebuild it. On
+a small screen the two differ by several milliseconds, and pooling them gives a
+median that describes neither.
+
+Read `apply_us` as an **upper bound** on that frame's native cost, not an
+attribution: it is main-thread busy time from the tree being applied to the run
+loop going idle, so anything else queued on the main thread in that window is
+inside the number.
+
+`dropped` tells you how many samples scrolled out of the fixed-size native ring
+buffer. When it is above zero, the percentiles describe the tail of your run
+rather than all of it.
+
+**Availability.** iOS debug builds only. It returns `{:error, :unsupported}` on
+Android, on the host, and in an iOS **release** build, because the reading NIFs
+sit inside the same guard as the rest of the test harness. Profile a debug
+build.
+
+### Cost when enabled
+
+`time/2` reads a `:persistent_term`; `accumulate/2` reads the process
+dictionary. Neither allocates when disabled. The honest cost when enabled is
+dominated by `accumulate/2`, which wraps every `register_tap` call — 615 times
+on a 200-row screen, not once per frame. Measured at roughly 4 µs per dense
+frame on a development Mac and plausibly 20-40 µs on a phone. Against a 27 ms
+frame that is under 0.2%, but it is not nothing, which is why it is opt-in.
+
 ## Distribution in production
 
 In development, `Mob.Dist.ensure_started/1` runs so `mix mob.connect` can
