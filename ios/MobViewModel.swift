@@ -80,18 +80,36 @@ import QuartzCore
     /// in a later transaction than the one open at assignment time, so the
     /// completion fires before the work being measured has happened.
     ///
+    /// The order matters as much as the activity, and getting it wrong fails
+    /// silently with a plausible number. `beforeWaiting` observers run in
+    /// ascending `order`, and Core Animation's transaction-commit observer sits
+    /// at 2000000 (UIKit's post-commit handler at 2000001). SwiftUI evaluates
+    /// bodies and lays out inside that commit, so an observer at order 0 fires
+    /// *before* any of the work being measured and reports little more than the
+    /// three property assignments above. `CFIndex.max` puts this last, after
+    /// the commit, which is the only position where the closing bracket means
+    /// what the doc above says it means.
+    ///
     /// The observer is one-shot (`repeats: false`) and removes itself, so a
     /// burst of `set_root` calls in a single pass arms several observers that
     /// all fire on the same idle and each records its own start. That
     /// over-counts overlapping applies rather than losing them, which is the
     /// safer direction for a measurement whose purpose is to justify work.
+    ///
+    /// Two known biases, both upward, both worth knowing before trusting a
+    /// tail figure. `beforeWaiting` fires only when the loop is actually about
+    /// to sleep, so a main thread under continuous load can go many iterations
+    /// without one and the sample absorbs all of it. And the observer is added
+    /// to `.commonModes`, so a run loop excursion into a mode outside that set
+    /// is reported as apply time when a common mode resumes. Read `max` and
+    /// `p95` with that in mind; a single excursion poisons both.
     private func measureApply(from start: CFTimeInterval, transition: String) {
         var observer: CFRunLoopObserver?
         observer = CFRunLoopObserverCreateWithHandler(
             kCFAllocatorDefault,
             CFRunLoopActivity.beforeWaiting.rawValue,
             false,
-            0
+            CFIndex.max
         ) { obs, _ in
             mob_record_native_frame((CACurrentMediaTime() - start) * 1_000_000, transition)
             CFRunLoopRemoveObserver(CFRunLoopGetMain(), obs, .commonModes)

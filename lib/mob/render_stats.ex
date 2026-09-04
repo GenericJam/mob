@@ -620,7 +620,18 @@ defmodule Mob.RenderStats do
             samples
             |> Enum.group_by(& &1["transition"])
             |> Map.new(fn {transition, group} ->
-              {transition, percentiles(Enum.map(group, &%{apply_us: &1["apply_us"]}), :apply_us)}
+              # Drop non-numeric durations rather than sorting them. Elixir term
+              # ordering puts every binary above every number, so one
+              # `"apply_us": "slow"` from a mismatched native half becomes the
+              # p95 and the max: it takes over precisely the half of the
+              # distribution this measurement exists to look at.
+              values =
+                group
+                |> Enum.map(& &1["apply_us"])
+                |> Enum.filter(&is_number/1)
+                |> Enum.map(&%{apply_us: &1})
+
+              {transition, percentiles(values, :apply_us)}
             end)
         }
     end
@@ -633,14 +644,46 @@ defmodule Mob.RenderStats do
   defp native_call(nif, fun, args) do
     apply(nif, fun, args)
   rescue
-    UndefinedFunctionError -> {:error, :unsupported}
-    ErlangError -> {:error, :unsupported}
+    e in UndefinedFunctionError ->
+      # Only this module's own absence. A different UndefinedFunctionError
+      # raised from inside a working NIF is a real bug and should surface.
+      if e.module == nif and e.function == fun,
+        do: {:error, :unsupported},
+        else: reraise(e, __STACKTRACE__)
+
+    e in ErlangError ->
+      # Only the not-loaded stub. A working NIF can raise other erlang terms
+      # (`:system_limit` out of enif_alloc_binary, say), and turning those into
+      # "this platform does not support it" would hide a real failure behind a
+      # message saying nothing is wrong.
+      #
+      # Map.get, not `e.original`: this clause also catches the erlang errors
+      # that Elixir normalises into their own structs, and SystemLimitError has
+      # no :original field. Reading it directly raises KeyError from inside a
+      # rescue, turning a recoverable error into a crash — which is exactly what
+      # this function exists to prevent, and on the example named above.
+      if Map.get(e, :original) == :not_loaded,
+        do: {:error, :unsupported},
+        else: reraise(e, __STACKTRACE__)
   end
 
+  # Shape-check, not just key-check. The payload is well-formed JSON produced by
+  # a native library that may be older or newer than this module, so "parsed" is
+  # not the same as "usable": a `samples` that is a number reaches `length/1`,
+  # and a list of bare numbers reaches `Access.get/3`, both of which raise out of
+  # a function documented to return `{:error, _}` and never take down whatever
+  # is reading stats.
   defp decode_native(json) do
     case :json.decode(json) do
-      %{"samples" => _} = payload -> {:ok, payload}
-      other -> {:error, {:unexpected_payload, other}}
+      %{"samples" => samples} = payload when is_list(samples) ->
+        if Enum.all?(samples, &is_map/1) do
+          {:ok, payload}
+        else
+          {:error, {:unexpected_payload, :sample_not_a_map}}
+        end
+
+      other ->
+        {:error, {:unexpected_payload, other}}
     end
   rescue
     _ -> {:error, :bad_json}

@@ -30,6 +30,24 @@ Everything below is unreleased work from the MOB-124 rendering-performance
 epic. Nothing here has shipped to Hex.
 
 ### Added
+- **Native frame timing: `Mob.RenderStats.native_enable/1`, `native_frames/1`
+  and `native_summary/1`** (MOB-126). `Mob.RenderStats` measures seven stages
+  and every one is on the BEAM side of the boundary: `set_root_us` closes when
+  `nif_set_root` returns, and that is the moment the tree is handed to the main
+  thread, not the moment it is on screen. Everything SwiftUI does to build, lay
+  out and display it happened after the measurement closed, so the native half
+  of every frame had never been measured. These read a native ring buffer of
+  main-thread busy time per applied tree, tagged with the transition that
+  produced it so a navigation rebuild can be told apart from a steady-state
+  re-render.
+
+  Off by default; the disabled path is one relaxed atomic load per `set_root`.
+  Read it as an upper bound on a frame's native cost rather than an
+  attribution: anything else queued on the main thread in the same window is
+  inside the number. **iOS only for now** — Android returns
+  `{:error, :unsupported}`, which is accurate rather than silently zero. See
+  `decisions/2026-09-03-measure-the-native-half-of-a-frame.md`.
+
 - **`Mob.RenderStats` — per-frame render instrumentation** (MOB-125). Records
   the user's `render/1`, tree expansion, component reconcile, the renderer's
   prepare walk, `register_tap`, `:json.encode`, and `set_root` as seen from the
@@ -109,6 +127,19 @@ epic. Nothing here has shipped to Hex.
   recorded through `Mob.RenderStats` with `reason: :unchanged` rather than
   vanishing, so a screen that stops updating stays diagnosable. See
   `decisions/2026-09-03-skip-the-repaint-when-the-tree-is-unchanged.md`.
+- **Local-file images are cached instead of re-read on every render**
+  (found via MOB-126). `UIImage(contentsOfFile:)` was called inside SwiftUI's
+  `body`, and unlike `UIImage(named:)` there is no system cache behind it, so
+  every evaluation of an image node re-read the file from disk on the main
+  thread. Worst across a navigation, where the root's identity change rebuilds
+  the whole tree and every image on the incoming screen is loaded again while
+  the transition animates.
+
+  Keyed on (path, size, mtime) so a file rewritten in place is not served
+  stale, with the budget scaled to physical memory (16-64 MB) rather than a
+  flat ceiling that is only defensible on the largest device it runs on. A
+  first visit still loads cold; what goes away is every load after that.
+
 - **Children keep their identity across list edits** (MOB-127). Children of
   every container were keyed on their position, so inserting or removing a row
   made each following row adopt the previous occupant's view state: typed text,

@@ -164,13 +164,108 @@ defmodule Mob.NativeFrameStatsTest do
       # Same reasoning as nif_element_frames: the main thread takes this lock
       # once per set_root, and JSON-encoding the window from a dirty scheduler
       # while holding it stalls UI work on a thread with no QoS relationship.
-      body = nif_body(@nif, "nif_native_stats")
-      snapshot_at = index_of(body, "memcpy(snapshot, g_native_frames")
-      encode_at = index_of(body, "NSJSONSerialization")
-      sync_close = index_of(body, "}\n\n    uint64_t held")
+      #
+      # Asserted against the actual @synchronized block rather than against a
+      # nearby line. The earlier version located the closing brace by looking
+      # for the text that happened to follow it, which passed just as happily
+      # with the memcpy hoisted ABOVE the lock (the regression it is named for)
+      # and failed on an innocent rename or an added comment.
+      critical = synchronized_body(nif_body(@nif, "nif_native_stats"))
 
-      assert snapshot_at < sync_close, "the copy must happen inside @synchronized"
-      assert encode_at > sync_close, "the encode must happen after the lock is released"
+      assert critical =~ "memcpy(snapshot, g_native_frames",
+             "the copy must happen inside @synchronized"
+
+      refute critical =~ "NSJSONSerialization",
+             "the encode must not happen while the lock is held"
+
+      assert nif_body(@nif, "nif_native_stats") =~ "NSJSONSerialization",
+             "and it must still happen somewhere"
+    end
+
+    test "the Swift-callable helpers are outside the debug-only harness guard" do
+      # MobViewModel calls both on every set_root with no knowledge of
+      # MOB_RELEASE: the release pipeline compiles ios/*.swift without the flag
+      # and mob_nif.m with it. Defining these inside the guard links in debug
+      # and fails EVERY release build with an undefined symbol. Only the two
+      # NIFs that read the samples belong inside.
+      code = code_only(@nif)
+
+      writer_at = index_of(code, "void mob_record_native_frame(double apply_us")
+      probe_at = index_of(code, "int mob_native_stats_enabled(void) {")
+      harness_at = index_of(code, "#if !MOB_RELEASE // resume the debug-only harness")
+
+      assert writer_at < harness_at,
+             "mob_record_native_frame is Swift-callable and must not be release-gated"
+
+      assert probe_at < harness_at,
+             "mob_native_stats_enabled is Swift-callable and must not be release-gated"
+
+      # The readers, by contrast, must stay gated: they are harness surface.
+      assert index_of(code, "static ERL_NIF_TERM nif_native_stats(") > harness_at
+    end
+  end
+
+  describe "the measurement's closing bracket" do
+    test "the observer runs after Core Animation's commit, not before it" do
+      # beforeWaiting observers fire in ascending order, and Core Animation's
+      # transaction-commit observer sits at 2000000. SwiftUI evaluates bodies
+      # and lays out inside that commit, so an observer at order 0 fires before
+      # every bit of the work being measured and still reports a plausible
+      # number. This is the same class of silent-wrong-answer as the
+      # CATransaction completion the module rejects, and it has to be pinned
+      # rather than left to a comment.
+      assert code_only(@view_model) =~ "CFIndex.max"
+
+      refute code_only(@view_model) =~ ~r/beforeWaiting\.rawValue,\s*false,\s*0\b/s,
+             "order 0 puts the bracket ahead of the layout being measured"
+    end
+  end
+
+  describe "reading a payload from a mismatched native half" do
+    test "a samples field that is not a list is refused, not crashed on" do
+      defmodule ScalarSamplesNif do
+        def native_stats, do: ~s({"enabled":true,"recorded":1,"dropped":0,"samples":5})
+      end
+
+      assert {:error, {:unexpected_payload, _}} = RenderStats.native_frames(ScalarSamplesNif)
+      assert {:error, {:unexpected_payload, _}} = RenderStats.native_summary(ScalarSamplesNif)
+    end
+
+    test "samples that are not maps are refused" do
+      defmodule BareSamplesNif do
+        def native_stats, do: ~s({"enabled":true,"recorded":3,"dropped":0,"samples":[1,2,3]})
+      end
+
+      assert {:error, {:unexpected_payload, _}} = RenderStats.native_summary(BareSamplesNif)
+    end
+
+    test "a non-numeric duration cannot take over the tail" do
+      # Elixir term ordering puts every binary above every number, so one bad
+      # value becomes both p95 and max: it captures exactly the half of the
+      # distribution the measurement exists to look at.
+      defmodule StringDurationNif do
+        def native_stats do
+          ~s({"enabled":true,"recorded":2,"dropped":0,"samples":[) <>
+            ~s({"apply_us":"slow","transition":"push","seq":1},) <>
+            ~s({"apply_us":3.0,"transition":"push","seq":0}]})
+        end
+      end
+
+      summary = RenderStats.native_summary(StringDurationNif)
+      assert %{"push" => push} = summary.apply_us
+      assert push.n == 1
+      assert push.max == 3.0
+    end
+
+    test "a genuine error from a working NIF is not disguised as :unsupported" do
+      # rescue ErlangError across the board would turn a real failure inside a
+      # loaded NIF into "this platform does not support it", which reads as
+      # nothing being wrong.
+      defmodule AngryNif do
+        def native_stats, do: :erlang.error(:system_limit)
+      end
+
+      assert_raise SystemLimitError, fn -> RenderStats.native_frames(AngryNif) end
     end
 
     test "enabling clears the window so a run cannot report an earlier one" do
@@ -213,6 +308,25 @@ defmodule Mob.NativeFrameStatsTest do
       |> String.replace(~r{^\s*%%.*$}, "")
     end)
     |> Enum.join("\n")
+  end
+
+  # The text between `@synchronized(lock) {` and its matching close, by brace
+  # depth. Locating the close by the line that follows it is what made the
+  # earlier version of the lock test pass with the memcpy hoisted out.
+  defp synchronized_body(body) do
+    [_, after_open] = String.split(body, "@synchronized(lock) {", parts: 2)
+
+    {taken, _} =
+      after_open
+      |> String.graphemes()
+      |> Enum.reduce_while({[], 1}, fn
+        "{", {acc, depth} -> {:cont, {["{" | acc], depth + 1}}
+        "}", {acc, 1} -> {:halt, {acc, 0}}
+        "}", {acc, depth} -> {:cont, {["}" | acc], depth - 1}}
+        c, {acc, depth} -> {:cont, {[c | acc], depth}}
+      end)
+
+    taken |> Enum.reverse() |> Enum.join()
   end
 
   defp nif_body(source, name) do
