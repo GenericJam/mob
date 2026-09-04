@@ -30,12 +30,34 @@ defmodule Mob.Nav.ResetTransitionTest do
 
     def handle_event("reset_pop", _, socket),
       do: {:noreply, Mob.Socket.reset_to(socket, @other, %{}, transition: :pop)}
+
+    def handle_event("reset_all", _, socket),
+      do: {:noreply, Mob.Socket.reset_to(socket, @other, %{}, scope: :all)}
+
+    def handle_event("push_other", _, socket),
+      do: {:noreply, Mob.Socket.push_screen(socket, @other)}
   end
 
   defmodule OtherScreen do
     use Mob.Screen
     def mount(_params, _session, socket), do: {:ok, socket}
     def render(_assigns), do: %{type: :text, props: %{text: "other"}, children: []}
+
+    def handle_event("go_back", _, socket), do: {:noreply, Mob.Socket.pop_screen(socket)}
+
+    def handle_event("push_third", _, socket),
+      do: {:noreply, Mob.Socket.push_screen(socket, Mob.Nav.ResetTransitionTest.ThirdScreen)}
+  end
+
+  defmodule ThirdScreen do
+    use Mob.Screen
+    def mount(_params, _session, socket), do: {:ok, socket}
+    def render(_assigns), do: %{type: :text, props: %{text: "third"}, children: []}
+
+    def handle_event("to_root", _, socket), do: {:noreply, Mob.Socket.pop_to_root(socket)}
+
+    def handle_event("to_other", _, socket),
+      do: {:noreply, Mob.Socket.pop_to(socket, Mob.Nav.ResetTransitionTest.OtherScreen)}
   end
 
   defmodule DemoApp do
@@ -46,19 +68,37 @@ defmodule Mob.Nav.ResetTransitionTest do
   end
 
   defmodule RecordingNif do
-    def start, do: Agent.start(fn -> [] end, name: __MODULE__)
-    def transitions, do: __MODULE__ |> Agent.get(& &1) |> Enum.reverse()
-    def reset, do: Agent.update(__MODULE__, fn _ -> [] end)
+    def start, do: Agent.start(fn -> [transitions: [], roots: []] end, name: __MODULE__)
+
+    def transitions,
+      do: __MODULE__ |> Agent.get(&Keyword.get(&1, :transitions, [])) |> Enum.reverse()
+
+    def last_root, do: List.last(roots())
+
+    def roots,
+      do: __MODULE__ |> Agent.get(&Keyword.get(&1, :roots, [])) |> Enum.reverse()
+
+    def reset, do: Agent.update(__MODULE__, fn _ -> [transitions: [], roots: []] end)
 
     def platform, do: :android
     def safe_area, do: {0.0, 0.0, 0.0, 0.0}
     def take_launch_notification, do: :none
     def clear_taps, do: :ok
     def register_tap(_), do: 0
-    def set_root(_json), do: :ok
+
+    def set_root(json) do
+      Agent.update(__MODULE__, fn state ->
+        Keyword.update(state, :roots, [json], &[json | &1])
+      end)
+
+      :ok
+    end
 
     def set_transition(t) do
-      Agent.update(__MODULE__, &[t | &1])
+      Agent.update(__MODULE__, fn state ->
+        Keyword.update(state, :transitions, [t], &[t | &1])
+      end)
+
       :ok
     end
   end
@@ -73,6 +113,41 @@ defmodule Mob.Nav.ResetTransitionTest do
   defp last_transition do
     Mob.Sender.sync(:infinity)
     List.last(RecordingNif.transitions())
+  end
+
+  # Whether the frame told native the navigation stack was replaced. Carried on
+  # the JSON root rather than in the transition atom, so the transition
+  # vocabulary native matches on stays closed — see `replaces?/0`'s callers.
+  # Wait until the navigation has painted at least one frame.
+  #
+  # `Mob.Sender.sync/1` orders only the CALLER's casts, and an async paint
+  # travels router -> screen -> sender, so stepping those processes still races
+  # the flush. How many frames land is not fixed either, which is why callers
+  # assert a property of every frame rather than an exact list.
+  defp await_paint(timeout \\ 2_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_await_paint(deadline)
+  end
+
+  defp do_await_paint(deadline) do
+    Mob.Sender.sync(:infinity)
+
+    cond do
+      RecordingNif.roots() != [] ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("no frame was painted within the timeout")
+
+      true ->
+        Process.sleep(10)
+        do_await_paint(deadline)
+    end
+  end
+
+  defp replaced_stack? do
+    Mob.Sender.sync(:infinity)
+    Enum.any?(RecordingNif.roots(), &Map.get(:json.decode(&1), "replaces_stack", false))
   end
 
   setup do
@@ -116,19 +191,28 @@ defmodule Mob.Nav.ResetTransitionTest do
   end
 
   describe "the chosen transition reaches the native boundary" do
-    test "a plain reset still cross-fades", %{router: router} do
+    test "a plain reset still cross-fades, and marks the stack replaced", %{router: router} do
       Mob.Router.dispatch(router, "reset_default", %{})
+      # The transition atom stays in the closed `:push | :pop | :reset | :none`
+      # vocabulary; the "stack was replaced" fact rides on the JSON root
+      # instead. Android matches the transition as a raw string with an exact
+      # `when`, so a decorated atom would fall to `else` and silently lose its
+      # animation. The flag tells native the outgoing screen is unreachable, so
+      # the view tree MOB-129 would otherwise retain for a return can go.
       assert last_transition() == :reset
+      assert replaced_stack?()
     end
 
-    test "transition: :push paints a push", %{router: router} do
+    test "transition: :push paints a push and still replaces", %{router: router} do
       Mob.Router.dispatch(router, "reset_push", %{})
       assert last_transition() == :push
+      assert replaced_stack?()
     end
 
     test "transition: :pop paints a pop", %{router: router} do
       Mob.Router.dispatch(router, "reset_pop", %{})
       assert last_transition() == :pop
+      assert replaced_stack?()
     end
 
     test "the stack is still replaced, whatever the animation", %{router: router} do
@@ -165,7 +249,129 @@ defmodule Mob.Nav.ResetTransitionTest do
       :ok = GenServer.call(router, {:navigate, {:reset, OtherScreen, %{}}})
 
       assert last_transition() == :reset
+      assert replaced_stack?()
       assert Mob.Router.get_current_module(router) == OtherScreen
+    end
+  end
+
+  describe "a pop also releases the screen it left behind" do
+    # MOB-147 S3. `pop` stops the outgoing screen's process, so the view tree
+    # the two-slot presenter retains for it can never be shown again: the next
+    # navigation always writes into the *other* slot. Tagging it releases that
+    # tree when the animation ends instead of at the next navigation. Measured
+    # on an iPhone SE over eight pops of a dense screen, this did not cost the
+    # main-thread teardown it might have: median native apply fell 42.8ms ->
+    # 39.4ms. Leaving pop untagged was the inconsistency this closes.
+    test "pop marks the stack replaced", %{router: router} do
+      Mob.Router.dispatch(router, "push_other", %{})
+      Mob.Sender.sync(:infinity)
+      RecordingNif.reset()
+
+      Mob.Router.dispatch(router, "go_back", %{})
+
+      assert last_transition() == :pop
+      assert replaced_stack?()
+    end
+
+    test "a push does not - the screen it leaves is still on the stack", %{router: router} do
+      RecordingNif.reset()
+      Mob.Router.dispatch(router, "push_other", %{})
+      Mob.Sender.sync(:infinity)
+
+      assert :push in RecordingNif.transitions()
+      refute replaced_stack?()
+    end
+  end
+
+  describe "a reset that asks for no animation" do
+    # MOB-147 N2. `Mob.Socket.reset_to/4` rejects `:none`, but the router also
+    # takes raw nav actions - from `Mob.Test.reset_to/4`, which does not
+    # validate, and from sockets built before a hot code push. `:none` must
+    # stay untagged: with no animation there is no completion callback to
+    # release on, and the incoming screen reuses the outgoing one's view
+    # identities, so releasing the slot would pull the tree out from under it.
+    test "the socket API refuses to build one" do
+      assert_raise ArgumentError, fn ->
+        Mob.Socket.reset_to(%Mob.Socket{}, OtherScreen, %{}, transition: :none)
+      end
+    end
+
+    test "but Mob.Test.reset_to/4 does not validate, so the router still sees it",
+         %{router: router} do
+      # This is what makes `replacing(:none)` live rather than dead code, and it
+      # is asserted through the real public API rather than by inspecting an
+      # action shape. `Mob.Test` drives the router by its registered
+      # `:mob_screen` name, so pointing it at this node reaches the router this
+      # test started. If this ever raises, the guard can go — but not before.
+      RecordingNif.reset()
+
+      assert :ok = Mob.Test.reset_to(node(), OtherScreen, %{}, transition: :none)
+
+      assert Mob.Router.get_current_module(router) == OtherScreen
+      await_paint()
+
+      assert Enum.all?(RecordingNif.transitions(), &(&1 == :none))
+      refute replaced_stack?()
+    end
+
+    test "is painted without an animation and without the flag", %{router: router} do
+      current = :sys.get_state(router).current.pid
+      RecordingNif.reset()
+
+      send(router, {:nav_action, {:reset, OtherScreen, %{}, :none}, current})
+
+      assert Mob.Router.get_current_module(router) == OtherScreen
+      await_paint()
+
+      # Every frame, not an exact list: the count is not fixed and asserting
+      # `== [:none]` was flaky for exactly that reason.
+      assert Enum.all?(RecordingNif.transitions(), &(&1 == :none))
+      refute replaced_stack?()
+    end
+  end
+
+  describe "every navigation that stops the screen it leaves is tagged" do
+    # MOB-147 S3, review finding (b): the pop path had one test, through
+    # `pop_screen`, while `pop_to`, `pop_to_root` and the failed-restart
+    # recovery went untested. Reverting the tag at three of the four sites left
+    # the whole suite green.
+    setup %{router: router} do
+      Mob.Router.dispatch(router, "push_other", %{})
+      Mob.Router.dispatch(router, "push_third", %{})
+      Mob.Sender.sync(:infinity)
+      assert Mob.Router.get_current_module(router) == ThirdScreen
+      RecordingNif.reset()
+      :ok
+    end
+
+    test "pop_to_root", %{router: router} do
+      Mob.Router.dispatch(router, "to_root", %{})
+
+      assert Mob.Router.get_current_module(router) == HomeScreen
+      assert last_transition() == :pop
+      assert replaced_stack?()
+    end
+
+    test "pop_to a screen mid-stack", %{router: router} do
+      Mob.Router.dispatch(router, "to_other", %{})
+
+      assert Mob.Router.get_current_module(router) == OtherScreen
+      assert last_transition() == :pop
+      assert replaced_stack?()
+    end
+  end
+
+  describe "an all-stack reset" do
+    # `scope: :all` discards every parked tab stack as well as the current one,
+    # so it replaces strictly more than the default `scope: :stack` reset. It
+    # went untagged and untested: reverting `replacing/1` on that path alone
+    # left the whole suite green.
+    test "is tagged too", %{router: router} do
+      Mob.Router.dispatch(router, "reset_all", %{})
+
+      assert Mob.Router.get_current_module(router) == OtherScreen
+      assert last_transition() == :reset
+      assert replaced_stack?()
     end
   end
 end

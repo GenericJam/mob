@@ -10,6 +10,78 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **A parked screen no longer keeps live resources running, and returning to
+  one no longer breaks the frame registry** (MOB-147, MOB-145). MOB-129 keeps
+  the navigated-away screen mounted so popping back diffs rather than rebuilds.
+  Before it, "not active" and "not alive" were the same state, so several things
+  never had to ask which one they were in. A post-merge review found two of them
+  silently broken rather than merely wasteful.
+
+  **The frame registry refused every write from a screen you popped back to.**
+  The nav generation is still bumped on every navigation and stale writes are
+  still refused, but a parked tracker's `onAppear` never fires again — so a
+  returning screen kept a stamp two navigations old and was rejected for ever.
+  `Mob.Test.element_frames` and `tap_id` read empty for the screen actually on
+  display, silently, for exactly the screens the optimisation retains. Trackers
+  now re-seed when their slot becomes active. Verified on device: 231 frames
+  before a push, 231 again after popping back.
+
+  **Toggles and sliders inherited state across screens.** Neither had any
+  prop-to-state sync, relying on the navigation teardown to re-seed them, so a
+  screen could show the toggle states and slider positions of the screen two
+  navigations back. `Mob.Socket` already raises `ArgumentError` on
+  `transition: :none` citing this exact hazard; MOB-129 had made it the default
+  path. Both now re-seed when the BEAM's value changes.
+
+  Toggles, sliders and text fields re-seed when their screen becomes active,
+  not only when the BEAM's value changes. A value watcher alone misses the
+  common case: slots alternate, so a screen reuses the view identities of the
+  screen two navigations back, and if both carry the same value — `false` for a
+  toggle, `""` for an uncontrolled field — the watcher never fires. For a field
+  with `secure: true` that meant a password crossing screens. Focus is dropped
+  on park too, so a field holding the keyboard does not arrive focused on the
+  next screen.
+
+  Also: a parked sheet is dismissed and re-presented on return, rather than
+  staying visible and interactive over the incoming screen — `.sheet` presents
+  on the window, so the slot's `allowsHitTesting(false)` never reached it, and a
+  park is no longer reported to the BEAM as a user dismissal. A parked video
+  pauses (audio included) and only resumes if it was autoplaying; a parked GPU
+  view stops rendering, having previously run at 60 fps indefinitely behind the
+  visible screen. `on_end_reached`'s latch clears on activation, restoring the
+  pre-MOB-129 behaviour that a navigation used to give it for free.
+
+- **A navigation that replaces the stack releases the screen it replaced**
+  (MOB-147). The release used to key on the animation name, which got it wrong
+  in both directions: `reset_to(..., transition: :push)` is documented, does
+  replace the stack, and was read as a push and retained for ever; while
+  `switch_tab(..., transition: :reset)` is also documented, does NOT replace the
+  stack — a parked tab can be switched back to — and was released, throwing away
+  the retention it should have kept.
+
+  The flag now rides on the JSON root, and the transition atom keeps its closed
+  `:push | :pop | :reset | :none` vocabulary. A first attempt suffixed the atom
+  instead (`:reset_replace`) and that was wrong: `set_transition/1`'s atom name
+  reaches Android as a raw string, and `MainActivity.kt` matches those four
+  values with an exact `when`, so every `reset_to` would have silently lost its
+  animation — on newly generated apps too, and those files are app-owned and
+  never re-rendered, so no template fix would have reached existing ones. An
+  unknown root key is ignored by both platforms' parsers, so a host that does
+  not read it keeps its current behaviour.
+
+- **A reset cross-fades again** (MOB-147). The outgoing screen was released
+  synchronously, removing it in the same turn, so it hard-cut rather than fading
+  — and with `.transition()` gone there was nothing to animate its removal. The
+  release now runs on the animation's completion.
+
+  Still open on MOB-147: the layout cost of a parked slot on a container
+  geometry change. Steady state with both slots warm measures 67.6 ms against
+  65.7 ms for one, about 3%, which suggests the equality check is doing its job.
+  Rotation itself remains unmeasured, and honestly so: a geometry change
+  produces no `set_root`, so the frame instrumentation cannot see it at all.
+
+
 ### Performance
 - **Navigation no longer rebuilds the whole native tree (iOS)** (MOB-129). The
   root carried `.id(currentNavVersion)`, so every push, pop and reset destroyed

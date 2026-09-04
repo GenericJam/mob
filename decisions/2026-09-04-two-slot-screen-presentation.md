@@ -74,7 +74,9 @@ The cost is therefore paid once per screen per slot, not once per navigation. A 
 
 ## Hazards accepted, and the ones still open
 
-A parked screen is now alive rather than destroyed, which invalidates assumptions elsewhere. Addressed here: hit-testing, and the frame-registry generation is untouched because the parked slot stops re-registering once it stops laying out.
+A parked screen is now alive rather than destroyed, which invalidates assumptions elsewhere.
+
+**Correction.** An earlier version of this record claimed "the frame-registry generation is untouched because the parked slot stops re-registering once it stops laying out." That reasoned about the outgoing direction only, and it was wrong about the returning one. A post-merge review (MOB-147) found that a parked tracker's `.onAppear` never fires again, so a screen you pop back to keeps a stamp two navigations stale and **every one of its frame writes is refused for ever** — silently emptying `Mob.Test.element_frames` and `tap_id` for exactly the screens this optimisation retains. Fixed by re-seeding the stamp when a slot becomes active; the generation gate itself is kept, because it is what stops an outgoing screen re-registering at mid-animation coordinates.
 
 **Still open and NOT fixed here**, because they need a parked screen to actually contain the widget in question:
 
@@ -84,3 +86,64 @@ A parked screen is now alive rather than destroyed, which invalidates assumption
 * `MobLazyList`'s `on_end_reached` latch reasons explicitly that "only navigation changes the container's identity" — which this change makes false, so returning to a list already at its end will not re-fire pagination.
 
 Each is small on its own and none is reachable without the corresponding widget on the parked screen. They are recorded on MOB-129 rather than fixed blind.
+
+## Follow-up: which navigations release the slot they leave (MOB-147)
+
+Retention is only worth paying for when the screen left behind can come back.
+It cannot when its process has been stopped, and three navigations do that:
+`reset_to`, every flavour of `pop`, and the recovery path for a screen that
+crashed and failed to restart. In all of them the retained tree is unreachable
+— the next navigation always writes into the *other* slot — so it is held until
+something happens to overwrite it, which may be a long dwell later.
+
+Four sites qualify: `reset_to`, `pop`, `pop_to` and `pop_to_root`, and both
+recovery branches for a screen that crashed and failed to restart. All are now
+tagged, and the tagged form releases the outgoing slot when the animation
+completes.
+
+Tab switches are deliberately **not** tagged: a parked tab can be switched back
+to, so its tree is worth keeping. That is the one case where retention pays.
+
+**How the tag travels.** As `{transition, :replace}` inside the BEAM, unwrapped
+by `Mob.Renderer` into a plain `:push | :pop | :reset | :none` plus a
+`replaces_stack` key on the JSON root. The first attempt decorated the atom
+itself (`:reset_replace`). That broke Android: `MainActivity.kt.eex` matches
+the transition string against `"push"/"pop"/"reset"` exactly, so a decorated
+value fell through to `else` and every `reset_to` silently lost its animation —
+in generated apps too, and those files are app-owned and never re-rendered, so
+a template fix would not have reached existing ones. Keeping the wire
+vocabulary closed and putting the fact beside it costs nothing: both platforms
+already ignore unknown root keys.
+
+**`:none` stays untagged.** With no animation there is no completion callback
+to release on, and the incoming screen reuses the outgoing one's view
+identities, so releasing the slot would pull the tree out from under it.
+`Mob.Socket.reset_to/4` rejects `:none` outright, but the router still accepts
+raw nav actions — from `Mob.Test.reset_to/4`, which does not validate, and from
+sockets built before a hot code push — so the guard is load-bearing, not dead.
+
+**Tagging pop was measured, not assumed** — on both sides, because there are
+two.
+
+*The pop itself.* The worry was that releasing at animation completion moves a
+teardown onto the main thread at exactly the wrong moment; teardown of a dense
+tree measured ~26 ms earlier in this epic. Over eight pops of the dense screen
+on the iOS simulator, median native apply time went **42.8 ms to 39.4 ms**,
+with a markedly better low end. Reproducible across runs.
+
+*The navigation that pays for it.* The release costs nothing on the pop because
+the cost, if any, lands on the **next** navigation into the freed slot, which
+now builds from empty instead of diffing against the retained tree. Measured as
+`push A→B; pop B→A; push A→C`, eight rounds: **82.1 ms tagged, 84.4 ms
+untagged**. That is noise, and the reason it is noise is that the retention
+being given up was not buying anything here — C is a different screen from B, so
+what it replaces is a cross-shape diff, which this epic already measured as no
+cheaper than a fresh build. Retention pays only when a screen returns to its
+*own* slot, which is exactly the case a pop cannot produce for the screen it
+just destroyed.
+
+*Discarded:* an earlier tagged run of the same harness reported 18.5 ms. It was
+collected under different conditions (no redeploy or reconnect between runs) and
+a repeat under the same conditions as the untagged run gave 82.1 ms. The harness
+is not stable across app states, so only the like-for-like pair is quoted, and
+the claim is limited to "no measurable difference" rather than a win.

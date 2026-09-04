@@ -69,19 +69,35 @@ defmodule Mob.Nav.TabTransitionTest do
   end
 
   defmodule RecordingNif do
-    def start, do: Agent.start(fn -> [] end, name: __MODULE__)
-    def transitions, do: __MODULE__ |> Agent.get(& &1) |> Enum.reverse()
-    def reset, do: Agent.update(__MODULE__, fn _ -> [] end)
+    def start, do: Agent.start(fn -> [transitions: [], roots: []] end, name: __MODULE__)
+
+    def transitions,
+      do: __MODULE__ |> Agent.get(&Keyword.get(&1, :transitions, [])) |> Enum.reverse()
+
+    def reset, do: Agent.update(__MODULE__, fn _ -> [transitions: [], roots: []] end)
 
     def platform, do: :android
     def safe_area, do: {0.0, 0.0, 0.0, 0.0}
     def take_launch_notification, do: :none
     def clear_taps, do: :ok
     def register_tap(_), do: 0
-    def set_root(_json), do: :ok
+
+    def set_root(json) do
+      Agent.update(__MODULE__, fn state ->
+        Keyword.update(state, :roots, [json], &[json | &1])
+      end)
+
+      :ok
+    end
+
+    def roots,
+      do: __MODULE__ |> Agent.get(&Keyword.get(&1, :roots, [])) |> Enum.reverse()
 
     def set_transition(transition) do
-      Agent.update(__MODULE__, &[transition | &1])
+      Agent.update(__MODULE__, fn state ->
+        Keyword.update(state, :transitions, [transition], &[transition | &1])
+      end)
+
       :ok
     end
   end
@@ -130,6 +146,21 @@ defmodule Mob.Nav.TabTransitionTest do
     RecordingNif.transitions()
   end
 
+  # Whether ANY frame this navigation painted told native the stack was
+  # replaced. Carried on the JSON root so the transition vocabulary native
+  # matches on stays closed.
+  #
+  # Across every painted frame, not just the last: a navigation paints the
+  # activation frame and then the incoming screen's own render, and only the
+  # first carries the flag. Reading `last_root` alone reported `false` for a
+  # tagged navigation — and, worse, reported `false` when nothing was painted at
+  # all, so `refute replaced_stack?()` passed vacuously. The callers assert
+  # `roots() != []` for that reason.
+  defp replaced_stack? do
+    Mob.Sender.sync(:infinity)
+    Enum.any?(RecordingNif.roots(), &Map.get(:json.decode(&1), "replaces_stack", false))
+  end
+
   test "a directional transition reaches native on first mount and restore", %{router: router} do
     Mob.Router.dispatch(router, "settings_push", %{})
     assert List.last(transitions()) == :push
@@ -138,6 +169,28 @@ defmodule Mob.Nav.TabTransitionTest do
     Mob.Router.dispatch(router, "home_pop", %{})
     assert List.last(transitions()) == :pop
     assert Mob.Router.get_current_module(router) == HomeScreen
+  end
+
+  test "a tab switch is never marked as replacing the stack", %{router: router} do
+    # The other half of MOB-147 S1. A parked tab can be switched back to, so its
+    # view tree is worth retaining — releasing it throws away exactly the
+    # depth-1 retention MOB-129 exists for.
+    #
+    # Read off the JSON root, not off the transition atom. An earlier version
+    # asserted the atom did not end in "_replace", which became vacuous the
+    # moment the flag moved off the transition string: `Mob.Renderer` unwraps
+    # the tuple before `set_transition/1`, so NO atom can carry that suffix and
+    # the assertion could never fail — including for the regression it names.
+    for event <- ["settings_push", "home_pop", "settings_default"] do
+      RecordingNif.reset()
+      Mob.Router.dispatch(router, event, %{})
+      Mob.Sender.sync(:infinity)
+
+      assert RecordingNif.roots() != [],
+             "#{event} painted nothing, so the refutation below would be vacuous"
+
+      refute replaced_stack?(), "#{event} must not be tagged as a stack replacement"
+    end
   end
 
   test "legacy switch_tab/2 remains an unanimated swap", %{router: router} do

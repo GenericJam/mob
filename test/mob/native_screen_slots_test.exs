@@ -15,9 +15,13 @@ defmodule Mob.NativeScreenSlotsTest do
   satisfy would pass against code that does nothing.
   """
   # credo:disable-for-this-file Jump.CredoChecks.VacuousTest
+  import Mob.Test.NativeSource
+
   use ExUnit.Case, async: true
 
   @ios File.read!(Path.expand("../../ios/MobRootView.swift", __DIR__))
+  @nif File.read!(Path.expand("../../ios/mob_nif.m", __DIR__))
+  @view_model File.read!(Path.expand("../../ios/MobViewModel.swift", __DIR__))
 
   describe "identity" do
     test "navigation no longer changes the root's identity" do
@@ -79,6 +83,147 @@ defmodule Mob.NativeScreenSlotsTest do
     end
   end
 
+  describe "the mutations a post-merge review proved survived" do
+    test "the outgoing slot is cleared in exactly one place, under the release guard" do
+      # Inserting `slots[outgoing] = nil` anywhere else destroys depth-1
+      # retention — the headline benefit — and every other test still passed.
+      # The original guard rejected one exact textual shape; this counts.
+      body = region(code_only(@ios), "private func applyRoot(", "\n    }")
+      clears = body |> String.split("slots[outgoing] = nil") |> length()
+
+      assert clears - 1 == 1,
+             "expected exactly one clear of the outgoing slot, found #{clears - 1}"
+
+      # And it must sit behind the release guard, not anywhere earlier.
+      guard_at = index_of(body, "guard releasing, token == navToken else { return }")
+      clear_at = index_of(body, "slots[outgoing] = nil")
+      assert guard_at < clear_at
+
+      # The token must be taken AFTER the increment. Swapping those two lines
+      # leaves `token` one behind for ever, the guard never passes, and nothing
+      # is released — the whole feature inert, with every other assertion here
+      # still green.
+      assert index_of(body, "navToken += 1") < index_of(body, "let token = navToken"),
+             "the token must be read after it is bumped, or the guard never passes"
+    end
+
+    test "a resize keeps a parked slot on the side it parked on" do
+      # Flipping this sign swings the parked slot on screen after any rotation.
+      code = code_only(@ios)
+      assert code =~ "slotOffset[i] = slotOffset[i] < 0 ? -width : width"
+    end
+
+    test "the slot honours its opacity" do
+      # Deleting this makes the reset crossfade machinery dead code while
+      # leaving it in the source, which reads as working.
+      slot =
+        region(
+          code_only(@ios),
+          "private func screenSlot(_ index: Int) -> some View {",
+          "\n    }"
+        )
+
+      assert slot =~ ".opacity(slotOpacity[index])"
+    end
+
+    test "the startup branch keys on both slots being empty" do
+      # `if slots[activeSlot] != nil` looks equivalent and is not: it shows the
+      # startup spinner whenever the ACTIVE slot is empty, even though the other
+      # slot still holds a screen.
+      code = code_only(@ios)
+      assert code =~ "if slots[0] != nil || slots[1] != nil"
+      refute code =~ "if slots[activeSlot] != nil"
+    end
+
+    test "a non-animated navigation still settles" do
+      # Dropping settle() from the else branch leaves the incoming screen parked
+      # off-screen for any transition with no animation.
+      body = region(code_only(@ios), "private func applyRoot(", "\n    }")
+
+      assert body =~
+               ~r/if let anim = navAnimation\(t\) \{\s*withAnimation\(anim, settle, completion: release\)\s*\} else \{\s*settle\(\)\s*release\(\)\s*\}/,
+             "both branches must settle, and both must release"
+    end
+  end
+
+  describe "the release keys on stack replacement, not the animation (MOB-147 S1)" do
+    test "the flag comes from the view model, not from the transition string" do
+      # A suffixed atom (`:reset_replace`) was tried and was wrong: the atom's
+      # name reaches Android as a raw string and MainActivity.kt matches
+      # "push"/"pop"/"reset" with an exact `when`, so a suffixed value fell to
+      # `else` and every reset silently lost its animation. Keeping the flag off
+      # the transition string keeps that vocabulary closed.
+      code = code_only(@ios)
+      assert code =~ "replacesStack: model.replacesStack"
+      assert code =~ "let releasing = replacesStack"
+
+      refute code =~ "_replace\"",
+             "the replacement flag must not ride in the transition string"
+    end
+
+    test "the native side actually reads the flag off the root" do
+      # Hardcoding `BOOL replacesStack = NO;` makes the whole feature inert end
+      # to end, and every Swift-side assertion still passes — they only check
+      # the consumer. This checks the producer.
+      body = region(code_only(@nif, :objc), "static ERL_NIF_TERM nif_set_root(", "\n}\n")
+      assert body =~ ~s|((NSDictionary *)json)[@"replaces_stack"]|
+      assert body =~ "[replacesRaw isKindOfClass:[NSNumber class]] && [replacesRaw boolValue]"
+      assert body =~ "setRoot:node transition:transitionStr replacesStack:replacesStack"
+
+      # And the view model must keep it, not drop it on the floor.
+      vm = code_only(@view_model)
+      assert vm =~ "public var replacesStack: Bool = false"
+      assert vm =~ "self.replacesStack = replacesStack"
+    end
+
+    test "the offsets and the animation choice read the transition directly" do
+      code = code_only(@ios)
+
+      for fun <- ["enterOffset", "exitOffset", "navAnimation"] do
+        body = region(code, "private func #{fun}(", "\n    }")
+        assert body =~ "switch t {", "#{fun} should switch on the plain transition"
+      end
+    end
+
+    test "both opacity seeds derive from the same crossfade decision" do
+      # One of the two seeds read the raw transition while the other read a
+      # derived value. With a suffixed atom that made a reset cross-fade or
+      # hard-cut depending on which slot it landed in. Binding once and using it
+      # in both places is what makes that unrepresentable.
+      body = region(code_only(@ios), "private func applyRoot(", "\n    }")
+      assert body =~ ~s|let crossfading = t == "reset"|
+      assert body =~ "slotOpacity[incoming] = crossfading ? 0 : 1"
+      assert body =~ "slotOpacity[outgoing] = crossfading ? 0 : 1"
+
+      refute body =~ ~s|slotOpacity[incoming] = (t == "reset")|,
+             "the incoming seed must not re-derive the decision"
+    end
+
+    test "the release refuses to run if another navigation happened since" do
+      # A slot index is not enough state. `incoming = 1 - activeSlot` alternates,
+      # so a captured slot returns to being non-active every SECOND navigation:
+      # reset, push, pop inside one animation duration leaves the reset's
+      # completion passing an `activeSlot != outgoing` check while the slot holds
+      # the tree the pop just retained. It would clear that tree and snap its
+      # offset outside any animation, mid-slide.
+      body = region(code_only(@ios), "private func applyRoot(", "\n    }")
+      assert body =~ "navToken += 1"
+      assert body =~ "let token = navToken"
+      assert body =~ "guard releasing, token == navToken else { return }"
+
+      refute body =~ "activeSlot != outgoing",
+             "a slot index only defeats odd-numbered interleaves"
+    end
+
+    test "the release happens after the animation, not before it" do
+      body = region(code_only(@ios), "private func applyRoot(", "\n    }")
+      assert body =~ "withAnimation(anim, settle, completion: release)"
+
+      assert body =~ ~r/\} else \{\s*settle\(\)\s*release\(\)\s*\}/,
+             "the non-animated branch must settle and release too"
+    end
+  end
+
   describe "depth-1 retention" do
     test "push and pop keep the outgoing tree; reset drops it" do
       # Holding the outgoing slot is what makes popping back a diff rather than
@@ -86,11 +231,9 @@ defmodule Mob.NativeScreenSlotsTest do
       # unreachable and holding it is pure cost.
       body = region(code_only(@ios), "private func applyRoot(", "\n    }")
 
-      assert body =~ ~r/if t == "reset" \{\s*slots\[outgoing\] = nil/,
-             "reset must release the outgoing slot"
-
-      refute body =~ ~r/slots\[outgoing\] = nil\s*\n\s*\}\s*\n\s*\}\s*\z/,
-             "push and pop must NOT clear the outgoing slot"
+      assert body =~
+               ~r/guard releasing, token == navToken else \{ return \}\s*slots\[outgoing\] = nil/,
+             "released only for a stack replacement, and only if no later navigation happened"
     end
   end
 
@@ -99,7 +242,11 @@ defmodule Mob.NativeScreenSlotsTest do
       # Without this the parked slot's subtree is re-evaluated on every render of
       # the active one, and holding it costs more than rebuilding it.
       slot =
-        region(code_only(@ios), "private func screenSlot(_ index: Int) -> some View {", "\n    }")
+        region(
+          code_only(@ios),
+          "private func screenSlot(_ index: Int) -> some View {",
+          "\n    }"
+        )
 
       assert slot =~ ".equatable()"
     end
@@ -120,7 +267,11 @@ defmodule Mob.NativeScreenSlotsTest do
       # honour zero opacity the way UIKit honours zero alpha. A tappable parked
       # screen would resolve handles from a superseded tap-table generation.
       slot =
-        region(code_only(@ios), "private func screenSlot(_ index: Int) -> some View {", "\n    }")
+        region(
+          code_only(@ios),
+          "private func screenSlot(_ index: Int) -> some View {",
+          "\n    }"
+        )
 
       assert slot =~ ".allowsHitTesting(index == activeSlot)"
       assert slot =~ ".accessibilityHidden(index != activeSlot)"
@@ -152,29 +303,8 @@ defmodule Mob.NativeScreenSlotsTest do
       # off-screen.
       body = region(code_only(@ios), "private func applyRoot(", "\n    }")
       seat = index_of(body, "slotOffset[incoming] = enterOffset(t)")
-      anim = index_of(body, "withAnimation(animation, settle)")
+      anim = index_of(body, "withAnimation(anim, settle, completion: release)")
       assert seat < anim, "the incoming offset must be seated outside the animation"
-    end
-  end
-
-  defp code_only(source) do
-    source
-    |> String.replace(~r{/\*.*?\*/}s, "")
-    |> String.split("\n")
-    |> Enum.map(&String.replace(&1, ~r{^\s*//.*$}, ""))
-    |> Enum.join("\n")
-  end
-
-  defp region(source, from, to) do
-    [_, rest] = String.split(source, from, parts: 2)
-    [body | _] = String.split(rest, to, parts: 2)
-    body
-  end
-
-  defp index_of(hay, needle) do
-    case :binary.match(hay, needle) do
-      {i, _} -> i
-      :nomatch -> flunk("expected to find #{inspect(needle)}")
     end
   end
 end

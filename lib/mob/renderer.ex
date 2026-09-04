@@ -224,10 +224,27 @@ defmodule Mob.Renderer do
   Loads the active `Mob.Theme`, clears the tap registry, serialises the tree
   to JSON, and calls `set_root/1` on the NIF. Returns `{:ok, :json_tree}`.
 
-  `transition` is an atom (`:push`, `:pop`, `:reset`, `:none`) for the nav
-  animation. Defaults to `:none` (instant swap).
+  `transition` is an atom for the nav animation: `:push`, `:pop`, `:reset` or
+  `:none`, defaulting to `:none` (instant swap).
+
+  For a navigation that REPLACES the stack, the router passes
+  `{animation, :replace}` instead. The animation half still reaches
+  `set_transition/1` as a plain atom — the vocabulary native matches on stays
+  closed — and the replacement half is emitted as a `"replaces_stack"` key on
+  the JSON root, which tells native the outgoing screen is unreachable and its
+  retained view tree can be released.
+
+  The flag is deliberately NOT folded into the transition atom. That atom's name
+  reaches Android as a raw string and `MainActivity.kt` matches
+  `"push"`/`"pop"`/`"reset"` with an exact `when`, so any value outside that set
+  falls through to no animation at all. An unknown JSON key is skipped by every
+  parser on both platforms, so a host that does not read it keeps its behaviour.
+
+  Callers never construct the tuple; `Mob.Socket` validates the public
+  `:push | :pop | :reset` vocabulary.
   """
-  @spec render(map(), atom(), module() | atom(), atom()) :: {:ok, :json_tree} | {:error, term()}
+  @spec render(map(), atom(), module() | atom(), atom() | {atom(), :replace}) ::
+          {:ok, :json_tree} | {:error, term()}
   def render(tree, platform, nif \\ @default_nif, transition \\ :none) do
     theme = Theme.current()
 
@@ -241,10 +258,30 @@ defmodule Mob.Renderer do
       platform: platform
     }
 
+    # Split the animation from the stack-replacement flag. The router sends
+    # `{animation, :replace}` for a navigation that replaces the stack; native
+    # needs both facts and they must not be inferred from each other.
+    #
+    # The animation goes on the existing channel with an UNCHANGED vocabulary,
+    # because `set_transition/1`'s atom name reaches Android as a raw string and
+    # `MainActivity.kt` matches it exactly. The flag rides on the JSON root,
+    # where an unknown key is ignored by both platforms' parsers, so an old host
+    # simply keeps its current behaviour instead of losing its animation.
+    {animation, replaces_stack?} =
+      case transition do
+        {anim, :replace} -> {anim, true}
+        anim -> {anim, false}
+      end
+
     nif.clear_taps()
-    nif.set_transition(transition)
+    nif.set_transition(animation)
 
     prepared = Mob.RenderStats.time(:prepare_us, fn -> prepare(tree, nif, platform, ctx) end)
+
+    # Root-only sidecar. `mob_node_from_dict` and Compose's `toMobNode` both
+    # read named keys and ignore the rest, so this is additive on the wire:
+    # a host that does not know it behaves exactly as it did.
+    prepared = if replaces_stack?, do: Map.put(prepared, "replaces_stack", true), else: prepared
 
     json =
       Mob.RenderStats.time(:encode_us, fn ->

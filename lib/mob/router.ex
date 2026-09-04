@@ -528,7 +528,14 @@ defmodule Mob.Router do
       Mob.Nav.history(state.nav) != [] ->
         state = drop_entry(state, dead_pid)
         [previous | rest] = Mob.Nav.history(state.nav)
-        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous, :pop)
+
+        state =
+          make_current(
+            %{state | nav: Mob.Nav.put_history(state.nav, rest)},
+            previous,
+            replacing(:pop)
+          )
+
         paint(previous, :none, state)
         state
 
@@ -548,7 +555,10 @@ defmodule Mob.Router do
       # switch/3 parks the dead entry under the outgoing stack; drop it straight
       # after, so nothing can restore a corpse by switching back.
       nav = Mob.Nav.drop_parked(nav, &(&1.pid == entry.pid))
-      state = make_current(%{state | nav: nav}, live, :pop)
+      # Tagged for the same reason the sibling recovery branch is: `entry` is a
+      # corpse and has just been dropped from the parked list, so the tree the
+      # presenter is holding for it can never be shown again.
+      state = make_current(%{state | nav: nav}, live, replacing(:pop))
       paint(live, :none, state)
       state
     else
@@ -694,7 +704,11 @@ defmodule Mob.Router do
         state = stop_screen(state.current, state)
 
         state =
-          make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous, :pop)
+          make_current(
+            %{state | nav: Mob.Nav.put_history(state.nav, rest)},
+            previous,
+            replacing(:pop)
+          )
 
         do_paint(previous, :none, state, mode)
         state
@@ -712,7 +726,10 @@ defmodule Mob.Router do
         ]
 
         state = Enum.reduce(discarded, state, &stop_screen/2)
-        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, root, :pop)
+
+        state =
+          make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, root, replacing(:pop))
+
         do_paint(root, :none, state, mode)
         state
 
@@ -825,6 +842,32 @@ defmodule Mob.Router do
     end
   end
 
+  # A navigation that REPLACES the navigation stack, tagged so native can tell.
+  #
+  # Native needs two independent facts: which animation to play, and whether the
+  # outgoing screen is still reachable. Since MOB-129 it keeps the outgoing
+  # screen's view tree so popping back diffs rather than rebuilds, and holding a
+  # tree nobody can navigate back to is pure cost.
+  #
+  # Those two facts were conflated because both travelled as one atom. Keying
+  # the release on the animation name got it wrong in both directions:
+  # `reset_to(..., transition: :push)` is documented and replaces the stack, but
+  # read as a push and was retained for ever; `switch_tab(..., transition:
+  # :reset)` is also documented, does NOT replace the stack — a parked tab can
+  # be switched back to — and was released, throwing away the retention.
+  #
+  # Carried as a TUPLE rather than a suffixed atom. A suffix (`:reset_replace`)
+  # was tried first and was wrong: `set_transition/1`'s atom name reaches
+  # Android as a raw string, and `MainActivity.kt`'s `when` matches
+  # "push"/"pop"/"reset" exactly, so a suffixed value fell to `else` and every
+  # `reset_to` silently lost its animation. Those files are app-owned and never
+  # re-rendered, so a template fix would not have reached existing apps either.
+  # The tuple keeps the wire vocabulary closed — `Mob.Renderer` unwraps it and
+  # still sends a plain `:push | :pop | :reset | :none` — and puts the flag on
+  # the JSON root, which both platforms already ignore when unknown.
+  defp replacing(:none), do: :none
+  defp replacing(transition), do: {transition, :replace}
+
   defp reset_resolved(new_module, mount_params, transition, state, mode) do
     case start_screen(new_module, mount_params, state) do
       {:ok, entry, state} ->
@@ -832,7 +875,11 @@ defmodule Mob.Router do
         state = Enum.reduce(discarded, state, &stop_screen/2)
 
         state =
-          make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, entry, transition)
+          make_current(
+            %{state | nav: Mob.Nav.put_history(state.nav, [])},
+            entry,
+            replacing(transition)
+          )
 
         do_paint(entry, :none, state, mode)
         state
@@ -861,7 +908,7 @@ defmodule Mob.Router do
         # exited between collection and its synchronous preparation call.
         Mob.ScreenState.delete_all()
         nav = reset_navigation(state.nav, new_module)
-        state = make_current(%{state | nav: nav}, entry, transition)
+        state = make_current(%{state | nav: nav}, entry, replacing(transition))
         do_paint(entry, :none, state, mode)
         state
 
@@ -879,7 +926,11 @@ defmodule Mob.Router do
         state = Enum.reduce(discarded, state, &stop_screen/2)
 
         state =
-          make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous, :pop)
+          make_current(
+            %{state | nav: Mob.Nav.put_history(state.nav, rest)},
+            previous,
+            replacing(:pop)
+          )
 
         do_paint(previous, :none, state, mode)
         state

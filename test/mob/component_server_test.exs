@@ -284,9 +284,13 @@ defmodule Mob.ComponentServerTest do
       assert Mob.ComponentServer.get_handle(pid) == -1
       assert MockNIF.calls() == []
 
+      ref = Process.monitor(pid)
       Process.exit(pid, :shutdown)
-      # terminate/2 runs asynchronously relative to exit; give it a beat.
-      Process.sleep(10)
+
+      # Wait for the process to actually be gone rather than sleeping a fixed
+      # 10 ms and hoping. `terminate/2` runs before the exit signal completes,
+      # so DOWN means the callback has finished — the thing this asserts about.
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 500
       assert MockNIF.calls() == []
     end
 
@@ -303,8 +307,10 @@ defmodule Mob.ComponentServerTest do
 
       assert Mob.ComponentServer.get_handle(pid) == 0
 
+      ref = Process.monitor(pid)
       Process.exit(pid, :shutdown)
-      Process.sleep(10)
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 500
       assert {:deregister_component, [0]} in MockNIF.calls()
     end
 
@@ -447,8 +453,9 @@ defmodule Mob.ComponentServerTest do
           send(pid, {:component_event, "tapped", "{}"})
           assert_receive {:component_changed, :exhausted, Recorder}
 
+          ref = Process.monitor(pid)
           Process.exit(pid, :shutdown)
-          Process.sleep(10)
+          assert_receive {:DOWN, ^ref, :process, ^pid, _}, 500
         end)
 
       assert log =~ "component slot pool exhausted"

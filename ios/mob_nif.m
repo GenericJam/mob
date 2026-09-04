@@ -2628,15 +2628,19 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     tap_build_count = 0;
     enif_mutex_unlock(tap_mutex);
 
-    // A non-"none" transition is what makes MobViewModel bump navVersion, and
-    // MobRootView keys the whole tree on `.id(currentNavVersion)` — so every
-    // view identity is destroyed and rebuilt. Bump the frame generation in
-    // lockstep: trackers belonging to the outgoing tree captured the old
-    // generation and are refused from here on, which is the only thing that
-    // stops them re-registering at mid-animation coordinates while they slide
-    // away. (`.move` transitions change their global frames continuously, so
-    // they keep firing onChange the whole way out; tree membership alone can't
-    // reject them when both screens tag the same :id.)
+    // Bump the frame generation on a real navigation, so trackers belonging to
+    // the OUTGOING tree — which captured the old generation — are refused from
+    // here on. That is the only thing that stops them re-registering at
+    // mid-animation coordinates while they slide away, and it is also what
+    // keeps two screens sharing an `:id` from clobbering each other's entry.
+    //
+    // Since MOB-129 the outgoing tree is no longer destroyed, so a parked
+    // tracker's stamp stays stale for as long as it is parked. That is the
+    // intended half. The returning half is handled in MobFrameTracker, which
+    // re-seeds its stamp when its slot becomes active again — without that,
+    // a screen you pop back to would be refused for ever. (`.move` transitions change their global
+    // frames continuously, so they keep firing onChange the whole way out; tree membership alone
+    // can't reject them when both screens tag the same :id.)
     if (strcmp(transition, "none") != 0)
         mob_bump_frame_generation();
 
@@ -2650,7 +2654,18 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     }
 
     NSString *transitionStr = [NSString stringWithUTF8String:transition];
-    [[MobViewModel shared] setRoot:node transition:transitionStr];
+
+    // Root-only sidecar from Mob.Renderer, set when the navigation REPLACED the
+    // stack. Deliberately not folded into the transition atom: that atom's name
+    // reaches Android as a raw string and MainActivity.kt matches
+    // "push"/"pop"/"reset" with an exact `when`, so any value outside that set
+    // falls through to no animation at all. Keeping the flag here leaves the
+    // wire vocabulary closed, and a host that does not read this key simply
+    // keeps its previous behaviour.
+    id replacesRaw = ((NSDictionary *)json)[@"replaces_stack"];
+    BOOL replacesStack = [replacesRaw isKindOfClass:[NSNumber class]] && [replacesRaw boolValue];
+
+    [[MobViewModel shared] setRoot:node transition:transitionStr replacesStack:replacesStack];
 
     return enif_make_atom(env, "ok");
 }

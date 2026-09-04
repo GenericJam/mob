@@ -30,6 +30,7 @@ import SwiftUI
 // MARK: - SwiftUI wrapper
 
 struct MobGpuView: UIViewRepresentable {
+    @Environment(\.mobScreenIsActive) private var isActive
     let node: MobNode
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -47,6 +48,12 @@ struct MobGpuView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: MobGpuMTKView, context: Context) {
+        // Stop rendering while parked. The view runs in continuous mode at
+        // 60 fps, and MOB-129 keeps a navigated-away screen mounted, so without
+        // this a parked GPU view burns the GPU indefinitely behind the screen
+        // the user is looking at.
+        view.isPaused = !isActive
+
         if let shader = node.gpuShaderMSL {
             view.setShader(shader)
         } else {
