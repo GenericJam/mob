@@ -47,8 +47,18 @@ import QuartzCore
         }
     }
 
-    @objc public func setRoot(_ node: MobNode?, transition: String) {
+    /// Whether the most recent `setRoot` replaced the navigation stack.
+    ///
+    /// Read by `MobRootView` to decide whether the outgoing screen is still
+    /// reachable and therefore worth retaining. Not `@Published`: it is
+    /// consumed inside the same `rootVersion` change that carried it, and
+    /// publishing it would trigger a second render for a value that never
+    /// changes independently.
+    public var replacesStack: Bool = false
+
+    @objc public func setRoot(_ node: MobNode?, transition: String, replacesStack: Bool) {
         DispatchQueue.main.async {
+            self.replacesStack = replacesStack
             let measuring = mob_native_stats_enabled() != 0
             let start = measuring ? CACurrentMediaTime() : 0
 

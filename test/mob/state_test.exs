@@ -15,10 +15,7 @@ defmodule Mob.StateTest do
     end)
 
     # Stop any running State process from a prior test.
-    case Process.whereis(Mob.State) do
-      nil -> :ok
-      pid -> GenServer.stop(pid)
-    end
+    Mob.Test.ProcessHelpers.stop_if_running(Mob.State)
 
     {:ok, _} = Mob.State.start_link()
     :ok

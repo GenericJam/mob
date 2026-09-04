@@ -1285,15 +1285,33 @@ private struct MobVideoPlayer: UIViewControllerRepresentable {
         return vc
     }
 
+    final class Coordinator {
+        /// Set while the screen is parked, so the resume fires once on return
+        /// rather than on every render of the active screen.
+        var wasParked = false
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
         // Pause on park; resume only what was playing itself. A video the user
         // had paused stays paused, and one that never autoplayed does not start
         // just because the screen came back.
         guard let player = vc.player else { return }
+
+        // Pause on park. Resume only on the park-to-active TRANSITION, never
+        // merely because the screen is active: this runs on every SwiftUI
+        // update of the active screen, and a fresh node graph arrives on every
+        // BEAM render, so gating on `isActive` alone restarts a video the user
+        // paused within one render of any screen carrying a timer or live data.
         if isActive {
-            if autoplay, player.timeControlStatus == .paused { player.play() }
-        } else if player.timeControlStatus != .paused {
-            player.pause()
+            if context.coordinator.wasParked {
+                context.coordinator.wasParked = false
+                if autoplay, player.timeControlStatus == .paused { player.play() }
+            }
+        } else {
+            context.coordinator.wasParked = true
+            if player.timeControlStatus != .paused { player.pause() }
         }
     }
 }
@@ -1471,6 +1489,7 @@ private struct MobTextField: View {
     let node: MobNode
     let placeholder: String
     let initialText: String
+    @Environment(\.mobScreenIsActive) private var isActive
     @State private var text: String
     @FocusState private var isFocused: Bool
 
@@ -1537,6 +1556,23 @@ private struct MobTextField: View {
                     text = newValue
                 }
             }
+            // Re-seed when this screen becomes active. The watcher above fires
+            // on a VALUE change, and slots alternate, so screen C reuses screen
+            // A's view identities — if both fields carry `""`, the default for
+            // an uncontrolled input, the value never changes and C shows what
+            // was typed on A. `secure: true` renders a SecureField, so that is
+            // a password crossing screens, not just a stale string.
+            //
+            // Focus is dropped too: a field that had the keyboard on the
+            // outgoing screen must not arrive focused on the incoming one.
+            .onChange(of: isActive) { _, nowActive in
+                guard nowActive else {
+                    isFocused = false
+                    return
+                }
+
+                if text != initialText { text = initialText }
+            }
             .textFieldStyle(.roundedBorder)
             .frame(maxWidth: .infinity)
             // Only contribute keyboard-toolbar items when THIS field is
@@ -1558,6 +1594,7 @@ private struct MobTextField: View {
 
 private struct MobToggle: View {
     let node: MobNode
+    @Environment(\.mobScreenIsActive) private var isActive
     @State private var isOn: Bool
 
     init(node: MobNode) {
@@ -1571,7 +1608,16 @@ private struct MobToggle: View {
             .onChange(of: isOn) { _, newValue in
                 node.onChangeBool?(newValue)
             }
-            // Re-seed from the node when the BEAM's value changes under us.
+            // Re-seed when this screen becomes active, not only when the value
+            // changes. `onChange(of:)` fires on a VALUE change, and slots
+            // alternate, so screen C reuses screen A's view identities — if
+            // both have `checked == false`, the default, the value never
+            // changes and C silently inherits whatever the user toggled on A.
+            // That is the common case, not an edge one.
+            .onChange(of: isActive) { _, nowActive in
+                if nowActive, node.checked != isOn { isOn = node.checked }
+            }
+            // Still needed for a BEAM-driven change while the screen is up.
             //
             // `State(initialValue:)` runs once per view identity, and before
             // MOB-129 a navigation destroyed every identity, so arriving on a
@@ -1599,6 +1645,7 @@ private struct MobToggle: View {
 
 private struct MobSlider: View {
     let node: MobNode
+    @Environment(\.mobScreenIsActive) private var isActive
     @State private var value: Double
 
     init(node: MobNode) {
@@ -1619,10 +1666,13 @@ private struct MobSlider: View {
             .onChange(of: value) { _, newValue in
                 node.onChangeFloat?(newValue)
             }
-            // Re-seed from the node when the BEAM's value changes under us.
-            // See MobToggle above: without this a slider inherits the position
-            // of whatever slider sat at the same slot two navigations back,
-            // because MOB-129 keeps view identities alive across navigation.
+            // Re-seed on activation. See MobToggle: a value-change watcher
+            // alone misses the common case where both screens carry the same
+            // value, which is exactly when the stale one is invisible.
+            .onChange(of: isActive) { _, nowActive in
+                if nowActive, node.value != value { value = node.value }
+            }
+            // Still needed for a BEAM-driven change while the screen is up.
             .onChange(of: node.value) { _, fromBeam in
                 if fromBeam != value { value = fromBeam }
             }
@@ -2352,7 +2402,12 @@ public struct MobRootView: View {
         .environment(\.mobAvailableSheetHeight, availableSheetHeight)
         .ignoresSafeArea(.container, edges: [.bottom, .horizontal])
         .onChange(of: model.rootVersion) {
-            applyRoot(model.root, transition: model.transition, navVersion: model.navVersion)
+            applyRoot(
+                model.root,
+                transition: model.transition,
+                navVersion: model.navVersion,
+                replacesStack: model.replacesStack
+            )
         }
         // Notify Elixir when the OS appearance toggles so subscribers
         // (Mob.Device → Mob.Theme.Adaptive consumers) can re-resolve.
@@ -2405,7 +2460,12 @@ public struct MobRootView: View {
     /// A `"none"` render is the steady-state path and updates the active slot
     /// directly: same slot, same identity, so SwiftUI diffs. That is the 65.7 ms
     /// path a navigation now also takes.
-    private func applyRoot(_ newRoot: MobNode?, transition t: String, navVersion: Int) {
+    private func applyRoot(
+        _ newRoot: MobNode?,
+        transition t: String,
+        navVersion: Int,
+        replacesStack: Bool
+    ) {
         guard t != "none" else {
             slots[activeSlot] = newRoot
             return
@@ -2419,15 +2479,15 @@ public struct MobRootView: View {
         let incoming = 1 - activeSlot
         let outgoing = activeSlot
 
+        let crossfading = t == "reset"
+        let releasing = replacesStack
+
         // Seat the incoming tree off-screen on the side it should arrive from,
         // OUTSIDE any animation, so the placement itself is not animated.
         slotOffset[incoming] = enterOffset(t)
-        slotOpacity[incoming] = (t == "reset") ? 0 : 1
+        slotOpacity[incoming] = crossfading ? 0 : 1
         slots[incoming] = newRoot
         activeSlot = incoming
-
-        let crossfading = animation(of: t) == "reset"
-        let releasing = replacesStack(t)
 
         let settle = {
             slotOffset[incoming] = 0
@@ -2445,7 +2505,14 @@ public struct MobRootView: View {
         // it until the animation completes is what lets the opacity actually
         // play.
         let release = {
-            guard releasing else { return }
+            // `activeSlot != outgoing` is the precondition, and it is not
+            // optional. This closure runs on the animation's completion, and a
+            // second navigation arriving before it settles reuses the very slot
+            // it captured — a reset followed within 0.25s by a push makes
+            // `outgoing` the ACTIVE slot. Clearing it then blanks the screen the
+            // user is looking at, and nothing recovers until that screen
+            // repaints, which a mount-once screen never does.
+            guard releasing, activeSlot != outgoing else { return }
             slots[outgoing] = nil
             slotOffset[outgoing] = 0
             slotOpacity[outgoing] = 1
@@ -2459,29 +2526,9 @@ public struct MobRootView: View {
         }
     }
 
-    /// The animation half of a transition.
-    ///
-    /// The router sends `push_replace` / `pop_replace` / `reset_replace` when a
-    /// navigation replaces the stack. Two independent facts travel in one atom:
-    /// the prefix says how to animate, the suffix says the outgoing screen is
-    /// unreachable. Splitting them here means neither is inferred from the
-    /// other, which is the bug this replaced — the release used to key on the
-    /// animation name, so a documented `reset_to(transition: :push)` retained a
-    /// screen nobody could reach, and a `switch_tab(transition: :reset)`
-    /// released one the user can switch straight back to.
-    private func animation(of t: String) -> String {
-        t.hasSuffix("_replace") ? String(t.dropLast("_replace".count)) : t
-    }
-
-    /// Whether this navigation replaced the stack, making the outgoing screen
-    /// unreachable and its retained tree pure cost.
-    private func replacesStack(_ t: String) -> Bool {
-        t.hasSuffix("_replace")
-    }
-
     /// Where an incoming screen starts, before it slides in.
     private func enterOffset(_ t: String) -> CGFloat {
-        switch animation(of: t) {
+        switch t {
         case "push": return containerWidth
         case "pop": return -containerWidth
         default: return 0
@@ -2491,7 +2538,7 @@ public struct MobRootView: View {
     /// Where an outgoing screen ends up. It stays there, parked off-screen,
     /// until a later navigation reuses its slot.
     private func exitOffset(_ t: String) -> CGFloat {
-        switch animation(of: t) {
+        switch t {
         case "push": return -containerWidth
         case "pop": return containerWidth
         default: return 0
@@ -2499,7 +2546,7 @@ public struct MobRootView: View {
     }
 
     private func navAnimation(_ t: String) -> Animation? {
-        switch animation(of: t) {
+        switch t {
         case "push", "pop":
             return .spring(response: 0.3, dampingFraction: 0.85)
         case "reset":

@@ -79,10 +79,7 @@ defmodule Mob.ScreenSenderWiringTest do
 
   setup do
     for name <- [Sender, Mob.Nav.Registry] do
-      case Process.whereis(name) do
-        nil -> :ok
-        pid -> GenServer.stop(pid)
-      end
+      Mob.Test.ProcessHelpers.stop_if_running(name)
     end
 
     {:ok, sender} = Sender.start_link([])

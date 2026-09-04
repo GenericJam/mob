@@ -80,6 +80,42 @@ defmodule Mob.NativeParkedScreenTest do
       assert body =~ "onChange(of: node.checked)"
     end
 
+    test "the toggle re-seeds on activation, not only on a value change" do
+      # `onChange(of:)` fires on a VALUE change, and slots alternate — screen C
+      # reuses screen A's view identities. If both carry `checked == false`, the
+      # default, the value never changes and C silently inherits whatever the
+      # user toggled on A. That is the common case, and a value watcher alone
+      # cannot see it.
+      body = region(code_only(@ios), "private struct MobToggle: View {", "\n}\n")
+      assert body =~ "@Environment(\\.mobScreenIsActive) private var isActive"
+
+      assert body =~
+               ~r/\.onChange\(of: isActive\) \{ _, nowActive in\s*if nowActive, node\.checked != isOn/,
+             "the toggle must re-seed when its screen becomes active"
+    end
+
+    test "the slider re-seeds on activation too" do
+      body = region(code_only(@ios), "private struct MobSlider: View {", "\n}\n")
+      assert body =~ "@Environment(\\.mobScreenIsActive) private var isActive"
+
+      assert body =~
+               ~r/\.onChange\(of: isActive\) \{ _, nowActive in\s*if nowActive, node\.value != value/
+    end
+
+    test "the text field re-seeds on activation and drops focus on park" do
+      # `secure: true` renders a SecureField, so an uncontrolled field whose
+      # prop is "" on both screens carries a PASSWORD across screens, not just a
+      # stale string. And a field holding the keyboard on the outgoing screen
+      # must not arrive focused on the incoming one.
+      body = region(code_only(@ios), "private struct MobTextField: View {", "\n}\n")
+      assert body =~ "@Environment(\\.mobScreenIsActive) private var isActive"
+
+      assert body =~ ~r/guard nowActive else \{\s*isFocused = false/,
+             "parking must drop focus"
+
+      assert body =~ "if text != initialText { text = initialText }"
+    end
+
     test "the slider re-seeds from the node" do
       body = region(code_only(@ios), "private struct MobSlider: View {", "\n}\n")
       assert body =~ "onChange(of: node.value)"
@@ -102,6 +138,23 @@ defmodule Mob.NativeParkedScreenTest do
       # would leave the BEAM believing a sheet it will see again is gone.
       body = region(code_only(@ios), "private func sendDismissOnce() {", "\n    }")
       assert body =~ "if dismissedByPark { return }"
+    end
+
+    test "the video resumes on the activation transition, not on every render" do
+      # updateUIViewController runs on EVERY SwiftUI update of the active
+      # screen, and a fresh node graph arrives on every BEAM render — so gating
+      # the resume on `isActive` alone restarts a video the user paused, within
+      # one render, on any screen carrying a timer or live data.
+      body =
+        region(
+          code_only(@ios),
+          "func updateUIViewController(_ vc: AVPlayerViewController",
+          "\n    }"
+        )
+
+      assert body =~ "if context.coordinator.wasParked {"
+      assert body =~ "context.coordinator.wasParked = false"
+      assert body =~ "context.coordinator.wasParked = true"
     end
 
     test "a parked video pauses, and only autoplay resumes it" do
@@ -140,25 +193,43 @@ defmodule Mob.NativeParkedScreenTest do
   # Strips comments while tracking string literals, so a `//` inside a string
   # survives and a trailing comment cannot satisfy an assertion.
   defp code_only(source) do
-    source
-    |> String.split("\n")
-    |> Enum.map(&strip_line/1)
-    |> Enum.join("\n")
+    scan(source, :code, [])
   end
 
-  defp strip_line(line), do: strip_line(line, <<>>, false)
-  defp strip_line(<<>>, acc, _in), do: acc
+  # Scans the whole file as one binary, carrying string and block-comment state
+  # ACROSS lines. A per-line scanner reset `in_string` at every newline, which
+  # breaks on Swift's multi-line `"""` literals — MobGpuView.swift embeds MSL
+  # shader source that way, and a `//` inside it was truncated as if it were a
+  # comment. It also never recognised `/* */`, so commented-out code satisfied a
+  # `=~` assertion: a false pass, the inverse of the bug this replaced.
+  defp scan(<<>>, _state, acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
 
-  defp strip_line(<<"\\", c::utf8, rest::binary>>, acc, true),
-    do: strip_line(rest, acc <> <<"\\", c::utf8>>, true)
+  defp scan(<<"\\", c::utf8, rest::binary>>, :string, acc),
+    do: scan(rest, :string, [<<c::utf8>>, "\\" | acc])
 
-  defp strip_line(<<"\"", rest::binary>>, acc, in_s),
-    do: strip_line(rest, acc <> "\"", not in_s)
+  defp scan(<<"\"\"\"", rest::binary>>, :code, acc), do: scan(rest, :multiline, ["\"\"\"" | acc])
+  defp scan(<<"\"\"\"", rest::binary>>, :multiline, acc), do: scan(rest, :code, ["\"\"\"" | acc])
 
-  defp strip_line(<<"//", _::binary>>, acc, false), do: acc
+  defp scan(<<c::utf8, rest::binary>>, :multiline, acc),
+    do: scan(rest, :multiline, [<<c::utf8>> | acc])
 
-  defp strip_line(<<c::utf8, rest::binary>>, acc, in_s),
-    do: strip_line(rest, acc <> <<c::utf8>>, in_s)
+  defp scan(<<"\"", rest::binary>>, :code, acc), do: scan(rest, :string, ["\"" | acc])
+  defp scan(<<"\"", rest::binary>>, :string, acc), do: scan(rest, :code, ["\"" | acc])
+  defp scan(<<c::utf8, rest::binary>>, :string, acc), do: scan(rest, :string, [<<c::utf8>> | acc])
+
+  defp scan(<<"//", rest::binary>>, :code, acc), do: scan(rest, :line_comment, acc)
+  defp scan(<<"\n", rest::binary>>, :line_comment, acc), do: scan(rest, :code, ["\n" | acc])
+  defp scan(<<_::utf8, rest::binary>>, :line_comment, acc), do: scan(rest, :line_comment, acc)
+
+  defp scan(<<"/*", rest::binary>>, :code, acc), do: scan(rest, :block_comment, acc)
+  defp scan(<<"*/", rest::binary>>, :block_comment, acc), do: scan(rest, :code, acc)
+
+  defp scan(<<"\n", rest::binary>>, :block_comment, acc),
+    do: scan(rest, :block_comment, ["\n" | acc])
+
+  defp scan(<<_::utf8, rest::binary>>, :block_comment, acc), do: scan(rest, :block_comment, acc)
+
+  defp scan(<<c::utf8, rest::binary>>, :code, acc), do: scan(rest, :code, [<<c::utf8>> | acc])
 
   defp region(source, from, to) do
     [_, rest] = String.split(source, from, parts: 2)

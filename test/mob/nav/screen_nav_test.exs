@@ -90,10 +90,7 @@ defmodule Mob.Nav.ScreenNavTest do
   end
 
   setup do
-    case Process.whereis(Mob.Nav.Registry) do
-      nil -> :ok
-      pid -> GenServer.stop(pid)
-    end
+    Mob.Test.ProcessHelpers.stop_if_running(Mob.Nav.Registry)
 
     {:ok, pid} = Mob.Nav.Registry.start_link(DemoApp)
     on_exit(fn -> stop_safely(pid) end)

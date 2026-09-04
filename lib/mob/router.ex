@@ -839,17 +839,17 @@ defmodule Mob.Router do
   # :reset)` is also documented, does NOT replace the stack — a parked tab can
   # be switched back to — and was released, throwing away the retention.
   #
-  # Encoded as a suffixed atom rather than a new wire field: `set_transition/1`
-  # already carries an atom end to end and native reads its name directly, so
-  # this needs no NIF arity change, no JSON schema change, and no change to the
-  # public `:push | :pop | :reset` vocabulary callers use. An older native build
-  # that does not know the suffix falls through to its default case: no slide,
-  # no release, which is a cosmetic degrade rather than a break.
-  defp replacing(:push), do: :push_replace
-  defp replacing(:pop), do: :pop_replace
-  defp replacing(:reset), do: :reset_replace
+  # Carried as a TUPLE rather than a suffixed atom. A suffix (`:reset_replace`)
+  # was tried first and was wrong: `set_transition/1`'s atom name reaches
+  # Android as a raw string, and `MainActivity.kt`'s `when` matches
+  # "push"/"pop"/"reset" exactly, so a suffixed value fell to `else` and every
+  # `reset_to` silently lost its animation. Those files are app-owned and never
+  # re-rendered, so a template fix would not have reached existing apps either.
+  # The tuple keeps the wire vocabulary closed — `Mob.Renderer` unwraps it and
+  # still sends a plain `:push | :pop | :reset | :none` — and puts the flag on
+  # the JSON root, which both platforms already ignore when unknown.
   defp replacing(:none), do: :none
-  defp replacing(other), do: other
+  defp replacing(transition), do: {transition, :replace}
 
   defp reset_resolved(new_module, mount_params, transition, state, mode) do
     case start_screen(new_module, mount_params, state) do

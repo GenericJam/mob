@@ -91,7 +91,7 @@ defmodule Mob.NativeScreenSlotsTest do
              "expected exactly one clear of the outgoing slot, found #{clears - 1}"
 
       # And it must sit behind the release guard, not anywhere earlier.
-      guard_at = index_of(body, "guard releasing else { return }")
+      guard_at = index_of(body, "guard releasing, activeSlot != outgoing else { return }")
       clear_at = index_of(body, "slots[outgoing] = nil")
       assert guard_at < clear_at
     end
@@ -132,42 +132,53 @@ defmodule Mob.NativeScreenSlotsTest do
   end
 
   describe "the release keys on stack replacement, not the animation (MOB-147 S1)" do
-    test "the animation and the replacement flag are read separately" do
-      # Two independent facts travelled as one atom, and keying the release on
-      # the animation name got it wrong in both directions: a documented
-      # `reset_to(transition: :push)` replaces the stack but read as a push and
-      # was retained for ever, while `switch_tab(transition: :reset)` does not
-      # replace it — a parked tab can be switched back to — and was released.
+    test "the flag comes from the view model, not from the transition string" do
+      # A suffixed atom (`:reset_replace`) was tried and was wrong: the atom's
+      # name reaches Android as a raw string and MainActivity.kt matches
+      # "push"/"pop"/"reset" with an exact `when`, so a suffixed value fell to
+      # `else` and every reset silently lost its animation. Keeping the flag off
+      # the transition string keeps that vocabulary closed.
       code = code_only(@ios)
-      assert code =~ "private func animation(of t: String) -> String {"
-      assert code =~ "private func replacesStack(_ t: String) -> Bool {"
-      assert code =~ ~s|t.hasSuffix("_replace")|
+      assert code =~ "replacesStack: model.replacesStack"
+      assert code =~ "let releasing = replacesStack"
+
+      refute code =~ "_replace\"",
+             "the replacement flag must not ride in the transition string"
     end
 
-    test "the offsets and the animation choice read the prefix" do
+    test "the offsets and the animation choice read the transition directly" do
       code = code_only(@ios)
 
       for fun <- ["enterOffset", "exitOffset", "navAnimation"] do
         body = region(code, "private func #{fun}(", "\n    }")
-
-        assert body =~ "switch animation(of: t)",
-               "#{fun} must read the animation from the prefix, not the raw atom"
+        assert body =~ "switch t {", "#{fun} should switch on the plain transition"
       end
     end
 
-    test "the release reads the suffix, never the animation name" do
+    test "both opacity seeds derive from the same crossfade decision" do
+      # One of the two seeds read the raw transition while the other read a
+      # derived value. With a suffixed atom that made a reset cross-fade or
+      # hard-cut depending on which slot it landed in. Binding once and using it
+      # in both places is what makes that unrepresentable.
       body = region(code_only(@ios), "private func applyRoot(", "\n    }")
-      assert body =~ "let releasing = replacesStack(t)"
-      assert body =~ "guard releasing else { return }"
+      assert body =~ ~s|let crossfading = t == "reset"|
+      assert body =~ "slotOpacity[incoming] = crossfading ? 0 : 1"
+      assert body =~ "slotOpacity[outgoing] = crossfading ? 0 : 1"
 
-      refute body =~ ~s|if t == "reset" {|,
-             "keying the release on the animation name is the bug this replaced"
+      refute body =~ ~s|slotOpacity[incoming] = (t == "reset")|,
+             "the incoming seed must not re-derive the decision"
+    end
+
+    test "the release refuses to clear a slot that is now active" do
+      # The closure runs on the animation's completion, and a second navigation
+      # arriving before it settles reuses the slot it captured — a reset
+      # followed quickly by a push makes `outgoing` the ACTIVE slot. Without
+      # this guard the release blanks the screen the user is looking at.
+      body = region(code_only(@ios), "private func applyRoot(", "\n    }")
+      assert body =~ "guard releasing, activeSlot != outgoing else { return }"
     end
 
     test "the release happens after the animation, not before it" do
-      # Clearing synchronously removed the outgoing screen in the same turn, so
-      # a reset hard-cut instead of cross-fading — there is no .transition() any
-      # more to animate its removal.
       body = region(code_only(@ios), "private func applyRoot(", "\n    }")
       assert body =~ "withAnimation(anim, settle, completion: release)"
 
@@ -183,8 +194,9 @@ defmodule Mob.NativeScreenSlotsTest do
       # unreachable and holding it is pure cost.
       body = region(code_only(@ios), "private func applyRoot(", "\n    }")
 
-      assert body =~ ~r/guard releasing else \{ return \}\s*slots\[outgoing\] = nil/,
-             "the outgoing slot is released only for a stack replacement"
+      assert body =~
+               ~r/guard releasing, activeSlot != outgoing else \{ return \}\s*slots\[outgoing\] = nil/,
+             "the outgoing slot is released only for a stack replacement, and only if still parked"
     end
   end
 
@@ -263,26 +275,43 @@ defmodule Mob.NativeScreenSlotsTest do
   # Handled line by line, tracking string literals, so a `//` inside a string
   # (a URL, say) survives and a stray `/*` cannot eat the file.
   defp code_only(source) do
-    source
-    |> String.split("\n")
-    |> Enum.map(&strip_line/1)
-    |> Enum.join("\n")
+    scan(source, :code, [])
   end
 
-  defp strip_line(line), do: strip_line(line, <<>>, false)
+  # Scans the whole file as one binary, carrying string and block-comment state
+  # ACROSS lines. A per-line scanner reset `in_string` at every newline, which
+  # breaks on Swift's multi-line `"""` literals — MobGpuView.swift embeds MSL
+  # shader source that way, and a `//` inside it was truncated as if it were a
+  # comment. It also never recognised `/* */`, so commented-out code satisfied a
+  # `=~` assertion: a false pass, the inverse of the bug this replaced.
+  defp scan(<<>>, _state, acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
 
-  defp strip_line(<<>>, acc, _in_string), do: acc
+  defp scan(<<"\\", c::utf8, rest::binary>>, :string, acc),
+    do: scan(rest, :string, [<<c::utf8>>, "\\" | acc])
 
-  defp strip_line(<<"\\", c::utf8, rest::binary>>, acc, true),
-    do: strip_line(rest, acc <> <<"\\", c::utf8>>, true)
+  defp scan(<<"\"\"\"", rest::binary>>, :code, acc), do: scan(rest, :multiline, ["\"\"\"" | acc])
+  defp scan(<<"\"\"\"", rest::binary>>, :multiline, acc), do: scan(rest, :code, ["\"\"\"" | acc])
 
-  defp strip_line(<<"\"", rest::binary>>, acc, in_string),
-    do: strip_line(rest, acc <> "\"", not in_string)
+  defp scan(<<c::utf8, rest::binary>>, :multiline, acc),
+    do: scan(rest, :multiline, [<<c::utf8>> | acc])
 
-  defp strip_line(<<"//", _::binary>>, acc, false), do: acc
+  defp scan(<<"\"", rest::binary>>, :code, acc), do: scan(rest, :string, ["\"" | acc])
+  defp scan(<<"\"", rest::binary>>, :string, acc), do: scan(rest, :code, ["\"" | acc])
+  defp scan(<<c::utf8, rest::binary>>, :string, acc), do: scan(rest, :string, [<<c::utf8>> | acc])
 
-  defp strip_line(<<c::utf8, rest::binary>>, acc, in_string),
-    do: strip_line(rest, acc <> <<c::utf8>>, in_string)
+  defp scan(<<"//", rest::binary>>, :code, acc), do: scan(rest, :line_comment, acc)
+  defp scan(<<"\n", rest::binary>>, :line_comment, acc), do: scan(rest, :code, ["\n" | acc])
+  defp scan(<<_::utf8, rest::binary>>, :line_comment, acc), do: scan(rest, :line_comment, acc)
+
+  defp scan(<<"/*", rest::binary>>, :code, acc), do: scan(rest, :block_comment, acc)
+  defp scan(<<"*/", rest::binary>>, :block_comment, acc), do: scan(rest, :code, acc)
+
+  defp scan(<<"\n", rest::binary>>, :block_comment, acc),
+    do: scan(rest, :block_comment, ["\n" | acc])
+
+  defp scan(<<_::utf8, rest::binary>>, :block_comment, acc), do: scan(rest, :block_comment, acc)
+
+  defp scan(<<c::utf8, rest::binary>>, :code, acc), do: scan(rest, :code, [<<c::utf8>> | acc])
 
   defp region(source, from, to) do
     [_, rest] = String.split(source, from, parts: 2)

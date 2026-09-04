@@ -248,10 +248,30 @@ defmodule Mob.Renderer do
       platform: platform
     }
 
+    # Split the animation from the stack-replacement flag. The router sends
+    # `{animation, :replace}` for a navigation that replaces the stack; native
+    # needs both facts and they must not be inferred from each other.
+    #
+    # The animation goes on the existing channel with an UNCHANGED vocabulary,
+    # because `set_transition/1`'s atom name reaches Android as a raw string and
+    # `MainActivity.kt` matches it exactly. The flag rides on the JSON root,
+    # where an unknown key is ignored by both platforms' parsers, so an old host
+    # simply keeps its current behaviour instead of losing its animation.
+    {animation, replaces_stack?} =
+      case transition do
+        {anim, :replace} -> {anim, true}
+        anim -> {anim, false}
+      end
+
     nif.clear_taps()
-    nif.set_transition(transition)
+    nif.set_transition(animation)
 
     prepared = Mob.RenderStats.time(:prepare_us, fn -> prepare(tree, nif, platform, ctx) end)
+
+    # Root-only sidecar. `mob_node_from_dict` and Compose's `toMobNode` both
+    # read named keys and ignore the rest, so this is additive on the wire:
+    # a host that does not know it behaves exactly as it did.
+    prepared = if replaces_stack?, do: Map.put(prepared, "replaces_stack", true), else: prepared
 
     json =
       Mob.RenderStats.time(:encode_us, fn ->

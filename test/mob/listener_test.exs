@@ -6,10 +6,7 @@ defmodule Mob.ListenerTest do
   alias Mob.Listener
 
   setup do
-    case Process.whereis(Listener) do
-      nil -> :ok
-      pid -> GenServer.stop(pid)
-    end
+    Mob.Test.ProcessHelpers.stop_if_running(Listener)
 
     :ok
   end

@@ -46,19 +46,30 @@ defmodule Mob.Nav.ResetTransitionTest do
   end
 
   defmodule RecordingNif do
-    def start, do: Agent.start(fn -> [] end, name: __MODULE__)
-    def transitions, do: __MODULE__ |> Agent.get(& &1) |> Enum.reverse()
-    def reset, do: Agent.update(__MODULE__, fn _ -> [] end)
+    def start, do: Agent.start(fn -> [transitions: []] end, name: __MODULE__)
+
+    def transitions,
+      do: __MODULE__ |> Agent.get(&Keyword.get(&1, :transitions, [])) |> Enum.reverse()
+
+    def last_root, do: Agent.get(__MODULE__, &Keyword.get(&1, :last_root))
+    def reset, do: Agent.update(__MODULE__, fn _ -> [transitions: []] end)
 
     def platform, do: :android
     def safe_area, do: {0.0, 0.0, 0.0, 0.0}
     def take_launch_notification, do: :none
     def clear_taps, do: :ok
     def register_tap(_), do: 0
-    def set_root(_json), do: :ok
+
+    def set_root(json) do
+      Agent.update(__MODULE__, fn state -> Keyword.put(state, :last_root, json) end)
+      :ok
+    end
 
     def set_transition(t) do
-      Agent.update(__MODULE__, &[t | &1])
+      Agent.update(__MODULE__, fn state ->
+        Keyword.update(state, :transitions, [t], &[t | &1])
+      end)
+
       :ok
     end
   end
@@ -73,6 +84,18 @@ defmodule Mob.Nav.ResetTransitionTest do
   defp last_transition do
     Mob.Sender.sync(:infinity)
     List.last(RecordingNif.transitions())
+  end
+
+  # Whether the frame told native the navigation stack was replaced. Carried on
+  # the JSON root rather than in the transition atom, so the transition
+  # vocabulary native matches on stays closed — see `replaces?/0`'s callers.
+  defp replaced_stack? do
+    Mob.Sender.sync(:infinity)
+
+    case RecordingNif.last_root() do
+      nil -> false
+      json -> Map.get(:json.decode(json), "replaces_stack", false)
+    end
   end
 
   setup do
@@ -122,17 +145,23 @@ defmodule Mob.Nav.ResetTransitionTest do
       # the stack. Native reads the animation from the prefix; the suffix tells
       # it the outgoing screen is unreachable, so the view tree MOB-129 would
       # otherwise retain for a return can be released. See MOB-147 S1.
-      assert last_transition() == :reset_replace
+      # The atom stays in the closed `:push | :pop | :reset | :none` vocabulary.
+      # Android matches it as a raw string with an exact `when`, so anything
+      # outside that set falls to `else` and silently loses its animation.
+      assert last_transition() == :reset
+      assert replaced_stack?()
     end
 
     test "transition: :push paints a push and still replaces", %{router: router} do
       Mob.Router.dispatch(router, "reset_push", %{})
-      assert last_transition() == :push_replace
+      assert last_transition() == :push
+      assert replaced_stack?()
     end
 
     test "transition: :pop paints a pop", %{router: router} do
       Mob.Router.dispatch(router, "reset_pop", %{})
-      assert last_transition() == :pop_replace
+      assert last_transition() == :pop
+      assert replaced_stack?()
     end
 
     test "the stack is still replaced, whatever the animation", %{router: router} do
@@ -168,7 +197,8 @@ defmodule Mob.Nav.ResetTransitionTest do
       # code push. Dropping it would break navigation across an upgrade.
       :ok = GenServer.call(router, {:navigate, {:reset, OtherScreen, %{}}})
 
-      assert last_transition() == :reset_replace
+      assert last_transition() == :reset
+      assert replaced_stack?()
       assert Mob.Router.get_current_module(router) == OtherScreen
     end
   end

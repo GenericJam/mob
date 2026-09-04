@@ -39,10 +39,7 @@ defmodule Mob.Nav.RegistryTest do
 
   setup do
     # Clean up any leftover registry and ensure a fresh state per test
-    case Process.whereis(Mob.Nav.Registry) do
-      nil -> :ok
-      pid -> GenServer.stop(pid)
-    end
+    Mob.Test.ProcessHelpers.stop_if_running(Mob.Nav.Registry)
 
     :ok
   end

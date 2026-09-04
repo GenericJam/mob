@@ -34,6 +34,15 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `transition: :none` citing this exact hazard; MOB-129 had made it the default
   path. Both now re-seed when the BEAM's value changes.
 
+  Toggles, sliders and text fields re-seed when their screen becomes active,
+  not only when the BEAM's value changes. A value watcher alone misses the
+  common case: slots alternate, so a screen reuses the view identities of the
+  screen two navigations back, and if both carry the same value — `false` for a
+  toggle, `""` for an uncontrolled field — the watcher never fires. For a field
+  with `secure: true` that meant a password crossing screens. Focus is dropped
+  on park too, so a field holding the keyboard does not arrive focused on the
+  next screen.
+
   Also: a parked sheet is dismissed and re-presented on return, rather than
   staying visible and interactive over the incoming screen — `.sheet` presents
   on the window, so the slot's `allowsHitTesting(false)` never reached it, and a
@@ -51,11 +60,15 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   stack — a parked tab can be switched back to — and was released, throwing away
   the retention it should have kept.
 
-  The router now tags a stack-replacing navigation, and native reads the
-  animation from the prefix and the release from the suffix, so neither is
-  inferred from the other. No wire schema or NIF arity change: the transition
-  already travels as an atom whose name native reads directly, and the public
-  `:push | :pop | :reset` vocabulary callers use is unchanged.
+  The flag now rides on the JSON root, and the transition atom keeps its closed
+  `:push | :pop | :reset | :none` vocabulary. A first attempt suffixed the atom
+  instead (`:reset_replace`) and that was wrong: `set_transition/1`'s atom name
+  reaches Android as a raw string, and `MainActivity.kt` matches those four
+  values with an exact `when`, so every `reset_to` would have silently lost its
+  animation — on newly generated apps too, and those files are app-owned and
+  never re-rendered, so no template fix would have reached existing ones. An
+  unknown root key is ignored by both platforms' parsers, so a host that does
+  not read it keeps its current behaviour.
 
 - **A reset cross-fades again** (MOB-147). The outgoing screen was released
   synchronously, removing it in the same turn, so it hard-cut rather than fading

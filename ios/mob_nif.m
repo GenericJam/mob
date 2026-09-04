@@ -2654,7 +2654,18 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     }
 
     NSString *transitionStr = [NSString stringWithUTF8String:transition];
-    [[MobViewModel shared] setRoot:node transition:transitionStr];
+
+    // Root-only sidecar from Mob.Renderer, set when the navigation REPLACED the
+    // stack. Deliberately not folded into the transition atom: that atom's name
+    // reaches Android as a raw string and MainActivity.kt matches
+    // "push"/"pop"/"reset" with an exact `when`, so any value outside that set
+    // falls through to no animation at all. Keeping the flag here leaves the
+    // wire vocabulary closed, and a host that does not read this key simply
+    // keeps its previous behaviour.
+    id replacesRaw = ((NSDictionary *)json)[@"replaces_stack"];
+    BOOL replacesStack = [replacesRaw isKindOfClass:[NSNumber class]] && [replacesRaw boolValue];
+
+    [[MobViewModel shared] setRoot:node transition:transitionStr replacesStack:replacesStack];
 
     return enif_make_atom(env, "ok");
 }

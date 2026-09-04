@@ -39,10 +39,7 @@ defmodule Mob.SenderTest do
   setup do
     # Order matters: a sender left running from an earlier test can still have a
     # flush queued, and it would record into the fresh recorder.
-    case Process.whereis(Sender) do
-      nil -> :ok
-      pid -> GenServer.stop(pid)
-    end
+    Mob.Test.ProcessHelpers.stop_if_running(Sender)
 
     case Process.whereis(RecordingNif) do
       nil -> :ok
