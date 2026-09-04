@@ -2426,32 +2426,62 @@ public struct MobRootView: View {
         slots[incoming] = newRoot
         activeSlot = incoming
 
+        let crossfading = animation(of: t) == "reset"
+        let releasing = replacesStack(t)
+
         let settle = {
             slotOffset[incoming] = 0
             slotOpacity[incoming] = 1
             slotOffset[outgoing] = exitOffset(t)
-            slotOpacity[outgoing] = (t == "reset") ? 0 : 1
+            slotOpacity[outgoing] = crossfading ? 0 : 1
         }
 
-        if let animation = navAnimation(t) {
-            withAnimation(animation, settle)
-        } else {
-            settle()
-        }
-
-        // A reset replaces the stack, so the outgoing screen is unreachable and
-        // holding it is pure cost. Push and pop keep it: that is the depth-1
-        // retention which makes popping back a diff rather than a rebuild.
-        if t == "reset" {
+        // Release AFTER the animation, not before it.
+        //
+        // Clearing the outgoing slot synchronously removed it from the
+        // hierarchy in the same turn, so a reset hard-cut instead of
+        // cross-fading: the outgoing screen vanished rather than fading, and
+        // there is no `.transition()` any more to animate its removal. Holding
+        // it until the animation completes is what lets the opacity actually
+        // play.
+        let release = {
+            guard releasing else { return }
             slots[outgoing] = nil
             slotOffset[outgoing] = 0
             slotOpacity[outgoing] = 1
         }
+
+        if let anim = navAnimation(t) {
+            withAnimation(anim, settle, completion: release)
+        } else {
+            settle()
+            release()
+        }
+    }
+
+    /// The animation half of a transition.
+    ///
+    /// The router sends `push_replace` / `pop_replace` / `reset_replace` when a
+    /// navigation replaces the stack. Two independent facts travel in one atom:
+    /// the prefix says how to animate, the suffix says the outgoing screen is
+    /// unreachable. Splitting them here means neither is inferred from the
+    /// other, which is the bug this replaced — the release used to key on the
+    /// animation name, so a documented `reset_to(transition: :push)` retained a
+    /// screen nobody could reach, and a `switch_tab(transition: :reset)`
+    /// released one the user can switch straight back to.
+    private func animation(of t: String) -> String {
+        t.hasSuffix("_replace") ? String(t.dropLast("_replace".count)) : t
+    }
+
+    /// Whether this navigation replaced the stack, making the outgoing screen
+    /// unreachable and its retained tree pure cost.
+    private func replacesStack(_ t: String) -> Bool {
+        t.hasSuffix("_replace")
     }
 
     /// Where an incoming screen starts, before it slides in.
     private func enterOffset(_ t: String) -> CGFloat {
-        switch t {
+        switch animation(of: t) {
         case "push": return containerWidth
         case "pop": return -containerWidth
         default: return 0
@@ -2461,7 +2491,7 @@ public struct MobRootView: View {
     /// Where an outgoing screen ends up. It stays there, parked off-screen,
     /// until a later navigation reuses its slot.
     private func exitOffset(_ t: String) -> CGFloat {
-        switch t {
+        switch animation(of: t) {
         case "push": return -containerWidth
         case "pop": return containerWidth
         default: return 0
@@ -2469,7 +2499,7 @@ public struct MobRootView: View {
     }
 
     private func navAnimation(_ t: String) -> Animation? {
-        switch t {
+        switch animation(of: t) {
         case "push", "pop":
             return .spring(response: 0.3, dampingFraction: 0.85)
         case "reset":

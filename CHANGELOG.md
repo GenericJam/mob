@@ -43,11 +43,30 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   visible screen. `on_end_reached`'s latch clears on activation, restoring the
   pre-MOB-129 behaviour that a navigation used to give it for free.
 
-  Still open, and recorded on MOB-147: a documented `reset_to(...,
-  transition: :push)` retains an unreachable screen because the clear keys on
-  the animation name rather than on whether the stack was replaced; a reset no
-  longer cross-fades; and the layout cost of a parked slot on rotation is
-  reasoned about but unmeasured.
+- **A navigation that replaces the stack releases the screen it replaced**
+  (MOB-147). The release used to key on the animation name, which got it wrong
+  in both directions: `reset_to(..., transition: :push)` is documented, does
+  replace the stack, and was read as a push and retained for ever; while
+  `switch_tab(..., transition: :reset)` is also documented, does NOT replace the
+  stack — a parked tab can be switched back to — and was released, throwing away
+  the retention it should have kept.
+
+  The router now tags a stack-replacing navigation, and native reads the
+  animation from the prefix and the release from the suffix, so neither is
+  inferred from the other. No wire schema or NIF arity change: the transition
+  already travels as an atom whose name native reads directly, and the public
+  `:push | :pop | :reset` vocabulary callers use is unchanged.
+
+- **A reset cross-fades again** (MOB-147). The outgoing screen was released
+  synchronously, removing it in the same turn, so it hard-cut rather than fading
+  — and with `.transition()` gone there was nothing to animate its removal. The
+  release now runs on the animation's completion.
+
+  Still open on MOB-147: the layout cost of a parked slot on a container
+  geometry change. Steady state with both slots warm measures 67.6 ms against
+  65.7 ms for one, about 3%, which suggests the equality check is doing its job.
+  Rotation itself remains unmeasured, and honestly so: a geometry change
+  produces no `set_root`, so the frame instrumentation cannot see it at all.
 
 
 ### Performance

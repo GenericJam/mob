@@ -825,6 +825,32 @@ defmodule Mob.Router do
     end
   end
 
+  # A navigation that REPLACES the navigation stack, tagged so native can tell.
+  #
+  # Native needs two independent facts: which animation to play, and whether the
+  # outgoing screen is still reachable. Since MOB-129 it keeps the outgoing
+  # screen's view tree so popping back diffs rather than rebuilds, and holding a
+  # tree nobody can navigate back to is pure cost.
+  #
+  # Those two facts were conflated because both travelled as one atom. Keying
+  # the release on the animation name got it wrong in both directions:
+  # `reset_to(..., transition: :push)` is documented and replaces the stack, but
+  # read as a push and was retained for ever; `switch_tab(..., transition:
+  # :reset)` is also documented, does NOT replace the stack — a parked tab can
+  # be switched back to — and was released, throwing away the retention.
+  #
+  # Encoded as a suffixed atom rather than a new wire field: `set_transition/1`
+  # already carries an atom end to end and native reads its name directly, so
+  # this needs no NIF arity change, no JSON schema change, and no change to the
+  # public `:push | :pop | :reset` vocabulary callers use. An older native build
+  # that does not know the suffix falls through to its default case: no slide,
+  # no release, which is a cosmetic degrade rather than a break.
+  defp replacing(:push), do: :push_replace
+  defp replacing(:pop), do: :pop_replace
+  defp replacing(:reset), do: :reset_replace
+  defp replacing(:none), do: :none
+  defp replacing(other), do: other
+
   defp reset_resolved(new_module, mount_params, transition, state, mode) do
     case start_screen(new_module, mount_params, state) do
       {:ok, entry, state} ->
@@ -832,7 +858,11 @@ defmodule Mob.Router do
         state = Enum.reduce(discarded, state, &stop_screen/2)
 
         state =
-          make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, entry, transition)
+          make_current(
+            %{state | nav: Mob.Nav.put_history(state.nav, [])},
+            entry,
+            replacing(transition)
+          )
 
         do_paint(entry, :none, state, mode)
         state
@@ -861,7 +891,7 @@ defmodule Mob.Router do
         # exited between collection and its synchronous preparation call.
         Mob.ScreenState.delete_all()
         nav = reset_navigation(state.nav, new_module)
-        state = make_current(%{state | nav: nav}, entry, transition)
+        state = make_current(%{state | nav: nav}, entry, replacing(transition))
         do_paint(entry, :none, state, mode)
         state
 

@@ -80,7 +80,7 @@ defmodule Mob.NativeScreenSlotsTest do
   end
 
   describe "the mutations a post-merge review proved survived" do
-    test "the outgoing slot is cleared in exactly one place, under the reset branch" do
+    test "the outgoing slot is cleared in exactly one place, under the release guard" do
       # Inserting `slots[outgoing] = nil` anywhere else destroys depth-1
       # retention — the headline benefit — and every other test still passed.
       # The original guard rejected one exact textual shape; this counts.
@@ -90,10 +90,10 @@ defmodule Mob.NativeScreenSlotsTest do
       assert clears - 1 == 1,
              "expected exactly one clear of the outgoing slot, found #{clears - 1}"
 
-      # And it must sit under the reset branch, not anywhere earlier.
-      reset_at = index_of(body, ~s|if t == "reset"|)
+      # And it must sit behind the release guard, not anywhere earlier.
+      guard_at = index_of(body, "guard releasing else { return }")
       clear_at = index_of(body, "slots[outgoing] = nil")
-      assert reset_at < clear_at
+      assert guard_at < clear_at
     end
 
     test "a resize keeps a parked slot on the side it parked on" do
@@ -126,8 +126,53 @@ defmodule Mob.NativeScreenSlotsTest do
       body = region(code_only(@ios), "private func applyRoot(", "\n    }")
 
       assert body =~
-               ~r/if let animation = navAnimation\(t\) \{\s*withAnimation\(animation, settle\)\s*\} else \{\s*settle\(\)\s*\}/,
-             "both branches must settle"
+               ~r/if let anim = navAnimation\(t\) \{\s*withAnimation\(anim, settle, completion: release\)\s*\} else \{\s*settle\(\)\s*release\(\)\s*\}/,
+             "both branches must settle, and both must release"
+    end
+  end
+
+  describe "the release keys on stack replacement, not the animation (MOB-147 S1)" do
+    test "the animation and the replacement flag are read separately" do
+      # Two independent facts travelled as one atom, and keying the release on
+      # the animation name got it wrong in both directions: a documented
+      # `reset_to(transition: :push)` replaces the stack but read as a push and
+      # was retained for ever, while `switch_tab(transition: :reset)` does not
+      # replace it — a parked tab can be switched back to — and was released.
+      code = code_only(@ios)
+      assert code =~ "private func animation(of t: String) -> String {"
+      assert code =~ "private func replacesStack(_ t: String) -> Bool {"
+      assert code =~ ~s|t.hasSuffix("_replace")|
+    end
+
+    test "the offsets and the animation choice read the prefix" do
+      code = code_only(@ios)
+
+      for fun <- ["enterOffset", "exitOffset", "navAnimation"] do
+        body = region(code, "private func #{fun}(", "\n    }")
+
+        assert body =~ "switch animation(of: t)",
+               "#{fun} must read the animation from the prefix, not the raw atom"
+      end
+    end
+
+    test "the release reads the suffix, never the animation name" do
+      body = region(code_only(@ios), "private func applyRoot(", "\n    }")
+      assert body =~ "let releasing = replacesStack(t)"
+      assert body =~ "guard releasing else { return }"
+
+      refute body =~ ~s|if t == "reset" {|,
+             "keying the release on the animation name is the bug this replaced"
+    end
+
+    test "the release happens after the animation, not before it" do
+      # Clearing synchronously removed the outgoing screen in the same turn, so
+      # a reset hard-cut instead of cross-fading — there is no .transition() any
+      # more to animate its removal.
+      body = region(code_only(@ios), "private func applyRoot(", "\n    }")
+      assert body =~ "withAnimation(anim, settle, completion: release)"
+
+      assert body =~ ~r/\} else \{\s*settle\(\)\s*release\(\)\s*\}/,
+             "the non-animated branch must settle and release too"
     end
   end
 
@@ -138,11 +183,8 @@ defmodule Mob.NativeScreenSlotsTest do
       # unreachable and holding it is pure cost.
       body = region(code_only(@ios), "private func applyRoot(", "\n    }")
 
-      assert body =~ ~r/if t == "reset" \{\s*slots\[outgoing\] = nil/,
-             "reset must release the outgoing slot"
-
-      refute body =~ ~r/slots\[outgoing\] = nil\s*\n\s*\}\s*\n\s*\}\s*\z/,
-             "push and pop must NOT clear the outgoing slot"
+      assert body =~ ~r/guard releasing else \{ return \}\s*slots\[outgoing\] = nil/,
+             "the outgoing slot is released only for a stack replacement"
     end
   end
 
@@ -204,7 +246,7 @@ defmodule Mob.NativeScreenSlotsTest do
       # off-screen.
       body = region(code_only(@ios), "private func applyRoot(", "\n    }")
       seat = index_of(body, "slotOffset[incoming] = enterOffset(t)")
-      anim = index_of(body, "withAnimation(animation, settle)")
+      anim = index_of(body, "withAnimation(anim, settle, completion: release)")
       assert seat < anim, "the incoming offset must be seated outside the animation"
     end
   end

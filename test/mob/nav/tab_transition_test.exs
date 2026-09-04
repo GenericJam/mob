@@ -140,6 +140,20 @@ defmodule Mob.Nav.TabTransitionTest do
     assert Mob.Router.get_current_module(router) == HomeScreen
   end
 
+  test "a tab switch is never marked as replacing the stack", %{router: router} do
+    # The other half of MOB-147 S1. A parked tab can be switched back to, so its
+    # view tree is worth retaining — releasing it throws away exactly the
+    # depth-1 retention MOB-129 exists for. Keying the release on the animation
+    # name got this wrong: `switch_tab(..., transition: :reset)` is documented,
+    # and read as a reset it released a screen the user can return to.
+    for event <- ["settings_push", "home_pop", "settings_default"] do
+      Mob.Router.dispatch(router, event, %{})
+
+      refute List.last(transitions()) |> to_string() |> String.ends_with?("_replace"),
+             "#{event} must not be tagged as a stack replacement"
+    end
+  end
+
   test "legacy switch_tab/2 remains an unanimated swap", %{router: router} do
     Mob.Router.dispatch(router, "settings_default", %{})
     assert List.last(transitions()) == :none

@@ -224,8 +224,15 @@ defmodule Mob.Renderer do
   Loads the active `Mob.Theme`, clears the tap registry, serialises the tree
   to JSON, and calls `set_root/1` on the NIF. Returns `{:ok, :json_tree}`.
 
-  `transition` is an atom (`:push`, `:pop`, `:reset`, `:none`) for the nav
-  animation. Defaults to `:none` (instant swap).
+  `transition` is an atom for the nav animation: `:push`, `:pop`, `:reset` or
+  `:none`, defaulting to `:none` (instant swap).
+
+  The router additionally sends `:push_replace`, `:pop_replace` and
+  `:reset_replace` for a navigation that REPLACES the stack. Native reads the
+  animation from the prefix and the suffix tells it the outgoing screen is
+  unreachable, so it can release the view tree it would otherwise retain for a
+  return that can never happen. Callers never construct these; `Mob.Socket`
+  still validates the public `:push | :pop | :reset` vocabulary.
   """
   @spec render(map(), atom(), module() | atom(), atom()) :: {:ok, :json_tree} | {:error, term()}
   def render(tree, platform, nif \\ @default_nif, transition \\ :none) do

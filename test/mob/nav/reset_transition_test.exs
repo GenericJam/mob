@@ -116,19 +116,23 @@ defmodule Mob.Nav.ResetTransitionTest do
   end
 
   describe "the chosen transition reaches the native boundary" do
-    test "a plain reset still cross-fades", %{router: router} do
+    test "a plain reset still cross-fades, and marks the stack replaced", %{router: router} do
       Mob.Router.dispatch(router, "reset_default", %{})
-      assert last_transition() == :reset
+      # `_replace` is the suffix the router adds for a navigation that replaces
+      # the stack. Native reads the animation from the prefix; the suffix tells
+      # it the outgoing screen is unreachable, so the view tree MOB-129 would
+      # otherwise retain for a return can be released. See MOB-147 S1.
+      assert last_transition() == :reset_replace
     end
 
-    test "transition: :push paints a push", %{router: router} do
+    test "transition: :push paints a push and still replaces", %{router: router} do
       Mob.Router.dispatch(router, "reset_push", %{})
-      assert last_transition() == :push
+      assert last_transition() == :push_replace
     end
 
     test "transition: :pop paints a pop", %{router: router} do
       Mob.Router.dispatch(router, "reset_pop", %{})
-      assert last_transition() == :pop
+      assert last_transition() == :pop_replace
     end
 
     test "the stack is still replaced, whatever the animation", %{router: router} do
@@ -164,7 +168,7 @@ defmodule Mob.Nav.ResetTransitionTest do
       # code push. Dropping it would break navigation across an upgrade.
       :ok = GenServer.call(router, {:navigate, {:reset, OtherScreen, %{}}})
 
-      assert last_transition() == :reset
+      assert last_transition() == :reset_replace
       assert Mob.Router.get_current_module(router) == OtherScreen
     end
   end
