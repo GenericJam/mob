@@ -141,6 +141,48 @@ For native-code changes (iOS `.m`, Android `.kt` / `.c`), Elixir tests don't
 exercise the change. Deploy with `mix mob.deploy --native` and verify
 manually with a screenshot or `Mob.Test` interaction before committing.
 
+
+### Adversarial review — before the commit, by a subagent
+
+**Non-trivial work gets an adversarial review before it is committed.** Spawn a
+subagent, point it at the actual diff, and tell it to find defects rather than
+to approve. Act on what it finds, then commit.
+
+It must be a **separate agent**, not a re-read of your own work. The thing that
+is wrong is usually the author's mental model of the change, and that model is
+exactly what a self-review carries into the second pass.
+
+Give the reviewer: the diff to read (`git diff <base>..HEAD`, and the base
+explicitly, since a diverged local branch will otherwise sweep in the whole
+tree), what the change claims to do, and the specific things you are least sure
+about. Tell it to cite `file:line` for every finding, to rank them
+blocking / should-fix / nitpick, and to separate what it verified in source from
+what it is reasoning about platform semantics. Ask it to say plainly if the
+change is sound rather than inventing problems — but only after it has looked
+hard.
+
+**Skip it for** mechanical or trivial changes: formatting, a typo, a version
+bump, a changelog edit, moving a file. Reach for it when the change has
+behaviour, touches native code, or spans a platform boundary.
+
+This is not ceremony. In one session, pre-commit reviews caught, each of which
+would otherwise have shipped:
+
+* a helper defined inside `#if !MOB_RELEASE` but called unconditionally from
+  Swift, which linked in debug and would have failed **every iOS release
+  build**;
+* a cache whose tests asserted the write path and nothing about the read, so
+  deleting the lookup, or reading under a constant key, passed the whole suite;
+* a fix that covered 3 of 7 call sites on one platform while claiming parity
+  with the other;
+* a comment and a decision record asserting a race was closed when the code
+  only narrowed it;
+* generated source telling every user that a feature does nothing, in the
+  release that made it work.
+
+The one substantial change that skipped review that session was the largest one
+in the batch. Do not let size be the reason to skip.
+
 ---
 
 ## Release flow

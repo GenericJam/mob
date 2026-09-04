@@ -105,6 +105,11 @@ last published version, before you publish.** Applies to `mob`,
 to — not because the changes look small, not because each PR was
 already reviewed on its way in.
 
+This is a *different* gate from the per-commit adversarial review in
+`CLAUDE.md`, and neither substitutes for the other. That one asks
+whether a change is correct; this one asks whether the accumulated
+diff is coherent and safe to ship.
+
 The unit is the **release**, not the PR. What a user pulls from Hex is
 the accumulated diff since the last published version, and that diff
 is rarely the same shape as any individual PR that went into it.
