@@ -10,6 +10,46 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **A parked screen no longer keeps live resources running, and returning to
+  one no longer breaks the frame registry** (MOB-147, MOB-145). MOB-129 keeps
+  the navigated-away screen mounted so popping back diffs rather than rebuilds.
+  Before it, "not active" and "not alive" were the same state, so several things
+  never had to ask which one they were in. A post-merge review found two of them
+  silently broken rather than merely wasteful.
+
+  **The frame registry refused every write from a screen you popped back to.**
+  The nav generation is still bumped on every navigation and stale writes are
+  still refused, but a parked tracker's `onAppear` never fires again — so a
+  returning screen kept a stamp two navigations old and was rejected for ever.
+  `Mob.Test.element_frames` and `tap_id` read empty for the screen actually on
+  display, silently, for exactly the screens the optimisation retains. Trackers
+  now re-seed when their slot becomes active. Verified on device: 231 frames
+  before a push, 231 again after popping back.
+
+  **Toggles and sliders inherited state across screens.** Neither had any
+  prop-to-state sync, relying on the navigation teardown to re-seed them, so a
+  screen could show the toggle states and slider positions of the screen two
+  navigations back. `Mob.Socket` already raises `ArgumentError` on
+  `transition: :none` citing this exact hazard; MOB-129 had made it the default
+  path. Both now re-seed when the BEAM's value changes.
+
+  Also: a parked sheet is dismissed and re-presented on return, rather than
+  staying visible and interactive over the incoming screen — `.sheet` presents
+  on the window, so the slot's `allowsHitTesting(false)` never reached it, and a
+  park is no longer reported to the BEAM as a user dismissal. A parked video
+  pauses (audio included) and only resumes if it was autoplaying; a parked GPU
+  view stops rendering, having previously run at 60 fps indefinitely behind the
+  visible screen. `on_end_reached`'s latch clears on activation, restoring the
+  pre-MOB-129 behaviour that a navigation used to give it for free.
+
+  Still open, and recorded on MOB-147: a documented `reset_to(...,
+  transition: :push)` retains an unreachable screen because the clear keys on
+  the animation name rather than on whether the stack was replaced; a reset no
+  longer cross-fades; and the layout cost of a parked slot on rotation is
+  reasoned about but unmeasured.
+
+
 ### Performance
 - **Navigation no longer rebuilds the whole native tree (iOS)** (MOB-129). The
   root carried `.id(currentNavVersion)`, so every push, pop and reset destroyed

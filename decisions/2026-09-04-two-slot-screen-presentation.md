@@ -74,7 +74,9 @@ The cost is therefore paid once per screen per slot, not once per navigation. A 
 
 ## Hazards accepted, and the ones still open
 
-A parked screen is now alive rather than destroyed, which invalidates assumptions elsewhere. Addressed here: hit-testing, and the frame-registry generation is untouched because the parked slot stops re-registering once it stops laying out.
+A parked screen is now alive rather than destroyed, which invalidates assumptions elsewhere.
+
+**Correction.** An earlier version of this record claimed "the frame-registry generation is untouched because the parked slot stops re-registering once it stops laying out." That reasoned about the outgoing direction only, and it was wrong about the returning one. A post-merge review (MOB-147) found that a parked tracker's `.onAppear` never fires again, so a screen you pop back to keeps a stamp two navigations stale and **every one of its frame writes is refused for ever** — silently emptying `Mob.Test.element_frames` and `tap_id` for exactly the screens this optimisation retains. Fixed by re-seeding the stamp when a slot becomes active; the generation gate itself is kept, because it is what stops an outgoing screen re-registering at mid-animation coordinates.
 
 **Still open and NOT fixed here**, because they need a parked screen to actually contain the widget in question:
 

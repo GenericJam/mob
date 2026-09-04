@@ -79,6 +79,58 @@ defmodule Mob.NativeScreenSlotsTest do
     end
   end
 
+  describe "the mutations a post-merge review proved survived" do
+    test "the outgoing slot is cleared in exactly one place, under the reset branch" do
+      # Inserting `slots[outgoing] = nil` anywhere else destroys depth-1
+      # retention — the headline benefit — and every other test still passed.
+      # The original guard rejected one exact textual shape; this counts.
+      body = region(code_only(@ios), "private func applyRoot(", "\n    }")
+      clears = body |> String.split("slots[outgoing] = nil") |> length()
+
+      assert clears - 1 == 1,
+             "expected exactly one clear of the outgoing slot, found #{clears - 1}"
+
+      # And it must sit under the reset branch, not anywhere earlier.
+      reset_at = index_of(body, ~s|if t == "reset"|)
+      clear_at = index_of(body, "slots[outgoing] = nil")
+      assert reset_at < clear_at
+    end
+
+    test "a resize keeps a parked slot on the side it parked on" do
+      # Flipping this sign swings the parked slot on screen after any rotation.
+      code = code_only(@ios)
+      assert code =~ "slotOffset[i] = slotOffset[i] < 0 ? -width : width"
+    end
+
+    test "the slot honours its opacity" do
+      # Deleting this makes the reset crossfade machinery dead code while
+      # leaving it in the source, which reads as working.
+      slot =
+        region(code_only(@ios), "private func screenSlot(_ index: Int) -> some View {", "\n    }")
+
+      assert slot =~ ".opacity(slotOpacity[index])"
+    end
+
+    test "the startup branch keys on both slots being empty" do
+      # `if slots[activeSlot] != nil` looks equivalent and is not: it shows the
+      # startup spinner whenever the ACTIVE slot is empty, even though the other
+      # slot still holds a screen.
+      code = code_only(@ios)
+      assert code =~ "if slots[0] != nil || slots[1] != nil"
+      refute code =~ "if slots[activeSlot] != nil"
+    end
+
+    test "a non-animated navigation still settles" do
+      # Dropping settle() from the else branch leaves the incoming screen parked
+      # off-screen for any transition with no animation.
+      body = region(code_only(@ios), "private func applyRoot(", "\n    }")
+
+      assert body =~
+               ~r/if let animation = navAnimation\(t\) \{\s*withAnimation\(animation, settle\)\s*\} else \{\s*settle\(\)\s*\}/,
+             "both branches must settle"
+    end
+  end
+
   describe "depth-1 retention" do
     test "push and pop keep the outgoing tree; reset drops it" do
       # Holding the outgoing slot is what makes popping back a diff rather than
@@ -157,13 +209,38 @@ defmodule Mob.NativeScreenSlotsTest do
     end
   end
 
+  # Strip comments before asserting, so prose next to the code cannot satisfy an
+  # assertion. Two defects a review demonstrated in the first version:
+  #
+  #   * it stripped only FULL-LINE `//` comments, so deleting the real
+  #     `containerWidth = width` and leaving the text in a trailing comment left
+  #     all 13 tests passing;
+  #   * `~r{/\*.*?\*/}s` ran over the whole file, so a string literal containing
+  #     `/*` paired with a later `*/` swallowed ~200 lines of real code.
+  #
+  # Handled line by line, tracking string literals, so a `//` inside a string
+  # (a URL, say) survives and a stray `/*` cannot eat the file.
   defp code_only(source) do
     source
-    |> String.replace(~r{/\*.*?\*/}s, "")
     |> String.split("\n")
-    |> Enum.map(&String.replace(&1, ~r{^\s*//.*$}, ""))
+    |> Enum.map(&strip_line/1)
     |> Enum.join("\n")
   end
+
+  defp strip_line(line), do: strip_line(line, <<>>, false)
+
+  defp strip_line(<<>>, acc, _in_string), do: acc
+
+  defp strip_line(<<"\\", c::utf8, rest::binary>>, acc, true),
+    do: strip_line(rest, acc <> <<"\\", c::utf8>>, true)
+
+  defp strip_line(<<"\"", rest::binary>>, acc, in_string),
+    do: strip_line(rest, acc <> "\"", not in_string)
+
+  defp strip_line(<<"//", _::binary>>, acc, false), do: acc
+
+  defp strip_line(<<c::utf8, rest::binary>>, acc, in_string),
+    do: strip_line(rest, acc <> <<c::utf8>>, in_string)
 
   defp region(source, from, to) do
     [_, rest] = String.split(source, from, parts: 2)
