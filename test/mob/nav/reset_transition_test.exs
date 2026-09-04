@@ -31,6 +31,9 @@ defmodule Mob.Nav.ResetTransitionTest do
     def handle_event("reset_pop", _, socket),
       do: {:noreply, Mob.Socket.reset_to(socket, @other, %{}, transition: :pop)}
 
+    def handle_event("reset_all", _, socket),
+      do: {:noreply, Mob.Socket.reset_to(socket, @other, %{}, scope: :all)}
+
     def handle_event("push_other", _, socket),
       do: {:noreply, Mob.Socket.push_screen(socket, @other)}
   end
@@ -115,6 +118,33 @@ defmodule Mob.Nav.ResetTransitionTest do
   # Whether the frame told native the navigation stack was replaced. Carried on
   # the JSON root rather than in the transition atom, so the transition
   # vocabulary native matches on stays closed — see `replaces?/0`'s callers.
+  # Wait until the navigation has painted at least one frame.
+  #
+  # `Mob.Sender.sync/1` orders only the CALLER's casts, and an async paint
+  # travels router -> screen -> sender, so stepping those processes still races
+  # the flush. How many frames land is not fixed either, which is why callers
+  # assert a property of every frame rather than an exact list.
+  defp await_paint(timeout \\ 2_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_await_paint(deadline)
+  end
+
+  defp do_await_paint(deadline) do
+    Mob.Sender.sync(:infinity)
+
+    cond do
+      RecordingNif.roots() != [] ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("no frame was painted within the timeout")
+
+      true ->
+        Process.sleep(10)
+        do_await_paint(deadline)
+    end
+  end
+
   defp replaced_stack? do
     Mob.Sender.sync(:infinity)
     Enum.any?(RecordingNif.roots(), &Map.get(:json.decode(&1), "replaces_stack", false))
@@ -278,12 +308,8 @@ defmodule Mob.Nav.ResetTransitionTest do
       assert :ok = Mob.Test.reset_to(node(), OtherScreen, %{}, transition: :none)
 
       assert Mob.Router.get_current_module(router) == OtherScreen
-      :sys.get_state(:sys.get_state(router).current.pid)
-      Mob.Sender.sync(:infinity)
+      await_paint()
 
-      # Driven synchronously this paints twice; what matters is that no frame
-      # asked for an animation, and that none was tagged.
-      assert RecordingNif.transitions() != []
       assert Enum.all?(RecordingNif.transitions(), &(&1 == :none))
       refute replaced_stack?()
     end
@@ -294,16 +320,12 @@ defmodule Mob.Nav.ResetTransitionTest do
 
       send(router, {:nav_action, {:reset, OtherScreen, %{}, :none}, current})
 
-      # A raw nav action arrives as a message, and its paint is async: the
-      # router tells the incoming screen to render and that screen casts to the
-      # sender. `Mob.Sender.sync/1` only orders the *caller's* own casts, so
-      # step through both processes first or the flush races the paint.
       assert Mob.Router.get_current_module(router) == OtherScreen
-      :sys.get_state(:sys.get_state(router).current.pid)
-      Mob.Sender.sync(:infinity)
+      await_paint()
 
-      assert RecordingNif.roots() != []
-      assert RecordingNif.transitions() == [:none]
+      # Every frame, not an exact list: the count is not fixed and asserting
+      # `== [:none]` was flaky for exactly that reason.
+      assert Enum.all?(RecordingNif.transitions(), &(&1 == :none))
       refute replaced_stack?()
     end
   end
@@ -335,6 +357,20 @@ defmodule Mob.Nav.ResetTransitionTest do
 
       assert Mob.Router.get_current_module(router) == OtherScreen
       assert last_transition() == :pop
+      assert replaced_stack?()
+    end
+  end
+
+  describe "an all-stack reset" do
+    # `scope: :all` discards every parked tab stack as well as the current one,
+    # so it replaces strictly more than the default `scope: :stack` reset. It
+    # went untagged and untested: reverting `replacing/1` on that path alone
+    # left the whole suite green.
+    test "is tagged too", %{router: router} do
+      Mob.Router.dispatch(router, "reset_all", %{})
+
+      assert Mob.Router.get_current_module(router) == OtherScreen
+      assert last_transition() == :reset
       assert replaced_stack?()
     end
   end

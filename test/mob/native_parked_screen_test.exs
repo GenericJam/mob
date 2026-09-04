@@ -57,8 +57,58 @@ defmodule Mob.NativeParkedScreenTest do
       assert tracker =~ "@Environment(\\.mobScreenIsActive) private var isActive"
 
       assert tracker =~
-               ~r/\.onChange\(of: isActive\) \{ _, nowActive in\s*guard nowActive else \{ return \}\s*box\.generation = mob_frame_generation\(\)/,
-             "a returning tracker must re-seed before re-registering"
+               ~r/\.onChange\(of: isActive\) \{ _, nowActive in\s*guard nowActive else \{ return \}\s*box\.generation = mob_frame_generation\(\)\s*record\(id, geo\.frame\(in: \.global\)\)/,
+             "a returning tracker must re-seed AND re-register in the same pass"
+    end
+
+    test "appearing registers, not just re-stamps" do
+      # The other half of the same shape, and it was a live gap: dropping the
+      # `record(...)` from `.onAppear` left the suite green. A view identity
+      # that disappears and comes back (a lazy row scrolled off and on) then
+      # re-stamps itself but registers nothing, so the id is missing from
+      # `element_frames` until some unrelated geometry change writes it.
+      tracker = region(code_only(@ios), "private struct MobFrameTracker: ViewModifier {", "\n}\n")
+      body = region(tracker, ".onAppear {", "\n                            }")
+
+      assert body =~ "box.generation = mob_frame_generation()"
+      assert body =~ "record(id, geo.frame(in: .global))"
+
+      assert index_of(body, "mob_frame_generation()") < index_of(body, "record(id"),
+             "the stamp must be refreshed before the write, or the write is refused"
+    end
+
+    test "the lazy stamp is a fallback for an unstamped tracker, not a re-stamp" do
+      # `record/2` stamps only when the generation is still 0, covering the
+      # non-contractual ordering of `onAppear` against `onChange(initial:)`.
+      # Relaxing that guard to stamp unconditionally would defeat the whole
+      # generation gate: an OUTGOING screen's mid-animation `.move` writes
+      # would re-stamp themselves current and be accepted, which is exactly
+      # what the gate exists to refuse. Nothing caught that before this test.
+      body =
+        region(code_only(@ios), "private func record(_ id: String, _ frame: CGRect) {", "\n    }")
+
+      assert body =~
+               ~r/if box\.generation == 0 \{\s*box\.generation = mob_frame_generation\(\)\s*\}/,
+             "the lazy stamp must be conditional on never having been stamped"
+
+      refute body =~ ~r/^\s*box\.generation = mob_frame_generation\(\)\s*$(?!\s*\})/m
+    end
+
+    test "re-seeding without re-registering would not be a fix" do
+      # Asserting the re-stamp alone is not enough, and this was a live gap:
+      # dropping the `record(...)` left the suite green. A returning screen
+      # would then carry a current generation and have registered nothing, so
+      # `element_frames` and `tap_id` stay empty until some unrelated geometry
+      # change happens to fire the frame watcher — the same silent emptiness
+      # B1 is about, just reached a different way.
+      tracker = region(code_only(@ios), "private struct MobFrameTracker: ViewModifier {", "\n}\n")
+      body = region(tracker, ".onChange(of: isActive)", "\n                            }")
+
+      assert body =~ "box.generation = mob_frame_generation()"
+      assert body =~ "record(id, geo.frame(in: .global))"
+
+      assert index_of(body, "mob_frame_generation()") < index_of(body, "record(id"),
+             "the stamp must be refreshed before the write, or the write is refused"
     end
 
     test "the generation gate itself is kept" do
@@ -162,8 +212,19 @@ defmodule Mob.NativeParkedScreenTest do
       # over the incoming screen.
       body = region(code_only(@ios), "private struct MobSheetView: View {", "\n}\n")
       assert body =~ "@Environment(\\.mobScreenIsActive) private var isActive"
-      assert body =~ "dismissedByPark"
-      assert body =~ ~r/\.onChange\(of: isActive\)/
+
+      watcher = region(body, ".onChange(of: isActive) { _, nowActive in", "\n            }")
+
+      # Parking must actually take the sheet down, and remember that it did.
+      assert watcher =~
+               ~r/\} else if isPresented \{\s*dismissedByPark = true\s*isPresented = false/,
+             "a parked sheet must be dismissed, or it stays over the incoming screen"
+
+      # And returning must put back exactly the sheet the park took down —
+      # only the one the park dismissed, not one the user closed themselves.
+      assert watcher =~
+               ~r/if nowActive \{\s*if dismissedByPark \{\s*dismissedByPark = false\s*isPresented = true/,
+             "a return must re-present only a sheet the park dismissed"
     end
 
     test "a park does not report a dismissal to the BEAM" do
