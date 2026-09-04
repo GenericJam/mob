@@ -142,6 +142,37 @@ exercise the change. Deploy with `mix mob.deploy --native` and verify
 manually with a screenshot or `Mob.Test` interaction before committing.
 
 
+### Decision log — check both directions
+
+Before committing, ask two questions, not one.
+
+**Does this need a new record?** Anything non-obvious: a tradeoff, a workaround,
+a convention, a "why X and not Y". The test is whether a reader six months from
+now would ask why it is like this. If the commit message is explaining a
+decision, that decision belongs in `decisions/` where it is findable, not only
+in `git log`. Record it in the same commit, not as a follow-up.
+
+**Does this INVALIDATE an existing record?** This is the half that gets missed,
+and it is the more dangerous one. A record asserting a property the code no
+longer has is worse than no record: it is a claim a maintainer will act on.
+Grep `decisions/` for the mechanism you are changing before you commit.
+
+Both failed in one session, on the same change:
+
+* A decision record claimed "the frame-registry generation is untouched because
+  the parked slot stops re-registering once it stops laying out." It reasoned
+  about the outgoing direction only. The returning direction was broken —
+  silently, for exactly the screens the change optimised for — and the record
+  said it was fine.
+* Source comments elsewhere stated invariants the same change inverted:
+  `MobLazyList`'s latch reasoned that "only navigation changes the container's
+  identity", which had just stopped being true.
+
+When you correct a record, correct it **in place** with a note saying what was
+wrong, rather than quietly deleting the claim. The wrong version is the part a
+future reader needs to recognise, and `decisions/` is append-only for
+superseding whole decisions, not for silently editing away a mistake inside one.
+
 ### Adversarial review — before the commit, by a subagent
 
 **Non-trivial work gets an adversarial review before it is committed.** Spawn a
