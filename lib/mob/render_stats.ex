@@ -552,6 +552,11 @@ defmodule Mob.RenderStats do
   # threading an identifier through the wire for a number that is only ever read
   # by a human deciding whether an optimisation is worth building.
 
+  #
+  # The `nif` argument on all four functions below is a test seam: it defaults to
+  # `:mob_nif` and exists so the tests can inject a stub that raises the way an
+  # unimplemented or unloaded NIF does. Callers should omit it.
+
   @doc """
   Turn native frame timing on, and clear the sample window.
 
@@ -559,13 +564,21 @@ defmodule Mob.RenderStats do
   `set_root`; the timestamps and the run loop observer are downstream of that
   check.
 
-  Returns `{:error, :unsupported}` on a platform whose native half has not
-  implemented it yet, and on the host, where there is no native side at all.
+  Returns `{:error, :unsupported}` in three cases, all of which look identical
+  to a caller: on the host, where there is no native side at all; on a platform
+  whose native half has not implemented it, which today means Android; and in
+  an **iOS release build**, because the reading NIFs sit inside the same
+  `MOB_RELEASE` guard as the rest of the test harness. Profile a debug build.
   """
   @spec native_enable(module()) :: :ok | {:error, :unsupported}
   def native_enable(nif \\ :mob_nif), do: native_call(nif, :native_stats_enable, [true])
 
-  @doc "Turn native frame timing off. Recorded samples stay readable."
+  @doc """
+  Turn native frame timing off. Recorded samples stay readable.
+
+  A sample can still land one apply-window after this returns: an observer
+  already armed when the flag flipped records when it fires.
+  """
   @spec native_disable(module()) :: :ok | {:error, :unsupported}
   def native_disable(nif \\ :mob_nif), do: native_call(nif, :native_stats_enable, [false])
 

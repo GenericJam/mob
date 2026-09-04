@@ -30,8 +30,8 @@ Everything below is unreleased work from the MOB-124 rendering-performance
 epic. Nothing here has shipped to Hex.
 
 ### Added
-- **Native frame timing: `Mob.RenderStats.native_enable/1`, `native_frames/1`
-  and `native_summary/1`** (MOB-126). `Mob.RenderStats` measures seven stages
+- **Native frame timing: `Mob.RenderStats.native_enable/1`, `native_disable/1`,
+  `native_frames/1` and `native_summary/1`** (MOB-126). `Mob.RenderStats` measures seven stages
   and every one is on the BEAM side of the boundary: `set_root_us` closes when
   `nif_set_root` returns, and that is the moment the tree is handed to the main
   thread, not the moment it is on screen. Everything SwiftUI does to build, lay
@@ -44,8 +44,13 @@ epic. Nothing here has shipped to Hex.
   Off by default; the disabled path is one relaxed atomic load per `set_root`.
   Read it as an upper bound on a frame's native cost rather than an
   attribution: anything else queued on the main thread in the same window is
-  inside the number. **iOS only for now** — Android returns
-  `{:error, :unsupported}`, which is accurate rather than silently zero. See
+  inside the number.
+
+  **Debug builds only, and iOS only.** The reading NIFs sit inside the same
+  `MOB_RELEASE` guard as the rest of the test harness, so a TestFlight or App
+  Store build returns `{:error, :unsupported}` — profile a debug build.
+  Android returns `{:error, :unsupported}` too, which is accurate rather than
+  silently zero. See
   `decisions/2026-09-03-measure-the-native-half-of-a-frame.md`.
 
 - **`Mob.RenderStats` — per-frame render instrumentation** (MOB-125). Records
@@ -67,8 +72,10 @@ epic. Nothing here has shipped to Hex.
   `lazy_list`. A `row` under a horizontal scroll, and anything deeper than a
   scroll's direct child, stay eager.
 
-  This is the **iOS** half. It is verified to render identically to the eager
-  path but its win is **not** independently measured on iOS — the equivalent
+  This is the **iOS** half, and it needs mob_new 0.4.31+ for the Android one: an
+  app upgrading `mob` alone gets lazy scroll on iOS and not on Android. It is
+  verified to render identically to the eager path but its win is **not**
+  independently measured on iOS — the equivalent
   Android change (in `mob_new`) measures a 500-row screen going from 498.9 ms to
   115.8 ms of main-thread work per frame. See
   `decisions/2026-09-02-lazy-scroll-on-ios.md`.
@@ -110,7 +117,18 @@ epic. Nothing here has shipped to Hex.
   applied to the outgoing screen's handlers and its own ran unthrottled;
   Android never sent the config at all. iOS now resolves against the table
   being built, and Android sends it per composition. Gestures finally honour
-  what the app asked for instead of always using the built-in defaults. See
+  what the app asked for instead of always using the built-in defaults.
+
+  **Action required if you use `throttle: 0`.** That is the documented escape
+  hatch for raw delivery (`guides/events.md`), and because the config never
+  reached native, an app asking for it was silently getting the 33 ms default
+  instead. It now means what it says: every sample is delivered, which on a
+  120 Hz display is four times the rate that screen's mailbox has been
+  receiving. Audit any handler that asked for it. The safe direction of this
+  fix — a handler that asked to be throttled and was not — needs no action.
+
+  `debounce`, `leading` and `trailing` are accepted and stored but not yet
+  acted on by either platform. See
   `decisions/2026-09-02-throttle-config-targets-the-building-table.md` and
   `decisions/2026-09-03-android-throttle-config-per-composition.md`. Needs
   mob_new 0.4.31+ for the Android half.
@@ -150,8 +168,12 @@ epic. Nothing here has shipped to Hex.
   twenty results again is suppressed; loading a page and going twenty to forty
   is not.
 
-  Not a complete fix, and the limitation is worth knowing: a re-query whose
-  result count differs every time still fires once per distinct count.
+  Not a complete fix, and the limitations are worth knowing. A re-query whose
+  result count differs every time still fires once per distinct count. A
+  **windowed** list holding a rolling buffer at constant length fires once and
+  then never again. And a page load that **fails or returns nothing** leaves the
+  count unchanged, so scrolling away and back will not retry it, where
+  previously `.onAppear` would have.
   Separating "new content, user is at the end" from "new content, user never
   scrolled" needs scroll position rather than content identity. Write
   `on_end_reached` handlers to be idempotent.
@@ -170,8 +192,12 @@ epic. Nothing here has shipped to Hex.
   Covers column, row, box, both scroll axes, the lazy list, the sheet body and
   the tab bar. The coercion is scoped to top-level props, so an id nested
   inside a prop value — `tabs: [%{id: 1}]` — still falls back to positional.
-  Needs mob_new 0.4.31+ for the Compose half; both platforms derive keys
-  identically. See `decisions/2026-09-03-children-key-on-author-id.md`.
+
+  Needs mob_new 0.4.31+ for the Compose half, which derives keys the same way
+  from the same rules for those seven containers. **The tab bar is iOS-only**:
+  Compose's `NavigationBar` still iterates tabs positionally, so reordering or
+  inserting a tab moves per-tab state on Android and not on iOS. See
+  `decisions/2026-09-03-children-key-on-author-id.md`.
 
 ### Known issues (found while measuring, not fixed here)
 - *(none outstanding — the two recorded here, MOB-133's 256-element cap and
