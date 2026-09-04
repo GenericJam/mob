@@ -35,15 +35,34 @@ defmodule Mob.NativeImageCacheTest.SwiftSource do
   defp strip(<<>>, _state, acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
 
   defp strip(<<"//", rest::binary>>, :code, acc), do: strip(rest, :line, acc)
-  defp strip(<<"/*", rest::binary>>, :code, acc), do: strip(rest, :block, acc)
+  defp strip(<<"/*", rest::binary>>, :code, acc), do: strip(rest, {:block, 1}, acc)
+
+  # Raw strings. Swift's `#"..."#` does not honour backslash escapes, so the
+  # escape clause below would eat the closing quote of `#"a\"#` and leave the
+  # scanner inside a string for the rest of the file. Everything after that
+  # point would then be copied through verbatim, comments included, which is
+  # the direction that actually matters: an assertion this file makes could be
+  # satisfied by prose rather than by code.
+  defp strip(<<"#\"", rest::binary>>, :code, acc), do: strip(rest, :raw_string, ["\"" | acc])
+
+  defp strip(<<"\"#", rest::binary>>, :raw_string, acc), do: strip(rest, :code, ["\"" | acc])
+
+  defp strip(<<c::utf8, rest::binary>>, :raw_string, acc),
+    do: strip(rest, :raw_string, [<<c::utf8>> | acc])
+
   defp strip(<<"\"", rest::binary>>, :code, acc), do: strip(rest, :string, ["\"" | acc])
   defp strip(<<c::utf8, rest::binary>>, :code, acc), do: strip(rest, :code, [<<c::utf8>> | acc])
 
   defp strip(<<"\n", rest::binary>>, :line, acc), do: strip(rest, :code, ["\n" | acc])
   defp strip(<<_c::utf8, rest::binary>>, :line, acc), do: strip(rest, :line, acc)
 
-  defp strip(<<"*/", rest::binary>>, :block, acc), do: strip(rest, :code, acc)
-  defp strip(<<_c::utf8, rest::binary>>, :block, acc), do: strip(rest, :block, acc)
+  # Swift block comments nest: `/* a /* b */ c */` is one comment. Exiting on
+  # the first `*/` leaves ` c */` behind as both leaked prose and syntactic
+  # garbage, so the depth is counted.
+  defp strip(<<"/*", rest::binary>>, {:block, n}, acc), do: strip(rest, {:block, n + 1}, acc)
+  defp strip(<<"*/", rest::binary>>, {:block, 1}, acc), do: strip(rest, :code, acc)
+  defp strip(<<"*/", rest::binary>>, {:block, n}, acc), do: strip(rest, {:block, n - 1}, acc)
+  defp strip(<<_c::utf8, rest::binary>>, {:block, n}, acc), do: strip(rest, {:block, n}, acc)
 
   # Swift escapes, including the `\(` that opens a string interpolation, are
   # copied through so the escaped quote in `"a \" b"` does not close the string
@@ -162,6 +181,74 @@ defmodule Mob.NativeImageCacheTest do
       %{cache: region(@ios, "final class MobImageCache {", "\n}\n")}
     end
 
+    test "the lookup actually reads the cache before decoding", %{cache: cache} do
+      # The single line that makes this a cache rather than an indirection with
+      # a stat in front of it. It had no test at all: deleting it left every
+      # other assertion in this file green while the implementation decoded on
+      # every render, which is strictly worse than not having the cache.
+      lookup = region(cache, "func image(atPath path: String) -> UIImage? {", "\n    }")
+
+      assert lookup =~ "cache.object(forKey: key)",
+             "image(atPath:) must consult the cache"
+
+      # And it must consult it with the derived key, not a constant. Reading
+      # under a fixed key type-checks, passes a presence assertion for
+      # `cache.object`, and serves one image for every path in the app.
+      assert lookup =~ ~r/cache\.object\(forKey: key\)/,
+             "the lookup must use the derived key"
+
+      # Before the decode, not after. A read placed below the decode is a cache
+      # that never saves anything.
+      read_at = :binary.match(lookup, "cache.object(forKey: key)") |> elem(0)
+      decode_at = :binary.match(lookup, "UIImage(contentsOfFile: path) else") |> elem(0)
+      assert read_at < decode_at, "the cache must be consulted before decoding"
+    end
+
+    test "the cache is a shared instance, not a fresh one per access", %{cache: cache} do
+      # `static var shared: MobImageCache { MobImageCache() }` type-checks,
+      # reads identically at every call site, and gives a 0% hit rate for ever.
+      assert cache =~ "static let shared = MobImageCache()"
+      refute cache =~ ~r/static var shared/, "a computed shared is a new cache every access"
+    end
+
+    test "an image too large for the budget is not silently dropped", %{cache: cache} do
+      # NSCache DISCARDS an object whose cost exceeds totalCostLimit: setObject
+      # appears to succeed and the next object(forKey:) returns nil. A 12 MP
+      # capture is ~48.75 MB decoded, over the budget of every device under 4 GB,
+      # so without this guard the most likely large image in a real app is
+      # re-decoded every render while the code reads as though it were cached.
+      lookup = region(cache, "func image(atPath path: String) -> UIImage? {", "\n    }")
+      assert lookup =~ "cost <= cache.totalCostLimit"
+    end
+
+    test "a rewritten path drops the entry it superseded", %{cache: cache} do
+      # The old key encodes the old size and mtime, so nothing can look it up
+      # again, but it holds budget until NSCache evicts it — and what NSCache
+      # evicts to make room is some other screen's images.
+      lookup = region(cache, "func image(atPath path: String) -> UIImage? {", "\n    }")
+      assert lookup =~ "cache.removeObject(forKey: previous)"
+      assert cache =~ "private let keysByPath = NSCache<NSString, NSString>()"
+    end
+
+    test "the key is derived from the symlink target, not the link", %{cache: cache} do
+      # attributesOfItem does not traverse a terminal symlink while
+      # UIImage(contentsOfFile:) does, so a symlinked path would be keyed on the
+      # link's own size and mtime and never notice the target being rewritten —
+      # the exact staleness the key exists to prevent, in the one case where a
+      # path is most likely to be a stable alias for changing content.
+      key = region(cache, "static func cacheKey(forPath path: String) -> NSString? {", "\n    }")
+      assert key =~ "resolvingSymlinksInPath"
+      assert key =~ "attributesOfItem(atPath: resolved)"
+    end
+
+    test "a missing file attribute bypasses the cache rather than defaulting", %{cache: cache} do
+      # `?? 0` on size and mtime degrades the key to path-only, which is the
+      # correctness bug this whole function exists to avoid, applied silently.
+      key = region(cache, "static func cacheKey(forPath path: String) -> NSString? {", "\n    }")
+      refute key =~ "?? 0", "a defaulted attribute is a path-only key in disguise"
+      assert key =~ "guard\n"
+    end
+
     test "is an NSCache, not a dictionary", %{cache: cache} do
       # A Dictionary grows without bound and releases nothing under memory
       # pressure; NSCache evicts on the system's own low-memory notifications,
@@ -177,6 +264,11 @@ defmodule Mob.NativeImageCacheTest do
       # A flat budget is only defensible on the largest device it runs on. Mob
       # targets old hardware deliberately, so the ceiling has to scale down.
       assert cache =~ "ProcessInfo.processInfo.physicalMemory"
+      # Pin the divisor, not just the clamp. A budget of physical/4 stays inside
+      # both bounds on every device and is a 16x blowout on the low-memory
+      # hardware the scaling exists to protect, so a clamp-only assertion waves
+      # through the one mistake that matters here.
+      assert cache =~ "Int(physical / 64)"
       assert cache =~ ~r/min\(64 \* 1024 \* 1024, max\(16 \* 1024 \* 1024/
     end
 
@@ -186,7 +278,7 @@ defmodule Mob.NativeImageCacheTest do
       # avatar landing at the same cache location.
       key = region(cache, "static func cacheKey(forPath path: String) -> NSString? {", "\n    }")
 
-      assert key =~ "FileManager.default.attributesOfItem(atPath: path)"
+      assert key =~ "FileManager.default.attributesOfItem(atPath: resolved)"
       assert key =~ "attrs[.size]"
       assert key =~ "attrs[.modificationDate]"
 
@@ -208,7 +300,8 @@ defmodule Mob.NativeImageCacheTest do
     end
 
     test "cost is the decoded byte size, not the file size", %{cache: cache} do
-      assert cache =~ "cache.setObject(decoded, forKey: key, cost: Self.decodedByteCost(decoded))"
+      assert cache =~ "let cost = Self.decodedByteCost(decoded)"
+      assert cache =~ "cache.setObject(decoded, forKey: key, cost: cost)"
 
       cost = region(cache, "static func decodedByteCost(_ image: UIImage) -> Int {", "\n    }")
 
@@ -234,9 +327,19 @@ defmodule Mob.NativeImageCacheTest do
                  "            return nil\n" <>
                  "        }"
 
-      # Exactly one insertion, on the success path only.
-      inserts = cache |> String.split("setObject") |> length()
-      assert inserts - 1 == 1, "expected a single setObject call, found #{inserts - 1}"
+      # Exactly one image insertion, on the success path only. Counted on the
+      # image cache specifically rather than on `setObject` across the class:
+      # the path -> key side table inserts too, and a bare `setObject` count
+      # would grow with every unrelated NSCache added later, so it would start
+      # failing for reasons that have nothing to do with negative caching.
+      inserts = cache |> String.split("cache.setObject(decoded") |> length()
+      assert inserts - 1 == 1, "expected a single image insertion, found #{inserts - 1}"
+
+      # The decode failure returns before reaching either insertion.
+      lookup = region(cache, "func image(atPath path: String) -> UIImage? {", "\n    }")
+      nil_return_at = :binary.match(lookup, "UIImage(contentsOfFile: path) else") |> elem(0)
+      insert_at = :binary.match(lookup, "cache.setObject(decoded") |> elem(0)
+      assert nil_return_at < insert_at
     end
   end
 end
