@@ -140,6 +140,22 @@ epic. Nothing here has shipped to Hex.
   flat ceiling that is only defensible on the largest device it runs on. A
   first visit still loads cold; what goes away is every load after that.
 
+- **`on_end_reached` fires on arrival at the end, not on content replacement**
+  (MOB-141). Keying children on the author's `:id` gave every row a new identity
+  when a list's contents were replaced, so the last row's `onAppear` ran again
+  even though nobody scrolled: a search screen re-queried on each keystroke
+  fired one pagination request per keystroke, where before it fired none. The
+  callback is now latched on the child count, which survives a replacement
+  because only navigation changes the list's identity. Re-querying and getting
+  twenty results again is suppressed; loading a page and going twenty to forty
+  is not.
+
+  Not a complete fix, and the limitation is worth knowing: a re-query whose
+  result count differs every time still fires once per distinct count.
+  Separating "new content, user is at the end" from "new content, user never
+  scrolled" needs scroll position rather than content identity. Write
+  `on_end_reached` handlers to be idempotent.
+
 - **Children keep their identity across list edits** (MOB-127). Children of
   every container were keyed on their position, so inserting or removing a row
   made each following row adopt the previous occupant's view state: typed text,
