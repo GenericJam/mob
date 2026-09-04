@@ -15,9 +15,13 @@ defmodule Mob.NativeScreenSlotsTest do
   satisfy would pass against code that does nothing.
   """
   # credo:disable-for-this-file Jump.CredoChecks.VacuousTest
+  import Mob.Test.NativeSource
+
   use ExUnit.Case, async: true
 
   @ios File.read!(Path.expand("../../ios/MobRootView.swift", __DIR__))
+  @nif File.read!(Path.expand("../../ios/mob_nif.m", __DIR__))
+  @view_model File.read!(Path.expand("../../ios/MobViewModel.swift", __DIR__))
 
   describe "identity" do
     test "navigation no longer changes the root's identity" do
@@ -91,9 +95,16 @@ defmodule Mob.NativeScreenSlotsTest do
              "expected exactly one clear of the outgoing slot, found #{clears - 1}"
 
       # And it must sit behind the release guard, not anywhere earlier.
-      guard_at = index_of(body, "guard releasing, activeSlot != outgoing else { return }")
+      guard_at = index_of(body, "guard releasing, token == navToken else { return }")
       clear_at = index_of(body, "slots[outgoing] = nil")
       assert guard_at < clear_at
+
+      # The token must be taken AFTER the increment. Swapping those two lines
+      # leaves `token` one behind for ever, the guard never passes, and nothing
+      # is released — the whole feature inert, with every other assertion here
+      # still green.
+      assert index_of(body, "navToken += 1") < index_of(body, "let token = navToken"),
+             "the token must be read after it is bumped, or the guard never passes"
     end
 
     test "a resize keeps a parked slot on the side it parked on" do
@@ -106,7 +117,11 @@ defmodule Mob.NativeScreenSlotsTest do
       # Deleting this makes the reset crossfade machinery dead code while
       # leaving it in the source, which reads as working.
       slot =
-        region(code_only(@ios), "private func screenSlot(_ index: Int) -> some View {", "\n    }")
+        region(
+          code_only(@ios),
+          "private func screenSlot(_ index: Int) -> some View {",
+          "\n    }"
+        )
 
       assert slot =~ ".opacity(slotOpacity[index])"
     end
@@ -146,6 +161,21 @@ defmodule Mob.NativeScreenSlotsTest do
              "the replacement flag must not ride in the transition string"
     end
 
+    test "the native side actually reads the flag off the root" do
+      # Hardcoding `BOOL replacesStack = NO;` makes the whole feature inert end
+      # to end, and every Swift-side assertion still passes — they only check
+      # the consumer. This checks the producer.
+      body = region(code_only(@nif, :objc), "static ERL_NIF_TERM nif_set_root(", "\n}\n")
+      assert body =~ ~s|((NSDictionary *)json)[@"replaces_stack"]|
+      assert body =~ "[replacesRaw isKindOfClass:[NSNumber class]] && [replacesRaw boolValue]"
+      assert body =~ "setRoot:node transition:transitionStr replacesStack:replacesStack"
+
+      # And the view model must keep it, not drop it on the floor.
+      vm = code_only(@view_model)
+      assert vm =~ "public var replacesStack: Bool = false"
+      assert vm =~ "self.replacesStack = replacesStack"
+    end
+
     test "the offsets and the animation choice read the transition directly" do
       code = code_only(@ios)
 
@@ -169,13 +199,20 @@ defmodule Mob.NativeScreenSlotsTest do
              "the incoming seed must not re-derive the decision"
     end
 
-    test "the release refuses to clear a slot that is now active" do
-      # The closure runs on the animation's completion, and a second navigation
-      # arriving before it settles reuses the slot it captured — a reset
-      # followed quickly by a push makes `outgoing` the ACTIVE slot. Without
-      # this guard the release blanks the screen the user is looking at.
+    test "the release refuses to run if another navigation happened since" do
+      # A slot index is not enough state. `incoming = 1 - activeSlot` alternates,
+      # so a captured slot returns to being non-active every SECOND navigation:
+      # reset, push, pop inside one animation duration leaves the reset's
+      # completion passing an `activeSlot != outgoing` check while the slot holds
+      # the tree the pop just retained. It would clear that tree and snap its
+      # offset outside any animation, mid-slide.
       body = region(code_only(@ios), "private func applyRoot(", "\n    }")
-      assert body =~ "guard releasing, activeSlot != outgoing else { return }"
+      assert body =~ "navToken += 1"
+      assert body =~ "let token = navToken"
+      assert body =~ "guard releasing, token == navToken else { return }"
+
+      refute body =~ "activeSlot != outgoing",
+             "a slot index only defeats odd-numbered interleaves"
     end
 
     test "the release happens after the animation, not before it" do
@@ -195,8 +232,8 @@ defmodule Mob.NativeScreenSlotsTest do
       body = region(code_only(@ios), "private func applyRoot(", "\n    }")
 
       assert body =~
-               ~r/guard releasing, activeSlot != outgoing else \{ return \}\s*slots\[outgoing\] = nil/,
-             "the outgoing slot is released only for a stack replacement, and only if still parked"
+               ~r/guard releasing, token == navToken else \{ return \}\s*slots\[outgoing\] = nil/,
+             "released only for a stack replacement, and only if no later navigation happened"
     end
   end
 
@@ -205,7 +242,11 @@ defmodule Mob.NativeScreenSlotsTest do
       # Without this the parked slot's subtree is re-evaluated on every render of
       # the active one, and holding it costs more than rebuilding it.
       slot =
-        region(code_only(@ios), "private func screenSlot(_ index: Int) -> some View {", "\n    }")
+        region(
+          code_only(@ios),
+          "private func screenSlot(_ index: Int) -> some View {",
+          "\n    }"
+        )
 
       assert slot =~ ".equatable()"
     end
@@ -226,7 +267,11 @@ defmodule Mob.NativeScreenSlotsTest do
       # honour zero opacity the way UIKit honours zero alpha. A tappable parked
       # screen would resolve handles from a superseded tap-table generation.
       slot =
-        region(code_only(@ios), "private func screenSlot(_ index: Int) -> some View {", "\n    }")
+        region(
+          code_only(@ios),
+          "private func screenSlot(_ index: Int) -> some View {",
+          "\n    }"
+        )
 
       assert slot =~ ".allowsHitTesting(index == activeSlot)"
       assert slot =~ ".accessibilityHidden(index != activeSlot)"
@@ -260,69 +305,6 @@ defmodule Mob.NativeScreenSlotsTest do
       seat = index_of(body, "slotOffset[incoming] = enterOffset(t)")
       anim = index_of(body, "withAnimation(anim, settle, completion: release)")
       assert seat < anim, "the incoming offset must be seated outside the animation"
-    end
-  end
-
-  # Strip comments before asserting, so prose next to the code cannot satisfy an
-  # assertion. Two defects a review demonstrated in the first version:
-  #
-  #   * it stripped only FULL-LINE `//` comments, so deleting the real
-  #     `containerWidth = width` and leaving the text in a trailing comment left
-  #     all 13 tests passing;
-  #   * `~r{/\*.*?\*/}s` ran over the whole file, so a string literal containing
-  #     `/*` paired with a later `*/` swallowed ~200 lines of real code.
-  #
-  # Handled line by line, tracking string literals, so a `//` inside a string
-  # (a URL, say) survives and a stray `/*` cannot eat the file.
-  defp code_only(source) do
-    scan(source, :code, [])
-  end
-
-  # Scans the whole file as one binary, carrying string and block-comment state
-  # ACROSS lines. A per-line scanner reset `in_string` at every newline, which
-  # breaks on Swift's multi-line `"""` literals — MobGpuView.swift embeds MSL
-  # shader source that way, and a `//` inside it was truncated as if it were a
-  # comment. It also never recognised `/* */`, so commented-out code satisfied a
-  # `=~` assertion: a false pass, the inverse of the bug this replaced.
-  defp scan(<<>>, _state, acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
-
-  defp scan(<<"\\", c::utf8, rest::binary>>, :string, acc),
-    do: scan(rest, :string, [<<c::utf8>>, "\\" | acc])
-
-  defp scan(<<"\"\"\"", rest::binary>>, :code, acc), do: scan(rest, :multiline, ["\"\"\"" | acc])
-  defp scan(<<"\"\"\"", rest::binary>>, :multiline, acc), do: scan(rest, :code, ["\"\"\"" | acc])
-
-  defp scan(<<c::utf8, rest::binary>>, :multiline, acc),
-    do: scan(rest, :multiline, [<<c::utf8>> | acc])
-
-  defp scan(<<"\"", rest::binary>>, :code, acc), do: scan(rest, :string, ["\"" | acc])
-  defp scan(<<"\"", rest::binary>>, :string, acc), do: scan(rest, :code, ["\"" | acc])
-  defp scan(<<c::utf8, rest::binary>>, :string, acc), do: scan(rest, :string, [<<c::utf8>> | acc])
-
-  defp scan(<<"//", rest::binary>>, :code, acc), do: scan(rest, :line_comment, acc)
-  defp scan(<<"\n", rest::binary>>, :line_comment, acc), do: scan(rest, :code, ["\n" | acc])
-  defp scan(<<_::utf8, rest::binary>>, :line_comment, acc), do: scan(rest, :line_comment, acc)
-
-  defp scan(<<"/*", rest::binary>>, :code, acc), do: scan(rest, :block_comment, acc)
-  defp scan(<<"*/", rest::binary>>, :block_comment, acc), do: scan(rest, :code, acc)
-
-  defp scan(<<"\n", rest::binary>>, :block_comment, acc),
-    do: scan(rest, :block_comment, ["\n" | acc])
-
-  defp scan(<<_::utf8, rest::binary>>, :block_comment, acc), do: scan(rest, :block_comment, acc)
-
-  defp scan(<<c::utf8, rest::binary>>, :code, acc), do: scan(rest, :code, [<<c::utf8>> | acc])
-
-  defp region(source, from, to) do
-    [_, rest] = String.split(source, from, parts: 2)
-    [body | _] = String.split(rest, to, parts: 2)
-    body
-  end
-
-  defp index_of(hay, needle) do
-    case :binary.match(hay, needle) do
-      {i, _} -> i
-      :nomatch -> flunk("expected to find #{inspect(needle)}")
     end
   end
 end

@@ -74,6 +74,21 @@ defmodule Mob.Sender do
   """
   @type screen_ref :: reference() | atom()
 
+  @typedoc """
+  A navigation transition, optionally tagged as replacing the stack.
+
+  The bare atom is the wire vocabulary the platforms understand. The
+  `{transition, :replace}` form additionally says the outgoing screen's process
+  is gone and its retained view tree can be released once the animation ends;
+  `Mob.Renderer` unwraps it and still sends a plain atom.
+
+  Only `activate/2` and `activate_frame/2` take this form. `render/5,6` are
+  always called with a plain atom; the reserved transition is substituted into
+  a pending render inside `handle_cast/2`, after the public function has been
+  called, so the tuple never crosses that boundary.
+  """
+  @type transition :: atom() | {atom(), :replace}
+
   defstruct active: nil,
             pending: %{},
             reserved_transition: nil,
@@ -134,13 +149,13 @@ defmodule Mob.Sender do
 
   A `:none` transition only activates the screen and creates no reservation.
   """
-  @spec activate(screen_ref(), atom()) :: :ok
+  @spec activate(screen_ref(), transition()) :: :ok
   def activate(ref, transition) do
     if running?(), do: GenServer.call(__MODULE__, {:activate, ref, transition}), else: :ok
   end
 
   @doc false
-  @spec activate_frame(screen_ref(), atom()) :: reference() | nil
+  @spec activate_frame(screen_ref(), transition()) :: reference() | nil
   def activate_frame(ref, transition) do
     if running?() do
       GenServer.call(__MODULE__, {:activate_frame, ref, transition})

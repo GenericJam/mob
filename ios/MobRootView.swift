@@ -1262,8 +1262,7 @@ private struct MobVideoPlayer: UIViewControllerRepresentable {
     // actually looking at.
     @Environment(\.mobScreenIsActive) private var isActive
 
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let vc = AVPlayerViewController()
+    private func makePlayer() -> AVPlayer {
         let url: URL
         if src.hasPrefix("http://") || src.hasPrefix("https://") {
             url = URL(string: src)!
@@ -1271,8 +1270,6 @@ private struct MobVideoPlayer: UIViewControllerRepresentable {
             url = URL(fileURLWithPath: src)
         }
         let player = AVPlayer(url: url)
-        vc.player = player
-        vc.showsPlaybackControls = controls
         if loop {
             NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
@@ -1281,14 +1278,39 @@ private struct MobVideoPlayer: UIViewControllerRepresentable {
                 player.play()
             }
         }
+        return player
+    }
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let vc = AVPlayerViewController()
+        let player = makePlayer()
+        vc.player = player
+        vc.showsPlaybackControls = controls
+        context.coordinator.src = src
         if autoplay { player.play() }
         return vc
     }
 
     final class Coordinator {
-        /// Set while the screen is parked, so the resume fires once on return
-        /// rather than on every render of the active screen.
-        var wasParked = false
+        /// Whether the player was actually playing at the moment its screen was
+        /// parked, and so should resume on return.
+        ///
+        /// Deliberately not "did a park happen". Resuming on `autoplay` alone
+        /// undoes a pause the user made before navigating away: park sees an
+        /// already-paused player and does nothing, and the return sees
+        /// `autoplay && .paused` and starts it. What matters is the state the
+        /// player was in, not how it got parked.
+        var wasPlaying = false
+
+        /// The `src` the current player was built for.
+        ///
+        /// Two-slot presentation deliberately preserves view identity across
+        /// *different* screens: screen C is written into the slot screen A
+        /// left, so C's video representable can be A's, coordinator and all.
+        /// `makeUIViewController` does not run again, so without this the
+        /// player is never rebuilt and C shows A's video — and, because
+        /// `wasPlaying` came from A being parked, plays it unbidden with audio.
+        var src: String?
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -1297,21 +1319,38 @@ private struct MobVideoPlayer: UIViewControllerRepresentable {
         // Pause on park; resume only what was playing itself. A video the user
         // had paused stays paused, and one that never autoplayed does not start
         // just because the screen came back.
+        // A changed `src` means this is a different video in a recycled view.
+        // Rebuild rather than resume: the old player belongs to another screen,
+        // and so does anything `wasPlaying` remembers about it.
+        if context.coordinator.src != src {
+            context.coordinator.src = src
+            context.coordinator.wasPlaying = false
+            let rebuilt = makePlayer()
+            vc.player = rebuilt
+            vc.showsPlaybackControls = controls
+            if autoplay && isActive { rebuilt.play() }
+            return
+        }
+
         guard let player = vc.player else { return }
 
-        // Pause on park. Resume only on the park-to-active TRANSITION, never
-        // merely because the screen is active: this runs on every SwiftUI
-        // update of the active screen, and a fresh node graph arrives on every
-        // BEAM render, so gating on `isActive` alone restarts a video the user
-        // paused within one render of any screen carrying a timer or live data.
+        // Pause on park; resume only what was playing when it was parked.
+        //
+        // Two separate traps here. Gating the resume on `isActive` alone
+        // restarts the video on every render, because this runs on every
+        // SwiftUI update of the active screen and a fresh node graph arrives on
+        // every BEAM render. And gating it on `autoplay` undoes a pause the
+        // user made before navigating away — the park finds it already paused
+        // and does nothing, the return finds `autoplay && .paused` and plays
+        // it. Recording what the player was doing avoids both.
         if isActive {
-            if context.coordinator.wasParked {
-                context.coordinator.wasParked = false
-                if autoplay, player.timeControlStatus == .paused { player.play() }
+            if context.coordinator.wasPlaying {
+                context.coordinator.wasPlaying = false
+                if player.timeControlStatus == .paused { player.play() }
             }
-        } else {
-            context.coordinator.wasParked = true
-            if player.timeControlStatus != .paused { player.pause() }
+        } else if player.timeControlStatus != .paused {
+            context.coordinator.wasPlaying = true
+            player.pause()
         }
     }
 }
@@ -1491,6 +1530,9 @@ private struct MobTextField: View {
     let initialText: String
     @Environment(\.mobScreenIsActive) private var isActive
     @State private var text: String
+    // See MobToggle. Covers the controlled-input sync below as well as the
+    // activation re-seed: both write `text` programmatically, and reporting
+    // either back to the BEAM echoes a value the BEAM just sent.
     @FocusState private var isFocused: Bool
 
     init(node: MobNode, placeholder: String, initialText: String) {
@@ -1540,8 +1582,10 @@ private struct MobTextField: View {
                 // dismiss for terminal actions; "next" intentionally keeps keyboard open
                 if node.returnKeyStr != "next" { isFocused = false }
             }
+            // See MobToggle: compare against the BEAM's value rather than
+            // latching, so a re-seed is silent by construction.
             .onChange(of: text) { _, newValue in
-                node.onChangeStr?(newValue)
+                if newValue != initialText { node.onChangeStr?(newValue) }
             }
             .onChange(of: isFocused) { _, focused in
                 if focused { node.onFocus?() } else { node.onBlur?() }
@@ -1571,7 +1615,9 @@ private struct MobTextField: View {
                     return
                 }
 
-                if text != initialText { text = initialText }
+                if text != initialText {
+                    text = initialText
+                }
             }
             .textFieldStyle(.roundedBorder)
             .frame(maxWidth: .infinity)
@@ -1596,7 +1642,6 @@ private struct MobToggle: View {
     let node: MobNode
     @Environment(\.mobScreenIsActive) private var isActive
     @State private var isOn: Bool
-
     init(node: MobNode) {
         self.node = node
         _isOn = State(initialValue: node.checked)
@@ -1605,8 +1650,13 @@ private struct MobToggle: View {
     var body: some View {
         let label = node.text ?? ""
         Toggle(label, isOn: $isOn)
+            // Report only what the user did. A re-seed assigns the BEAM's own
+            // value, so it compares equal and stays silent; a tap never does.
+            // This replaced a `seeding` latch, which was order-dependent: two
+            // programmatic writes straddling one SwiftUI pass left it armed for
+            // the wrong write and echoed a change the user never made.
             .onChange(of: isOn) { _, newValue in
-                node.onChangeBool?(newValue)
+                if newValue != node.checked { node.onChangeBool?(newValue) }
             }
             // Re-seed when this screen becomes active, not only when the value
             // changes. `onChange(of:)` fires on a VALUE change, and slots
@@ -1615,7 +1665,9 @@ private struct MobToggle: View {
             // changes and C silently inherits whatever the user toggled on A.
             // That is the common case, not an edge one.
             .onChange(of: isActive) { _, nowActive in
-                if nowActive, node.checked != isOn { isOn = node.checked }
+                if nowActive, node.checked != isOn {
+                    isOn = node.checked
+                }
             }
             // Still needed for a BEAM-driven change while the screen is up.
             //
@@ -1630,7 +1682,9 @@ private struct MobToggle: View {
             // `lib/mob/socket.ex` raises ArgumentError on `transition: :none`
             // for exactly this hazard; MOB-129 made it the default path.
             .onChange(of: node.checked) { _, fromBeam in
-                if fromBeam != isOn { isOn = fromBeam }
+                if fromBeam != isOn {
+                    isOn = fromBeam
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             // issues.md #8: SwiftUI's Toggle("Label", …) initializer does
@@ -1646,6 +1700,8 @@ private struct MobToggle: View {
 private struct MobSlider: View {
     let node: MobNode
     @Environment(\.mobScreenIsActive) private var isActive
+    // See MobToggle: distinguishes a programmatic re-seed from a user drag, so
+    // arriving at a screen does not report a `change` the user never made.
     @State private var value: Double
 
     init(node: MobNode) {
@@ -1663,18 +1719,24 @@ private struct MobSlider: View {
         // VoiceOver picks for native UISlider when no explicit step is set.
         let step = (node.maxValue - node.minValue) / 10.0
         Slider(value: $value, in: node.minValue...node.maxValue)
+            // See MobToggle: compare against the BEAM's value rather than
+            // latching, so a re-seed is silent by construction.
             .onChange(of: value) { _, newValue in
-                node.onChangeFloat?(newValue)
+                if newValue != node.value { node.onChangeFloat?(newValue) }
             }
             // Re-seed on activation. See MobToggle: a value-change watcher
             // alone misses the common case where both screens carry the same
             // value, which is exactly when the stale one is invisible.
             .onChange(of: isActive) { _, nowActive in
-                if nowActive, node.value != value { value = node.value }
+                if nowActive, node.value != value {
+                    value = node.value
+                }
             }
             // Still needed for a BEAM-driven change while the screen is up.
             .onChange(of: node.value) { _, fromBeam in
-                if fromBeam != value { value = fromBeam }
+                if fromBeam != value {
+                    value = fromBeam
+                }
             }
             .tint(node.color.map { Color($0) } ?? Color.accentColor)
             .frame(maxWidth: .infinity)
@@ -2325,6 +2387,18 @@ public struct MobRootView: View {
     @State private var slotOffset: [CGFloat] = [0, 0]
     @State private var slotOpacity: [Double] = [1, 1]
     @State private var containerWidth: CGFloat = 400
+
+    /// Monotonic navigation counter, so a deferred release can tell whether the
+    /// navigation it belongs to is still the most recent one.
+    ///
+    /// A slot index cannot answer that. `incoming = 1 - activeSlot` alternates,
+    /// so a captured `outgoing` returns to being non-active every SECOND
+    /// navigation — reset, push, pop inside one animation leaves the reset's
+    /// completion looking at a slot that passes an `activeSlot != outgoing`
+    /// check while holding the tree the pop just retained. It would then
+    /// release the screen the user popped away from, and snap its offset
+    /// outside any animation mid-slide.
+    @State private var navToken: Int = 0
     @State private var availableSheetHeight: CGFloat = 1
 
     /// Share of the root's height a content-detent sheet may occupy at most.
@@ -2482,6 +2556,9 @@ public struct MobRootView: View {
         let crossfading = t == "reset"
         let releasing = replacesStack
 
+        navToken += 1
+        let token = navToken
+
         // Seat the incoming tree off-screen on the side it should arrive from,
         // OUTSIDE any animation, so the placement itself is not animated.
         slotOffset[incoming] = enterOffset(t)
@@ -2505,14 +2582,19 @@ public struct MobRootView: View {
         // it until the animation completes is what lets the opacity actually
         // play.
         let release = {
-            // `activeSlot != outgoing` is the precondition, and it is not
-            // optional. This closure runs on the animation's completion, and a
-            // second navigation arriving before it settles reuses the very slot
-            // it captured — a reset followed within 0.25s by a push makes
-            // `outgoing` the ACTIVE slot. Clearing it then blanks the screen the
-            // user is looking at, and nothing recovers until that screen
-            // repaints, which a mount-once screen never does.
-            guard releasing, activeSlot != outgoing else { return }
+            // Release only if no navigation has happened since this one.
+            //
+            // This closure runs on the animation's completion, so anything can
+            // have happened in between. An `activeSlot != outgoing` check is not
+            // enough: slots alternate, so a captured slot returns to being
+            // non-active every second navigation, and reset-push-pop inside one
+            // animation duration leaves this completion clearing the tree the
+            // pop just retained — and snapping its offset outside any animation
+            // while it is still sliding.
+            //
+            // Comparing the token answers the actual question. It also
+            // subsumes the blanking case, where the slot became active again.
+            guard releasing, token == navToken else { return }
             slots[outgoing] = nil
             slotOffset[outgoing] = 0
             slotOpacity[outgoing] = 1

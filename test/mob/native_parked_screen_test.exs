@@ -14,6 +14,8 @@ defmodule Mob.NativeParkedScreenTest do
   purely by prose.
   """
   # credo:disable-for-this-file Jump.CredoChecks.VacuousTest
+  import Mob.Test.NativeSource
+
   use ExUnit.Case, async: true
 
   @ios File.read!(Path.expand("../../ios/MobRootView.swift", __DIR__))
@@ -63,7 +65,7 @@ defmodule Mob.NativeParkedScreenTest do
       # Dropping the gate would also 'fix' the return path, and would reopen
       # what it exists for: an outgoing screen re-registering at mid-animation
       # coordinates, and two screens sharing an :id clobbering each other.
-      code = code_only(@nif)
+      code = code_only(@nif, :objc)
       assert code =~ "mob_bump_frame_generation();"
       assert code =~ "generation < g_frame_generation"
     end
@@ -113,12 +115,43 @@ defmodule Mob.NativeParkedScreenTest do
       assert body =~ ~r/guard nowActive else \{\s*isFocused = false/,
              "parking must drop focus"
 
-      assert body =~ "if text != initialText { text = initialText }"
+      assert body =~ ~r/if text != initialText \{\s*text = initialText/
     end
 
     test "the slider re-seeds from the node" do
       body = region(code_only(@ios), "private struct MobSlider: View {", "\n}\n")
       assert body =~ "onChange(of: node.value)"
+    end
+  end
+
+  describe "a programmatic re-seed is not reported as a user change (MOB-147 B2)" do
+    # `onChange(of:)` sees a value change and nothing about who caused it, so a
+    # re-seed on activation would fire the callback on the INCOMING screen — and
+    # it fires precisely when the values differ, which is the case the re-seed
+    # exists for. The app's handle_event then runs for a control the user never
+    # touched.
+    #
+    # This was first done with a `seeding` latch, armed by the re-seed and
+    # cleared by the observed change. That was order-dependent: two programmatic
+    # writes straddling one SwiftUI pass left it armed for the wrong write and
+    # leaked a change anyway. Comparing against the BEAM's own value is
+    # stateless — a re-seed writes exactly that value and so compares equal,
+    # while a user's gesture never does.
+    for {control, struct_name, watched, from_beam} <- [
+          {"toggle", "MobToggle", "isOn", "node.checked"},
+          {"slider", "MobSlider", "value", "node.value"},
+          {"text field", "MobTextField", "text", "initialText"}
+        ] do
+      test "the #{control} reports a change only when it differs from the BEAM's value" do
+        body = region(code_only(@ios), "private struct #{unquote(struct_name)}: View {", "\n}\n")
+
+        assert body =~
+                 ~r/\.onChange\(of: #{unquote(watched)}\) \{ _, newValue in\s*if newValue != #{Regex.escape(unquote(from_beam))} \{/,
+               "the change watcher must compare against the BEAM's value"
+
+        refute body =~ "seeding",
+               "the order-dependent latch must not come back"
+      end
     end
   end
 
@@ -140,11 +173,18 @@ defmodule Mob.NativeParkedScreenTest do
       assert body =~ "if dismissedByPark { return }"
     end
 
-    test "the video resumes on the activation transition, not on every render" do
-      # updateUIViewController runs on EVERY SwiftUI update of the active
-      # screen, and a fresh node graph arrives on every BEAM render — so gating
-      # the resume on `isActive` alone restarts a video the user paused, within
-      # one render, on any screen carrying a timer or live data.
+    test "a parked video resumes only if it was playing when parked" do
+      # Two traps. Gating the resume on `isActive` alone restarts the video on
+      # every render, because this runs on every update of the active screen and
+      # a fresh node graph arrives on every BEAM render. And gating it on
+      # `autoplay` undoes a pause the user made before navigating away: the park
+      # finds it already paused and does nothing, the return finds
+      # `autoplay && .paused` and plays it.
+      #
+      # An earlier version of this test asserted exactly that `autoplay` form,
+      # with a failure message claiming "a video the user paused must stay
+      # paused" — a message asserting a property its own assertion could not
+      # detect.
       body =
         region(
           code_only(@ios),
@@ -152,23 +192,48 @@ defmodule Mob.NativeParkedScreenTest do
           "\n    }"
         )
 
-      assert body =~ "if context.coordinator.wasParked {"
-      assert body =~ "context.coordinator.wasParked = false"
-      assert body =~ "context.coordinator.wasParked = true"
-    end
+      assert body =~ "if context.coordinator.wasPlaying {"
 
-    test "a parked video pauses, and only autoplay resumes it" do
-      body =
-        region(
-          code_only(@ios),
-          "func updateUIViewController(_ vc: AVPlayerViewController",
-          "\n    }"
-        )
+      # Pin the CONDITION, not just the assignment. Relaxing this to a bare
+      # `} else {` restores exactly the "did a park happen" semantics this
+      # replaced, and every other assertion here still passes.
+      assert body =~
+               ~r/\} else if player\.timeControlStatus != \.paused \{\s*context\.coordinator\.wasPlaying = true/,
+             "only a player that was actually playing may be marked for resume"
 
       assert body =~ "player.pause()"
+    end
 
-      assert body =~ ~r/if autoplay, player\.timeControlStatus == \.paused \{ player\.play\(\) \}/,
-             "a video the user paused must stay paused across a park"
+    test "a video whose src changed is rebuilt, not resumed" do
+      # Slot reuse preserves view identity across DIFFERENT screens, so screen
+      # C's video representable can be screen A's — coordinator, player and all.
+      # `makeUIViewController` does not run again, so without this C shows A's
+      # video, and `wasPlaying` from A's park starts it playing with audio.
+      body =
+        region(
+          code_only(@ios),
+          "func updateUIViewController(_ vc: AVPlayerViewController",
+          "\n    }"
+        )
+
+      assert body =~ ~r/if context\.coordinator\.src != src \{/,
+             "a changed src must be detected before anything resumes"
+
+      rebuild = region(body, "if context.coordinator.src != src {", "return")
+      assert rebuild =~ "context.coordinator.wasPlaying = false"
+      assert rebuild =~ "vc.player = rebuilt"
+
+      # The guard has to come FIRST. Below it, `wasPlaying` resumes a player
+      # that may belong to another screen.
+      assert index_of(body, "context.coordinator.src != src") <
+               index_of(body, "if context.coordinator.wasPlaying {")
+    end
+
+    test "the coordinator records playback state, not that a park happened" do
+      body = region(code_only(@ios), "final class Coordinator {", "\n    }")
+      assert body =~ "var wasPlaying = false"
+      assert body =~ "var src: String?"
+      refute body =~ "wasParked"
     end
 
     test "a parked GPU view stops rendering" do
@@ -192,48 +257,4 @@ defmodule Mob.NativeParkedScreenTest do
 
   # Strips comments while tracking string literals, so a `//` inside a string
   # survives and a trailing comment cannot satisfy an assertion.
-  defp code_only(source) do
-    scan(source, :code, [])
-  end
-
-  # Scans the whole file as one binary, carrying string and block-comment state
-  # ACROSS lines. A per-line scanner reset `in_string` at every newline, which
-  # breaks on Swift's multi-line `"""` literals — MobGpuView.swift embeds MSL
-  # shader source that way, and a `//` inside it was truncated as if it were a
-  # comment. It also never recognised `/* */`, so commented-out code satisfied a
-  # `=~` assertion: a false pass, the inverse of the bug this replaced.
-  defp scan(<<>>, _state, acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
-
-  defp scan(<<"\\", c::utf8, rest::binary>>, :string, acc),
-    do: scan(rest, :string, [<<c::utf8>>, "\\" | acc])
-
-  defp scan(<<"\"\"\"", rest::binary>>, :code, acc), do: scan(rest, :multiline, ["\"\"\"" | acc])
-  defp scan(<<"\"\"\"", rest::binary>>, :multiline, acc), do: scan(rest, :code, ["\"\"\"" | acc])
-
-  defp scan(<<c::utf8, rest::binary>>, :multiline, acc),
-    do: scan(rest, :multiline, [<<c::utf8>> | acc])
-
-  defp scan(<<"\"", rest::binary>>, :code, acc), do: scan(rest, :string, ["\"" | acc])
-  defp scan(<<"\"", rest::binary>>, :string, acc), do: scan(rest, :code, ["\"" | acc])
-  defp scan(<<c::utf8, rest::binary>>, :string, acc), do: scan(rest, :string, [<<c::utf8>> | acc])
-
-  defp scan(<<"//", rest::binary>>, :code, acc), do: scan(rest, :line_comment, acc)
-  defp scan(<<"\n", rest::binary>>, :line_comment, acc), do: scan(rest, :code, ["\n" | acc])
-  defp scan(<<_::utf8, rest::binary>>, :line_comment, acc), do: scan(rest, :line_comment, acc)
-
-  defp scan(<<"/*", rest::binary>>, :code, acc), do: scan(rest, :block_comment, acc)
-  defp scan(<<"*/", rest::binary>>, :block_comment, acc), do: scan(rest, :code, acc)
-
-  defp scan(<<"\n", rest::binary>>, :block_comment, acc),
-    do: scan(rest, :block_comment, ["\n" | acc])
-
-  defp scan(<<_::utf8, rest::binary>>, :block_comment, acc), do: scan(rest, :block_comment, acc)
-
-  defp scan(<<c::utf8, rest::binary>>, :code, acc), do: scan(rest, :code, [<<c::utf8>> | acc])
-
-  defp region(source, from, to) do
-    [_, rest] = String.split(source, from, parts: 2)
-    [body | _] = String.split(rest, to, parts: 2)
-    body
-  end
 end

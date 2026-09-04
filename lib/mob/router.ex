@@ -528,7 +528,14 @@ defmodule Mob.Router do
       Mob.Nav.history(state.nav) != [] ->
         state = drop_entry(state, dead_pid)
         [previous | rest] = Mob.Nav.history(state.nav)
-        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous, :pop)
+
+        state =
+          make_current(
+            %{state | nav: Mob.Nav.put_history(state.nav, rest)},
+            previous,
+            replacing(:pop)
+          )
+
         paint(previous, :none, state)
         state
 
@@ -548,7 +555,10 @@ defmodule Mob.Router do
       # switch/3 parks the dead entry under the outgoing stack; drop it straight
       # after, so nothing can restore a corpse by switching back.
       nav = Mob.Nav.drop_parked(nav, &(&1.pid == entry.pid))
-      state = make_current(%{state | nav: nav}, live, :pop)
+      # Tagged for the same reason the sibling recovery branch is: `entry` is a
+      # corpse and has just been dropped from the parked list, so the tree the
+      # presenter is holding for it can never be shown again.
+      state = make_current(%{state | nav: nav}, live, replacing(:pop))
       paint(live, :none, state)
       state
     else
@@ -694,7 +704,11 @@ defmodule Mob.Router do
         state = stop_screen(state.current, state)
 
         state =
-          make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous, :pop)
+          make_current(
+            %{state | nav: Mob.Nav.put_history(state.nav, rest)},
+            previous,
+            replacing(:pop)
+          )
 
         do_paint(previous, :none, state, mode)
         state
@@ -712,7 +726,10 @@ defmodule Mob.Router do
         ]
 
         state = Enum.reduce(discarded, state, &stop_screen/2)
-        state = make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, root, :pop)
+
+        state =
+          make_current(%{state | nav: Mob.Nav.put_history(state.nav, [])}, root, replacing(:pop))
+
         do_paint(root, :none, state, mode)
         state
 
@@ -909,7 +926,11 @@ defmodule Mob.Router do
         state = Enum.reduce(discarded, state, &stop_screen/2)
 
         state =
-          make_current(%{state | nav: Mob.Nav.put_history(state.nav, rest)}, previous, :pop)
+          make_current(
+            %{state | nav: Mob.Nav.put_history(state.nav, rest)},
+            previous,
+            replacing(:pop)
+          )
 
         do_paint(previous, :none, state, mode)
         state

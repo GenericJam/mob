@@ -227,14 +227,24 @@ defmodule Mob.Renderer do
   `transition` is an atom for the nav animation: `:push`, `:pop`, `:reset` or
   `:none`, defaulting to `:none` (instant swap).
 
-  The router additionally sends `:push_replace`, `:pop_replace` and
-  `:reset_replace` for a navigation that REPLACES the stack. Native reads the
-  animation from the prefix and the suffix tells it the outgoing screen is
-  unreachable, so it can release the view tree it would otherwise retain for a
-  return that can never happen. Callers never construct these; `Mob.Socket`
-  still validates the public `:push | :pop | :reset` vocabulary.
+  For a navigation that REPLACES the stack, the router passes
+  `{animation, :replace}` instead. The animation half still reaches
+  `set_transition/1` as a plain atom — the vocabulary native matches on stays
+  closed — and the replacement half is emitted as a `"replaces_stack"` key on
+  the JSON root, which tells native the outgoing screen is unreachable and its
+  retained view tree can be released.
+
+  The flag is deliberately NOT folded into the transition atom. That atom's name
+  reaches Android as a raw string and `MainActivity.kt` matches
+  `"push"`/`"pop"`/`"reset"` with an exact `when`, so any value outside that set
+  falls through to no animation at all. An unknown JSON key is skipped by every
+  parser on both platforms, so a host that does not read it keeps its behaviour.
+
+  Callers never construct the tuple; `Mob.Socket` validates the public
+  `:push | :pop | :reset` vocabulary.
   """
-  @spec render(map(), atom(), module() | atom(), atom()) :: {:ok, :json_tree} | {:error, term()}
+  @spec render(map(), atom(), module() | atom(), atom() | {atom(), :replace}) ::
+          {:ok, :json_tree} | {:error, term()}
   def render(tree, platform, nif \\ @default_nif, transition \\ :none) do
     theme = Theme.current()
 
