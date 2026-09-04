@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.7.39] - 2026-09-04
+
 ### Fixed
 - **Interactive elements past the 256th no longer silently stop responding**
   (MOB-133). The tap registry was a fixed 256-entry pair of tables and the

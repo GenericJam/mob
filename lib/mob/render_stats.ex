@@ -11,7 +11,7 @@ defmodule Mob.RenderStats do
   ## A frame spans two processes
 
   This is the thing that makes the implementation less obvious than it looks.
-  `Mob.Screen.Server.paint/4` runs the user's `render/1`, the expansion passes
+  the screen's paint path runs the user's `render/1`, the expansion passes
   and the component reconcile in the **screen's** process — then hands the tree
   to `Mob.Sender` as a *cast*, so `prepare`, `:json.encode` and `set_root` run
   in the **sender's** process. A process-dictionary accumulator started by the
@@ -53,7 +53,7 @@ defmodule Mob.RenderStats do
 
   * `render_us` — the user's `render/1`
   * `expand_us` — `Mob.Composite`, `Mob.List` and `Mob.Component` expansion
-  * `reconcile_us` — `Mob.ComponentRegistry.reconcile/2`
+  * `reconcile_us` — the component reconcile pass
   * `prepare_us` — the renderer's tree walk: prop resolution, theme token
     lookup, and one `register_tap` per handler prop
   * `register_tap_us` — the `register_tap` calls alone. **Nested inside

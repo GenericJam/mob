@@ -257,7 +257,7 @@ records, newest first, when a percentile hides what you are looking for.
 |---|---|
 | `render_us` | your `render/1` |
 | `expand_us` | `Mob.Composite`, `Mob.List` and `Mob.Component` expansion |
-| `reconcile_us` | `Mob.ComponentRegistry.reconcile/2` |
+| `reconcile_us` | the component reconcile pass |
 | `prepare_us` | the renderer's tree walk: prop resolution, theme tokens, one `register_tap` per handler prop |
 | `register_tap_us` | the `register_tap` calls alone — **nested inside `prepare_us`**, so adding the two double-counts |
 | `encode_us` | `:json.encode` |

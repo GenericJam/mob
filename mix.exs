@@ -4,7 +4,7 @@ defmodule Mob.MixProject do
   def project do
     [
       app: :mob,
-      version: "0.7.38",
+      version: "0.7.39",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -142,6 +142,7 @@ defmodule Mob.MixProject do
         "MOB_PLUGINS.md": [title: "Plugins — Manifest Reference"],
         "MOB_PLUGIN_SECURITY.md": [title: "Plugins — Security & Trust"],
         "MOB_STYLES.md": [title: "Styles — Manifest Reference"],
+        "MOB_FONTS.md": [title: "Fonts — Design Reference"],
         "guides/why_beam.md": [title: "Why the BEAM?"],
         "guides/getting_started.md": [title: "Getting Started"],
         "guides/packages.md": [title: "First-Party Packages"],
@@ -173,7 +174,7 @@ defmodule Mob.MixProject do
       ],
       groups_for_extras: [
         Guides: ~r/guides\/.*/,
-        Plugins: ["MOB_PLUGINS.md", "MOB_PLUGIN_SECURITY.md", "MOB_STYLES.md"]
+        Plugins: ["MOB_PLUGINS.md", "MOB_PLUGIN_SECURITY.md", "MOB_STYLES.md", "MOB_FONTS.md"]
       ],
       groups_for_modules: [
         Core: [Mob, Mob.App, Mob.Screen, Mob.ScreenState, Mob.Socket, Mob.State],
