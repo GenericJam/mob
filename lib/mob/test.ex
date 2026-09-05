@@ -134,6 +134,16 @@ defmodule Mob.Test do
   | `adjust_slider/4`            | ⚠️ AX active§ | ⚠️ AX active§ | ❌ ui_tree_unavailable |
   | `tap_xy/3`                   | ⚠️ AX-activatable only¶ | ❌ no_effect¶ | n/a  |
   | `swipe/5`                    | ⚠️ scroll only| ⚠️ unverified✱| n/a             |
+  | `capabilities/1`             | ✅            | ✅            | ✅              |
+
+  **This table is a snapshot, and snapshots drift.** Ask the running app
+  instead — `capabilities/1` reports what THIS build can actually serve. On
+  Android that is a per-*app* fact, since each harness NIF bails when its
+  cached `MobBridge` method is absent and the bridge is generated once and
+  never re-rendered; on iOS it is per-*configuration*, since the whole harness
+  is compiled out of release builds. Measured on a freshly generated Android
+  app, `tap_xy` and `type_text` are both unavailable (MOB-160) — the `n/a` in
+  the rows above reads as "not applicable" but means "no bridge method".
 
   - **†** SwiftUI doesn't expose its content as separate UIView instances —
     `view_tree` reaches the SwiftUI hosting view's container and stops.
@@ -387,6 +397,102 @@ defmodule Mob.Test do
                 "Expected one of [:stack, :all]."
     end
   end
+
+  @doc """
+  What this node can actually be probed with, right now.
+
+  Every helper in this module is a thin `:rpc.call` into `:mob_nif`, and which
+  of those the app can serve is a runtime fact, not a property of the platform:
+
+    * On **Android** each harness NIF checks a cached `MobBridge` method and
+      returns `{:error, :not_loaded}` when it is absent. `MobBridge.kt` is
+      app-owned and generated once, so an app built from an older template
+      silently lacks methods a newer one has.
+    * On **iOS** the whole harness is compiled out of release builds, leaving
+      the Erlang stubs behind.
+
+  Without this an agent finds out by running the probe and reading an error
+  mid-investigation, having already committed to an approach.
+
+      iex> Mob.Test.capabilities(node)
+      %{
+        dist_rpc: true,
+        view_tree: false,
+        tap_xy: true,
+        ax_action: false,
+        element_frames: true,
+        screenshot: true,
+        ...
+      }
+
+  `dist_rpc` is `true` whenever the node answered, since that is what answering
+  proves. When it is unreachable every capability is `false` — including
+  against an iOS **release** build, which drops `-name` entirely and so has no
+  distribution to answer over.
+
+  A node whose `load_nif` failed reports `dist_rpc: true` with every probe
+  `false`: it answered, and every NIF really is down.
+
+  An app built before `mob_nif:capabilities/0` existed cannot answer. Rather
+  than guess from a table that would drift the same way, those report
+  `:unknown` for each probe with `dist_rpc: true` — the honest answer, and one
+  a caller can branch on.
+  """
+  @spec capabilities(node(), timeout()) :: %{atom() => boolean() | :unknown}
+  def capabilities(node, timeout \\ 5_000) do
+    node
+    |> :rpc.call(:mob_nif, :capabilities, [], timeout)
+    |> classify_capabilities()
+  end
+
+  @doc false
+  # Extracted so the classification is testable without a device — every branch
+  # below describes a real state an agent hits, and the interesting ones cannot
+  # be produced from a host test otherwise.
+  @spec classify_capabilities(term()) :: %{atom() => boolean() | :unknown}
+  def classify_capabilities(%{} = caps), do: Map.put(caps, :dist_rpc, true)
+
+  def classify_capabilities({:badrpc, {:EXIT, {:undef, _}}}),
+    # The app predates `mob_nif:capabilities/0`. It answered, so dist works;
+    # what it can serve is genuinely unknown, and guessing from a table is the
+    # drift this function exists to avoid.
+    do: Map.put(unknown_probes(), :dist_rpc, true)
+
+  def classify_capabilities({:badrpc, {:EXIT, {:not_loaded, _}}}),
+    # `load_nif` failed on the device, so EVERY NIF is down, not just this one.
+    # Reporting `:unknown` would send an agent off to try probes that cannot
+    # work; false is the truth here.
+    do: unreachable() |> Map.put(:dist_rpc, true)
+
+  def classify_capabilities(_unreachable_or_unrecognised), do: unreachable()
+
+  @probe_keys [
+    :view_tree,
+    :ui_tree,
+    :screen_info,
+    :tap_xy,
+    :tap_by_label,
+    :long_press_xy,
+    :swipe_xy,
+    :type_text,
+    :delete_backward,
+    :clear_text,
+    :ax_action,
+    :element_frames,
+    :scroll_info,
+    :scroll_to,
+    :sample_region,
+    :screenshot
+  ]
+
+  @doc false
+  @spec probe_keys() :: [atom()]
+  def probe_keys, do: @probe_keys
+
+  defp unknown_probes, do: Map.new(@probe_keys, &{&1, :unknown})
+
+  defp unreachable,
+    do: @probe_keys |> Map.new(&{&1, false}) |> Map.put(:dist_rpc, false)
 
   @doc """
   Switch to a named tab stack. Synchronous.

@@ -647,6 +647,72 @@ export fn nif_screenshot(
     return erts.enif_make_binary(env, &bin);
 }
 
+// nif_capabilities/0 — which probes this app can actually serve.
+//
+// On Android a capability is a per-APP fact, not a per-platform one: every
+// harness NIF is registered, and each returns {:error, :not_loaded} when the
+// matching MobBridge method is absent from the cache. MobBridge.kt is
+// app-owned and generated once, so an app built against an older template
+// silently lacks methods a newer one has — the same drift that makes a
+// hardcoded support table wrong within a release or two. Reading the cache
+// reports what THIS app can do.
+export fn nif_capabilities(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+
+    // Keys and values are parallel arrays: keep them in the same order, and
+    // keep each value next to the NIF that actually serves that call.
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.atom(env, "view_tree"),      erts.atom(env, "ui_tree"),
+        erts.atom(env, "screen_info"),    erts.atom(env, "tap_xy"),
+        erts.atom(env, "tap_by_label"),   erts.atom(env, "long_press_xy"),
+        erts.atom(env, "swipe_xy"),       erts.atom(env, "type_text"),
+        erts.atom(env, "delete_backward"), erts.atom(env, "clear_text"),
+        erts.atom(env, "ax_action"),      erts.atom(env, "element_frames"),
+        erts.atom(env, "scroll_info"),    erts.atom(env, "scroll_to"),
+        erts.atom(env, "sample_region"),  erts.atom(env, "screenshot"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        boolAtom(env, Bridge.ui_view_tree != null),
+        boolAtom(env, Bridge.ui_tree != null),
+        boolAtom(env, Bridge.screen_info != null),
+        boolAtom(env, Bridge.tap_xy != null),
+        boolAtom(env, Bridge.tap_by_label != null),
+        boolAtom(env, Bridge.long_press_xy != null),
+        boolAtom(env, Bridge.swipe_xy != null),
+        boolAtom(env, Bridge.type_text != null),
+        boolAtom(env, Bridge.delete_backward != null),
+        boolAtom(env, Bridge.clear_text != null),
+        // No accessibility-action bridge exists: nif_ax_action returns
+        // :not_supported_on_android unconditionally.
+        boolAtom(env, false),
+        boolAtom(env, Bridge.element_frames != null),
+        boolAtom(env, Bridge.scroll_info != null),
+        boolAtom(env, Bridge.scroll_to != null),
+        // Android has NO sample_region NIF — not a missing bridge method, an
+        // absent implementation. `sample_color/2` fails with a stub raise on
+        // this platform. Reporting it from Bridge.screenshot (the crop is
+        // served that way on iOS) claimed a capability that does not exist,
+        // which is worse than not reporting it at all: an agent commits to
+        // pixel verification and finds out mid-run.
+        // See decisions/2026-08-10-sample-region-crops-natively-and-stays-debug-only.md
+        boolAtom(env, false),
+        boolAtom(env, Bridge.screenshot != null),
+    };
+    return erts.makeMap(env, &keys, &vals) orelse erts.atom(env, "error");
+}
+
+inline fn boolAtom(env: ?*erts.ErlNifEnv, on: bool) erts.ERL_NIF_TERM {
+    // Branch before the call: `erts.atom` takes the name as a comptime
+    // parameter, so selecting the string with a runtime `if` inside the
+    // argument does not compile.
+    return if (on) erts.atom(env, "true") else erts.atom(env, "false");
+}
+
 // nif_scroll_info/1 — read a scroll view's offset/extent (JSON string by :id).
 export fn nif_scroll_info(
     env: ?*erts.ErlNifEnv,
@@ -4191,6 +4257,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     // Test harness first — matches the iOS nif_funcs[] ordering convention.
     .{ .name = "ui_tree", .arity = 0, .fptr = nif_ui_tree, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
     .{ .name = "ui_view_tree", .arity = 0, .fptr = nif_ui_view_tree, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
+    .{ .name = "capabilities", .arity = 0, .fptr = nif_capabilities, .flags = 0 },
     .{ .name = "ax_action", .arity = 2, .fptr = nif_ax_action, .flags = 0 },
     .{ .name = "ax_action_at_xy", .arity = 3, .fptr = nif_ax_action_at_xy, .flags = 0 },
     .{ .name = "ui_debug", .arity = 0, .fptr = nif_ui_debug, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
