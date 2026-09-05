@@ -7065,6 +7065,53 @@ static ERL_NIF_TERM nif_element_frames(ErlNifEnv *env, int argc, const ERL_NIF_T
 
 #endif // !MOB_RELEASE — end of test harness block (started near line 2780)
 
+// ── Capabilities ──────────────────────────────────────────────────────────────
+//
+// Which probes this build can actually serve, so an agent can pick a strategy
+// up front instead of discovering the answer by getting an error mid-run.
+//
+// Deliberately OUTSIDE the `#if !MOB_RELEASE` block above. A release build
+// compiles the whole harness out, leaving the Erlang stubs in place — so a
+// capabilities NIF inside the gate would itself be missing from exactly the
+// build whose reduced capability it exists to report.
+static ERL_NIF_TERM nif_capabilities(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+
+#if !MOB_RELEASE
+    int harness = 1;
+#else
+    int harness = 0;
+#endif
+
+#if !MOB_RELEASE || defined(MOB_ENABLE_SCREENSHOT)
+    int screenshot = 1;
+#else
+    int screenshot = 0;
+#endif
+
+    ERL_NIF_TERM map = enif_make_new_map(env);
+
+    struct {
+        const char *name;
+        int on;
+    } caps[] = {
+        {"view_tree", harness},     {"ui_tree", harness},      {"screen_info", harness},
+        {"tap_xy", harness},        {"tap_by_label", harness}, {"long_press_xy", harness},
+        {"swipe_xy", harness},      {"type_text", harness},    {"delete_backward", harness},
+        {"clear_text", harness},    {"ax_action", harness},    {"element_frames", harness},
+        {"scroll_info", harness},   {"scroll_to", harness},    {"sample_region", harness},
+        {"screenshot", screenshot},
+    };
+
+    for (size_t i = 0; i < sizeof(caps) / sizeof(caps[0]); i++) {
+        enif_make_map_put(env, map, enif_make_atom(env, caps[i].name),
+                          enif_make_atom(env, caps[i].on ? "true" : "false"), &map);
+    }
+
+    return map;
+}
+
 // ── Storage ───────────────────────────────────────────────────────────────────
 
 static ERL_NIF_TERM nif_storage_dir(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
@@ -7954,6 +8001,7 @@ static ErlNifFunc nif_funcs[] = {
     {"long_press_xy", 3, nif_long_press_xy, 0},
     {"swipe_xy", 4, nif_swipe_xy, 0},
 #endif
+    {"capabilities", 0, nif_capabilities, 0},
 #if !MOB_RELEASE || defined(MOB_ENABLE_SCREENSHOT)
     {"screenshot", 3, nif_screenshot, ERL_NIF_DIRTY_JOB_CPU_BOUND},
 #endif

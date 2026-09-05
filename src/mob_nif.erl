@@ -85,6 +85,7 @@
     %% Test harness — native UI inspection and interaction
     ui_tree/0,
     ui_view_tree/0,
+    capabilities/0,
     ui_paint_debug/0,
     ui_debug/0,
     screen_info/0,
@@ -189,6 +190,7 @@
     device_keep_awake/1,
     ui_tree/0,
     ui_view_tree/0,
+    capabilities/0,
     ui_paint_debug/0,
     ui_debug/0,
     screen_info/0,
@@ -323,6 +325,7 @@ ui_tree() -> erlang:nif_error(not_loaded).
 %% bg_color/text_color are the colours the view actually painted, as
 %% 0xAARRGGBB integers (see guides/theming.md), or nil.
 ui_view_tree() -> erlang:nif_error(not_loaded).
+capabilities() -> erlang:nif_error(not_loaded).
 %% ui_paint_debug() -> JSON binary censusing where colour lives in the native
 %% view tree, grouped by view/layer class. Diagnostic for when ui_view_tree
 %% reports nil colours — tells you which property the renderer actually set.
