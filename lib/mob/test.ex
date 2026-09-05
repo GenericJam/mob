@@ -433,6 +433,13 @@ defmodule Mob.Test do
   A node whose `load_nif` failed reports `dist_rpc: true` with every probe
   `false`: it answered, and every NIF really is down.
 
+  Two side effects worth knowing. `:mob_nif` is `-on_load`, so calling this on
+  a node that has not loaded it triggers the code load and the NIF load — in a
+  booted Mob app it is always loaded already, so this is theory rather than
+  practice. And the device runs an interactive code server, so probing a module
+  it has not loaded causes it to load; that makes the answer reflect the code
+  path rather than the resident set.
+
   An app built before `mob_nif:capabilities/0` existed cannot answer. Rather
   than guess from a table that would drift the same way, those report
   `:unknown` for each probe with `dist_rpc: true` — the honest answer, and one

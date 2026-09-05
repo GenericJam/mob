@@ -10,6 +10,17 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **`Mob.Test.capabilities/1`** — ask a build which test-harness probes it can
+  actually serve, before choosing how to drive it. Which probes work is a
+  runtime fact: on Android each harness NIF bails when the app's generated
+  `MobBridge.kt` lacks the matching method, and that file is generated once and
+  never re-rendered; on iOS the harness is compiled out of release builds.
+  Returns `:unknown` per probe for an app predating `mob_nif:capabilities/0`
+  rather than guessing, and `false` everywhere with `dist_rpc: false` when
+  nothing answered. Backed by a new `mob_nif:capabilities/0` NIF on both
+  platforms.
+
 ### Fixed
 - **A parked screen no longer keeps live resources running, and returning to
   one no longer breaks the frame registry** (MOB-147, MOB-145). MOB-129 keeps

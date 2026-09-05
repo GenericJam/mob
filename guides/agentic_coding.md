@@ -175,6 +175,62 @@ or directly from an agent that can run shell commands, using:
 iex -S mix --eval 'IO.inspect Mob.Test.assigns(:"mob_demo_ios@127.0.0.1")'
 ```
 
+**Ask what this build can be probed with, before committing to an approach.**
+
+Which probes work is a runtime fact, not a property of the platform. On Android
+most harness NIFs return `{:error, :not_loaded}` when the app's generated
+`MobBridge.kt` lacks the matching method, and that file is generated once and
+never re-rendered, so apps drift as the template moves. On iOS the harness is
+compiled out of release builds.
+
+```elixir
+Mob.Test.capabilities(node)
+#=> %{
+#=>   dist_rpc: true,
+#=>   view_tree: false,      ui_tree: false,        screen_info: true,
+#=>   tap_xy: false,         tap_by_label: false,   long_press_xy: false,
+#=>   swipe_xy: false,       type_text: false,      delete_backward: false,
+#=>   clear_text: false,     ax_action: false,      element_frames: true,
+#=>   scroll_info: true,     scroll_to: true,       sample_region: false,
+#=>   screenshot: true
+#=> }
+```
+
+That is a **freshly generated Android app** — abridged only in layout, not in
+content; every one of the seventeen keys is shown, because guessing at the rest
+is exactly what goes wrong. The template defines `screenInfo`, `elementFrames`,
+`screenshot`, `scrollInfo` and `scrollTo`, and nothing else in the harness set
+(MOB-160).
+
+Two of those `false`s bite harder than they look:
+
+* `sample_region: false` means `Mob.Test.sample_color/2` is unavailable — there
+  is no Android NIF for it at all, so the call **raises** rather than returning
+  an error tuple. `screenshot: true` sitting next to it is not a substitute.
+* `tap_by_label: false` removes the documented fallback for `tap_xy`, so this
+  build has no synthetic input of any kind.
+
+`Mob.Test.tap/2` still works: it delivers the same `{:tap, tag}` message a
+native tap produces straight to the screen process over dist, never touching
+the bridge. It is fire-and-forget — `:ok` whether or not a screen matched — so
+assert the state change, per *The honesty contract* above.
+
+**When there is no synthetic input, that is your cue to drop to Layer 2**: drive
+the UI with `mcp__adb__*` below and keep `Mob.Test` for reading state.
+
+Four answers, and three of them are not "the app is fine":
+
+| Result | Means |
+|--------|-------|
+| probes true/false, `dist_rpc: true` | the real answer |
+| all `:unknown`, `dist_rpc: true` | app predates `capabilities/0` (added 0.7.40) — upgrade `mob` rather than guessing |
+| all `false`, `dist_rpc: true` | `load_nif` failed on the device: every NIF is down, and the fix is a native rebuild, not the bridge |
+| all `false`, `dist_rpc: false` | nothing answered. An iOS **release** build reports exactly this, because it drops `-name` and has no distribution at all — indistinguishable from a bad node name or a dead tunnel, so check which you expect |
+
+`capabilities/2` takes a timeout, defaulting to 5s. That matters here because
+this is the first call an agent makes, and a wedged-but-reachable device would
+otherwise hang it indefinitely.
+
 #### Layer 2 — MCP platform tools (for rendering and layout)
 
 When the question is visual — "does this text overflow?", "is the button in the right
@@ -410,7 +466,8 @@ screenshots or adb screencap as your primary inspection method.
 Instead:
 1. Run `mix mob.connect --no-iex` to establish distribution tunnels (if not already running)
 2. Use `Mob.Test` from IEx to query exact state:
-   - `Mob.Test.screen(node)` — what screen is active?
+   - `Mob.Test.capabilities(node)  # ask FIRST: which probes does this build serve?
+Mob.Test.screen(node)` — what screen is active?
    - `Mob.Test.assigns(node)` — what is the live data?
    - `Mob.Test.tap(node, :tag)` — drive a tap by tag atom
    - `Mob.Test.find(node, "text")` — locate a widget by visible text
