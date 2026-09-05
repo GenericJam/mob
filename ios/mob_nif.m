@@ -7102,6 +7102,9 @@ static ERL_NIF_TERM nif_capabilities(ErlNifEnv *env, int argc, const ERL_NIF_TER
         {"clear_text", harness},    {"ax_action", harness},    {"element_frames", harness},
         {"scroll_info", harness},   {"scroll_to", harness},    {"sample_region", harness},
         {"screenshot", screenshot},
+        // Frame timing is part of the harness, so it lives or dies with it —
+        // compiled out of release builds along with everything else here.
+        {"native_stats", harness},
     };
 
     for (size_t i = 0; i < sizeof(caps) / sizeof(caps[0]); i++) {

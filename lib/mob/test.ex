@@ -489,7 +489,8 @@ defmodule Mob.Test do
     :scroll_info,
     :scroll_to,
     :sample_region,
-    :screenshot
+    :screenshot,
+    :native_stats
   ]
 
   @doc false

@@ -48,8 +48,8 @@ defmodule Mob.NativeFrameStatsTest do
 
   describe "graceful degradation" do
     test "a native half that has not implemented it reports :unsupported" do
-      # Android has no native_stats yet, so :mob_nif keeps the Erlang stub and
-      # it raises. Reading stats must not take down whatever is reading them.
+      # A platform whose native half lacks the function keeps the Erlang stub,
+      # and it raises. Reading stats must not take down whatever is reading them.
       assert {:error, :unsupported} = RenderStats.native_enable(NotLoadedNif)
       assert {:error, :unsupported} = RenderStats.native_disable(NotLoadedNif)
       assert {:error, :unsupported} = RenderStats.native_frames(NotLoadedNif)
@@ -340,6 +340,78 @@ defmodule Mob.NativeFrameStatsTest do
     case :binary.match(haystack, needle) do
       {at, _} -> at
       :nomatch -> flunk("expected to find #{inspect(needle)}")
+    end
+  end
+
+  describe "Android-shaped payloads" do
+    # Android builds this JSON by hand in Kotlin (a StringBuilder in
+    # MobBridge.kt) rather than through a serialiser the way iOS does with
+    # NSJSONSerialization. Hand-built JSON is exactly the kind that is
+    # well-formed for the values you tried and malformed for the one you did
+    # not, so the shape it actually emits is pinned here.
+
+    defmodule AndroidNif do
+      @moduledoc false
+      # A wrapped ring: 250 frames recorded, 240 retained, 10 scrolled off.
+      def native_stats do
+        samples =
+          for seq <- 249..10//-1 do
+            ~s({"apply_us":#{seq}.5,"transition":"push","seq":#{seq}})
+          end
+
+        ~s({"enabled":true,"recorded":250,"dropped":10,"samples":[) <>
+          Enum.join(samples, ",") <> "]}"
+      end
+
+      def native_stats_enable(_on), do: :ok
+    end
+
+    defmodule QuotedTransitionNif do
+      @moduledoc false
+      # `transition` reaches the buffer from nif_set_transition, which accepts
+      # any atom up to 15 characters verbatim. An unescaped quote here costs
+      # the reader the whole window, not the one sample.
+      def native_stats do
+        ~s({"enabled":true,"recorded":1,"dropped":0,) <>
+          ~s("samples":[{"apply_us":1.0,"transition":"a\\"b","seq":0}]})
+      end
+
+      def native_stats_enable(_on), do: :ok
+    end
+
+    test "a wrapped ring reports retained, recorded and dropped consistently" do
+      summary = RenderStats.native_summary(AndroidNif)
+
+      assert summary.samples == 240
+      assert summary.recorded == 250
+      assert summary.dropped == 10
+
+      # The identity that makes `dropped` meaningful: what you can still read,
+      # plus what scrolled away, is everything that happened.
+      assert summary.samples + summary.dropped == summary.recorded
+    end
+
+    test "an escaped quote in a transition still parses" do
+      summary = RenderStats.native_summary(QuotedTransitionNif)
+
+      assert summary.samples == 1
+      assert Map.has_key?(summary.apply_us, ~s(a"b))
+    end
+
+    test "an UNescaped quote loses the whole window, not one sample" do
+      # Pinning the consequence, so the escaping in MobBridge.kt is understood
+      # as load-bearing rather than defensive tidiness.
+      defmodule BrokenNif do
+        @moduledoc false
+        def native_stats do
+          ~s({"enabled":true,"recorded":1,"dropped":0,) <>
+            ~s("samples":[{"apply_us":1.0,"transition":"a"b","seq":0}]})
+        end
+
+        def native_stats_enable(_on), do: :ok
+      end
+
+      assert {:error, _} = RenderStats.native_frames(BrokenNif)
     end
   end
 end
