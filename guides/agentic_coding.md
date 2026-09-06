@@ -192,15 +192,23 @@ Mob.Test.capabilities(node)
 #=>   swipe_xy: false,       type_text: false,      delete_backward: false,
 #=>   clear_text: false,     ax_action: false,      element_frames: true,
 #=>   scroll_info: true,     scroll_to: true,       sample_region: false,
-#=>   screenshot: true
+#=>   screenshot: true,      native_stats: false
 #=> }
 ```
 
-That is a **freshly generated Android app** — abridged only in layout, not in
-content; every one of the seventeen keys is shown, because guessing at the rest
-is exactly what goes wrong. The template defines `screenInfo`, `elementFrames`,
-`screenshot`, `scrollInfo` and `scrollTo`, and nothing else in the harness set
-(MOB-160).
+That is an Android app generated **before `mob_new` 0.4.32** — abridged only in
+layout, not in content; every one of the eighteen keys is shown, because
+guessing at the rest is exactly what goes wrong. That template defined
+`screenInfo`, `elementFrames`, `screenshot`, `scrollInfo` and `scrollTo`, and
+nothing else in the harness set.
+
+Regenerating against 0.4.32 or newer flips `tap_xy`, `long_press_xy`,
+`swipe_xy`, `type_text` and `delete_backward` to `true` (MOB-160) and
+`native_stats` to `true` (MOB-146). `clear_text` stays `false` there on
+purpose — two implementations of it reported success while clearing nothing,
+so the bridge ships without one rather than lie. Which is the point of asking
+the build instead of reading a table: this paragraph is already a snapshot of
+two releases, and `capabilities/1` is not.
 
 Two of those `false`s bite harder than they look:
 

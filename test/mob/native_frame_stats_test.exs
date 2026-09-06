@@ -343,6 +343,34 @@ defmodule Mob.NativeFrameStatsTest do
     end
   end
 
+  describe "a bridge method the app does not have" do
+    # Android reports a missing bridge method by RETURNING {:error, :not_loaded}
+    # rather than raising: the NIF is present in the loaded library, so nothing
+    # raises, but the Kotlin half is absent because MobBridge.kt is generated
+    # once and never re-rendered. Every app generated before the frame-timing
+    # methods existed takes this path — which is to say, the common case.
+    #
+    # It went untested when it was written, and the omission was invisible:
+    # deleting the conversion in native_call/3 left the entire suite green,
+    # because every other stub here either raises or returns valid JSON.
+    defmodule ReturnsNotLoadedNif do
+      @moduledoc false
+      def native_stats, do: {:error, :not_loaded}
+      def native_stats_enable(_on), do: {:error, :not_loaded}
+    end
+
+    test "reports :unsupported, not the raw :not_loaded" do
+      # The @spec promises :ok | {:error, :unsupported}. Leaking a third shape
+      # breaks every caller matching on :unsupported, and it looks like a
+      # working NIF returning an error rather than a build that cannot serve
+      # the call at all.
+      assert {:error, :unsupported} = RenderStats.native_enable(ReturnsNotLoadedNif)
+      assert {:error, :unsupported} = RenderStats.native_disable(ReturnsNotLoadedNif)
+      assert {:error, :unsupported} = RenderStats.native_frames(ReturnsNotLoadedNif)
+      assert {:error, :unsupported} = RenderStats.native_summary(ReturnsNotLoadedNif)
+    end
+  end
+
   describe "Android-shaped payloads" do
     # Android builds this JSON by hand in Kotlin (a StringBuilder in
     # MobBridge.kt) rather than through a serialiser the way iOS does with
