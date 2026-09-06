@@ -50,26 +50,26 @@ defmodule Mob.Nav.RegistryTest do
     test "starts the registry and seeds it from the app module" do
       {:ok, pid} = Mob.Nav.Registry.start_link(SimpleApp)
       assert is_pid(pid)
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
     end
   end
 
   describe "lookup/1" do
     test "finds a registered screen" do
       {:ok, pid} = Mob.Nav.Registry.start_link(SimpleApp)
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
       assert {:ok, HomeScreen} = Mob.Nav.Registry.lookup(:home)
     end
 
     test "returns not_found for unknown atom" do
       {:ok, pid} = Mob.Nav.Registry.start_link(SimpleApp)
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
       assert {:error, :not_found} = Mob.Nav.Registry.lookup(:nonexistent)
     end
 
     test "seeds both platforms from tab_bar app" do
       {:ok, pid} = Mob.Nav.Registry.start_link(TabApp)
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
       assert {:ok, HomeScreen} = Mob.Nav.Registry.lookup(:home)
       assert {:ok, ProfileScreen} = Mob.Nav.Registry.lookup(:profile)
       assert {:ok, SettingsScreen} = Mob.Nav.Registry.lookup(:settings)
@@ -79,14 +79,14 @@ defmodule Mob.Nav.RegistryTest do
   describe "register/2" do
     test "registers a name→module mapping at runtime" do
       {:ok, pid} = Mob.Nav.Registry.start_link(SimpleApp)
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
       :ok = Mob.Nav.Registry.register(:detail, ProfileScreen)
       assert {:ok, ProfileScreen} = Mob.Nav.Registry.lookup(:detail)
     end
 
     test "overwrites an existing mapping" do
       {:ok, pid} = Mob.Nav.Registry.start_link(SimpleApp)
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
       :ok = Mob.Nav.Registry.register(:home, ProfileScreen)
       assert {:ok, ProfileScreen} = Mob.Nav.Registry.lookup(:home)
     end
@@ -95,7 +95,7 @@ defmodule Mob.Nav.RegistryTest do
   describe "register/3 + lookup_route/1 (route-bound params)" do
     test "params registered with the route come back via lookup_route" do
       {:ok, pid} = Mob.Nav.Registry.start_link(SimpleApp)
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
 
       :ok = Mob.Nav.Registry.register(:"/ash/post/list", ProfileScreen, %{resource: Post})
 
@@ -108,7 +108,7 @@ defmodule Mob.Nav.RegistryTest do
 
     test "register/2 entries resolve with empty route params" do
       {:ok, pid} = Mob.Nav.Registry.start_link(SimpleApp)
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
 
       :ok = Mob.Nav.Registry.register(:detail, ProfileScreen)
       assert Mob.Nav.Registry.lookup_route(:detail) == {:ok, ProfileScreen, %{}}
@@ -116,7 +116,7 @@ defmodule Mob.Nav.RegistryTest do
 
     test "app-navigation seeded routes resolve with empty route params" do
       {:ok, pid} = Mob.Nav.Registry.start_link(SimpleApp)
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
       assert {:ok, _module, %{}} = Mob.Nav.Registry.lookup_route(:home)
     end
   end

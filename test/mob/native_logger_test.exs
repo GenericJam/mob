@@ -107,8 +107,9 @@ defmodule Mob.NativeLoggerTest do
 
     test "Logger.info/1 reaches the handler end-to-end", %{nif_pid: pid} do
       Logger.info("end-to-end test")
-      # Give the async logger handler a moment to flush
-      Process.sleep(50)
+      # `Logger.flush/0` blocks until the handlers have drained — the actual
+      # barrier the sleep was approximating.
+      Logger.flush()
       calls = MockNIF.calls(pid)
 
       assert Enum.any?(calls, fn {level, msg} ->
@@ -118,7 +119,7 @@ defmodule Mob.NativeLoggerTest do
 
     test "Logger.error/1 reaches the handler with :error level", %{nif_pid: pid} do
       Logger.error("something broke")
-      Process.sleep(50)
+      Logger.flush()
       calls = MockNIF.calls(pid)
 
       assert Enum.any?(calls, fn {level, msg} ->

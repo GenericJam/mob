@@ -63,12 +63,6 @@ defmodule Mob.Screen.RestartTest do
     end
   end
 
-  defp stop_safely(pid) do
-    GenServer.stop(pid)
-  catch
-    :exit, _ -> :ok
-  end
-
   defp owner_state(owner), do: :sys.get_state(owner)
   defp history(owner), do: owner |> owner_state() |> Map.fetch!(:nav) |> Mob.Nav.history()
   defp parked(owner), do: owner |> owner_state() |> Map.fetch!(:nav) |> Map.fetch!(:parked)
@@ -93,10 +87,10 @@ defmodule Mob.Screen.RestartTest do
     Mob.Test.ProcessHelpers.stop_if_running(Mob.Nav.Registry)
 
     {:ok, registry} = Mob.Nav.Registry.start_link(TabApp)
-    on_exit(fn -> stop_safely(registry) end)
+    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(registry) end)
 
     {:ok, owner} = Mob.Screen.start_link(HomeScreen, %{})
-    on_exit(fn -> stop_safely(owner) end)
+    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(owner) end)
 
     %{owner: owner}
   end

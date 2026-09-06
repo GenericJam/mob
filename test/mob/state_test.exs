@@ -65,7 +65,7 @@ defmodule Mob.StateTest do
       Process.unlink(pid)
       # bypasses terminate/2, no dets.close
       Process.exit(pid, :kill)
-      Process.sleep(10)
+      Mob.Test.ProcessHelpers.await_exit(pid)
       {:ok, _} = Mob.State.start_link()
       assert Mob.State.get(:kill_survived) == :yes
     end

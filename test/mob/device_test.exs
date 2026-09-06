@@ -17,7 +17,7 @@ defmodule Mob.DeviceTest do
       GenServer.start_link(Device, [], name: :"device_#{System.unique_integer([:positive])}")
 
     on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid)
+      Mob.Test.ProcessHelpers.stop_pid(pid)
     end)
 
     {:ok, dispatcher: pid}
@@ -197,22 +197,22 @@ defmodule Mob.DeviceTest do
     end
 
     test "multiple subscribers all receive matching events", %{dispatcher: d} do
-      task1 =
-        Task.async(fn ->
-          :ok = GenServer.call(d, {:subscribe, self(), [:app]})
-          assert_receive {:mob_device, :did_become_active}, 200
-          :got_it
-        end)
+      parent = self()
 
-      task2 =
-        Task.async(fn ->
-          :ok = GenServer.call(d, {:subscribe, self(), [:app]})
-          assert_receive {:mob_device, :did_become_active}, 200
-          :got_it
-        end)
+      subscriber = fn ->
+        :ok = GenServer.call(d, {:subscribe, self(), [:app]})
+        send(parent, :subscribed)
+        assert_receive {:mob_device, :did_become_active}, 200
+        :got_it
+      end
 
-      # Give both tasks time to subscribe.
-      Process.sleep(20)
+      task1 = Task.async(subscriber)
+      task2 = Task.async(subscriber)
+
+      # Both subscriptions must be registered before the event is sent. The
+      # tasks say when that is true; sleeping only guessed at it.
+      assert_receive :subscribed
+      assert_receive :subscribed
       send(d, {:mob_device, :did_become_active})
 
       assert Task.await(task1) == :got_it
@@ -234,11 +234,13 @@ defmodule Mob.DeviceTest do
         end)
 
       assert Task.await(task) == :done
-      # Wait for the :DOWN to be processed.
-      Process.sleep(50)
 
-      subs = GenServer.call(d, :__test_subscribers__)
-      refute Map.has_key?(subs, task.pid)
+      # The :DOWN comes from the monitor, not from this process, so a call here
+      # orders nothing. Poll until the server has actually pruned the entry.
+      Mob.Test.ProcessHelpers.eventually(fn ->
+        subs = GenServer.call(d, :__test_subscribers__)
+        not Map.has_key?(subs, task.pid)
+      end)
     end
 
     test "double-subscribe replaces categories rather than duplicating", %{dispatcher: d} do
@@ -292,10 +294,11 @@ defmodule Mob.DeviceTest do
         end)
 
       assert Task.await(task) == :done
-      Process.sleep(50)
 
-      subs = GenServer.call(Mob.Device.IOS, :__test_subscribers__)
-      refute Map.has_key?(subs, task.pid)
+      Mob.Test.ProcessHelpers.eventually(fn ->
+        subs = GenServer.call(Mob.Device.IOS, :__test_subscribers__)
+        not Map.has_key?(subs, task.pid)
+      end)
     end
   end
 

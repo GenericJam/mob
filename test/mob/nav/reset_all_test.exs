@@ -155,14 +155,14 @@ defmodule Mob.Nav.ResetAllTest do
   setup do
     case Process.whereis(Mob.Nav.Registry) do
       nil -> :ok
-      pid -> stop_safely(pid)
+      pid -> Mob.Test.ProcessHelpers.stop_pid(pid)
     end
 
     {:ok, registry} = Mob.Nav.Registry.start_link(TabApp)
-    on_exit(fn -> stop_safely(registry) end)
+    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(registry) end)
 
     {:ok, router} = Mob.Screen.start_link(LoginScreen, %{source: :initial})
-    on_exit(fn -> stop_safely(router) end)
+    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(router) end)
 
     %{router: router}
   end
@@ -302,11 +302,5 @@ defmodule Mob.Nav.ResetAllTest do
 
     assert Mob.Router.reset_all_supported?(Mob.Screen.Server, Mob.ScreenState)
     refute :code.is_loaded(Mob.ScreenState) == false
-  end
-
-  defp stop_safely(pid) do
-    GenServer.stop(pid)
-  catch
-    :exit, _ -> :ok
   end
 end

@@ -75,10 +75,7 @@ defmodule Mob.ComponentServerTest do
     # async test file (component_test.exs) may have already started it —
     # start_supervised! would raise on {:already_started, _}, so tolerate
     # that instead of racing to be first.
-    case start_supervised({Mob.ComponentRegistry, []}) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-    end
+    Mob.Test.ProcessHelpers.ensure_component_registry()
 
     {:ok, pid} =
       Mob.ComponentServer.start(
@@ -253,10 +250,7 @@ defmodule Mob.ComponentServerTest do
     end
 
     setup do
-      case start_supervised({Mob.ComponentRegistry, []}) do
-        {:ok, _pid} -> :ok
-        {:error, {:already_started, _pid}} -> :ok
-      end
+      Mob.Test.ProcessHelpers.ensure_component_registry()
 
       # Unlinked, fixed-name Agent (mirrors test/mob/renderer_test.exs's
       # MockNIF) — reset rather than restarted, since a prior test in this

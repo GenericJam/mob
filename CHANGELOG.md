@@ -10,6 +10,13 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **`mix mob.flake`** — run the suite repeatedly and report which tests are not
+  deterministic. `--runs N`, `--until-failure`, `--keep-going`, `--seed`, and a
+  path to narrow the target. A flake does not announce itself; it fails once on
+  someone else's branch and the natural response is to re-run and move on. This
+  makes looking cheap and deliberate.
+
 ### Fixed
 - **NIFs that wait on the UI thread no longer block the only scheduler**
   (MOB-164). Android runs the BEAM with `-S 1:1` — one normal scheduler — so a
@@ -32,6 +39,34 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   without deciding fails the build. It checks both directions — a flag is
   wrong when it is missing *and* when it is spurious, and the first draft of
   this change flagged two NIFs that do not block.
+
+- **Test-suite races that made every automated verdict unreliable** (MOB-154,
+  MOB-119, MOB-123). A 1-in-20 flake corrupted a mutation-testing result and,
+  a day later, sent a bisect down the wrong path when it appeared in the same
+  run as a real failure.
+
+  `Mob.ComponentRegistry` is a globally-named singleton owning a named ETS
+  table, and two `async: true` modules each started it with
+  `start_supervised/1` — so whichever test won the race owned it, and ExUnit
+  tore it down while the other module was still using it. It now starts in
+  `test_helper.exs`, owned by the run.
+
+  Nineteen `on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)`
+  sites across eleven modules were check-then-act across a process boundary;
+  thirteen further modules had each written the same correct workaround
+  privately, byte for byte. All now use `Mob.Test.ProcessHelpers`, which gains
+  `stop_pid/2`, `await_exit/2` and `eventually/2`.
+
+  All 35 `Process.sleep` calls were classified rather than swept. Twelve are
+  `Process.sleep(:infinity)` — a parked stub, not a wait. Of the 23 finite
+  ones, 8 remain: three are the subject under test in `render_stats_test.exs`,
+  three are the backoff inside a poll loop that has its own deadline, one is a
+  `@doc` example, and one is a genuine bet that is recorded rather than
+  disguised. The other 15 either had nothing to wait for (a `GenServer.call`
+  from the same process is already an ordering barrier) or were replaced with
+  the actual barrier — a ready-message, `Logger.flush/0`, a monitor, or a
+  bounded poll. See
+  `decisions/2026-09-06-tests-wait-for-events-not-durations.md`.
 
 
 ### Changed

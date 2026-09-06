@@ -250,9 +250,9 @@ defmodule Mob.RenderStatsTest do
     end
 
     setup do
-      for name <- [Mob.Sender], pid = Process.whereis(name), do: GenServer.stop(pid)
+      Mob.Test.ProcessHelpers.stop_if_running(Mob.Sender)
       {:ok, sender} = Mob.Sender.start_link(active: :the_screen)
-      on_exit(fn -> if Process.alive?(sender), do: GenServer.stop(sender) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(sender) end)
 
       RenderStats.enable()
       RenderStats.reset()
@@ -338,7 +338,7 @@ defmodule Mob.RenderStatsTest do
 
     setup do
       services = [Mob.Sender, Mob.Listener, Mob.ComponentRegistry, Mob.Nav.Registry]
-      for name <- services, pid = Process.whereis(name), do: safe_stop(pid)
+      for name <- services, pid = Process.whereis(name), do: Mob.Test.ProcessHelpers.stop_pid(pid)
 
       {:ok, _} = Mob.ComponentRegistry.start_link()
       {:ok, _} = Mob.Nav.Registry.start_link(DemoApp)
@@ -349,17 +349,14 @@ defmodule Mob.RenderStatsTest do
       {:ok, router} = Mob.Router.start_root(CounterScreen, %{}, nif: RealNif)
 
       on_exit(fn ->
-        safe_stop(router)
-        for name <- services, pid = Process.whereis(name), do: safe_stop(pid)
+        Mob.Test.ProcessHelpers.stop_pid(router)
+
+        for name <- services,
+            pid = Process.whereis(name),
+            do: Mob.Test.ProcessHelpers.stop_pid(pid)
       end)
 
       %{router: router}
-    end
-
-    defp safe_stop(pid) do
-      GenServer.stop(pid)
-    catch
-      :exit, _ -> :ok
     end
 
     test "a real render records a complete frame", %{router: router} do

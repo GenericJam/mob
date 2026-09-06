@@ -47,7 +47,7 @@ defmodule Mob.RegistryTest do
       # Use a unique name per test to avoid async collisions
       name = :"Mob.Registry.#{System.unique_integer([:positive])}"
       {:ok, pid} = Registry.start_link(name: name)
-      on_exit(fn -> if Process.alive?(pid), do: Agent.stop(pid) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
       %{default_reg: name}
     end
 

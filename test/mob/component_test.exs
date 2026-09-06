@@ -130,11 +130,8 @@ defmodule Mob.ComponentTest do
       # racing to be first (MOB-98: this is the shared-name race that fix
       # already covers on that file's side; this file needed the same
       # tolerance).
-      reg =
-        case start_supervised({Mob.ComponentRegistry, []}) do
-          {:ok, pid} -> pid
-          {:error, {:already_started, pid}} -> pid
-        end
+      :ok = Mob.Test.ProcessHelpers.ensure_component_registry()
+      reg = Process.whereis(Mob.ComponentRegistry)
 
       {:ok, reg: reg}
     end
