@@ -14,6 +14,16 @@
 #   ONLY WHEN mix.exs CHANGED IN THIS PUSH (release preflight):
 #     mix test --exclude macos_only --exclude requires_zig
 #
+#   ALWAYS, ADVISORY (never blocks):
+#     how far behind origin/master this branch is
+#     whether code changed without any test changing
+#
+# The advisory tier exists because both of those got missed repeatedly, and
+# neither is safely blockable: a worktree legitimately lags, and plenty of
+# real changes need no test. They are printed, loudly, and you decide. A
+# check that blocks on a judgement call is a check people learn to bypass,
+# which costs more than it catches.
+#
 # Intentionally NOT in the always-tier: the full test suite. It's a
 # 30-60s wait per push and that's exactly what teaches people to reach
 # for --no-verify. CI runs the suite on every push regardless; this
@@ -46,12 +56,59 @@ release_preflight() {
     fi
 }
 
+# ── Advisory checks ───────────────────────────────────────────────────────
+#
+# Facts, not opinions: how stale the branch is, and whether code moved without
+# tests moving. Both print and return 0.
+
+staleness_notice() {
+    git fetch --quiet origin master 2>/dev/null || return 0
+
+    local behind
+    behind=$(git rev-list --count "HEAD..origin/master" 2>/dev/null) || return 0
+    [ -z "$behind" ] && return 0
+    [ "$behind" -eq 0 ] && return 0
+
+    echo "[pre-push] note: this branch is $behind commit(s) behind origin/master."
+
+    # 100 is not a magic threshold, it is "far enough that you are probably
+    # reading, building, or reviewing against something that no longer exists".
+    # A checkout ~370 commits behind once produced a review finding that a
+    # function "did not exist" when it did, and cost about forty minutes of
+    # debugging code that was never running.
+    if [ "$behind" -gt 100 ]; then
+        echo "[pre-push]       That is far enough to matter. Anything you built,"
+        echo "[pre-push]       measured, or asked a reviewer to read may not"
+        echo "[pre-push]       reflect master. Consider merging before you push."
+    fi
+}
+
+coverage_notice() {
+    local range="$1"
+    local changed code_changed test_changed
+
+    changed=$(git diff --name-only "$range" 2>/dev/null) || return 0
+    [ -z "$changed" ] && return 0
+
+    code_changed=$(printf '%s\n' "$changed" | grep -E '^(lib|src|priv/templates|ios|android)/' || true)
+    test_changed=$(printf '%s\n' "$changed" | grep -E '^test/' || true)
+
+    if [ -n "$code_changed" ] && [ -z "$test_changed" ]; then
+        echo "[pre-push] note: code changed, no test changed in this push:"
+        printf '%s\n' "$code_changed" | sed 's/^/[pre-push]       /' | head -10
+        echo "[pre-push]       If that is right — a refactor, a doc string, a"
+        echo "[pre-push]       rename — carry on. If it is not, this is the"
+        echo "[pre-push]       cheapest moment to notice."
+    fi
+}
+
 # git invokes pre-push with no args but pipes
 #   <local_ref> <local_sha> <remote_ref> <remote_sha>
 # on stdin, one line per ref being pushed. We diff the local sha
 # against the remote sha to see what mix.exs looks like in this push.
 zero=0000000000000000000000000000000000000000
 mix_exs_changed=false
+push_range=""
 
 while read -r local_ref local_sha remote_ref remote_sha; do
     # Branch deletion (local_sha all zeros) → nothing to diff.
@@ -68,6 +125,8 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     if git diff --name-only "$range" 2>/dev/null | grep -qx 'mix.exs'; then
         mix_exs_changed=true
     fi
+
+    push_range="$range"
 done
 
 cheap_checks
@@ -75,5 +134,10 @@ cheap_checks
 if [ "$mix_exs_changed" = "true" ]; then
     release_preflight
 fi
+
+# Advisory last, so the notices are the final thing on screen rather than
+# scrolled away by compiler output.
+staleness_notice
+[ -n "${push_range:-}" ] && coverage_notice "$push_range"
 
 echo "[pre-push] ✓ all checks passed"
