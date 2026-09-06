@@ -130,6 +130,45 @@ is always better.
 
 Full workflow detail: `guides/agentic_coding.md`.
 
+## Verification fidelity ladder
+
+Run every applicable lower rung, plus the highest rung the change actually
+reaches. Then say which rung you stopped at. "Tests pass" is not a claim about
+a device.
+
+1. **Static.** `mix format --check-formatted`, `mix credo --strict` (ex_slop
+   included), `mix compile --warnings-as-errors`.
+2. **Host unit.** `mix test`. Proves the Elixir logic. Proves nothing about
+   rendering, NIFs, or either platform.
+3. **Simulator or emulator.** Deployed, attached over dist, driven through
+   `Mob.Test` — read `assigns/1` back after the action, don't trust the tap.
+4. **Physical device, both platforms.** The pool is not the world: an
+   API-33-only call crashed on Android 11 and was invisible across an
+   all-Android-13 emulator pool. `tap_xy/3` returns `{:error, :no_effect}` on a
+   real device where the simulator lets it through. iOS needs the cable out
+   before dist RPC works.
+5. **Release build, not debug.** Different linkage, different packaging,
+   different failures. iOS release links plugin NIFs by a separate path
+   (`mob_dev` `decisions/2026-07-07-ios-release-links-plugin-nifs.md`), and a
+   release leaves an `assets/otp.zip` that crash-loops the next debug deploy
+   until it is removed.
+6. **Published artifact.** Built from the packed tarball or the store split,
+   not the working tree. Hex packaging omits repository-root dotfiles, and AGP
+   packs native libs into a release App Bundle that the BEAM needs on the
+   filesystem — debug defaults masked both until an install from Play failed.
+
+Every rung above exists because something got through the one below it.
+
+Two rules that outrank the list:
+
+- **Never substitute a lower rung because a higher one is slow, broken, or
+  inconvenient.** Fix the harness, open an issue, or state plainly that the rung
+  was unavailable and why. An unavailable rung is a fine answer. A silently
+  skipped one is not.
+- **Verify effects, not exit codes.** An exit code proves a tool ran. It does
+  not prove a build happened, a deploy landed, or a screen rendered. After a
+  deploy, prove the app is up and answering before believing anything else.
+
 ## Pre-empt-failure rules — read before you touch anything
 
 These are the things we've burned ourselves on. Following them isn't optional.
