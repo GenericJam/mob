@@ -175,6 +175,14 @@ These are the things we've burned ourselves on. Following them isn't optional.
    relevant repo, every time. Both are clean across the codebase today; don't
    regress them.
 
+   **And the native formatters, if you touched native source.** CI runs
+   `xcrun clang-format --dry-run -Werror ios/mob_nif.m android/jni/mob_beam.h`
+   and swiftlint, and `mix format` says nothing about either. Adding one line
+   to an aligned C initialiser is enough to fail it, because clang-format
+   re-flows the whole block around the new entry — which is how this note came
+   to be written. Run `xcrun clang-format -i <file>` on any `.m`/`.h` you
+   edited before committing.
+
 6. **Multi-repo changes batch together.** A user-visible fix in mob often needs
    matching changes in mob_dev (build) and mob_new (template). Bumping versions
    without coordination produces ghost regressions. Check all three before

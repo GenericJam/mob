@@ -564,11 +564,13 @@ defmodule Mob.RenderStats do
   `set_root`; the timestamps and the run loop observer are downstream of that
   check.
 
-  Returns `{:error, :unsupported}` in three cases, all of which look identical
+  Returns `{:error, :unsupported}` in four cases, all of which look identical
   to a caller: on the host, where there is no native side at all; on a platform
-  whose native half has not implemented it, which today means Android; and in
-  an **iOS release build**, because the reading NIFs sit inside the same
-  `MOB_RELEASE` guard as the rest of the test harness. Profile a debug build.
+  whose native half has not implemented it; in an **iOS release build**,
+  because the reading NIFs sit inside the same `MOB_RELEASE` guard as the rest
+  of the test harness (profile a debug build); and on an Android app whose
+  generated `MobBridge.kt` predates the frame-timing methods — `MobBridge.kt`
+  is generated once and never re-rendered, so regenerate the app.
   """
   @spec native_enable(module()) :: :ok | {:error, :unsupported}
   def native_enable(nif \\ :mob_nif), do: native_call(nif, :native_stats_enable, [true])
@@ -655,7 +657,17 @@ defmodule Mob.RenderStats do
   # whose native half lacks this function). Both mean the same thing to a
   # caller, and neither should take down whatever is reading stats.
   defp native_call(nif, fun, args) do
-    apply(nif, fun, args)
+    case apply(nif, fun, args) do
+      # Android reports a missing bridge method by RETURNING this rather than
+      # raising: the NIF is present in the loaded library, so nothing raises,
+      # but the Kotlin half is absent because `MobBridge.kt` is generated once
+      # and never re-rendered. Every app generated before the frame-timing
+      # methods existed reaches here. Same meaning as the raised cases below —
+      # this build cannot serve the call — so it gets the same answer, instead
+      # of leaking a fourth shape past a @spec that promises two.
+      {:error, :not_loaded} -> {:error, :unsupported}
+      other -> other
+    end
   rescue
     e in UndefinedFunctionError ->
       # Only this module's own absence. A different UndefinedFunctionError

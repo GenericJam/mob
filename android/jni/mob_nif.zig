@@ -287,6 +287,8 @@ pub const BridgeMethods = extern struct {
     type_text: jni.JMethodID = null,
     delete_backward: jni.JMethodID = null,
     clear_text: jni.JMethodID = null,
+    render_stats: jni.JMethodID = null,
+    render_stats_enable: jni.JMethodID = null,
     long_press_xy: jni.JMethodID = null,
     swipe_xy: jni.JMethodID = null,
     screenshot: jni.JMethodID = null,
@@ -675,6 +677,7 @@ export fn nif_capabilities(
         erts.atom(env, "ax_action"),      erts.atom(env, "element_frames"),
         erts.atom(env, "scroll_info"),    erts.atom(env, "scroll_to"),
         erts.atom(env, "sample_region"),  erts.atom(env, "screenshot"),
+        erts.atom(env, "native_stats"),
     };
     const vals = [_]erts.ERL_NIF_TERM{
         boolAtom(env, Bridge.ui_view_tree != null),
@@ -702,6 +705,10 @@ export fn nif_capabilities(
         // See decisions/2026-08-10-sample-region-crops-natively-and-stays-debug-only.md
         boolAtom(env, false),
         boolAtom(env, Bridge.screenshot != null),
+        // Both halves come from the same generated bridge, so one flag answers
+        // for the pair; renderStatsEnable without renderStats would be an app
+        // that half-applied a template update.
+        boolAtom(env, Bridge.render_stats != null),
     };
     return erts.makeMap(env, &keys, &vals) orelse erts.atom(env, "error");
 }
@@ -4241,9 +4248,82 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     cacheOptional(jenv, "clearText", "()Z", &Bridge.clear_text);
     cacheOptional(jenv, "longPressXy", "(FFJ)Z", &Bridge.long_press_xy);
     cacheOptional(jenv, "swipeXy", "(FFFF)Z", &Bridge.swipe_xy);
+    cacheOptional(jenv, "renderStats", "()Ljava/lang/String;", &Bridge.render_stats);
+    cacheOptional(jenv, "renderStatsEnable", "(Z)Z", &Bridge.render_stats_enable);
 
     logi_nif("Mob NIF loaded (Compose backend)", .{});
     return 0;
+}
+
+// nif_native_stats/0 — JSON of the recorded native frame samples, newest
+// first, matching the shape iOS emits so `Mob.RenderStats` needs no
+// per-platform parsing:
+//
+//   {"enabled":bool,"recorded":N,"dropped":M,
+//    "samples":[{"apply_us":f,"transition":s,"seq":n},...]}
+//
+// The ring buffer lives in Kotlin rather than here, unlike iOS where it sits in
+// C beside the NIF. On Android the measurement can only be taken on the main
+// thread — it brackets a Compose frame — so keeping the buffer next to the
+// thing that writes it avoids a JNI hop per sample on the hot path. This
+// mirrors elementFrames, which is built in Kotlin for the same reason.
+export fn nif_native_stats(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    if (Bridge.render_stats == null) return notLoaded(env);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const jresult = jenv.*.CallStaticObjectMethod.?(jenv, Bridge.cls, Bridge.render_stats);
+    const result = jstringToBin(env, jenv, jresult);
+    detachIfAttached(attached);
+    return result;
+}
+
+// nif_native_stats_enable/1 — turn native frame timing on or off.
+//
+// Off by default: an enabled measurement arms an idle handler per set_root and
+// takes two timestamps, which is not free on a screen that re-renders steadily.
+// Enabling also clears the buffer, so a caller measures the run it just started
+// rather than whatever was left over from the last one.
+export fn nif_native_stats_enable(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.render_stats_enable == null) return notLoaded(env);
+
+    var on_buf: [8]u8 = @splat(0);
+    if (erts.enif_get_atom(env, argv[0], &on_buf, on_buf.len, erts.ERL_NIF_LATIN1) == 0)
+        return erts.badarg(env);
+
+    // Exact compare against the NUL-terminated atom, not a prefix: `on_buf` is
+    // 8 bytes, so a prefix test on the first four accepts `:truthy` and
+    // `:true_x` as "on" — the very typo-enables-it case this refuses. Anything
+    // that is neither `true` nor `false` is a caller error rather than a
+    // silent no-op, matching what iOS does.
+    const on_atom = std.mem.sliceTo(&on_buf, 0);
+    const on: bool = if (std.mem.eql(u8, on_atom, "true"))
+        true
+    else if (std.mem.eql(u8, on_atom, "false"))
+        false
+    else
+        return erts.badarg(env);
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    _ = jenv.*.CallStaticBooleanMethod.?(
+        jenv,
+        Bridge.cls,
+        Bridge.render_stats_enable,
+        @as(jni.JBoolean, if (on) 1 else 0),
+    );
+    detachIfAttached(attached);
+    return erts.ok(env);
 }
 
 // ── NIF table + ERL_NIF_INIT entry point ─────────────────────────────────
@@ -4272,6 +4352,8 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "clear_text", .arity = 0, .fptr = nif_clear_text, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
     .{ .name = "long_press_xy", .arity = 3, .fptr = nif_long_press_xy, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
     .{ .name = "swipe_xy", .arity = 4, .fptr = nif_swipe_xy, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
+    .{ .name = "native_stats", .arity = 0, .fptr = nif_native_stats, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
+    .{ .name = "native_stats_enable", .arity = 1, .fptr = nif_native_stats_enable, .flags = 0 },
     .{ .name = "screenshot", .arity = 3, .fptr = nif_screenshot, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
     .{ .name = "scroll_info", .arity = 1, .fptr = nif_scroll_info, .flags = 0 },
     .{ .name = "scroll_to", .arity = 3, .fptr = nif_scroll_to, .flags = 0 },

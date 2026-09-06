@@ -7096,12 +7096,25 @@ static ERL_NIF_TERM nif_capabilities(ErlNifEnv *env, int argc, const ERL_NIF_TER
         const char *name;
         int on;
     } caps[] = {
-        {"view_tree", harness},     {"ui_tree", harness},      {"screen_info", harness},
-        {"tap_xy", harness},        {"tap_by_label", harness}, {"long_press_xy", harness},
-        {"swipe_xy", harness},      {"type_text", harness},    {"delete_backward", harness},
-        {"clear_text", harness},    {"ax_action", harness},    {"element_frames", harness},
-        {"scroll_info", harness},   {"scroll_to", harness},    {"sample_region", harness},
+        {"view_tree", harness},
+        {"ui_tree", harness},
+        {"screen_info", harness},
+        {"tap_xy", harness},
+        {"tap_by_label", harness},
+        {"long_press_xy", harness},
+        {"swipe_xy", harness},
+        {"type_text", harness},
+        {"delete_backward", harness},
+        {"clear_text", harness},
+        {"ax_action", harness},
+        {"element_frames", harness},
+        {"scroll_info", harness},
+        {"scroll_to", harness},
+        {"sample_region", harness},
         {"screenshot", screenshot},
+        // Frame timing is part of the harness, so it lives or dies with it —
+        // compiled out of release builds along with everything else here.
+        {"native_stats", harness},
     };
 
     for (size_t i = 0; i < sizeof(caps) / sizeof(caps[0]); i++) {
