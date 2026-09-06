@@ -85,3 +85,27 @@ accepting it deliberately rather than claiming it is free.
 - The rule to apply to anything added here later: **if it waits on the UI
   thread, it is dirty.** The old table had no principle, which is how one
   member of a group of nine ended up flagged correctly and eight did not.
+
+## Correction, 2026-09-06 (MOB-164)
+
+Two claims above were wrong when written, and are corrected here rather than
+edited away, because the wrong version is the part worth recognising.
+
+**"Every harness input NIF blocks" is false for Android's `tap/1`.** It needs
+`Bridge.tap_by_label`, which no generated bridge defines, so `nif_tap` returns
+`:not_loaded` before any JNI call. Its dirty hop buys nothing. Harmless, but
+the sentence claimed more than the code did.
+
+**The scope was too narrow.** The rule "if it waits on the UI thread, it is
+dirty" was stated and then applied only to the input NIFs in front of us. It
+was false of this codebase the moment it was written: `screen_info`,
+`scroll_to`, `safe_area`, `clipboard_get` and `webview_can_go_back` all wait
+on a Kotlin latch on Android, and thirteen more `dispatch_sync` on iOS. Worse,
+three of the Android waits — `getSafeArea`, `screenInfo`, `clipboardGet` — had
+**no timeout at all**, which on a single normal scheduler is not a stall but a
+VM that never runs another process again if the main thread wedges.
+
+All of them are now flagged, the unbounded waits are bounded (mob_new), and
+the scheduling test enumerates them so the rule is enforced rather than
+merely written down. The lesson is narrower than the rule: a principle stated
+in a decision record is worth exactly as much as the test that checks it.
