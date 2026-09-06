@@ -27,17 +27,20 @@ defmodule Mob.InputNifSchedulingTest do
   # flagged, which made the rule stated in
   # decisions/2026-09-05-input-nifs-are-dirty-io.md false of its own codebase:
   # three of the Android ones waited on a latch with no timeout at all.
-  @blocking_both ~w(screen_info scroll_to clipboard_get webview_can_go_back)
+  @blocking_both ~w(screen_info scroll_to clipboard_get webview_can_go_back safe_area)
 
-  # Android reads insets through a separate bridge call; iOS gets them from
-  # screen_info, so there is no iOS `safe_area` NIF to flag.
-  @android_only_blocking ~w(safe_area)
+  @android_only_blocking ~w()
 
-  # iOS dispatch_syncs for these; Android answers them without touching the
-  # UI thread, so flagging them there would buy a scheduler hop and nothing.
+  # iOS blocks on these; Android answers them without touching the UI thread,
+  # so flagging them there would buy a scheduler hop and nothing.
+  #
+  # `audio_stop_playback` and `audio_set_volume` are deliberately absent. They
+  # look like they block — both contain `dispatch_sync` — but it is nested
+  # inside a `dispatch_async` block, so it runs on the main thread and never
+  # on the scheduler. Flagging them by grepping for the token is exactly the
+  # mistake this file exists to prevent, and it was made here first.
   @ios_only_ui_thread ~w(scroll_info color_scheme set_theme device_battery_state
-                         device_foreground device_orientation battery_level
-                         audio_stop_playback audio_set_volume)
+                         device_foreground device_orientation battery_level)
 
   describe "Android" do
     setup do

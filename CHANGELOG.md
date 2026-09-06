@@ -25,9 +25,13 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
   This makes true a rule that
   `decisions/2026-09-05-input-nifs-are-dirty-io.md` stated and did not apply
-  beyond the NIFs in front of it; that record now carries the correction, and
-  the scheduling test enumerates every affected NIF so the rule is enforced
-  rather than asserted.
+  beyond the NIFs in front of it; that record now carries the correction.
+
+  Enforced by a completeness check rather than a list: every registered iOS
+  NIF must be classified as blocking, CPU-heavy or prompt, so adding one
+  without deciding fails the build. It checks both directions — a flag is
+  wrong when it is missing *and* when it is spurious, and the first draft of
+  this change flagged two NIFs that do not block.
 
 
 ### Changed

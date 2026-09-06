@@ -105,7 +105,31 @@ three of the Android waits — `getSafeArea`, `screenInfo`, `clipboardGet` — h
 **no timeout at all**, which on a single normal scheduler is not a stall but a
 VM that never runs another process again if the main thread wedges.
 
-All of them are now flagged, the unbounded waits are bounded (mob_new), and
-the scheduling test enumerates them so the rule is enforced rather than
-merely written down. The lesson is narrower than the rule: a principle stated
-in a decision record is worth exactly as much as the test that checks it.
+All of them are now flagged and the unbounded waits are bounded (mob_new).
+
+**Enumeration is not enforcement**, which took a third pass to get right. A
+test that iterates a hand-written list of NIFs we remembered cannot fail for
+one nobody thought of — the same shape of gap, one layer up. What enforces the
+rule is a completeness check: the union of the classified lists must equal the
+registration table exactly, so a new NIF fails the build until someone decides
+how it schedules. It also checks the inverse, because the flag is wrong in both
+directions.
+
+That inverse caught this change flagging `audio_set_volume` and
+`audio_stop_playback`, neither of which blocks: both contain `dispatch_sync`,
+but nested inside a `dispatch_async`, so it runs on the main thread and the
+scheduler never waits. They were flagged by grepping for the token — which is
+to say, this record's own correction was written while repeating the error it
+describes, two lines further down. The classification cannot be derived by
+pattern-matching; it requires reading the body.
+
+**One new contention edge, worth knowing.** There is exactly one dirty IO
+scheduler (`-SDio 1`), and `resolve_ipv4` already lives on it. A DNS lookup on
+a bad network runs for seconds, and `safe_area` is on the screen-mount path —
+so a slow lookup can now delay a mount in a way it could not before. Still a
+large net win, since blocking one dirty scheduler beats blocking the only
+normal one. `-SDio 2` is the cheap decoupling if it bites.
+
+The lesson is narrower than the rule: a principle stated in a decision record
+is worth exactly as much as the test that checks it — and the test has to be
+able to fail for the case nobody wrote down.
