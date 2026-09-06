@@ -10,6 +10,30 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **NIFs that wait on the UI thread no longer block the only scheduler**
+  (MOB-164). Android runs the BEAM with `-S 1:1` — one normal scheduler — so a
+  NIF that waits there stops every process on the device. `screen_info`,
+  `scroll_to`, `safe_area`, `clipboard_get` and `webview_can_go_back` all did,
+  and thirteen more `dispatch_sync` on iOS. All now run on a dirty IO
+  scheduler.
+
+  Three of the Android waits had **no timeout at all**, which is not a stall
+  but a hang: if the main thread never answered, no Erlang process on the
+  device would run again. Those are bounded in the generated bridge (requires
+  regenerating the app, or the matching `mob_new` release).
+
+  This makes true a rule that
+  `decisions/2026-09-05-input-nifs-are-dirty-io.md` stated and did not apply
+  beyond the NIFs in front of it; that record now carries the correction.
+
+  Enforced by a completeness check rather than a list: every registered iOS
+  NIF must be classified as blocking, CPU-heavy or prompt, so adding one
+  without deciding fails the build. It checks both directions — a flag is
+  wrong when it is missing *and* when it is spurious, and the first draft of
+  this change flagged two NIFs that do not block.
+
+
 ### Changed
 - **Input NIFs now run on a dirty IO scheduler.** `tap`, `tap_xy`,
   `long_press_xy`, `swipe_xy`, `type_text`, `delete_backward` and `clear_text`

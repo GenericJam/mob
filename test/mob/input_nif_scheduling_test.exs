@@ -22,13 +22,33 @@ defmodule Mob.InputNifSchedulingTest do
   # 4 x 50ms retrying — where Android has no AX path at all.
   @ios_only_blocking ~w(key_press ax_action ax_action_at_xy)
 
+  # The rest of the harness and device surface that waits on the UI thread
+  # (MOB-164). These were left on a normal scheduler when the input NIFs were
+  # flagged, which made the rule stated in
+  # decisions/2026-09-05-input-nifs-are-dirty-io.md false of its own codebase:
+  # three of the Android ones waited on a latch with no timeout at all.
+  @blocking_both ~w(screen_info scroll_to clipboard_get webview_can_go_back safe_area)
+
+  @android_only_blocking ~w()
+
+  # iOS blocks on these; Android answers them without touching the UI thread,
+  # so flagging them there would buy a scheduler hop and nothing.
+  #
+  # `audio_stop_playback` and `audio_set_volume` are deliberately absent. They
+  # look like they block — both contain `dispatch_sync` — but it is nested
+  # inside a `dispatch_async` block, so it runs on the main thread and never
+  # on the scheduler. Flagging them by grepping for the token is exactly the
+  # mistake this file exists to prevent, and it was made here first.
+  @ios_only_ui_thread ~w(scroll_info color_scheme set_theme device_battery_state
+                         device_foreground device_orientation battery_level)
+
   describe "Android" do
     setup do
       %{source: File.read!(Path.join(@root, "android/jni/mob_nif.zig"))}
     end
 
     test "every blocking input NIF is registered dirty IO-bound", %{source: source} do
-      for name <- @blocking_input_nifs do
+      for name <- @blocking_input_nifs ++ @blocking_both ++ @android_only_blocking do
         entry = registration(source, ~r/\.\{ \.name = "#{name}", .*?\}/s)
 
         assert entry =~ "ERL_NIF_DIRTY_JOB_IO_BOUND",
@@ -75,7 +95,11 @@ defmodule Mob.InputNifSchedulingTest do
     end
 
     test "every blocking input NIF is registered dirty IO-bound", %{source: source} do
-      for name <- @blocking_input_nifs ++ @ios_only_blocking do
+      for name <-
+            @blocking_input_nifs ++
+              @ios_only_blocking ++
+              @blocking_both ++
+              @ios_only_ui_thread do
         entry = registration(source, ~r/\{"#{name}", \d+, nif_\w+, [^}]*\}/)
 
         assert entry =~ "ERL_NIF_DIRTY_JOB_IO_BOUND",

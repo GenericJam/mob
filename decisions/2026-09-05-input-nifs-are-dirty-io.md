@@ -85,3 +85,51 @@ accepting it deliberately rather than claiming it is free.
 - The rule to apply to anything added here later: **if it waits on the UI
   thread, it is dirty.** The old table had no principle, which is how one
   member of a group of nine ended up flagged correctly and eight did not.
+
+## Correction, 2026-09-06 (MOB-164)
+
+Two claims above were wrong when written, and are corrected here rather than
+edited away, because the wrong version is the part worth recognising.
+
+**"Every harness input NIF blocks" is false for Android's `tap/1`.** It needs
+`Bridge.tap_by_label`, which no generated bridge defines, so `nif_tap` returns
+`:not_loaded` before any JNI call. Its dirty hop buys nothing. Harmless, but
+the sentence claimed more than the code did.
+
+**The scope was too narrow.** The rule "if it waits on the UI thread, it is
+dirty" was stated and then applied only to the input NIFs in front of us. It
+was false of this codebase the moment it was written: `screen_info`,
+`scroll_to`, `safe_area`, `clipboard_get` and `webview_can_go_back` all wait
+on a Kotlin latch on Android, and thirteen more `dispatch_sync` on iOS. Worse,
+three of the Android waits — `getSafeArea`, `screenInfo`, `clipboardGet` — had
+**no timeout at all**, which on a single normal scheduler is not a stall but a
+VM that never runs another process again if the main thread wedges.
+
+All of them are now flagged and the unbounded waits are bounded (mob_new).
+
+**Enumeration is not enforcement**, which took a third pass to get right. A
+test that iterates a hand-written list of NIFs we remembered cannot fail for
+one nobody thought of — the same shape of gap, one layer up. What enforces the
+rule is a completeness check: the union of the classified lists must equal the
+registration table exactly, so a new NIF fails the build until someone decides
+how it schedules. It also checks the inverse, because the flag is wrong in both
+directions.
+
+That inverse caught this change flagging `audio_set_volume` and
+`audio_stop_playback`, neither of which blocks: both contain `dispatch_sync`,
+but nested inside a `dispatch_async`, so it runs on the main thread and the
+scheduler never waits. They were flagged by grepping for the token — which is
+to say, this record's own correction was written while repeating the error it
+describes, two lines further down. The classification cannot be derived by
+pattern-matching; it requires reading the body.
+
+**One new contention edge, worth knowing.** There is exactly one dirty IO
+scheduler (`-SDio 1`), and `resolve_ipv4` already lives on it. A DNS lookup on
+a bad network runs for seconds, and `safe_area` is on the screen-mount path —
+so a slow lookup can now delay a mount in a way it could not before. Still a
+large net win, since blocking one dirty scheduler beats blocking the only
+normal one. `-SDio 2` is the cheap decoupling if it bites.
+
+The lesson is narrower than the rule: a principle stated in a decision record
+is worth exactly as much as the test that checks it — and the test has to be
+able to fail for the case nobody wrote down.
