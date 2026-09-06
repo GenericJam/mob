@@ -7969,15 +7969,21 @@ static ERL_NIF_TERM nif_vendor_usb_close(ErlNifEnv *env, int argc, const ERL_NIF
 //   * ui_tree         — recursive UIAccessibility walk (variable, can be 10s of ms)
 //   * ui_debug        — same walk, more output
 //
-// Synthetic-input NIFs (swipe_xy, long_press_xy, type_text, key_press,
-// delete_backward, clear_text) dispatch_sync to the main queue but also do
-// some pre-dispatch work; they're left on regular schedulers for now because
-// the test harness calls them in tight loops and dirty-dispatch overhead would
-// add up. Re-evaluate if benchmarks show scheduler stalls under heavy harness use.
+// The input NIFs (tap, tap_xy, swipe_xy, long_press_xy, type_text, key_press,
+// delete_backward, clear_text, ax_action, ax_action_at_xy) are all
+// ERL_NIF_DIRTY_JOB_IO_BOUND: every one of them blocks a scheduler waiting on
+// the main queue. See decisions/2026-09-05-input-nifs-are-dirty-io.md.
 //
-// tap_xy is the exception: it blocks up to MOB_TAP_SETTLE_MS waiting for the
-// app to react (that wait is what makes its :ok trustworthy), which is far too
-// long to hold a normal scheduler.
+// This reverses an earlier note here, which kept them on regular schedulers on
+// the grounds that the harness calls them in tight loops and dirty-dispatch
+// overhead would add up, pending benchmarks. That trade was the wrong way
+// round: the overhead is a thread wakeup, while the stall is the whole VM.
+// nif_long_press_xy sleeps the caller's full duration on the device branch,
+// and nif_ax_action_at_xy sleeps up to 4 x 50ms retrying its lookup — on
+// Android there is exactly one normal scheduler, so that is the entire device.
+//
+// The rule for anything added below: if it waits on the main queue, it is
+// dirty. IO_BOUND rather than CPU_BOUND, because it is waiting, not computing.
 static ErlNifFunc nif_funcs[] = {
 #if !MOB_RELEASE
     // ── Test harness (listed first to survive linker dead-code stripping) ──────
@@ -7990,16 +7996,16 @@ static ErlNifFunc nif_funcs[] = {
     {"ui_paint_debug", 0, nif_ui_paint_debug, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"ui_debug", 0, nif_ui_debug, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"screen_info", 0, nif_screen_info, 0},
-    {"tap", 1, nif_tap, 0},
-    {"ax_action", 2, nif_ax_action, 0},
-    {"ax_action_at_xy", 3, nif_ax_action_at_xy, 0},
+    {"tap", 1, nif_tap, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"ax_action", 2, nif_ax_action, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"ax_action_at_xy", 3, nif_ax_action_at_xy, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"tap_xy", 2, nif_tap_xy, ERL_NIF_DIRTY_JOB_IO_BOUND},
-    {"type_text", 1, nif_type_text, 0},
-    {"delete_backward", 0, nif_delete_backward, 0},
-    {"key_press", 1, nif_key_press, 0},
-    {"clear_text", 0, nif_clear_text, 0},
-    {"long_press_xy", 3, nif_long_press_xy, 0},
-    {"swipe_xy", 4, nif_swipe_xy, 0},
+    {"type_text", 1, nif_type_text, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"delete_backward", 0, nif_delete_backward, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"key_press", 1, nif_key_press, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"clear_text", 0, nif_clear_text, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"long_press_xy", 3, nif_long_press_xy, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"swipe_xy", 4, nif_swipe_xy, ERL_NIF_DIRTY_JOB_IO_BOUND},
 #endif
     {"capabilities", 0, nif_capabilities, 0},
 #if !MOB_RELEASE || defined(MOB_ENABLE_SCREENSHOT)
