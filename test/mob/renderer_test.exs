@@ -1434,4 +1434,30 @@ defmodule Mob.RendererTest do
       assert set_root_json()["props"]["corner_radius"] == 10
     end
   end
+
+  describe "max_lines" do
+    # No pass-through test: a positive integer already reached the wire via the
+    # generic fallback before this clause existed, so it could not fail on revert.
+    test "nil is dropped rather than sent as a JSON null" do
+      Renderer.render(
+        %{type: :text, props: %{text: "hi", max_lines: nil}, children: []},
+        :ios,
+        MockNIF
+      )
+
+      refute Map.has_key?(set_root_json()["props"], "max_lines")
+    end
+
+    test "zero, a negative, a float and a string raise during render" do
+      for bad <- [0, -1, 1.0, "1"] do
+        assert_raise ArgumentError, ~r/max_lines must be a positive integer/, fn ->
+          Renderer.render(
+            %{type: :text, props: %{text: "hi", max_lines: bad}, children: []},
+            :ios,
+            MockNIF
+          )
+        end
+      end
+    end
+  end
 end

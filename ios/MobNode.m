@@ -8,6 +8,7 @@
 - (instancetype)init {
     if ((self = [super init])) {
         _textSize = 14.0;
+        _maxLines = 0;
         _padding = 0.0;
         _paddingTop = -1.0;
         _paddingRight = -1.0;

@@ -407,6 +407,18 @@ Displays a string.
 | `font` | token / string | A named font token from `Mob.Theme`'s `fonts:` map (e.g. `:heading`), or a raw platform font name. See [Styling → Custom fonts](styling.md#custom-fonts). |
 | `font_weight` | `"regular"` / `"medium"` / `"bold"` | Font weight |
 | `text_align` | `"left"` / `"center"` / `"right"` | Horizontal alignment |
+| `max_lines` | positive integer | Maximum lines to render; overflow is truncated with an ellipsis. Omit to wrap without limit. |
+
+A one-line name beside an amount that must not shrink:
+
+```elixir
+~MOB"""
+<Row fill_width={true}>
+  <Text text={@merchant} max_lines={1} weight={1} />
+  <Text text={@amount} />
+</Row>
+"""
+```
 
 ### `:button`
 

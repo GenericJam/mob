@@ -26,6 +26,10 @@ defmodule Mob.UITest do
       assert UI.text(text: "hi", text_size: 18).props.text_size == 18
     end
 
+    test "optional max_lines is included when given" do
+      assert UI.text(text: "hi", max_lines: 1).props.max_lines == 1
+    end
+
     test "unrecognized props are omitted" do
       props = UI.text(text: "hi", font_weight: :bold, opacity: 0.5).props
       refute Map.has_key?(props, :font_weight)

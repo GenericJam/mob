@@ -593,6 +593,18 @@ defmodule Mob.Renderer do
       {:id, value} when is_number(value) ->
         [{"id", to_string(value)}]
 
+      # `nil` is dropped (a JSON null reaches iOS as NSNull); anything else that
+      # is not a positive integer raises here, the one point every construction
+      # path passes through. See decisions/2026-09-07-max-lines-is-a-native-prop.md.
+      {:max_lines, nil} ->
+        []
+
+      {:max_lines, lines} when is_integer(lines) and lines > 0 ->
+        [{"max_lines", lines}]
+
+      {:max_lines, other} ->
+        raise ArgumentError, "max_lines must be a positive integer, got: #{inspect(other)}"
+
       {key, value} ->
         [{Atom.to_string(key), resolve_token(key, value, ctx)}]
     end)

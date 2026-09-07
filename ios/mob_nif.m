@@ -887,6 +887,7 @@ typedef NS_ENUM(NSUInteger, MobPropKey) {
     MOB_PROP_line_height,
     MOB_PROP_loop,
     MOB_PROP_max,
+    MOB_PROP_max_lines,
     MOB_PROP_min,
     MOB_PROP_module,
     MOB_PROP_name,
@@ -1001,6 +1002,7 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
           [MOB_PROP_line_height] = @"line_height",
           [MOB_PROP_loop] = @"loop",
           [MOB_PROP_max] = @"max",
+          [MOB_PROP_max_lines] = @"max_lines",
           [MOB_PROP_min] = @"min",
           [MOB_PROP_module] = @"module",
           [MOB_PROP_name] = @"name",
@@ -1201,6 +1203,11 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         id letterSpacing = pv[MOB_PROP_letter_spacing];
         if (letterSpacing)
             node.letterSpacing = [letterSpacing doubleValue];
+        // Class-checked, not `if (maxLines)`: a JSON null parses to NSNull,
+        // which is non-nil and does not respond to integerValue.
+        id maxLines = pv[MOB_PROP_max_lines];
+        if ([maxLines isKindOfClass:[NSNumber class]])
+            node.maxLines = [maxLines integerValue];
 
         id tabDefs = pv[MOB_PROP_tabs];
         if ([tabDefs isKindOfClass:[NSArray class]])
