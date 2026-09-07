@@ -7350,11 +7350,16 @@ static ERL_NIF_TERM nif_alert_show(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
               as = UIAlertActionStyleCancel;
           if ([style isEqualToString:@"destructive"])
               as = UIAlertActionStyleDestructive;
-          const char *act_c = [action UTF8String];
+          // Capture the NSString, not [action UTF8String]. The C pointer aims
+          // into a string owned by `buttons`, a local ARC releases the moment
+          // this block returns — long before anyone taps — so the handler read
+          // freed memory and enif_make_atom built the action atom out of
+          // whatever was there. Capturing the object retains it for the life
+          // of the handler.
           [ac addAction:[UIAlertAction actionWithTitle:label
                                                  style:as
                                                handler:^(UIAlertAction *_) {
-                                                 mob_deliver_alert_action(act_c);
+                                                 mob_deliver_alert_action([action UTF8String]);
                                                }]];
       }
       UIViewController *vc = root_vc();
@@ -7399,11 +7404,10 @@ static ERL_NIF_TERM nif_action_sheet_show(ErlNifEnv *env, int argc, const ERL_NI
               as = UIAlertActionStyleCancel;
           if ([style isEqualToString:@"destructive"])
               as = UIAlertActionStyleDestructive;
-          const char *act_c = [action UTF8String];
           [ac addAction:[UIAlertAction actionWithTitle:label
                                                  style:as
                                                handler:^(UIAlertAction *_) {
-                                                 mob_deliver_alert_action(act_c);
+                                                 mob_deliver_alert_action([action UTF8String]);
                                                }]];
       }
       UIViewController *vc = root_vc();

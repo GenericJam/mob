@@ -294,6 +294,14 @@ These are the things we've burned ourselves on. Following them isn't optional.
     *the platform API didn't complain*. See
     `decisions/2026-08-09-tap-xy-reports-observed-effect.md`.
 
+15. **Never capture `[nsstring UTF8String]` in a block that outlives the
+    scope.** The pointer belongs to the NSString (and is autorelease-scoped
+    besides), so a `const char *` captured for a callback — a `UIAlertAction`
+    handler, a completion block, anything the run loop calls back later — is
+    reading freed memory by the time it fires. Capture the object and convert
+    inside the block. Both alert NIFs did this, and it is invisible in testing
+    because freed bytes usually still spell the old string.
+
 ## Where to look
 
 | Question | File |
