@@ -7295,18 +7295,20 @@ static void mob_deliver_alert_action(const char *action) {
     enif_free_env(env);
 }
 
-// Returns the root UIViewController for presenting dialogs.
+// Returns the topmost presented UIViewController for presenting dialogs.
+//
+// The window has to be resolved through mob_root_vc, not by hand. Taking
+// `scene.windows.firstObject` and reading its rootViewController assumes the
+// app's window sorts first in the scene's window set; on iOS 26 it does not,
+// the property is nil, and every alert and action sheet is dropped with no
+// error anywhere. mob_root_vc tries `keyWindow` first and only then falls back
+// — which is why the scanner and camera plugins (scan_root_vc, cam_root_vc,
+// both copies of it) present fine while these two did not.
 static UIViewController *root_vc(void) {
-    for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if (scene.activationState == UISceneActivationStateForegroundActive) {
-            UIWindow *win = scene.windows.firstObject;
-            UIViewController *vc = win.rootViewController;
-            while (vc.presentedViewController)
-                vc = vc.presentedViewController;
-            return vc;
-        }
-    }
-    return nil;
+    UIViewController *vc = mob_root_vc();
+    while (vc.presentedViewController)
+        vc = vc.presentedViewController;
+    return vc;
 }
 
 // ── NIF: alert_show/3 ────────────────────────────────────────────────────────
