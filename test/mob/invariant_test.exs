@@ -124,6 +124,70 @@ defmodule Mob.InvariantTest do
       assert Invariant.violation_count() == 0
     end
 
+    test "the shipped default age floor is long enough to outlast a teardown" do
+      # The floor's *default* is the half of the rule that does the work, and
+      # setting it to 0 left the whole suite green. This drives two samples
+      # microseconds apart with the env var unset, which is what a multi-screen
+      # reset does, and asserts nothing is reported.
+      Application.delete_env(:mob, :invariant_min_candidate_age_us)
+      register(:fast_pair, fn _ctx -> {:violation, %{stable: true}} end)
+
+      assert Invariant.run(:periodic) == []
+      assert Invariant.run(:periodic) == []
+      assert Invariant.run(:periodic) == []
+
+      assert Invariant.violation_count() == 0,
+             "two samples microseconds apart confirmed a violation — the age floor is too low"
+    end
+
+    test "a violation that disappears and returns identically does not confirm" do
+      # Appear / resolve / reappear is not "continuously present". Keeping the
+      # candidate across the gap would report something that was never a
+      # sustained breach.
+      counter = :counters.new(1, [])
+
+      register(:blinking, fn _ctx ->
+        n = :counters.get(counter, 1)
+        :counters.add(counter, 1, 1)
+        if rem(n, 2) == 0, do: {:violation, %{same: :always}}, else: :ok
+      end)
+
+      for _ <- 1..6, do: Invariant.run(:periodic)
+
+      assert Invariant.violation_count() == 0
+    end
+
+    test "a candidate whose violation is gone is dropped, even while others remain" do
+      # Pruning is per violation, not all-or-nothing. When one problem resolves
+      # while another persists, the resolved one's candidate must go — otherwise
+      # if it comes back it confirms on sight, having never been continuously
+      # present.
+      step = :counters.new(1, [])
+
+      register(:mixed, fn _ctx ->
+        n = :counters.get(step, 1)
+        :counters.add(step, 1, 1)
+
+        case n do
+          # b present, then gone while a stays, then back.
+          0 -> {:violations, [%{id: :a}, %{id: :b}]}
+          1 -> {:violations, [%{id: :a}]}
+          _ -> {:violations, [%{id: :a}, %{id: :b}]}
+        end
+      end)
+
+      assert Invariant.run(:periodic) == []
+
+      assert Enum.map(Invariant.run(:periodic), & &1.details.id) == [:a],
+             "only the violation still present should confirm"
+
+      assert Enum.map(Invariant.run(:periodic), & &1.details.id) == [],
+             "b returned after resolving, so it starts a fresh candidacy rather " <>
+               "than confirming on sight"
+
+      assert Enum.sort(Enum.map(Invariant.run(:periodic), & &1.details.id)) == [:a, :b]
+    end
+
     test "an intermittent violation is reported once it repeats identically" do
       register(:same_again, fn _ctx -> {:violation, %{identity: :stable}} end)
 

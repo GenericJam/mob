@@ -8,6 +8,13 @@ defmodule Mob.Invariant.BuiltinsTest do
   setup do
     Invariant.reset()
     Mob.Test.ProcessHelpers.ensure_component_registry()
+
+    # The registry is a global table and these tests deliberately leave orphans
+    # in it. Clearing it here keeps one test's leak out of the next one's
+    # assertions.
+    if ComponentRegistry.table() != :undefined,
+      do: :ets.delete_all_objects(ComponentRegistry.table())
+
     on_exit(&Invariant.reset/0)
     :ok
   end
@@ -28,8 +35,20 @@ defmodule Mob.Invariant.BuiltinsTest do
   defmodule NavScreen do
     @moduledoc false
     use Mob.Screen
+
     def mount(_p, _s, socket), do: {:ok, socket}
+
+    def handle_event("go_detail", _p, socket),
+      do: {:noreply, Mob.Socket.push_screen(socket, Mob.Invariant.BuiltinsTest.DetailScreen)}
+
     def render(_a), do: %{type: :text, props: %{text: "nav"}, children: []}
+  end
+
+  defmodule DetailScreen do
+    @moduledoc false
+    use Mob.Screen
+    def mount(_p, _s, socket), do: {:ok, socket}
+    def render(_a), do: %{type: :text, props: %{text: "detail"}, children: []}
   end
 
   defmodule Nif do
@@ -61,7 +80,7 @@ defmodule Mob.Invariant.BuiltinsTest do
       send(dead_owner, :stop)
       assert_receive {:DOWN, ^ref, :process, ^dead_owner, _}
 
-      assert {:violation, %{count: 1, orphans: [orphan]}} = Builtins.orphaned_component(%{})
+      assert {:violations, [orphan]} = Builtins.orphaned_component(%{})
       assert orphan.id == :leaky
       assert orphan.module == SomeComponent
 
@@ -95,6 +114,57 @@ defmodule Mob.Invariant.BuiltinsTest do
     end
   end
 
+  describe "a leak that grows" do
+    test "still confirms — one violation per orphan, not one carrying a list" do
+      # The shape a broken reaping path actually produces: one more orphan per
+      # navigation. Rolled into a single violation carrying a count, the details
+      # changed on every sample, the fingerprint changed with them, and nothing
+      # ever confirmed — the check saw the leak on 59 of 60 samples and reported
+      # zero. Per-orphan candidacy is what fixes it: the older orphans are stable
+      # while new ones accumulate.
+      Application.put_env(:mob, :invariant_min_candidate_age_us, 0)
+      on_exit(fn -> Application.delete_env(:mob, :invariant_min_candidate_age_us) end)
+
+      Invariant.reset()
+      Invariant.unregister(:dead_screen_in_nav)
+
+      reported =
+        for i <- 1..4 do
+          owner = forever()
+          component = forever()
+          ComponentRegistry.register(owner, :"grow#{i}", SomeComponent, component)
+          ref = Process.monitor(owner)
+          send(owner, :stop)
+          assert_receive {:DOWN, ^ref, :process, ^owner, _}
+
+          length(Invariant.run(:on_screen_stop, %{}))
+        end
+
+      assert hd(reported) == 0, "the first sighting is a candidate, not a report"
+
+      assert Enum.sum(reported) > 0,
+             "a growing leak never confirmed: #{inspect(reported)}"
+    end
+
+    test "caps how many orphans one sample reports" do
+      # Every reported violation is an ETS write on a teardown path, and a leak
+      # of a thousand is not a thousand times more informative than a leak of
+      # eight. The cap is also taken before building the maps — two inspect/1
+      # calls per orphan ran inside terminate/2 on the router's stop path.
+      for i <- 1..30 do
+        owner = forever()
+        component = forever()
+        ComponentRegistry.register(owner, :"many#{i}", SomeComponent, component)
+        ref = Process.monitor(owner)
+        send(owner, :stop)
+        assert_receive {:DOWN, ^ref, :process, ^owner, _}
+      end
+
+      assert {:violations, reported} = Builtins.orphaned_component(%{})
+      assert length(reported) == 8
+    end
+  end
+
   describe "dead_screen_in_nav/1" do
     test "finds a dead screen the router is still holding" do
       # A stub answering the same call `Mob.Router.entries/1` makes. Driving a
@@ -109,9 +179,7 @@ defmodule Mob.Invariant.BuiltinsTest do
       {:ok, stub} = FakeRouter.start_link([{NavScreen, dead}])
       on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(stub) end)
 
-      assert {:violation, %{count: 1, dead_entries: [entry]}} =
-               Builtins.dead_screen_in_nav(%{router: stub})
-
+      assert {:violations, [entry]} = Builtins.dead_screen_in_nav(%{router: stub})
       assert entry.module == NavScreen
     end
 
@@ -146,11 +214,22 @@ defmodule Mob.Invariant.BuiltinsTest do
       {:ok, router} = Mob.Router.start_root(NavScreen, %{}, nif: Nif)
       on_exit(fn -> Mob.Test.ProcessHelpers.stop_root(router) end)
 
+      assert [{NavScreen, first}] = Mob.Router.entries(router)
+      assert first == Mob.Router.get_screen_pid(router)
+
+      # History too, which is the half that matters: dead_screen_in_nav is only
+      # meaningful over history and parked tabs — the current entry is alive by
+      # construction. Returning just `state.current` left the suite green.
+      # Pushed the way the app does, through the screen's own handler.
+      Mob.Screen.dispatch(router, "go_detail", %{})
+
       entries = Mob.Router.entries(router)
 
-      assert [{NavScreen, pid}] = entries
-      assert is_pid(pid) and Process.alive?(pid)
-      assert pid == Mob.Router.get_screen_pid(router)
+      assert length(entries) == 2,
+             "entries/1 must report history, not only the current screen: #{inspect(entries)}"
+
+      assert Enum.sort(Enum.map(entries, fn {m, _} -> m end)) == [DetailScreen, NavScreen]
+      assert Enum.all?(entries, fn {_m, p} -> is_pid(p) and Process.alive?(p) end)
     end
   end
 

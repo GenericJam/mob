@@ -75,16 +75,35 @@ and stops when the screen dies, so after an ordinary teardown there is no live
 component under a dead owner. The check reports `:ok`, and a probe confirms the
 registry is empty rather than the check being blind.
 
-**It fires on an injected regression.** Disabling the `{:DOWN, ...}` clause in
-`Mob.ComponentServer` — the exact mechanism the invariant guards — leaves the
-component alive under a dead owner. The first sample holds a candidate and the
-second reports it, with the component's id and module. Restoring the clause
-returns it to `:ok`.
+**It reports the state it asserts the absence of.** With a real
+`Mob.ComponentServer` registered under an owner that then dies, the check
+reports the orphan with its id and module — first sample holds a candidate,
+second reports. A leak that *grows*, one more orphan per sample, also confirms:
+the older orphans are stable while new ones accumulate.
 
-**It does not fire on healthy teardowns.** 60 consecutive teardowns, each with
-three components carrying a queued prop backlog so they are mid-reap when the
-next screen stops: **0 confirmed violations**, and the registry settles empty.
-That scenario produced 60 out of 60 with the back-to-back rule.
+**It does not false-positive on healthy teardowns.** 60 consecutive teardowns,
+each with three components carrying a queued prop backlog so they are mid-reap
+when the next screen stops: **0 confirmed violations**, and the registry settles
+empty. That scenario produced 60 out of 60 with the back-to-back rule.
+
+**What could not be demonstrated, and why.** An earlier draft of this record
+claimed the check "fires on an injected regression — disabling the
+`{:DOWN, ...}` clause in `Mob.ComponentServer`". That claim was wrong and is
+withdrawn rather than deleted. Disabling that clause does not produce a leak,
+because component reaping is defence in depth: `{:EXIT, _, reason}` stops a
+linked component independently, and `Mob.ComponentRegistry.reconcile/2` on the
+screen's next paint removes anything no longer in the tree. Disabling the first
+two still left the registry empty. So there is no single-fault injection that
+makes a real leak through the ordinary path, and the earlier "evidence" came
+from a hand-built probe that froze the orphan set — the CLAUDE.md
+"trust the instrument last" case: a probe constructed so it could not exhibit
+the failure.
+
+That leaves the built-in verified against the orphan *state*, which is what it
+asserts the absence of, and not against a reproduction of the fault that would
+produce it. The honest reading is that this invariant guards a regression in
+three cooperating mechanisms, and that it currently holds because all three
+work.
 
 **Cost, measured, since these ship in release builds** per
 `2026-09-04-defect-reports-are-a-shipped-feature.md`. Through `run/2`, which is

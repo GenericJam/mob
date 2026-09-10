@@ -16,6 +16,11 @@ defmodule Mob.Invariant.Builtins do
 
   alias Mob.ComponentRegistry
 
+  # Reported orphans per sample. A leak of a thousand is not a thousand times
+  # more informative than a leak of eight, and every reported violation is an
+  # ETS write on a teardown path.
+  @max_reported 8
+
   @doc """
   Register the built-in checks. Idempotent.
   """
@@ -53,8 +58,13 @@ defmodule Mob.Invariant.Builtins do
   Confirmation matters here more than anywhere: the router stops screens in a
   tight loop, so during a multi-screen reset this samples while the previous
   screen's components are mid-reap. Measured with the confirmation rule in
-  place: 0 violations across 60 healthy teardowns, and a real leak — the
-  `{:DOWN, ...}` clause in `Mob.ComponentServer` disabled — still reported.
+  place: 0 violations across 60 healthy teardowns.
+
+  Reaping is defence in depth — a monitor `:DOWN`, an `:EXIT` from a linked
+  screen, and `ComponentRegistry.reconcile/2` on the next paint — so no
+  single-fault injection produces a real leak through the ordinary path. This
+  check is verified against the orphan state itself rather than against a
+  reproduction of the fault that would cause it. See the decision record.
   """
   @spec orphaned_component(map()) :: Mob.Invariant.result()
   def orphaned_component(_context) do
@@ -65,35 +75,43 @@ defmodule Mob.Invariant.Builtins do
       table ->
         # A match spec rather than `tab2list/1`: the registry also holds a
         # `{pid, key}` reverse index, so listing the whole table copies twice
-        # the rows this needs. And `Enum.take` before `Enum.map` — building a
-        # map with two `inspect/1` calls for every orphan and then keeping eight
-        # made the check slowest exactly when a leak was largest, inside
-        # `terminate/2`, on the router's synchronous stop path.
-        raw =
-          :ets.select(table, [
-            {{{:"$1", :"$2", :"$3"}, :"$4"}, [], [{{:"$1", :"$2", :"$3", :"$4"}}]}
-          ])
+        # the rows this needs.
+        orphans =
+          table
+          |> :ets.select([{{{:"$1", :"$2", :"$3"}, :"$4"}, [], [{{:"$1", :"$2", :"$3", :"$4"}}]}])
+          |> Enum.filter(&orphan?/1)
+          # Sorted before the cap, and this is load-bearing rather than tidy.
+          # ETS `select` returns rows in an unspecified order that shifts as the
+          # table grows, so taking an arbitrary eight reported a *different*
+          # eight on every sample — each one a fresh fingerprint, so nothing
+          # ever matured. Measured: 240 leaked rows across 60 teardowns and
+          # zero confirmations. Sorting makes the same orphans the reported
+          # ones until they are reaped.
+          |> Enum.sort()
 
-        orphans = Enum.filter(raw, &orphan?/1)
-
-        case orphans do
+        # One violation per orphan, not one carrying a list. Each leaked
+        # component then matures on its own: rolled together, the details change
+        # whenever any orphan is added or reaped, the fingerprint changes with
+        # them, and a leak that grows — one more orphan per navigation, which is
+        # exactly what a broken reaping path produces — never confirms at all.
+        #
+        # Capped, and the cap is taken BEFORE building the maps: two `inspect/1`
+        # calls per orphan for a thousand orphans ran inside `terminate/2` on the
+        # router's synchronous stop path.
+        case Enum.take(orphans, @max_reported) do
           [] ->
             :ok
 
-          _ ->
-            details =
-              orphans
-              |> Enum.take(8)
-              |> Enum.map(fn {screen_pid, id, module, component_pid} ->
-                %{
-                  screen: inspect(screen_pid),
-                  component: inspect(component_pid),
-                  id: id,
-                  module: module
-                }
-              end)
-
-            {:violation, %{orphans: details, count: length(orphans)}}
+          reported ->
+            {:violations,
+             Enum.map(reported, fn {screen_pid, id, module, component_pid} ->
+               %{
+                 screen: inspect(screen_pid),
+                 component: inspect(component_pid),
+                 id: id,
+                 module: module
+               }
+             end)}
         end
     end
   end
@@ -119,9 +137,13 @@ defmodule Mob.Invariant.Builtins do
         router
         |> Mob.Router.entries()
         |> Enum.filter(fn {_module, pid} -> is_pid(pid) and not Process.alive?(pid) end)
+        |> Enum.take(@max_reported)
         |> Enum.map(fn {module, pid} -> %{module: module, pid: inspect(pid)} end)
 
-      if dead == [], do: :ok, else: {:violation, %{dead_entries: dead, count: length(dead)}}
+      # One per dead entry, for the same reason as orphaned_component: a stack
+      # that accumulates corpses would re-fingerprint on every sample and never
+      # confirm.
+      if dead == [], do: :ok, else: {:violations, dead}
     else
       :ok
     end

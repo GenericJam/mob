@@ -63,9 +63,14 @@ defmodule Mob.Invariant do
         check: fn context -> ... end
       )
 
-  A check returns `:ok`, or `{:violation, details}` where `details` is a map
-  carrying **no application state** — the same rule receipts follow. Pids,
-  module names and counts are fine; assigns are not.
+  A check returns `:ok`, `{:violation, details}`, or `{:violations, [details]}`
+  where each `details` is a map carrying **no application state** — the same rule
+  receipts follow. Pids, module names and counts are fine; assigns are not.
+
+  **Report independent problems separately.** A check that finds three leaked
+  components should return three violations, not one carrying a list. Each
+  matures on its own; rolled into one, the details change whenever any of them
+  does, the fingerprint changes with it, and nothing ever confirms.
   """
 
   alias Mob.Invariant.Violation
@@ -73,7 +78,7 @@ defmodule Mob.Invariant do
   @type point :: :after_committed_frame | :on_screen_stop | :periodic
   @type severity :: :critical | :warning
   @type context :: map()
-  @type result :: :ok | {:violation, map()}
+  @type result :: :ok | {:violation, map()} | {:violations, [map()]}
 
   @table :mob_invariants
   @violations :mob_invariant_violations
@@ -142,9 +147,11 @@ defmodule Mob.Invariant do
   @doc """
   Run every check registered for `point` against `context`.
 
-  Returns the violations confirmed by this run — that is, ones also seen at the
-  previous sampling of `point`. A violation seen for the first time is held as a
-  candidate and returns nothing. Never
+  Returns the violations confirmed by this run: ones also seen at the previous
+  sampling of `point` **and** whose candidacy is at least
+  `:mob, :invariant_min_candidate_age_us` old (50ms by default). A violation
+  seen for the first time, or too recently, is held as a candidate and returns
+  nothing. Never
   raises: a check that blows up is itself reported as a violation of
   `:invariant_check_failed` rather than being allowed to take down the process
   that was kind enough to sample.
@@ -211,51 +218,82 @@ defmodule Mob.Invariant do
   end
 
   # Confirmation is deferred to the next sampling of this point — see the
-  # moduledoc. Re-running the check here instead would compare two observations
-  # a microsecond apart, which is far shorter than the transients being
-  # filtered.
+  # moduledoc. Candidacy is per *violation*, not per check, and that granularity
+  # is load-bearing: keyed by check name alone, any check whose details change
+  # between samples could never confirm, because each sample replaced the
+  # candidate and restarted its clock. A leak that grows — which is exactly what
+  # a broken reaping path produces, one more orphan per navigation — was seen on
+  # 59 of 60 samples and reported zero times.
   defp evaluate(spec, context) do
     case safe_check(spec, context) do
       :ok ->
-        # No violation now, so any candidate for this check was transient.
-        :ets.delete(@candidates, spec.name)
+        :ets.match_delete(@candidates, {{spec.name, :_}, :_})
         []
 
-      {:violation, details} ->
-        fingerprint = :erlang.phash2({spec.name, details})
-
+      {:violations, all_details} ->
         now = System.monotonic_time(:microsecond)
+        by_fingerprint = Map.new(all_details, &{:erlang.phash2({spec.name, &1}), &1})
 
-        case :ets.lookup(@candidates, spec.name) do
-          [{_name, ^fingerprint, first_seen}] ->
-            if now - first_seen >= min_candidate_age_us() do
-              :ets.delete(@candidates, spec.name)
-              [violation(spec, details, context)]
-            else
-              # Same violation, but not yet old enough to be distinguished from
-              # work in progress. The original first-seen is kept so a later
-              # sample can confirm it.
-              []
-            end
+        # A candidate whose violation is no longer present has resolved. Dropping
+        # it is what stops an appear/disappear/reappear sequence confirming
+        # something that was never continuously there.
+        prune_candidates(spec.name, Map.keys(by_fingerprint))
 
-          _ ->
-            # First sighting, or a *different* violation than last time — which
-            # is a new candidate rather than a confirmation of the old one.
-            :ets.insert(@candidates, {spec.name, fingerprint, now})
-            []
-        end
+        Enum.flat_map(by_fingerprint, fn {fingerprint, details} ->
+          mature(spec, fingerprint, details, context, now)
+        end)
     end
   end
 
+  defp mature(spec, fingerprint, details, context, now) do
+    key = {spec.name, fingerprint}
+
+    # `:ets.take/2` reads and deletes atomically, so when two screens stop at
+    # once only one of them can claim a candidate — otherwise both pass the age
+    # gate and the same violation is recorded twice.
+    case :ets.take(@candidates, key) do
+      [{^key, first_seen}] ->
+        if now - first_seen >= min_candidate_age_us() do
+          [violation(spec, details, context)]
+        else
+          # Not old enough yet to be told apart from work in progress. Put it
+          # back with its ORIGINAL first-seen, so the clock runs from the first
+          # sighting rather than restarting on every sample.
+          :ets.insert(@candidates, {key, first_seen})
+          []
+        end
+
+      [] ->
+        :ets.insert_new(@candidates, {key, now})
+        []
+    end
+  end
+
+  defp prune_candidates(name, keep) do
+    keep = MapSet.new(keep)
+
+    @candidates
+    |> :ets.match_object({{name, :_}, :_})
+    |> Enum.each(fn {{_name, fingerprint} = key, _first_seen} ->
+      if not MapSet.member?(keep, fingerprint), do: :ets.delete(@candidates, key)
+    end)
+  end
+
+  # Normalised to a list so `evaluate/2` has one shape to reason about. A check
+  # that can report several independent violations — one per leaked component,
+  # say — must return them separately, or they share a fingerprint and mature
+  # as a single lump that changes every time one of them does.
   defp safe_check(spec, context) do
     case spec.check.(context) do
       :ok -> :ok
-      {:violation, details} when is_map(details) -> {:violation, details}
+      {:violation, details} when is_map(details) -> {:violations, [details]}
+      {:violations, []} -> :ok
+      {:violations, list} when is_list(list) -> {:violations, list}
     end
   rescue
-    e -> {:violation, %{invariant_check_failed: spec.name, exception: e.__struct__}}
+    e -> {:violations, [%{invariant_check_failed: spec.name, exception: e.__struct__}]}
   catch
-    kind, _ -> {:violation, %{invariant_check_failed: spec.name, exit: kind}}
+    kind, _ -> {:violations, [%{invariant_check_failed: spec.name, exit: kind}]}
   end
 
   defp violation(spec, details, context) do
