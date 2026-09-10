@@ -80,13 +80,16 @@ defmodule Mob.Invariant.Builtins do
           table
           |> :ets.select([{{{:"$1", :"$2", :"$3"}, :"$4"}, [], [{{:"$1", :"$2", :"$3", :"$4"}}]}])
           |> Enum.filter(&orphan?/1)
-          # Sorted before the cap, and this is load-bearing rather than tidy.
-          # ETS `select` returns rows in an unspecified order that shifts as the
-          # table grows, so taking an arbitrary eight reported a *different*
-          # eight on every sample — each one a fresh fingerprint, so nothing
-          # ever matured. Measured: 240 leaked rows across 60 teardowns and
-          # zero confirmations. Sorting makes the same orphans the reported
-          # ones until they are reaped.
+          # Sorted before the cap so the same orphans are the reported ones
+          # across samples. ETS `select` returns rows in an order that shifts as
+          # the table grows — measured changing the unsorted top-8 on 33 of 199
+          # insertions — so an arbitrary eight names a partly different eight
+          # each time. Worth about 4% of confirmations rather than being
+          # load-bearing: per-violation candidacy already tolerates one element
+          # churning in and out of the window, and sorting does not eliminate
+          # the churn either (7 of 199), because a reused pid slot can sort
+          # *into* the window. The zero-confirmations measurement belongs to the
+          # per-violation change below, not to this sort.
           |> Enum.sort()
 
         # One violation per orphan, not one carrying a list. Each leaked

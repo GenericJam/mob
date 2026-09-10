@@ -130,6 +130,9 @@ defmodule Mob.Invariant do
   def unregister(name) do
     start()
     :ets.delete(@table, name)
+    # Its candidates too — nothing will ever sample this name again, so they
+    # would sit in the table for the life of the owner.
+    :ets.match_delete(@candidates, {{name, :_}, :_})
     :ok
   end
 
@@ -248,18 +251,11 @@ defmodule Mob.Invariant do
   defp mature(spec, fingerprint, details, context, now) do
     key = {spec.name, fingerprint}
 
-    # `:ets.take/2` reads and deletes atomically, so when two screens stop at
-    # once only one of them can claim a candidate — otherwise both pass the age
-    # gate and the same violation is recorded twice.
-    case :ets.take(@candidates, key) do
+    case :ets.lookup(@candidates, key) do
       [{^key, first_seen}] ->
-        if now - first_seen >= min_candidate_age_us() do
+        if now - first_seen >= min_candidate_age_us() and claim(key, first_seen) do
           [violation(spec, details, context)]
         else
-          # Not old enough yet to be told apart from work in progress. Put it
-          # back with its ORIGINAL first-seen, so the clock runs from the first
-          # sighting rather than restarting on every sample.
-          :ets.insert(@candidates, {key, first_seen})
           []
         end
 
@@ -269,6 +265,29 @@ defmodule Mob.Invariant do
     end
   end
 
+  # Compare-and-delete on the exact `{key, first_seen}` pair. Only one sampler
+  # can remove that row, so concurrent samplers cannot both report the same
+  # candidate — and, crucially, **nothing ever writes a first_seen back**.
+  #
+  # The previous version used `:ets.take/2` and re-inserted the row when it was
+  # too young. That looks atomic and is not: with three samplers in flight, one
+  # takes the row, a second sees absence and inserts a fresh `now`, a third takes
+  # *that* and writes it back — so the candidate's age kept resetting and a
+  # permanently-present violation was never confirmed at all. Measured through
+  # `run/2`: 1 sampler 39 confirmations, 2 samplers 34, **4 samplers zero**.
+  #
+  # This is not a theoretical race. `Mob.Router` `start_link`s its screens, so a
+  # router exit runs `terminate/2` — and this sampling point — in every live
+  # screen at once.
+  defp claim(key, first_seen) do
+    :ets.select_delete(@candidates, [{{key, first_seen}, [], [true]}]) == 1
+  end
+
+  # `:set` tables cannot match on a partially bound key, so this scans the whole
+  # candidates table rather than just this check's rows. The live set is bounded
+  # by the number of violations a check reports (capped at 8 for the built-ins),
+  # so that is a handful of rows — but it is why `unregister/1` above has to
+  # clear its own candidates rather than leaving them to be pruned.
   defp prune_candidates(name, keep) do
     keep = MapSet.new(keep)
 

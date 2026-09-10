@@ -129,6 +129,22 @@ re-measures one pass of each check on the device that matters; it does not
 include the candidate bookkeeping, so the table above is the number to budget
 against.
 
+## Concurrency is not optional here
+
+`Mob.Router` `start_link`s its screens, so a router exit runs `terminate/2` — and
+this sampling point — in every live screen at once. A first implementation used
+`:ets.take/2` and re-inserted a candidate that was not yet old enough, which
+looks atomic and is not: with three samplers in flight one takes the row, a
+second sees absence and inserts a fresh timestamp, a third takes *that* and
+writes it back, so the candidate's age keeps resetting. Measured through
+`run/2` against a permanently-present violation: 1 sampler 39 confirmations,
+2 samplers 34, **4 samplers zero**. A silent total failure, under exactly the
+condition the code's own comment claimed to handle.
+
+Claiming a candidate is now a compare-and-delete on the exact
+`{key, first_seen}` pair, and nothing ever writes a `first_seen` back. Only one
+sampler can remove a given row, and the clock only ever moves forward.
+
 ## Consequences
 
 - `:on_screen_stop` samples while the stopping screen is **still alive** — it is

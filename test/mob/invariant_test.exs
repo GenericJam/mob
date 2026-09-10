@@ -188,6 +188,37 @@ defmodule Mob.InvariantTest do
       assert Enum.sort(Enum.map(Invariant.run(:periodic), & &1.details.id)) == [:a, :b]
     end
 
+    test "concurrent samplers still confirm — the mechanism must not starve" do
+      # `Mob.Router` start_links its screens, so a router exit runs terminate/2,
+      # and this sampling point, in every live screen at once. An earlier
+      # version used :ets.take and re-inserted a too-young candidate; with three
+      # samplers in flight a stale first_seen could be written back, the
+      # candidate's age never grew, and a permanently-present violation was
+      # confirmed ZERO times. It failed silently, under exactly the condition
+      # its own comment claimed to handle.
+      # A real age floor is required for this to bite: with the floor at 0 the
+      # first sampler confirms immediately and there is no aging window to
+      # starve. 20ms is enough to need several samples.
+      Application.put_env(:mob, :invariant_min_candidate_age_us, 20_000)
+      register(:under_load, fn _ctx -> {:violation, %{stable: true}} end)
+
+      deadline = System.monotonic_time(:millisecond) + 400
+
+      1..4
+      |> Task.async_stream(
+        fn _ ->
+          Stream.repeatedly(fn -> Invariant.run(:periodic) end)
+          |> Enum.take_while(fn _ -> System.monotonic_time(:millisecond) < deadline end)
+        end,
+        max_concurrency: 4,
+        timeout: 5_000
+      )
+      |> Stream.run()
+
+      assert Invariant.violation_count() > 0,
+             "four concurrent samplers confirmed nothing — the candidate clock is being reset"
+    end
+
     test "an intermittent violation is reported once it repeats identically" do
       register(:same_again, fn _ctx -> {:violation, %{identity: :stable}} end)
 
