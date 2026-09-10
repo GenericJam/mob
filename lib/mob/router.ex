@@ -83,6 +83,17 @@ defmodule Mob.Router do
   def get_nav_history(pid), do: GenServer.call(pid, :get_nav_history)
 
   @doc """
+  Every screen entry the router holds, as `{module, pid}` — current, history and
+  parked tabs alike.
+
+  For `Mob.Invariant`: `get_nav_history/1` returns sockets, which is what a test
+  wants, but an invariant needs the pids in order to ask whether they are still
+  alive.
+  """
+  @spec entries(pid()) :: [{module(), pid()}]
+  def entries(pid), do: GenServer.call(pid, :__entries__)
+
+  @doc """
   Start a screen as the root UI screen. Calls mount, renders the component tree
   via `Mob.Renderer`, and calls `set_root` on the resulting view.
 
@@ -236,6 +247,13 @@ defmodule Mob.Router do
 
   def handle_call(:get_current_module, _from, state) do
     {:reply, state.current.module, state}
+  end
+
+  # Every entry the router is holding — current, history, and parked tabs —
+  # as {module, pid}. `get_nav_history/1` returns sockets, which is what a test
+  # wants; an invariant needs the pids to ask whether they are alive.
+  def handle_call(:__entries__, _from, state) do
+    {:reply, Enum.map(all_entries(state), &{&1.module, &1.pid}), state}
   end
 
   def handle_call(:get_nav_history, _from, state) do

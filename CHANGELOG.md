@@ -11,6 +11,31 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 ## [Unreleased]
 
 ### Added
+- **Runtime invariant registry — `Mob.Invariant`** (MOB-156). Checks the
+  framework can make about itself, with the rule that keeps them from becoming
+  noise: **a violation is re-checked immediately and only recorded if it
+  survives**. Every check reads live state from concurrently changing processes,
+  so a screen mid-teardown looks exactly like a leak; a check that disagrees with
+  itself two evaluations apart was watching a race.
+
+  `register/2` takes a sampling point (`:on_screen_stop`, `:periodic`,
+  `:after_committed_frame`), a severity and a check function. A check that raises
+  is reported rather than propagated — a diagnostic must never affect what it
+  observes.
+
+  Two built-ins ship. `orphaned_component` — a live component under a dead owning
+  screen, the leak class three of four agents in MOB-149 named independently —
+  runs at `:on_screen_stop`, which is wired. `dead_screen_in_nav` is registered
+  for `:periodic`, and **nothing drives `:periodic` yet**; it is reachable only
+  by an explicit call until the defect bus lands in MOB-159. The other eight
+  checks MOB-156 names are listed in `Builtins.unimplemented/0` with what each
+  needs, and a test asserts none is ever silently registered.
+
+  Measured through `run/2` at 1.6µs with an empty registry, 7µs at 100 live
+  components and 16µs at 100 orphaned ones, once per screen teardown rather than
+  per frame; `cost_us/2` re-measures on the device that matters. See
+  `decisions/2026-09-10-an-invariant-must-survive-to-the-next-sample.md`.
+
 - **Causal receipts — `Mob.Agent.Receipt`** (MOB-155). Every dispatched event now
   gets an `action_id`, and the screen records which stages the action
   reached: dispatched, handled (or unhandled), assigns changed, navigation
