@@ -59,13 +59,21 @@ defmodule Mob.Test.ProcessHelpers do
     GenServer.stop(pid, :normal, timeout)
     :ok
   catch
-    # Only one exit reason means "did not work": the process ignored a :normal
+    # Two exit reasons mean "did not work". First: the process ignored a :normal
     # stop and is still alive, about to leak into the next test. That is the
     # failure this module exists to prevent, so it is the one thing that must
     # not be swallowed. `GenServer.stop/3` reports it as
     # `{:timeout, {GenServer, :stop, _}}`, not a bare atom.
     :exit, {:timeout, _} ->
       raise "#{inspect(pid)} ignored a :normal stop for #{timeout}ms and is still alive"
+
+    # A process that blew up in `terminate/2` exits with the exception itself in
+    # the reason. That is a real bug — screens in this repo flush state from
+    # terminate/2 — and reporting it as a clean stop would hide it. Identify it
+    # *positively*, by the exception struct, rather than by enumerating the
+    # shutdown shapes: enumerating is what broke this function last time.
+    :exit, {{%{__exception__: true} = exception, stack}, _} when is_list(stack) ->
+      reraise exception, stack
 
     # Everything else means it was already on its way down, which is the state
     # the caller wanted. Do not enumerate those shapes: they nest to varying
@@ -77,6 +85,62 @@ defmodule Mob.Test.ProcessHelpers do
     # concurrent run.
     :exit, _ ->
       :ok
+  end
+
+  @doc """
+  A temp path unique across concurrently running VMs, not just within one.
+
+  `System.unique_integer/1` is unique *per VM*. Two `mix test` runs at once —
+  a CI matrix on one box, a worktree A/B, a developer with a second terminal —
+  each start counting from their own zero, collide on the same directory, and
+  then delete each other's fixtures from `on_exit`. The symptom is a file that
+  vanishes mid-test: `Storage.delete/1` returning `{:error, :enoent}` for a file
+  the test just wrote. Observed exactly that way while measuring this PR.
+
+  The OS pid is what distinguishes the VMs.
+  """
+  @spec tmp_path(String.t()) :: String.t()
+  def tmp_path(prefix) do
+    Path.join(
+      System.tmp_dir!(),
+      "#{prefix}_#{System.pid()}_#{System.unique_integer([:positive])}"
+    )
+  end
+
+  @doc """
+  Stop every pid in `pids`, then raise if any of them refused.
+
+  `stop_pid/2` raises on timeout, which is correct on its own and wrong in the
+  middle of a teardown list: the first failure would skip every later stop, so
+  a single wedged process leaks all its siblings — under their global names —
+  into every file that runs after. That is precisely the failure this module
+  exists to prevent, so a teardown must stop everything first and report
+  afterwards.
+
+  Non-pids are ignored, so `stop_all([a, Process.whereis(B), c])` is safe when
+  a name is not registered.
+  """
+  @spec stop_all([pid() | nil], timeout()) :: :ok
+  def stop_all(pids, timeout \\ 5_000) when is_list(pids) do
+    failures =
+      pids
+      |> Enum.filter(&is_pid/1)
+      |> Enum.flat_map(fn pid ->
+        try do
+          stop_pid(pid, timeout)
+          []
+        rescue
+          e in RuntimeError -> [Exception.message(e)]
+        end
+      end)
+
+    case failures do
+      [] ->
+        :ok
+
+      msgs ->
+        raise "#{length(msgs)} process(es) refused to stop:\n  " <> Enum.join(msgs, "\n  ")
+    end
   end
 
   @doc """
@@ -163,8 +227,8 @@ defmodule Mob.Test.ProcessHelpers do
   @spec ensure_component_registry() :: :ok
   def ensure_component_registry do
     case GenServer.start(Mob.ComponentRegistry, [], name: Mob.ComponentRegistry) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
+      {:ok, pid} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> {:ok, pid}
     end
   end
 end

@@ -166,10 +166,7 @@ defmodule Mob.ListenerTest do
     end
 
     setup do
-      case Process.whereis(FakeNative) do
-        nil -> :ok
-        pid -> Agent.stop(pid)
-      end
+      Mob.Test.ProcessHelpers.stop_if_running(FakeNative)
 
       FakeNative.start()
       :ok

@@ -291,7 +291,7 @@ defmodule Mob.PluginsTest do
   end
 
   defp write_manifest(contents) do
-    dir = Path.join(System.tmp_dir!(), "mob_plugins_test_#{System.unique_integer([:positive])}")
+    dir = Mob.Test.ProcessHelpers.tmp_path("mob_plugins_test")
     File.mkdir_p!(dir)
     path = Path.join(dir, "mob_plugins.exs")
     File.write!(path, contents)

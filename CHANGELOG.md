@@ -51,23 +51,27 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   tore it down while the other module was still using it. It now starts in
   `test_helper.exs`, owned by the run.
 
-  Nineteen `on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)`
-  sites across eleven modules were check-then-act across a process boundary;
+  Fourteen `on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)`
+  sites across six modules were check-then-act across a process boundary;
   thirteen further modules had each written the same correct workaround
-  privately, byte for byte. All now use `Mob.Test.ProcessHelpers`, which gains
-  `stop_pid/2`, `await_exit/2` and `eventually/2`.
+  privately. All now use `Mob.Test.ProcessHelpers`, which gains `stop_pid/2`,
+  `await_exit/2` and `eventually/2`.
 
   All 35 `Process.sleep` calls were classified rather than swept. Twelve are
-  `Process.sleep(:infinity)` — a parked stub, not a wait. Of the 23 finite
-  ones, 8 remain: three are the subject under test in `render_stats_test.exs`,
-  three are the backoff inside a poll loop that has its own deadline, one is a
-  `@doc` example, and one is a genuine bet that is recorded rather than
-  disguised. The other 15 either had nothing to wait for (a `GenServer.call`
-  from the same process is already an ordering barrier) or were replaced with
-  the actual barrier — a ready-message, `Logger.flush/0`, a monitor, or a
-  bounded poll. See
+  `Process.sleep(:infinity)`, which is not a wait. Of the 23 finite ones, 17
+  were dealt with and 6 kept — the kept ones measure elapsed time, back off a
+  poll loop that has its own deadline, or are a genuine bet that is recorded
+  rather than disguised. The 17 either had nothing to wait for (a
+  `GenServer.call` from the process that sent the earlier messages is already
+  an ordering barrier) or were replaced with the actual barrier: a
+  ready-message, `Logger.flush/0`, a monitor, or a bounded poll. See
   `decisions/2026-09-06-tests-wait-for-events-not-durations.md`.
 
+  Also fixes a temp-directory collision between concurrent `mix test` runs:
+  `System.unique_integer/1` is unique per VM, so two suites running at once
+  (a CI matrix on one box) generated the same fixture directory and each
+  `on_exit` deleted the other's files. `ProcessHelpers.tmp_path/1` includes the
+  OS pid.
 
 ### Changed
 - **Input NIFs now run on a dirty IO scheduler.** `tap`, `tap_xy`,

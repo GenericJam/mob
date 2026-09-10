@@ -227,20 +227,34 @@ defmodule Mob.DeviceTest do
     end
 
     test "subscriber pid going down is auto-removed", %{dispatcher: d} do
+      parent = self()
+
       task =
         Task.async(fn ->
           :ok = GenServer.call(d, {:subscribe, self(), [:app]})
-          :done
+          send(parent, :subscribed)
+          receive do: (:finish -> :done)
         end)
 
+      # Prove the entry was actually there before asserting it goes away. Without
+      # this the poll below is satisfied on its first pass by a dispatcher that
+      # never stored the subscriber at all, or stored it under a different key.
+      assert_receive :subscribed
+      assert Map.has_key?(GenServer.call(d, :__test_subscribers__), task.pid)
+
+      send(task.pid, :finish)
       assert Task.await(task) == :done
 
       # The :DOWN comes from the monitor, not from this process, so a call here
-      # orders nothing. Poll until the server has actually pruned the entry.
+      # orders nothing against it. Poll until the server has actually pruned.
       Mob.Test.ProcessHelpers.eventually(fn ->
         subs = GenServer.call(d, :__test_subscribers__)
         not Map.has_key?(subs, task.pid)
       end)
+
+      # Keep a real assertion as the test's own last word, rather than letting a
+      # helper's success be the only thing standing between this test and green.
+      refute Map.has_key?(GenServer.call(d, :__test_subscribers__), task.pid)
     end
 
     test "double-subscribe replaces categories rather than duplicating", %{dispatcher: d} do
@@ -287,18 +301,27 @@ defmodule Mob.DeviceTest do
     end
 
     test "subscriber pid down is removed" do
+      parent = self()
+
       task =
         Task.async(fn ->
           :ok = Mob.Device.IOS.subscribe()
-          :done
+          send(parent, :subscribed)
+          receive do: (:finish -> :done)
         end)
 
+      assert_receive :subscribed
+      assert Map.has_key?(GenServer.call(Mob.Device.IOS, :__test_subscribers__), task.pid)
+
+      send(task.pid, :finish)
       assert Task.await(task) == :done
 
       Mob.Test.ProcessHelpers.eventually(fn ->
         subs = GenServer.call(Mob.Device.IOS, :__test_subscribers__)
         not Map.has_key?(subs, task.pid)
       end)
+
+      refute Map.has_key?(GenServer.call(Mob.Device.IOS, :__test_subscribers__), task.pid)
     end
   end
 

@@ -4,7 +4,7 @@ defmodule Mob.StorageTest do
   alias Mob.Storage
 
   setup do
-    dir = Path.join(System.tmp_dir!(), "mob_storage_#{:erlang.unique_integer([:positive])}")
+    dir = Mob.Test.ProcessHelpers.tmp_path("mob_storage")
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf!(dir) end)
     %{dir: dir}

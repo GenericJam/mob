@@ -110,9 +110,22 @@ defmodule Mix.Tasks.Mob.Flake do
 
     Mix.shell().error("\n\n#{length(ordered)} failure(s) in #{runs} run(s):\n")
 
+    # Always write the full log to disk, not just the summarised extract. A rare
+    # failure may not come back: it is entirely possible to watch one go past,
+    # fail to reproduce it in a hundred later runs, and be left with nothing to
+    # go on because the only copy was a summary on a terminal that scrolled.
+    # That happened while building this task. The artefact costs nothing and is
+    # the difference between a lead and a rumour.
+    dir = Path.join([Mix.Project.build_path(), "mob_flake"])
+    File.mkdir_p!(dir)
+
     for {attempt, output} <- ordered do
+      path = Path.join(dir, "run-#{attempt}.log")
+      File.write!(path, output)
+
       Mix.shell().error("── run #{attempt} " <> String.duplicate("─", 50))
       Mix.shell().error(failing_tests(output))
+      Mix.shell().info([:faint, "   full log: #{Path.relative_to_cwd(path)}", :reset])
     end
 
     Mix.shell().info([
@@ -133,20 +146,29 @@ defmodule Mix.Tasks.Mob.Flake do
   # possible bug, and it was in the first version of this function.
   @header ~r/^\s+\d+\) (test|doctest|property) /
 
+  # ExUnit's own trailer. A failure block runs until this, not to the end of the
+  # log — otherwise the last one absorbs the summary and the seed line, which is
+  # exactly the noise this function exists to strip.
+  @summary ~r/^(Finished in |\d+ (test|doctest|property)|Randomized with seed )/
+
   @doc false
-  @spec failing_tests(String.t()) :: [String.t()]
+  @spec failing_tests(String.t()) :: String.t()
   def failing_tests(output) do
     output
     |> String.split("\n")
     |> Enum.reduce([], fn line, acc ->
       cond do
-        Regex.match?(@header, line) -> [[line] | acc]
+        Regex.match?(@header, line) -> [{:open, [line]} | acc]
         acc == [] -> acc
-        true -> [[line | hd(acc)] | tl(acc)]
+        match?([{:closed, _} | _], acc) -> acc
+        Regex.match?(@summary, line) -> [{:closed, elem(hd(acc), 1)} | tl(acc)]
+        true -> [{:open, [line | elem(hd(acc), 1)]} | tl(acc)]
       end
     end)
     |> Enum.reverse()
-    |> Enum.map(fn block -> block |> Enum.reverse() |> Enum.take(8) |> Enum.join("\n") end)
+    |> Enum.map(fn {_, block} ->
+      block |> Enum.reverse() |> Enum.join("\n") |> String.trim_trailing()
+    end)
     |> case do
       [] -> output |> String.split("\n") |> Enum.take(-15) |> Enum.join("\n")
       blocks -> Enum.join(blocks, "\n\n")

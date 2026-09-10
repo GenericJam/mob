@@ -12,7 +12,7 @@ defmodule Mob.DataDirTest do
   defp restore(var, val), do: System.put_env(var, val)
 
   test "data_dir/0 returns MOB_DATA_DIR and creates it" do
-    base = Path.join(System.tmp_dir!(), "mob_data_dir_test_#{System.unique_integer([:positive])}")
+    base = Mob.Test.ProcessHelpers.tmp_path("mob_data_dir_test")
     File.rm_rf!(base)
     System.put_env("MOB_DATA_DIR", base)
 
@@ -28,7 +28,7 @@ defmodule Mob.DataDirTest do
   end
 
   test "data_dir/1 returns and creates a subdirectory" do
-    base = Path.join(System.tmp_dir!(), "mob_data_dir_test_#{System.unique_integer([:positive])}")
+    base = Mob.Test.ProcessHelpers.tmp_path("mob_data_dir_test")
     File.rm_rf!(base)
     System.put_env("MOB_DATA_DIR", base)
 

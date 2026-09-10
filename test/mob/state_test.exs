@@ -3,7 +3,7 @@ defmodule Mob.StateTest do
 
   # Each test uses an isolated DETS file so tests don't share state.
   setup do
-    tmp = Path.join(System.tmp_dir!(), "mob_state_test_#{System.unique_integer([:positive])}")
+    tmp = Mob.Test.ProcessHelpers.tmp_path("mob_state_test")
     File.mkdir_p!(tmp)
     System.put_env("MOB_DATA_DIR", tmp)
 

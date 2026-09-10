@@ -71,11 +71,9 @@ defmodule Mob.ComponentServerTest do
   end
 
   setup do
-    # Mob.ComponentRegistry registers under a fixed global name. Another
-    # async test file (component_test.exs) may have already started it —
-    # start_supervised! would raise on {:already_started, _}, so tolerate
-    # that instead of racing to be first.
-    Mob.Test.ProcessHelpers.ensure_component_registry()
+    # Mob.ComponentRegistry registers under a fixed global name and is owned by
+    # the run (test_helper.exs), not by whichever async file starts first.
+    {:ok, _} = Mob.Test.ProcessHelpers.ensure_component_registry()
 
     {:ok, pid} =
       Mob.ComponentServer.start(
@@ -250,7 +248,7 @@ defmodule Mob.ComponentServerTest do
     end
 
     setup do
-      Mob.Test.ProcessHelpers.ensure_component_registry()
+      {:ok, _} = Mob.Test.ProcessHelpers.ensure_component_registry()
 
       # Unlinked, fixed-name Agent (mirrors test/mob/renderer_test.exs's
       # MockNIF) — reset rather than restarted, since a prior test in this

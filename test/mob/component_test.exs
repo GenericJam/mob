@@ -123,15 +123,13 @@ defmodule Mob.ComponentTest do
 
   describe "Mob.ComponentRegistry" do
     setup do
-      # Mob.ComponentRegistry registers under a fixed global name. Another
-      # async test file (component_server_test.exs) may have already started
-      # it — start_supervised/1 returns {:error, {:already_started, _}} in
-      # that case rather than raising, so tolerate either order instead of
-      # racing to be first (MOB-98: this is the shared-name race that fix
-      # already covers on that file's side; this file needed the same
-      # tolerance).
-      :ok = Mob.Test.ProcessHelpers.ensure_component_registry()
-      reg = Process.whereis(Mob.ComponentRegistry)
+      # Mob.ComponentRegistry registers under a fixed global name, and the run
+      # owns it (test_helper.exs starts it) rather than whichever async file
+      # got there first. Take the pid from the helper: a separate
+      # Process.whereis/1 here would be the same check-then-act this module
+      # exists to remove, and would hand back nil if anything stopped the
+      # registry in between.
+      {:ok, reg} = Mob.Test.ProcessHelpers.ensure_component_registry()
 
       {:ok, reg: reg}
     end

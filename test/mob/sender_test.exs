@@ -41,10 +41,7 @@ defmodule Mob.SenderTest do
     # flush queued, and it would record into the fresh recorder.
     Mob.Test.ProcessHelpers.stop_if_running(Sender)
 
-    case Process.whereis(RecordingNif) do
-      nil -> :ok
-      pid -> Agent.stop(pid)
-    end
+    Mob.Test.ProcessHelpers.stop_if_running(RecordingNif)
 
     RecordingNif.start()
     :ok

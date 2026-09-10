@@ -153,11 +153,7 @@ defmodule Mob.RouterHotPathTest do
       {:ok, router} = Mob.Router.start_root(HomeScreen, %{}, nif: StubNif)
 
       on_exit(fn ->
-        Mob.Test.ProcessHelpers.stop_pid(router)
-
-        for name <- services,
-            pid = Process.whereis(name),
-            do: Mob.Test.ProcessHelpers.stop_pid(pid)
+        Mob.Test.ProcessHelpers.stop_all([router | Enum.map(services, &Process.whereis/1)])
       end)
 
       %{rendering_router: router, rendering_screen: Mob.Screen.get_screen_pid(router)}

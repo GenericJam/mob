@@ -185,8 +185,18 @@ defmodule Mob.Nav.ScreenNavTest do
       {:ok, pid} = Mob.Screen.start_link(HomeScreen, %{})
       # Send an info message that would trigger pop — default handle_info is noop
       send(pid, :pop_test)
-      # `get_current_module/1` is a call from this same process, so :pop_test is
-      # already handled by the time it replies — no sleep needed.
+
+      # `pid` is the owner. :pop_test travels owner -> screen, and if the screen
+      # produced a nav action, screen -> owner. The test is not party to either
+      # hop, so pairwise ordering against a test -> owner call proves nothing:
+      # an earlier version of this test deleted the wait on that reasoning and
+      # stopped catching the regression it exists for.
+      #
+      # Syncing with the *screen* is a real barrier. Once its handle_info has
+      # returned, any {:nav_action, ...} it sent is already sitting in the
+      # owner's mailbox, so the call below queues behind it.
+      pid |> Mob.Screen.get_screen_pid() |> :sys.get_state()
+
       assert Mob.Screen.get_current_module(pid) == HomeScreen
       GenServer.stop(pid)
     end

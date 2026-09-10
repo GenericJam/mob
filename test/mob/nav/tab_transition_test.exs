@@ -115,10 +115,7 @@ defmodule Mob.Nav.TabTransitionTest do
     {:ok, router} = Mob.Router.start_root(HomeScreen, %{}, nif: RecordingNif)
 
     on_exit(fn ->
-      Mob.Test.ProcessHelpers.stop_pid(router)
-      Mob.Test.ProcessHelpers.stop_pid(registry)
-      Mob.Test.ProcessHelpers.stop_pid(components)
-      Mob.Test.ProcessHelpers.stop_pid(crash_control)
+      Mob.Test.ProcessHelpers.stop_all([router, registry, components, crash_control])
 
       for name <- [Mob.Sender, Mob.Listener], pid = Process.whereis(name) do
         Mob.Test.ProcessHelpers.stop_pid(pid)

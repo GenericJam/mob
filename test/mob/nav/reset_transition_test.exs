@@ -157,22 +157,20 @@ defmodule Mob.Nav.ResetTransitionTest do
     # directly. Mob.Router brings up the Sender and Listener under their global
     # names; leaving them behind is what produces cross-file ordering flakes.
     on_exit(fn ->
-      Mob.Test.ProcessHelpers.stop_pid(components)
+      # One list, not a sequence of raising calls: stop_pid/2 raises on timeout,
+      # so a wedged `components` would otherwise leave Sender and Listener alive
+      # under their global names — the exact cross-file leak this is preventing.
+      Mob.Test.ProcessHelpers.stop_all([
+        components,
+        Process.whereis(Mob.Sender),
+        Process.whereis(Mob.Listener)
+      ])
 
-      for name <- [Mob.Sender, Mob.Listener], pid = Process.whereis(name) do
-        Mob.Test.ProcessHelpers.stop_pid(pid)
-      end
-
-      case Process.whereis(RecordingNif) do
-        nil -> :ok
-        pid -> Agent.stop(pid)
-      end
+      Mob.Test.ProcessHelpers.stop_if_running(RecordingNif)
     end)
 
-    case Process.whereis(RecordingNif) do
-      nil -> RecordingNif.start()
-      pid -> Agent.stop(pid) && RecordingNif.start()
-    end
+    Mob.Test.ProcessHelpers.stop_if_running(RecordingNif)
+    RecordingNif.start()
 
     {:ok, registry} = Mob.Nav.Registry.start_link(DemoApp)
     on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(registry) end)
