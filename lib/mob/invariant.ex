@@ -18,9 +18,19 @@ defmodule Mob.Invariant do
   reporting nothing — it teaches the reader to ignore the channel.
 
   So the first sighting of a violation is held as a **candidate**, and it is
-  recorded only if the *same* violation is still there at the next sampling of
-  that point. Something that has survived a whole screen teardown, or a whole
-  periodic tick, is not a scheduling artefact.
+  recorded only when two things are true: the *same* violation is still there at
+  the next sampling of that point, **and** the candidate is at least 50ms old.
+
+  Both halves are needed, and the second was not obvious. Sampling points are
+  event-driven — the router stops screens in a tight loop, so during a
+  multi-screen reset "the next sample" can arrive in under a millisecond, and a
+  component still being reaped is seen twice. Surviving one teardown is
+  therefore *not* proof of anything; surviving 50ms is, because a real leak
+  persists indefinitely and does not notice the wait. With deferral alone,
+  healthy teardowns still produced about one confirmed violation in sixty.
+
+  The floor is `:mob, :invariant_min_candidate_age_us` for a device whose
+  teardown outlasts the default.
 
   The first version of this re-ran the check immediately instead, back to back
   in the same process. That was measured and it filtered nothing: the gap

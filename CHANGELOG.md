@@ -13,10 +13,16 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 ### Added
 - **Runtime invariant registry — `Mob.Invariant`** (MOB-156). Checks the
   framework can make about itself, with the rule that keeps them from becoming
-  noise: **a violation is re-checked immediately and only recorded if it
-  survives**. Every check reads live state from concurrently changing processes,
-  so a screen mid-teardown looks exactly like a leak; a check that disagrees with
-  itself two evaluations apart was watching a race.
+  noise: **a violation is recorded only if the same violation is still there at
+  the next sampling of that point, and is at least 50ms old**. Every check reads
+  live state from concurrently changing processes, so a screen mid-teardown looks
+  exactly like a leak.
+
+  Re-running the check immediately instead was measured filtering none of them —
+  two evaluations a microsecond apart cannot disagree — and reported a confirmed
+  `:critical` on 60 of 60 healthy teardowns. Deferring to the next sample, with
+  an age floor, gives 0 of 60 while still catching an injected regression in the
+  reaping path it guards.
 
   `register/2` takes a sampling point (`:on_screen_stop`, `:periodic`,
   `:after_committed_frame`), a severity and a check function. A check that raises
