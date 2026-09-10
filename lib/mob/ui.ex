@@ -28,8 +28,8 @@ defmodule Mob.UI do
     * `:text` — the string to display (required)
     * `:text_color` — color value passed to `set_text_color/2` in the NIF
     * `:text_size` — font size in sp passed to `set_text_size/2` in the NIF
-    * `:max_lines` — positive integer cap on rendered lines; overflow is
-      truncated with an ellipsis. Omit to wrap without limit.
+    * `:max_lines` — integer from 1 through 2,147,483,647 that caps rendered
+      lines; overflow is truncated with an ellipsis. Omit to wrap without limit.
 
   ## Examples
 

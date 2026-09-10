@@ -92,6 +92,11 @@ defmodule Mob.SigilTest do
       assert node.props.text_size == :xl
     end
 
+    test "retains max_lines as an integer" do
+      node = ~MOB(<Text text="hello" max_lines={2} />)
+      assert node.props.max_lines == 2
+    end
+
     test "evaluates tuple expression for on_tap" do
       handler = {self(), :ok}
       node = ~MOB(<Button text="OK" on_tap={handler} />)

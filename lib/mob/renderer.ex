@@ -332,7 +332,7 @@ defmodule Mob.Renderer do
 
     %{
       "type" => Atom.to_string(type),
-      "props" => prepare_props(with_font_default, nif, platform, ctx),
+      "props" => prepare_props(type, with_font_default, nif, platform, ctx),
       "children" => Enum.map(children, &prepare(&1, nif, platform, ctx))
     }
   end
@@ -373,7 +373,7 @@ defmodule Mob.Renderer do
   defp inject_font_default(props, %{fonts: %{default: _}}), do: Map.put(props, :font, :default)
   defp inject_font_default(props, _ctx), do: props
 
-  defp prepare_props(props, nif, platform, ctx) do
+  defp prepare_props(type, props, nif, platform, ctx) do
     # 1. Merge any %Mob.Style{} under the :style key (inline props win)
     {style, base} = Map.pop(props, :style)
 
@@ -593,17 +593,16 @@ defmodule Mob.Renderer do
       {:id, value} when is_number(value) ->
         [{"id", to_string(value)}]
 
-      # `nil` is dropped (a JSON null reaches iOS as NSNull); anything else that
-      # is not a positive integer raises here, the one point every construction
-      # path passes through. See decisions/2026-09-07-max-lines-is-a-native-prop.md.
-      {:max_lines, nil} ->
+      {:max_lines, nil} when type == :text ->
         []
 
-      {:max_lines, lines} when is_integer(lines) and lines > 0 ->
+      {:max_lines, lines}
+      when type == :text and is_integer(lines) and lines > 0 and lines <= 2_147_483_647 ->
         [{"max_lines", lines}]
 
-      {:max_lines, other} ->
-        raise ArgumentError, "max_lines must be a positive integer, got: #{inspect(other)}"
+      {:max_lines, other} when type == :text ->
+        raise ArgumentError,
+              "max_lines must be an integer from 1 through 2147483647, got: #{inspect(other)}"
 
       {key, value} ->
         [{Atom.to_string(key), resolve_token(key, value, ctx)}]

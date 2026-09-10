@@ -15,19 +15,22 @@ BEAM never sees it.
 
 ## Decision
 
-`max_lines: pos_integer()` on `:text`. The renderer forwards it; each platform
-caps with its own primitive and ellipsises the tail. Three rules:
+`max_lines` on `:text` accepts integers from 1 through 2,147,483,647. The
+renderer forwards it; each platform caps with its own primitive and ellipsises
+the tail. Three rules:
 
 - **Unset means unchanged.** iOS keeps `maxLines == 0` as "no limit" and
   applies `.lineLimit` only above zero; Android maps absence to
   `Int.MAX_VALUE` and `TextOverflow.Clip`, which are Compose's own defaults.
   No existing tree renders differently.
 - **`nil` is dropped, not sent.** `max_lines: if(compact?, do: 1)` is the
-  natural way to write a conditional prop, and a JSON `null` reaches iOS as
-  `NSNull` — non-nil, and it does not respond to `integerValue`. The renderer
-  drops it so the wire stays clean, and the iOS reader is NSNumber-guarded
-  regardless.
-- **Anything else raises in the renderer.** It is the one point every
+  natural way to write a conditional prop. This renderer's JSON encoder would
+  otherwise serialize the atom as the string `"nil"`. The iOS reader also
+  accepts only `NSNumber`, so explicit JSON nulls and other unexpected values
+  cannot be sent `integerValue`.
+- **Anything else raises in the renderer.** The upper bound is Android's
+  `Int.MAX_VALUE`; keeping the same range avoids Android narrowing a larger
+  JSON integer to a different value. The renderer is the one point every
   construction path (map literal, `Mob.UI.text/1`, `~MOB`) passes through, and
   each platform would otherwise coerce a bad value into a different limit
   (Compose rejects `maxLines <= 0` outright).

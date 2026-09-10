@@ -1436,8 +1436,16 @@ defmodule Mob.RendererTest do
   end
 
   describe "max_lines" do
-    # No pass-through test: a positive integer already reached the wire via the
-    # generic fallback before this clause existed, so it could not fail on revert.
+    test "a positive integer is retained on text" do
+      Renderer.render(
+        %{type: :text, props: %{text: "hi", max_lines: 2_147_483_647}, children: []},
+        :ios,
+        MockNIF
+      )
+
+      assert set_root_json()["props"]["max_lines"] == 2_147_483_647
+    end
+
     test "nil is dropped rather than sent as a JSON null" do
       Renderer.render(
         %{type: :text, props: %{text: "hi", max_lines: nil}, children: []},
@@ -1448,15 +1456,31 @@ defmodule Mob.RendererTest do
       refute Map.has_key?(set_root_json()["props"], "max_lines")
     end
 
-    test "zero, a negative, a float and a string raise during render" do
-      for bad <- [0, -1, 1.0, "1"] do
-        assert_raise ArgumentError, ~r/max_lines must be a positive integer/, fn ->
-          Renderer.render(
-            %{type: :text, props: %{text: "hi", max_lines: bad}, children: []},
-            :ios,
-            MockNIF
-          )
-        end
+    test "values outside the cross-platform integer range raise during render" do
+      for bad <- [0, -1, 1.0, "1", 2_147_483_648] do
+        assert_raise ArgumentError,
+                     ~r/max_lines must be an integer from 1 through 2147483647/,
+                     fn ->
+                       Renderer.render(
+                         %{type: :text, props: %{text: "hi", max_lines: bad}, children: []},
+                         :ios,
+                         MockNIF
+                       )
+                     end
+      end
+    end
+
+    test "native views retain opaque props named max_lines" do
+      for value <- ["auto", nil] do
+        Renderer.render(
+          Mob.UI.native_view(MyApp.FakeComponent, max_lines: value),
+          :ios,
+          MockNIF
+        )
+
+        props = set_root_json()["props"]
+        assert Map.has_key?(props, "max_lines")
+        assert props["max_lines"] == if(is_nil(value), do: "nil", else: value)
       end
     end
   end
