@@ -81,3 +81,26 @@ fix on its own; something has to cause the paint.
   version of it asserted only the boot-time value and passed with the fix
   reverted, because `init` never marked its own reading confirmed either way.
   Checked by reverting: treating `:no_window` as confirmed fails it.
+
+## Verified on device
+
+An app generated from the paired `mob_new` branch, built native against this
+branch (both `mob.exs`'s `mob_dir` and `mix.exs`'s dep pointed at the same
+checkout, so the two halves could not diverge), deployed to a simulator and
+inspected over dist:
+
+- `:mob_screen` resolves to the router — the registered name
+  `mob_notify_window_connected()` looks up via `enif_whereis_pid`, so the native
+  sender has a real target.
+- The screen holds **real** insets, `%{top: 20.0, bottom: 25.0, left: 0.0,
+  right: 0.0}`, with `__mob__.safe_area_confirmed == true`. Not the zeroed
+  placeholder, on a build that boots from `didFinishLaunchingWithOptions:`.
+- Sending `{:mob_window, :connected}` — the exact term the native function
+  sends — leaves the app alive and still on its screen, so the new handler is
+  reached and does not disturb a screen that is already correct.
+
+**Not verified:** a launch that genuinely paints before the window — a real
+prewarm or background launch. Forcing one needs a background mode and a real
+trigger. The unit tests cover the state machine for that case; the device check
+covers the ordinary path and the native plumbing.
+
