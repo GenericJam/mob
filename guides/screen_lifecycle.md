@@ -202,10 +202,15 @@ assigns.safe_area
 ```
 
 On iOS the insets are read from the active window. If the BEAM starts before
-that window exists — a background launch connects no window scene, and an
-iOS 15+ prewarmed launch runs long before the user taps the icon — the assign
-holds zeros and is refreshed on the next paint, until the platform gives a real
-answer. It is never missing, so `assigns.safe_area` is always safe to read.
+that window exists — a background launch connects no window scene at launch, and
+an iOS 15+ prewarmed launch runs long before the user taps the icon — the assign
+holds zeros until the platform can answer, and the window connecting triggers a
+re-read and a repaint.
+
+On device the assign is always present, so `assigns.safe_area` is safe to read
+directly. Under `Mob.ScreenCase` it is not: `mount_screen/3` builds a socket
+without it, so a test that renders a screen reading `assigns.safe_area` should
+assign one in `mount/3` or read it with `assigns[:safe_area]`.
 
 Use it to avoid content being obscured by the notch, home indicator, or status bar:
 

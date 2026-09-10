@@ -38,4 +38,10 @@ void mob_set_launch_notification_json(const char *json);
 // already running (warm).
 void mob_handle_opened_url(const char *url_cstr);
 
+// Call from SceneDelegate scene:willConnectToSession: after the window is
+// created. Tells the BEAM the window now exists so a screen that painted
+// earlier — a background or prewarmed launch — can re-read its safe-area
+// insets and repaint. Safe to call when no BEAM is running: it is a no-op.
+void mob_notify_window_connected(void);
+
 #endif // MOB_BEAM_H

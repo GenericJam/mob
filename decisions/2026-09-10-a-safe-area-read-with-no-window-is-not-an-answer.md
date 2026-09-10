@@ -25,8 +25,9 @@ earlier, and two ordinary things do:
 * an **iOS 15+ prewarmed launch** runs `application:didFinishLaunchingWithOptions:`
   well before the user taps the icon, and prewarming is routine.
 
-A screen that painted in that window would render under the notch and home
-indicator until it was replaced. UIKit usually wins the race, which is what makes
+A screen that painted in that window would be under-padded until it was
+replaced — at the bottom and sides specifically, since `MobRootView` already
+ignores the container's safe area on those edges while respecting the top. UIKit usually wins the race, which is what makes
 it the bad kind of bug: rare, silent, and permanent for the screen it hits.
 
 This was found by the pre-commit review of mob_new #63, whose first version
@@ -45,14 +46,29 @@ than wrong insets. It holds zeros, and the socket records that the reading is
 unconfirmed. `ensure_safe_area/3` asks again on each paint until the platform
 gives a real answer, then stops.
 
-Stopping matters: each read is a hop to the main thread, and a real answer does
-not change under a screen. Re-reading every paint would trade a rare layout bug
-for a permanent cost on every frame.
+Stopping matters: each read is a hop to the main thread, and re-reading every
+paint would trade a rare layout bug for a permanent per-frame cost.
+
+**But a confirmed answer is not permanent, and an earlier draft of this record
+claimed it was.** Insets change under a screen — rotation, a resized scene —
+which `decisions/2026-08-28-multi-stack-nav-state.md` had already recorded. So
+the confirmation is *invalidated* rather than final: `mob_notify_window_connected()`
+sends `{:mob_window, :connected}` from `scene:willConnectToSession:`, and
+`Mob.Screen.Server` clears the flag and repaints.
+
+That hook is also what makes the placeholder case actually work. `ensure_safe_area/3`
+is only reached from a paint, and **nothing repaints when a scene connects** —
+so on a prewarmed launch the screen would paint its placeholder, then sit until
+the user interacted, showing a wrong first frame. Re-reading on paint is not a
+fix on its own; something has to cause the paint.
 
 ## Consequences
 
-- Android is untouched: it does not consult a window, and its branch still
-  assigns zeros unconditionally.
+- Android does not consult a window, so it never answers `:no_window` — but its
+  reply now goes through the same `case`, which has a catch-all: Android answers
+  `:error` when it cannot attach to the JVM, and without that clause a screen
+  would die in `init/1` with a `CaseClauseError` instead of degrading to zeros
+  and retrying.
 - The contract of `mob_nif:safe_area/0` changed from "always a 4-tuple" to "a
   4-tuple or `:no_window`". Both callers are in `Mob.Screen.Server`. Test stubs
   returning a 4-tuple are unaffected.

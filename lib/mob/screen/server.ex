@@ -150,7 +150,13 @@ defmodule Mob.Screen.Server do
     socket =
       module
       |> Mob.Socket.new(platform: platform)
-      |> Mob.Socket.assign(:safe_area, initial_safe_area(render_mode, nif))
+      |> then(fn socket ->
+        {insets, status} = initial_safe_area(render_mode, nif)
+
+        socket
+        |> Mob.Socket.assign(:safe_area, insets)
+        |> Mob.Socket.put_mob(:safe_area_confirmed, status == :confirmed)
+      end)
 
     case module.mount(Keyword.get(opts, :params, %{}), %{}, socket) do
       {:ok, mounted} ->
@@ -229,6 +235,22 @@ defmodule Mob.Screen.Server do
   # A component's state changed — repaint so the native view gets fresh props.
   def handle_info({:component_changed, _id, _module}, state) do
     {:noreply, %{state | socket: paint(state, :none)}}
+  end
+
+  # The window now exists, so the insets this screen is holding may be a
+  # placeholder taken before it did. Drop the confirmation and repaint; the
+  # paint re-reads. Intercepted here rather than forwarded to the user's
+  # handle_info, which has no reason to know about windows.
+  #
+  # Without this the correction had no trigger: `ensure_safe_area/3` is only
+  # reached from a paint, and nothing repaints when a scene connects. A screen
+  # that painted during a prewarmed launch would show its placeholder as the
+  # user's first visible frame and keep it until they interacted.
+  @impl GenServer
+  def handle_info({:mob_window, :connected}, state) do
+    socket = Mob.Socket.put_mob(state.socket, :safe_area_confirmed, false)
+    state = %{state | socket: socket}
+    {:noreply, %{state | socket: do_paint(state, :none, :async, nil, false)}}
   end
 
   # Periodic state sync — intercepted before the user's handle_info so the
@@ -459,13 +481,24 @@ defmodule Mob.Screen.Server do
   # icon. `ensure_safe_area/3` used to stop asking as soon as the key existed,
   # so a placeholder taken then left the root screen laid out under the notch
   # and home indicator for the rest of its life.
-  defp initial_safe_area(:render, nif), do: read_safe_area(nif) |> elem(0)
-  defp initial_safe_area(_mode, _nif), do: @zero_insets
+  defp initial_safe_area(:render, nif), do: read_safe_area(nif)
+  defp initial_safe_area(_mode, _nif), do: {@zero_insets, :placeholder}
 
   defp read_safe_area(nif) do
     case nif.safe_area() do
-      {t, r, b, l} -> {%{top: t, right: r, bottom: b, left: l}, :confirmed}
-      :no_window -> {@zero_insets, :placeholder}
+      {t, r, b, l} ->
+        {%{top: t, right: r, bottom: b, left: l}, :confirmed}
+
+      :no_window ->
+        {@zero_insets, :placeholder}
+
+      other ->
+        # Android answers `:error` when it cannot attach to the JVM, and a
+        # future platform may answer something else again. Treating an
+        # unrecognised reply as a placeholder means a screen degrades to zeros
+        # and retries, rather than dying in init/1 with a CaseClauseError.
+        Logger.warning("[mob] unexpected safe_area/0 result: #{inspect(other)}")
+        {@zero_insets, :placeholder}
     end
   end
 
@@ -474,8 +507,10 @@ defmodule Mob.Screen.Server do
       platform != :ios ->
         Mob.Socket.assign_new(socket, :safe_area, fn -> @zero_insets end)
 
-      # Confirmed once, kept forever: a real reading does not change under a
-      # screen, and re-reading costs a hop to the main thread every paint.
+      # Confirmed readings are not re-read on every paint — each read is a hop
+      # to the main thread. They are not permanent either: insets DO change
+      # under a screen (rotation, a resized scene), so `{:mob_window,
+      # :connected}` clears this flag and the next paint asks again.
       socket.__mob__[:safe_area_confirmed] ->
         socket
 
@@ -484,12 +519,9 @@ defmodule Mob.Screen.Server do
 
         socket
         |> Mob.Socket.assign(:safe_area, insets)
-        |> put_mob(:safe_area_confirmed, status == :confirmed)
+        |> Mob.Socket.put_mob(:safe_area_confirmed, status == :confirmed)
     end
   end
-
-  defp put_mob(socket, key, value),
-    do: %{socket | __mob__: Map.put(socket.__mob__, key, value)}
 
   defp maybe_load_state(module, socket) do
     if module.__mob_persist__() do

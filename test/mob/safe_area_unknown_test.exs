@@ -39,17 +39,24 @@ defmodule Mob.SafeAreaUnknownTest do
 
     # `:no_window` for the first `n` reads, then real insets — a window that
     # appears after the app has already started painting.
-    def start(n), do: Agent.start_link(fn -> {n, 0} end, name: __MODULE__)
+    def start(n), do: Agent.start_link(fn -> {n, 0, {47.0, 0.0, 34.0, 0.0}} end, name: __MODULE__)
+
+    def set_insets(insets),
+      do: Agent.update(__MODULE__, fn {n, reads, _} -> {n, reads, insets} end)
 
     def safe_area do
       Agent.get_and_update(__MODULE__, fn
-        {0, reads} -> {{47.0, 0.0, 34.0, 0.0}, {0, reads + 1}}
-        {n, reads} -> {:no_window, {n - 1, reads + 1}}
+        {0, reads, insets} -> {insets, {0, reads + 1, insets}}
+        {n, reads, insets} -> {:no_window, {n - 1, reads + 1, insets}}
       end)
     end
 
-    def reads, do: Agent.get(__MODULE__, fn {_n, r} -> r end)
+    def reads, do: Agent.get(__MODULE__, fn {_n, r, _} -> r end)
     def platform, do: :ios
+    # Enumerated like every other stub in this suite. A catch-all returning :ok
+    # makes a typo'd NIF name silently succeed, and produced three
+    # "launch notification could not be decoded" errors per run.
+    def take_launch_notification, do: :none
     def unquote(:"$handle_undefined_function")(_f, _a), do: :ok
   end
 
@@ -64,12 +71,18 @@ defmodule Mob.SafeAreaUnknownTest do
     pid
   end
 
-  defp repaint(pid) do
-    send(pid, :repaint)
-    # A call to the router is not an ordering barrier for a message it forwards
-    # to the screen, so sync with the screen itself.
+  defp settle(pid) do
+    # Both halves are load-bearing. `get_screen_pid/1` is a call to the router,
+    # so the router has necessarily forwarded the message above before it
+    # replies; only then does syncing with the screen queue behind that
+    # forwarded message. Drop either and this is racy.
     pid |> Mob.Router.get_screen_pid() |> :sys.get_state()
     Mob.Router.get_socket(pid)
+  end
+
+  defp repaint(pid) do
+    send(pid, :repaint)
+    settle(pid)
   end
 
   test "a screen that painted before the window picks up the real insets later" do
@@ -89,6 +102,52 @@ defmodule Mob.SafeAreaUnknownTest do
 
     assert Mob.Router.get_socket(pid).assigns.safe_area ==
              %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+  end
+
+  test "a window connecting corrects a screen that painted before it existed" do
+    # The case the whole change exists for, and the one a repaint-driven fix
+    # does not cover on its own: on a prewarmed launch the BEAM boots, paints
+    # its placeholder, and then nothing happens until the user interacts. If
+    # the window connecting does not itself trigger the correction, the user's
+    # first visible frame is wrong.
+    {:ok, _} = Nif.start(2)
+    pid = start_screen()
+
+    assert Mob.Router.get_socket(pid).assigns.safe_area == %{
+             top: 0.0,
+             right: 0.0,
+             bottom: 0.0,
+             left: 0.0
+           }
+
+    # Exactly what mob_notify_window_connected() sends from
+    # scene:willConnectToSession:. No user interaction, no other repaint.
+    send(pid, {:mob_window, :connected})
+
+    assert settle(pid).assigns.safe_area == %{top: 47.0, right: 0.0, bottom: 34.0, left: 0.0},
+           "a window connecting must correct a placeholder reading by itself"
+  end
+
+  test "a window connecting re-reads insets even after they were confirmed" do
+    # The half a placeholder cannot exercise. Once a reading is confirmed the
+    # paint path deliberately stops asking, so a screen holding real-but-stale
+    # insets — the device rotated, the scene was resized, a new window
+    # connected — would keep them. `{:mob_window, :connected}` is what clears
+    # the confirmation; without it this screen never sees the new values.
+    {:ok, _} = Nif.start(0)
+    pid = start_screen()
+
+    assert Mob.Router.get_socket(pid).assigns.safe_area.top == 47.0
+
+    Nif.set_insets({0.0, 47.0, 21.0, 47.0})
+
+    # A plain repaint must NOT pick it up — that is what "confirmed" means.
+    assert repaint(pid).assigns.safe_area.top == 47.0
+
+    send(pid, {:mob_window, :connected})
+
+    assert settle(pid).assigns.safe_area == %{top: 0.0, right: 47.0, bottom: 21.0, left: 47.0},
+           "a confirmed reading must be invalidated when the window changes"
   end
 
   test "a confirmed reading is not re-read on later paints" do

@@ -779,6 +779,31 @@ void mob_handle_back(void) {
     enif_free_env(env);
 }
 
+// ── Window-connected sender ───────────────────────────────────────────────────
+// Called from SceneDelegate scene:willConnectToSession: once the window exists.
+//
+// Safe-area insets are read from the active window. The BEAM can reach its
+// first paint before that window exists — a background launch connects no
+// window scene at launch, and an iOS 15+ prewarmed launch runs
+// didFinishLaunchingWithOptions: long before the user taps the icon — and there
+// was nothing to tell it when the situation changed. Without this a screen
+// keeps its placeholder insets until something incidental repaints it, which on
+// a prewarmed launch means the user's first visible frame is wrong.
+//
+// Sending to :mob_screen reaches the router, whose catch-all forwards to the
+// current screen; Mob.Screen.Server invalidates its cached insets and repaints.
+
+void mob_notify_window_connected(void) {
+    ErlNifEnv *env = enif_alloc_env();
+    ErlNifPid pid;
+    if (enif_whereis_pid(env, enif_make_atom(env, "mob_screen"), &pid)) {
+        ERL_NIF_TERM msg = enif_make_tuple2(env, enif_make_atom(env, "mob_window"),
+                                            enif_make_atom(env, "connected"));
+        enif_send(NULL, &pid, env, msg);
+    }
+    enif_free_env(env);
+}
+
 // ── Change senders ────────────────────────────────────────────────────────────
 // Called from MobNode onChange blocks when an input widget fires.
 
@@ -2401,9 +2426,11 @@ static ERL_NIF_TERM nif_device_keep_awake(ErlNifEnv *env, int argc, const ERL_NI
 // main thread hasn't reached an idle run-loop tick yet (observed during
 // scene-attachment on iPad, including the compatibility-mode window an
 // iPhone-only app runs in there), this blocks the BEAM boot thread forever —
-// the app never finishes launching. Bound the wait and fall back to zero
-// insets on timeout: a screen with wrong insets once is a far smaller bug
-// than an app that never boots.
+// the app never finishes launching. So the wait is bounded, and a timeout
+// returns `no_window` just as a genuine absence does: both mean "this is not an
+// answer", and the caller retries on a later paint instead of caching it. Never
+// blocking forever matters more than either — an app that never boots is a far
+// worse bug than a screen that pads wrongly for one frame.
 static ERL_NIF_TERM nif_safe_area(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     __block UIEdgeInsets insets = UIEdgeInsetsZero;
     __block BOOL had_window = NO;
