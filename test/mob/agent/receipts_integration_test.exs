@@ -132,6 +132,9 @@ defmodule Mob.Agent.ReceiptsIntegrationTest do
 
     assert Receipt.effect(receipt) == :unhandled
     assert Receipt.owner(receipt) == :event_routing
+
+    # No handler is named: there is no clause to send anyone to read.
+    assert receipt.handler == nil
     refute Receipt.reached?(receipt, :committed)
   end
 

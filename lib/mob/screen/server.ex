@@ -257,6 +257,12 @@ defmodule Mob.Screen.Server do
   end
 
   defp finish_event(socket, state, receipt, before_assigns, before_tree, started) do
+    # The handler's own assigns, captured before the paint. `do_paint/5` runs
+    # `ensure_safe_area/3`, which writes `:safe_area` the first time insets
+    # resolve and on rotation — reading assigns afterwards reported
+    # `:assigns_changed` for an inert handler and blamed `render/1` for a
+    # framework-written assign.
+    handler_assigns = socket.assigns
     # Read before `reply_after_callback/2` clears it. A handler that navigated
     # is the reason this screen does not paint, so without this the receipt
     # infers "nothing happened" from an absence the framework created on
@@ -270,7 +276,8 @@ defmodule Mob.Screen.Server do
     {:reply, reply, new_state} = reply_after_callback(socket, state)
 
     record_receipt(receipt, new_state, before_assigns, before_tree, started,
-      navigated: navigated?
+      navigated: navigated?,
+      after_assigns: handler_assigns
     )
 
     {:reply, reply, new_state}
@@ -297,7 +304,7 @@ defmodule Mob.Screen.Server do
     error = Keyword.get(opts, :error)
     navigated? = Keyword.get(opts, :navigated, false)
     observable? = state.render_mode == :render
-    after_assigns = state.socket.assigns
+    after_assigns = Keyword.get(opts, :after_assigns, state.socket.assigns)
     after_frame = Map.get(state.socket.__mob__, :last_frame)
 
     unmatched? = Mob.Agent.Receipt.unmatched_event?(error, state.module)
@@ -321,7 +328,7 @@ defmodule Mob.Screen.Server do
     %{
       receipt
       | stages: stages,
-        handler: {state.module, :handle_event, 3},
+        handler: if(unmatched?, do: nil, else: {state.module, :handle_event, 3}),
         after_frame_fingerprint: after_frame,
         error: summarize(error, Keyword.get(opts, :stacktrace, [])),
         elapsed_us: System.monotonic_time(:microsecond) - started

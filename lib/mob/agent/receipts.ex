@@ -3,10 +3,12 @@ defmodule Mob.Agent.Receipts do
   A bounded record of recent action receipts, and the telemetry bridge.
 
   Receipts are written on the path of every dispatched event, so this is
-  deliberately cheap: one ETS insert into a `:set`, plus a counter, plus an
-  eviction every `@keep` writes. No process is involved on the write path — a
-  GenServer here would serialise every event in the app through one mailbox,
-  which is the opposite of what a diagnostic should cost.
+  deliberately cheap: one ETS insert into a `:set`, one `:atomics.add_get/3`,
+  and an eviction check. **No process is involved on the write path** — a
+  GenServer in front of the table would serialise every event in the app
+  through one mailbox, which is the opposite of what a diagnostic should cost.
+  `Mob.Agent.Receipts.Owner` exists only to own the table so it outlives the
+  screens that write to it; nothing routes through it.
 
   ## Bounded, and honest about it
 
@@ -27,8 +29,11 @@ defmodule Mob.Agent.Receipts do
       [:mob, :action, :stop]
 
   with measurements `%{duration_us: ..., }` and metadata carrying the receipt.
-  Apps without it pay one `Code.ensure_loaded?/1` per action, cached by the code
-  server after the first call.
+  The check runs once, in `Mob.Agent.Receipts.Owner`, and the result is read
+  from `:persistent_term` thereafter. Doing it per action would be far worse
+  than it looks: a *negative* `Code.ensure_loaded?/1` is not cached, so every
+  event in every app would make a `gen_server` call into `:code_server` and scan
+  the code path.
   """
 
   @table :mob_agent_receipts
