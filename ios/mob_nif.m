@@ -7365,11 +7365,13 @@ static ERL_NIF_TERM nif_alert_show(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
               as = UIAlertActionStyleCancel;
           if ([style isEqualToString:@"destructive"])
               as = UIAlertActionStyleDestructive;
-          const char *act_c = [action UTF8String];
+          // Capture the NSString, not its UTF8String pointer. The block can
+          // outlive the temporary buffer; retaining the object and converting
+          // inside the handler keeps the bytes valid for synchronous delivery.
           [ac addAction:[UIAlertAction actionWithTitle:label
                                                  style:as
                                                handler:^(UIAlertAction *_) {
-                                                 mob_deliver_alert_action(act_c);
+                                                 mob_deliver_alert_action([action UTF8String]);
                                                }]];
       }
       UIViewController *vc = root_vc();
@@ -7414,11 +7416,10 @@ static ERL_NIF_TERM nif_action_sheet_show(ErlNifEnv *env, int argc, const ERL_NI
               as = UIAlertActionStyleCancel;
           if ([style isEqualToString:@"destructive"])
               as = UIAlertActionStyleDestructive;
-          const char *act_c = [action UTF8String];
           [ac addAction:[UIAlertAction actionWithTitle:label
                                                  style:as
                                                handler:^(UIAlertAction *_) {
-                                                 mob_deliver_alert_action(act_c);
+                                                 mob_deliver_alert_action([action UTF8String]);
                                                }]];
       }
       UIViewController *vc = root_vc();
