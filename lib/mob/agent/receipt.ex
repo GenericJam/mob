@@ -13,10 +13,10 @@ defmodule Mob.Agent.Receipt do
   A receipt replaces the window with a correlation id. One action, one id,
   followed from dispatch through to the committed frame.
 
-  ## The five stages
+  ## The stages
 
-  An action passes through five observable stages, and the *first* one it fails
-  to reach names the layer at fault. That is the whole point of recording them
+  An action passes through the stages below, and the *first* one it fails to
+  reach names the layer at fault. That is the whole point of recording them
   separately rather than reporting a boolean:
 
   | Stage | Reached when | If it stops here |
@@ -27,7 +27,7 @@ defmodule Mob.Agent.Receipt do
   | `:assigns_changed` | the socket's assigns differ | application code — the handler ran and decided nothing |
   | `:frame_changed` | `render/1` produced a different frame | the render function — it ignores the assigns that changed |
   | `:committed` | the frame was handed to the sender | the renderer or the bridge |
-  | `:navigated` | the handler asked for a navigation | — this screen does not paint; the destination does |
+  | `:navigation_requested` | the handler asked to navigate | `:unknown` — this screen cannot see whether the router honoured it |
 
   `:frame_changed` rather than `:tree_changed` because the fingerprint covers
   `{tree, Mob.Theme.current()}` — a handler that changes only the theme produces
@@ -57,12 +57,13 @@ defmodule Mob.Agent.Receipt do
 
   @type stage ::
           :dispatched
+          | :unobservable
           | :unhandled
           | :handled
           | :assigns_changed
           | :frame_changed
           | :committed
-          | :navigated
+          | :navigation_requested
 
   @typedoc """
   A crash, reduced to what is safe to keep.
@@ -80,7 +81,8 @@ defmodule Mob.Agent.Receipt do
           at: mfa() | nil,
           redaction: :applied
         }
-  @type owner :: :event_routing | :app_code | :render_function | :renderer | :none
+  @type owner ::
+          :event_routing | :app_code | :render_function | :renderer | :unknown | :none
 
   @type t :: %__MODULE__{
           action_id: String.t(),
@@ -132,8 +134,10 @@ defmodule Mob.Agent.Receipt do
   reason `:event_routing` and `:app_code` are separate owners. An event that
   reached the screen and matched nothing is a routing problem — a tag that no
   longer exists, a renamed event — and sending someone to read the handler body
-  wastes their time. `use Mob.Screen` supplies no catch-all, so this arrives as
-  a `FunctionClauseError` naming the function it failed to match.
+  wastes their time. A screen with its own `handle_event/3` clauses overrides
+  the catch-all `use Mob.Screen` injects, so an unmatched event arrives as a
+  `FunctionClauseError`; a screen with no clauses of its own raises
+  `Mob.Screen.UnhandledEventError` from that catch-all. Both are routing.
   """
   @spec unmatched_event?(term(), module()) :: boolean()
   def unmatched_event?({:error, %Mob.Screen.UnhandledEventError{}}, _screen), do: true
@@ -208,9 +212,14 @@ defmodule Mob.Agent.Receipt do
 
   def owner(%__MODULE__{stages: stages}) do
     cond do
-      # A handler that navigated did the most visible thing an action can do.
-      # The destination screen paints; this one deliberately does not.
-      :navigated in stages -> :none
+      :unobservable in stages -> :unknown
+      # The one stage this screen cannot verify: it records that the handler
+      # ASKED to navigate, and the router decides whether the ask does anything.
+      # It routinely refuses — a pop at the root, a push to a module that fails
+      # to resolve, an unrecognised action — and repaints this screen instead.
+      # Reporting :none there would be a false "nothing to answer for" on Back,
+      # which is the same lie the process-wide counter tells.
+      :navigation_requested in stages -> :unknown
       :frame_changed in stages and :committed in stages -> :none
       :frame_changed in stages -> :renderer
       :assigns_changed in stages -> :render_function
@@ -223,16 +232,19 @@ defmodule Mob.Agent.Receipt do
   The verdict an agent asked "did my action do anything" wants.
 
   * `:verified` — a changed frame was committed.
-  * `:navigated` — the handler asked for a navigation. The most visible thing an
-    action can do, and it is reported separately because this screen
-    deliberately does not paint: the owner applies the action and the
-    destination paints. Reporting it from the absence of a paint would call the
-    commonest successful action in a mobile app "inert", which is the same lie
-    the process-wide counter tells, in the other direction.
+  * `:navigation_requested` — the handler asked to navigate. Reported separately
+    because this screen deliberately does not paint for it: the owner applies
+    the action and the destination paints, so deriving a verdict from the
+    absence of a paint would call a screen push "inert". **It is a request, not
+    an outcome** — the router may refuse it (a pop at the root, a push that
+    fails to resolve) and simply repaint this screen. The receipt says what was
+    asked; confirming what happened needs the router, which is not wired yet.
   * `:no_visible_change` — the handler ran and the frame came out identical.
   * `:not_committed` — a new frame was built and never handed to the sender.
   * `:inert` — the handler ran and changed nothing.
   * `:unhandled` — no clause matched the event.
+  * `:unobservable` — the screen is in `:no_render` mode, so no frame stage can
+    be reached and no conclusion about the view is available.
   * `:error` — the handler raised.
 
   `:no_visible_change` is deliberately not an error. A handler that toggles a
@@ -242,11 +254,12 @@ defmodule Mob.Agent.Receipt do
   """
   @spec effect(t()) ::
           :verified
-          | :navigated
+          | :navigation_requested
           | :no_visible_change
           | :not_committed
           | :inert
           | :unhandled
+          | :unobservable
           | :error
   def effect(%__MODULE__{error: error, stages: stages}) when not is_nil(error) do
     if :unhandled in stages, do: :unhandled, else: :error
@@ -254,7 +267,11 @@ defmodule Mob.Agent.Receipt do
 
   def effect(%__MODULE__{stages: stages}) do
     cond do
-      :navigated in stages -> :navigated
+      # No paint happens in :no_render mode, so no frame stage can ever be
+      # reached. Falling through to :no_visible_change would blame a render
+      # function that is not running.
+      :unobservable in stages -> :unobservable
+      :navigation_requested in stages -> :navigation_requested
       :frame_changed in stages and :committed in stages -> :verified
       :frame_changed in stages -> :not_committed
       :assigns_changed in stages -> :no_visible_change

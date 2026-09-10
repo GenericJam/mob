@@ -12,9 +12,9 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ### Added
 - **Causal receipts — `Mob.Agent.Receipt`** (MOB-155). Every dispatched event now
-  gets an `action_id`, and the screen records which of five stages the action
-  reached: dispatched, handled (or unhandled), assigns changed, navigated, frame
-  changed, committed. The first stage it fails to reach names the layer answerable for it,
+  gets an `action_id`, and the screen records which stages the action
+  reached: dispatched, handled (or unhandled), assigns changed, navigation
+  requested, frame changed, committed. The first stage it fails to reach names the layer answerable for it,
   so "the tap did nothing" becomes "the handler ran and changed `:count`, and the
   tree did not change" — which points at a `render/1` that never reads `:count`.
 
@@ -22,12 +22,15 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   callback, and every later stage is a before/after comparison the screen makes
   itself, so a handler cannot claim an effect it did not have.
 
-  A navigation is its own verdict: this screen deliberately does not paint when
-  the handler navigates, so deriving the answer from the absence of a paint would
-  report a screen push — the commonest successful action in a mobile app — as
-  "the handler did nothing".
+  A navigation is its own verdict, and explicitly a *request*: this screen does
+  not paint when the handler navigates, so deriving the answer from the absence
+  of a paint would report a screen push as "the handler did nothing" — but the
+  router may also refuse the request (a pop at the root), which this screen
+  cannot see, so the owner is `:unknown` rather than "nothing to answer for".
 
-  **Receipts carry no application state.** A crash is reduced to its kind,
+  **Receipts carry no state read out of assigns.** They do carry the event tag,
+  which is the action's identity and whatever the render tree put in `on_tap`.
+  A crash is reduced to its kind,
   exception module and top stack frame; the message is dropped unless the
   framework built it, because `KeyError` and friends embed the term that failed
   and would otherwise carry the whole assigns map into telemetry.

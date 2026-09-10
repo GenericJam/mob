@@ -75,11 +75,7 @@ defmodule Mob.Agent.ReceiptsIntegrationTest do
       # `{:mob_route, ...}` only when a listener is running, so Mob.RendererTest
       # fails asserting on the unwrapped tag it registered — naming a file that
       # has never heard of this one.
-      Mob.Test.ProcessHelpers.stop_all([
-        pid,
-        Process.whereis(Mob.Sender),
-        Process.whereis(Mob.Listener)
-      ])
+      Mob.Test.ProcessHelpers.stop_root(pid)
     end)
 
     %{pid: pid}
@@ -127,7 +123,8 @@ defmodule Mob.Agent.ReceiptsIntegrationTest do
   end
 
   test "an unmatched event is unhandled, not inert", %{pid: pid} do
-    # `use Mob.Screen` supplies no catch-all, so an unknown event arrives as a
+    # This screen defines its own handle_event/3 clauses, which override the
+    # catch-all `use Mob.Screen` injects — so an unmatched event arrives as a
     # FunctionClauseError. Lumping that in with "the handler crashed" would send
     # someone to read a handler body that was never entered; it is a routing
     # problem — a stale tag, a renamed event.
@@ -186,9 +183,12 @@ defmodule Mob.Agent.ReceiptsIntegrationTest do
     # nothing". That is the same lie as the process-wide counter, inverted.
     receipt = dispatch_and_fetch(pid, "go")
 
-    assert Receipt.effect(receipt) == :navigated
-    assert Receipt.owner(receipt) == :none
-    assert Receipt.reached?(receipt, :navigated)
+    assert Receipt.effect(receipt) == :navigation_requested
+
+    # :unknown, not :none — the router may refuse the request (a pop at the
+    # root, a push that fails to resolve) and this screen cannot see that.
+    assert Receipt.owner(receipt) == :unknown
+    assert Receipt.reached?(receipt, :navigation_requested)
     refute Receipt.effect(receipt) == :inert
   end
 
@@ -204,11 +204,7 @@ defmodule Mob.Agent.ReceiptsIntegrationTest do
     {:ok, pid} = Mob.Router.start_root(NoHandlers, %{}, nif: Nif)
 
     on_exit(fn ->
-      Mob.Test.ProcessHelpers.stop_all([
-        pid,
-        Process.whereis(Mob.Sender),
-        Process.whereis(Mob.Listener)
-      ])
+      Mob.Test.ProcessHelpers.stop_root(pid)
     end)
 
     Mob.Screen.dispatch(pid, "anything", %{})
@@ -231,6 +227,23 @@ defmodule Mob.Agent.ReceiptsIntegrationTest do
 
     refute inspect(receipt) =~ "hunter2",
            "the receipt carried a value out of assigns"
+  end
+
+  test "a :no_render screen reports unobservable, not a false render_function owner" do
+    # `do_paint/5`'s :no_render clause never touches :last_frame, so no frame
+    # stage can be reached. Falling through to :no_visible_change blames a
+    # render function that is not running — and render_mode DEFAULTS to
+    # :no_render, so every screen started outside Mob.Router.start_root/3 would
+    # report it for every action.
+    {:ok, pid} = Mob.Screen.start_link(Screen, %{}, nif: Nif)
+    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
+
+    Mob.Screen.dispatch(pid, "increment", %{})
+    [receipt] = Receipts.recent(1)
+
+    assert Receipt.effect(receipt) == :unobservable
+    assert Receipt.owner(receipt) == :unknown
+    assert Receipt.reached?(receipt, :assigns_changed)
   end
 
   test "a receipt is retrievable by its id", %{pid: pid} do

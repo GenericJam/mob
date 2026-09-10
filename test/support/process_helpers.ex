@@ -108,6 +108,26 @@ defmodule Mob.Test.ProcessHelpers do
   end
 
   @doc """
+  Stop a router started with `Mob.Router.start_root/3`, and the globals it
+  brought up with it.
+
+  `start_root/3` registers `Mob.Sender` and `Mob.Listener` under global names,
+  and leaving the Listener behind silently changes what the renderer does in
+  every file that runs afterwards: `Mob.Listener.handler/1` wraps a tap tag into
+  `{:mob_route, ...}` only when a listener is running, so `Mob.RendererTest`
+  fails asserting on the unwrapped tag it registered — naming a file that has
+  never heard of the one that leaked.
+
+  That is not hypothetical. Before this helper existed the leak was reproducible
+  on master at roughly 1 run in 4, from a single module that stopped only its
+  router pid.
+  """
+  @spec stop_root(pid(), timeout()) :: :ok
+  def stop_root(router, timeout \\ 5_000) do
+    stop_all([router, Process.whereis(Mob.Sender), Process.whereis(Mob.Listener)], timeout)
+  end
+
+  @doc """
   Stop every pid in `pids`, then raise if any of them refused.
 
   `stop_pid/2` raises on timeout, which is correct on its own and wrong in the

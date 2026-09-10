@@ -261,6 +261,10 @@ defmodule Mob.Screen.Server do
     # is the reason this screen does not paint, so without this the receipt
     # infers "nothing happened" from an absence the framework created on
     # purpose — and calls a screen push `:inert`.
+    #
+    # This records the *request*. Whether the router honours it is not
+    # observable from here, which is why the stage and its verdict are named
+    # for the ask rather than the outcome.
     navigated? = not is_nil(socket.__mob__.nav_action)
 
     {:reply, reply, new_state} = reply_after_callback(socket, state)
@@ -301,9 +305,10 @@ defmodule Mob.Screen.Server do
     stages =
       [:dispatched]
       |> add_if(unmatched?, :unhandled)
+      |> add_if(is_nil(error) and not observable?, :unobservable)
       |> add_if(is_nil(error), :handled)
       |> add_if(is_nil(error) and after_assigns !== before_assigns, :assigns_changed)
-      |> add_if(is_nil(error) and navigated?, :navigated)
+      |> add_if(is_nil(error) and navigated?, :navigation_requested)
       # A frame is only observable in :render mode — `do_paint/5`'s :no_render
       # clause never touches :last_frame, so comparing it there would report
       # "the render function ignored your assigns" for every action.

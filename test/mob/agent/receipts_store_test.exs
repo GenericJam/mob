@@ -58,6 +58,43 @@ defmodule Mob.Agent.ReceiptsStoreTest do
     end
   end
 
+  describe "table ownership" do
+    test "receipts survive the death of the process that recorded the first one" do
+      # An ETS table dies with its creator. Creating it lazily from `record/1`
+      # made the owner whichever screen dispatched the first event of the app's
+      # life, so an ordinary `pop` destroyed every held receipt — at zero, not
+      # at 256, with `dropped/0` still reporting 0. Worst case is the headline
+      # case: the screen whose handler raises owns the table, and the crash
+      # receipt is destroyed microseconds later by the same crash.
+      # The spawned process must be the table's *creator*, which is the real
+      # situation: whichever screen dispatches the first event of the app's
+      # life. Tear down what `setup` built so it is.
+      if pid = Process.whereis(Mob.Agent.Receipts.Owner), do: GenServer.stop(pid)
+      if :ets.whereis(:mob_agent_receipts) != :undefined, do: :ets.delete(:mob_agent_receipts)
+      :persistent_term.erase(:mob_agent_receipts_state)
+
+      parent = self()
+
+      recorder =
+        spawn(fn ->
+          Receipts.record(receipt(1))
+          send(parent, :recorded)
+
+          receive do
+            :die -> :ok
+          end
+        end)
+
+      assert_receive :recorded
+      ref = Process.monitor(recorder)
+      send(recorder, :die)
+      assert_receive {:DOWN, ^ref, :process, ^recorder, _}
+
+      assert {:ok, %Receipt{event: "tap-1"}} = Receipts.fetch("id-1"),
+             "the receipt died with the process that wrote it"
+    end
+  end
+
   describe "ordering" do
     test "recent/1 is newest first" do
       for n <- 1..5, do: Receipts.record(receipt(n))
@@ -81,9 +118,9 @@ defmodule Mob.Agent.ReceiptsStoreTest do
   describe "telemetry" do
     test "emits the advertised event, measurements and metadata" do
       Application.put_env(:mob, :telemetry_module, StubTelemetry)
-      # The flag is resolved once at start, so re-resolve it for this test.
-      :persistent_term.erase(:mob_agent_receipts_state)
-      :ets.delete(:mob_agent_receipts)
+      # The flag is resolved once by the owner, so ask it to re-resolve rather
+      # than deleting the table out from under it.
+      Mob.Agent.Receipts.Owner.reload()
 
       Receipts.record(%{receipt(7) | stages: [:dispatched, :handled]})
 
@@ -97,8 +134,7 @@ defmodule Mob.Agent.ReceiptsStoreTest do
 
     test "does not emit when no telemetry module is available" do
       Application.put_env(:mob, :telemetry_module, NotALoadedModule)
-      :persistent_term.erase(:mob_agent_receipts_state)
-      :ets.delete(:mob_agent_receipts)
+      Mob.Agent.Receipts.Owner.reload()
 
       Receipts.record(receipt(1))
 

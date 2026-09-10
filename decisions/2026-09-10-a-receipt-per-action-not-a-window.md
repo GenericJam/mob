@@ -29,9 +29,10 @@ A window cannot answer a question about causation. Only a correlation id can.
 ## Decision
 
 Every dispatched event gets an `action_id`, and the screen assembles a
-`%Mob.Agent.Receipt{}` around the callback recording which of five stages the
-action reached: `:dispatched`, `:handled` (or `:unhandled`),
-`:assigns_changed`, `:navigated`, `:frame_changed`, `:committed`.
+`%Mob.Agent.Receipt{}` around the callback recording which stages the
+action reached: `:dispatched`, `:handled` (or `:unhandled`), `:assigns_changed`,
+`:navigation_requested`, `:frame_changed`, `:committed`, and `:unobservable`
+for a screen that does not render.
 
 **The stages are observed, not reported.** Only `:handled` is proved by the
 callback itself; every later stage is a comparison the screen makes for itself —
@@ -48,7 +49,7 @@ reason for recording stages separately rather than a boolean:
 | `:handled` | `:app_code` | the handler ran and decided nothing |
 | `:assigns_changed` | `:render_function` | `render/1` ignores what changed |
 | `:frame_changed` without `:committed` | `:renderer` | a frame built and never handed over |
-| `:navigated` | `:none` | this screen does not paint; the destination does |
+| `:navigation_requested` | `:unknown` | the handler asked to navigate; this screen cannot see whether the router honoured it |
 | `:committed` with `:frame_changed` | `:none` | nothing to answer for |
 
 "The tap did nothing" is a bug report nobody can route. "The handler ran and
@@ -56,14 +57,22 @@ changed `:count`, and the tree did not change" points at a `render/1` that never
 reads `:count`. This is the attribution MOB-149 wants computable rather than
 guessed.
 
-**A navigation is its own verdict.** The first version of this derived
-everything from the paint, and `reply_after_callback/2` deliberately does not
+**A navigation is its own verdict, and only a request.** The first version of
+this derived everything from the paint, and `reply_after_callback/2` deliberately does not
 paint when the handler asked to navigate — the owner applies the action and the
 destination screen paints. So a tap that pushed a whole new screen recorded
 `[:dispatched, :handled]` and reported `:inert`, "the handler ran and decided
 nothing", filed against `:app_code`. That is the same lie the process-wide
 counter tells, inverted, on the commonest successful action in a mobile app. The
 receipt now reads the nav action before it is cleared.
+
+It records the **request**, not the outcome, and the naming says so. The router
+decides whether the ask does anything and routinely refuses — a pop at the root,
+a push to a module that fails to resolve, an unrecognised action — repainting
+this screen instead. A second version called that `:navigated` with
+`owner: :none`, which reported a false success on Back-at-root: the same lie as
+the process-wide counter, on the second-commonest action in a mobile app.
+Confirming the outcome needs the router to report back, which is not wired.
 
 **`:no_visible_change` is not an error.** A handler that updates state the
 current screen does not render has done what it was asked. Whether that is a bug
@@ -103,7 +112,11 @@ that overclaim cost a day.
   eviction kept the boundary row while three documents stated 256. `count/0` and `dropped/0` are exposed so "no
   receipt for that id" can be distinguished from "that id never existed"; a
   diagnostic that silently forgets is a diagnostic that lies.
-- **A receipt carries no application state at all**, and getting this right took
+- **A receipt carries no state out of the socket.** It does carry `event` — the
+  tag the render tree put in `on_tap` — because that is the action's identity.
+  The guides teach building those tags from record data (`{:contact,
+  contact.id}`), so a receipt can carry an identifier the app chose to put in a
+  tag. What it never carries is anything read out of assigns, and getting this right took
   two attempts. The first stored a hash of assigns and the normalised exception,
   and the exception was the leak: `KeyError`, `MatchError` and `BadMapError`
   embed the term that failed, so a `Map.fetch!/2` against assigns put the entire
@@ -153,18 +166,25 @@ that overclaim cost a day.
 
 - **A test module that calls `Mob.Router.start_root/3` leaks two global
   processes, and the failure lands somewhere else entirely.** `start_root/3`
-  brings up `Mob.Sender` and `Mob.Listener` under global names.
+  registers `Mob.Sender` and `Mob.Listener` under global names, and
   `Mob.Listener.handler/1` wraps a tap tag into `{:mob_route, ...}` *only when a
   listener is running* — so leaving one behind changes what the renderer does
   for every file that runs afterwards. The symptom was two `Mob.RendererTest`
-  assertions failing 2 runs in 12, in a file with no connection to this work,
-  and passing every time in isolation. CI found it before the pre-merge review
-  did.
+  assertions failing, in a file with no connection to this work, passing every
+  time in isolation.
 
-  The teardown stops the router first, then both globals. Two wrong turns on the
-  way: adding `stop_if_running(:mob_screen)` made it fail 12 runs out of 12,
-  because it killed whichever process held that name at the time rather than the
-  one this module started. `reset_transition_test.exs` already carried a comment
-  saying leaving Sender and Listener behind "is what produces cross-file
-  ordering flakes" — the precedent was there to read.
+  **This predates the receipts work.** `safe_area_unknown_test.exs`, added by
+  MOB-166 and already on master, stopped only its router pid. The fix is
+  `ProcessHelpers.stop_root/2`, now used by every `start_root/3` caller.
+
+  Two wrong turns while chasing it: adding `stop_if_running(:mob_screen)` made
+  it fail 12 runs out of 12, because it killed whichever process held that name
+  rather than the one the module started. And **no rate is claimed** — a
+  reviewer measured the leak at 4 runs in 14 on master where this machine
+  measured 0 in 12. The mechanism is verified by reading
+  `Mob.Listener.handler/1`; the frequency is load-dependent and not worth
+  asserting, a lesson MOB-154 already paid for.
+  `reset_transition_test.exs` carried a comment saying leaving Sender and
+  Listener behind "is what produces cross-file ordering flakes" — the precedent
+  was there to read.
 

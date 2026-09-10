@@ -38,44 +38,9 @@ defmodule Mob.Agent.Receipts do
   @doc false
   @spec start() :: :ok
   def start do
-    if :ets.whereis(@table) == :undefined do
-      # State BEFORE the table, and the table is the flag. The reverse order has
-      # a window in which a second process sees the table, skips
-      # initialisation, and then reads a `:persistent_term` key that does not
-      # exist yet — which raises, on the event path, inside the very `catch`
-      # clause that is trying to record a crash report. A state entry with no
-      # table is harmless; a table with no state is not.
-      :persistent_term.put(@state, %{
-        seq: :atomics.new(2, signed: false),
-        telemetry?: telemetry_available?()
-      })
-
-      :ets.new(@table, [:set, :public, :named_table, {:write_concurrency, true}])
-    end
-
+    if :ets.whereis(@table) == :undefined, do: Mob.Agent.Receipts.Owner.start()
     :ok
-  rescue
-    # Two processes racing to create the same named table: whichever lost is
-    # looking at a table the winner already made, which is the desired state.
-    ArgumentError -> :ok
   end
-
-  # Resolved once, at startup, and never again. `Code.ensure_loaded?/1` for an
-  # ABSENT module is not cached: it is a `gen_server` call into `:code_server`
-  # plus a scan of the code path, measured here at ~12us against ~0.04us for a
-  # loaded module. `mob` has no `:telemetry` dependency, so absent is the
-  # default case — calling it per action would put every event in every app
-  # through one global mailbox, which is exactly what this module's docs claim
-  # it avoids.
-  defp telemetry_available? do
-    mod = emitter()
-    Code.ensure_loaded?(mod) and function_exported?(mod, :execute, 3)
-  end
-
-  # Configurable so the emission path is testable. `mob` has no `:telemetry`
-  # dependency, so with the real module the `emit/2` body can never execute
-  # under `mix test` — an advertised event shape that nothing verifies.
-  defp emitter, do: Application.get_env(:mob, :telemetry_module, :telemetry)
 
   @doc """
   Record `receipt`, evicting the oldest when the table is full.
@@ -141,7 +106,7 @@ defmodule Mob.Agent.Receipts do
   @doc false
   @spec reset() :: :ok
   def reset do
-    start()
+    Mob.Agent.Receipts.Owner.reload()
     :ets.delete_all_objects(@table)
     state = state()
     :atomics.put(state.seq, 1, 0)
@@ -167,7 +132,11 @@ defmodule Mob.Agent.Receipts do
   defp emit(%{telemetry?: false}, _receipt), do: :ok
 
   defp emit(%{telemetry?: true}, receipt) do
-    emitter().execute(
+    # Same lookup the owner used to resolve `telemetry?`, so a test that swaps
+    # the module and restarts the owner gets a consistent pair.
+    emitter = Application.get_env(:mob, :telemetry_module, :telemetry)
+
+    emitter.execute(
       [:mob, :action, :stop],
       %{duration_us: receipt.elapsed_us || 0},
       %{

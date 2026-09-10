@@ -66,9 +66,9 @@ defmodule Mob.Agent.ReceiptTest do
       # The commonest successful action in a mobile app. This screen does not
       # paint for it — the destination does — so deriving the verdict from the
       # absence of a paint reports a screen push as "the handler did nothing".
-      nav = [:dispatched, :handled, :assigns_changed, :navigated]
-      assert Receipt.effect(receipt(nav)) == :navigated
-      assert Receipt.owner(receipt(nav)) == :none
+      nav = [:dispatched, :handled, :assigns_changed, :navigation_requested]
+      assert Receipt.effect(receipt(nav)) == :navigation_requested
+      assert Receipt.owner(receipt(nav)) == :unknown
     end
 
     test "a frame built but never handed over is not_committed" do
