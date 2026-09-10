@@ -15,6 +15,19 @@ defmodule Mob.ComponentRegistry do
   end
 
   @doc """
+  The ETS table, or `:undefined` when the registry has not started.
+
+  For `Mob.Invariant`, which needs to walk every entry rather than look one up.
+  """
+  @spec table() :: :ets.table() | :undefined
+  def table do
+    case :ets.whereis(@table) do
+      :undefined -> :undefined
+      _ref -> @table
+    end
+  end
+
+  @doc """
   Register a component process. Raises if the same {screen_pid, id, module}
   is already registered (duplicate id on the same screen).
   """
