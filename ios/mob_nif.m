@@ -7350,12 +7350,9 @@ static ERL_NIF_TERM nif_alert_show(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
               as = UIAlertActionStyleCancel;
           if ([style isEqualToString:@"destructive"])
               as = UIAlertActionStyleDestructive;
-          // Capture the NSString, not [action UTF8String]. The C pointer aims
-          // into a string owned by `buttons`, a local ARC releases the moment
-          // this block returns — long before anyone taps — so the handler read
-          // freed memory and enif_make_atom built the action atom out of
-          // whatever was there. Capturing the object retains it for the life
-          // of the handler.
+          // Capture the NSString, not its UTF8String pointer. The block can
+          // outlive the temporary buffer; retaining the object and converting
+          // inside the handler keeps the bytes valid for synchronous delivery.
           [ac addAction:[UIAlertAction actionWithTitle:label
                                                  style:as
                                                handler:^(UIAlertAction *_) {
