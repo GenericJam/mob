@@ -194,12 +194,18 @@ defmodule Mob.Test.ProcessHelpers do
   end
 
   defp do_eventually(fun, deadline, timeout) do
+    value = fun.()
+
     cond do
-      fun.() ->
+      value ->
         :ok
 
       System.monotonic_time(:millisecond) >= deadline ->
-        raise "condition still false after #{timeout}ms"
+        # Report what the condition last saw. Without it every failure reads
+        # "still false", which hides the difference between "the event did not
+        # happen" and "the check was wrong" — an `:rpc.call` answering
+        # `{:badrpc, _}`, say, is never going to match and is not a timeout.
+        raise "condition still false after #{timeout}ms; last saw: #{inspect(value)}"
 
       true ->
         Process.sleep(5)

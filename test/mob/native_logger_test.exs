@@ -107,8 +107,11 @@ defmodule Mob.NativeLoggerTest do
 
     test "Logger.info/1 reaches the handler end-to-end", %{nif_pid: pid} do
       Logger.info("end-to-end test")
-      # `Logger.flush/0` blocks until the handlers have drained — the actual
-      # barrier the sleep was approximating.
+      # Not really a barrier: `Mob.NativeLogger` is a plain :logger handler, and
+      # :logger invokes handlers synchronously in the calling process, so the
+      # mock has already been written by the time Logger.info/1 returns. The
+      # sleep here was guarding against nothing. `flush/0` is kept as the honest
+      # way to say "and nothing is queued", at no cost, rather than a duration.
       Logger.flush()
       calls = MockNIF.calls(pid)
 

@@ -216,6 +216,11 @@ defmodule Mob.MixProject do
     [
       licenses: ["MIT"],
       links: %{"GitHub" => "https://github.com/genericjam/mob"},
+      # `lib/mix/tasks/mob.flake.ex` is deliberately absent: it is a
+      # repo-internal tool that shells out to `mix test` in whatever project
+      # loads it, and its docs quote this repo's own bisect history. Every app
+      # depending on mob would otherwise gain a `mix mob.flake`.
+      exclude_patterns: ["lib/mix/tasks/mob.flake.ex"],
       files: ~w(
         lib src priv
         android ios assets
