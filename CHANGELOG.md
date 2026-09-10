@@ -10,6 +10,37 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **A safe-area reading taken before iOS had a window is no longer kept for the
+  life of the screen** (MOB-166). `nif_safe_area` returned zeros when it could
+  find no window, which is indistinguishable from a device that genuinely has no
+  insets, and `ensure_safe_area/3` stopped asking once the assign existed. A
+  screen that painted before the window existed was under-padded at the bottom
+  and sides until it was replaced.
+
+  Two ordinary launches reach a paint that early: a background launch connects no
+  window scene at launch, and an iOS 15+ prewarmed launch runs
+  `didFinishLaunchingWithOptions:` long before the user taps the icon.
+
+  The NIF now answers `:no_window` — on a genuine absence and on a timeout, both
+  of which mean "not an answer". Zeros are still assigned (screens read
+  `assigns.safe_area` directly, so a missing key would be a `KeyError` in
+  `render/1`) but marked unconfirmed and re-read on the next paint.
+
+  Re-reading on paint is not enough on its own, because nothing repaints when a
+  scene connects. New `mob_notify_window_connected()`, called from
+  `scene:willConnectToSession:`, sends `{:mob_window, :connected}`; the screen
+  invalidates its cached insets and repaints. That also covers insets changing
+  under a live screen — a rotation, a resized scene — which a confirmed-once
+  cache would otherwise never pick up.
+
+  **Requires a native rebuild** (`mix mob.deploy --native`), and the two halves
+  must move together. Old native with new Elixir degrades safely: a 4-tuple is
+  still handled. **New native with old Elixir crashes** — `{t, r, b, l} =
+  :no_window` raises in `Mob.Screen.Server.init/1` and the root screen never
+  starts — so do not point `mob.exs`'s `mob_dir` at a newer checkout than the
+  `mix.exs` dependency.
+
 ### Added
 - **`mix mob.flake`** — run the suite repeatedly and report which tests are not
   deterministic. `--runs N`, `--until-failure`, `--keep-going`, `--seed`, and a

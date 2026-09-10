@@ -26,6 +26,7 @@ defmodule Mob.Socket do
             required(:nav_action) => term(),
             # Written by Mob.Screen.Server rather than by the struct default, so
             # both are optional. The render path reads :last_frame every message.
+            optional(:safe_area_confirmed) => boolean(),
             optional(:last_frame) => non_neg_integer(),
             optional(:list_renderers) => map()
           }

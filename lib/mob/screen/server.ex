@@ -150,7 +150,13 @@ defmodule Mob.Screen.Server do
     socket =
       module
       |> Mob.Socket.new(platform: platform)
-      |> Mob.Socket.assign(:safe_area, initial_safe_area(render_mode, nif))
+      |> then(fn socket ->
+        {insets, status} = initial_safe_area(render_mode, nif)
+
+        socket
+        |> Mob.Socket.assign(:safe_area, insets)
+        |> Mob.Socket.put_mob(:safe_area_confirmed, status == :confirmed)
+      end)
 
     case module.mount(Keyword.get(opts, :params, %{}), %{}, socket) do
       {:ok, mounted} ->
@@ -229,6 +235,22 @@ defmodule Mob.Screen.Server do
   # A component's state changed — repaint so the native view gets fresh props.
   def handle_info({:component_changed, _id, _module}, state) do
     {:noreply, %{state | socket: paint(state, :none)}}
+  end
+
+  # The window now exists, so the insets this screen is holding may be a
+  # placeholder taken before it did. Drop the confirmation and repaint; the
+  # paint re-reads. Intercepted here rather than forwarded to the user's
+  # handle_info, which has no reason to know about windows.
+  #
+  # Without this the correction had no trigger: `ensure_safe_area/3` is only
+  # reached from a paint, and nothing repaints when a scene connects. A screen
+  # that painted during a prewarmed launch would show its placeholder as the
+  # user's first visible frame and keep it until they interacted.
+  @impl GenServer
+  def handle_info({:mob_window, :connected}, state) do
+    socket = Mob.Socket.put_mob(state.socket, :safe_area_confirmed, false)
+    state = %{state | socket: socket}
+    {:noreply, %{state | socket: do_paint(state, :none, :async, nil, false)}}
   end
 
   # Periodic state sync — intercepted before the user's handle_info so the
@@ -446,26 +468,58 @@ defmodule Mob.Screen.Server do
   # recovers in practice, but "one dropped frame" would be the wrong summary.
   defp fingerprint(tree), do: :erlang.phash2({tree, Mob.Theme.current()}, 4_294_967_296)
 
-  defp initial_safe_area(:render, nif) do
-    {t, r, b, l} = nif.safe_area()
-    %{top: t, right: r, bottom: b, left: l}
+  @zero_insets %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+
+  # The `:safe_area` assign is always present — screens are documented to read
+  # `assigns.safe_area` directly, so it must never be missing — but a reading
+  # taken before iOS has a window is a placeholder, not an answer, and must not
+  # be kept. `nif.safe_area()` answers `:no_window` for exactly that case.
+  #
+  # It matters because the BEAM can reach here before a window exists: a
+  # background launch connects no window scene at all, and an iOS 15+ prewarmed
+  # launch runs `didFinishLaunchingWithOptions:` long before the user taps the
+  # icon. `ensure_safe_area/3` used to stop asking as soon as the key existed,
+  # so a placeholder taken then left the root screen laid out under the notch
+  # and home indicator for the rest of its life.
+  defp initial_safe_area(:render, nif), do: read_safe_area(nif)
+  defp initial_safe_area(_mode, _nif), do: {@zero_insets, :placeholder}
+
+  defp read_safe_area(nif) do
+    case nif.safe_area() do
+      {t, r, b, l} ->
+        {%{top: t, right: r, bottom: b, left: l}, :confirmed}
+
+      :no_window ->
+        {@zero_insets, :placeholder}
+
+      other ->
+        # Android answers `:error` when it cannot attach to the JVM, and a
+        # future platform may answer something else again. Treating an
+        # unrecognised reply as a placeholder means a screen degrades to zeros
+        # and retries, rather than dying in init/1 with a CaseClauseError.
+        Logger.warning("[mob] unexpected safe_area/0 result: #{inspect(other)}")
+        {@zero_insets, :placeholder}
+    end
   end
 
-  defp initial_safe_area(_mode, _nif), do: %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
-
   defp ensure_safe_area(socket, platform, nif) do
-    if Map.has_key?(socket.assigns, :safe_area) do
-      socket
-    else
-      safe_area =
-        if platform == :ios do
-          {t, r, b, l} = nif.safe_area()
-          %{top: t, right: r, bottom: b, left: l}
-        else
-          %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
-        end
+    cond do
+      platform != :ios ->
+        Mob.Socket.assign_new(socket, :safe_area, fn -> @zero_insets end)
 
-      Mob.Socket.assign(socket, :safe_area, safe_area)
+      # Confirmed readings are not re-read on every paint — each read is a hop
+      # to the main thread. They are not permanent either: insets DO change
+      # under a screen (rotation, a resized scene), so `{:mob_window,
+      # :connected}` clears this flag and the next paint asks again.
+      socket.__mob__[:safe_area_confirmed] ->
+        socket
+
+      true ->
+        {insets, status} = read_safe_area(nif)
+
+        socket
+        |> Mob.Socket.assign(:safe_area, insets)
+        |> Mob.Socket.put_mob(:safe_area_confirmed, status == :confirmed)
     end
   end
 
