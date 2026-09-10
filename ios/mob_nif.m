@@ -2406,6 +2406,7 @@ static ERL_NIF_TERM nif_device_keep_awake(ErlNifEnv *env, int argc, const ERL_NI
 // than an app that never boots.
 static ERL_NIF_TERM nif_safe_area(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     __block UIEdgeInsets insets = UIEdgeInsetsZero;
+    __block BOOL had_window = NO;
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
     dispatch_async(dispatch_get_main_queue(), ^{
       UIWindow *window = nil;
@@ -2416,12 +2417,24 @@ static ERL_NIF_TERM nif_safe_area(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
               break;
           }
       }
-      if (window)
+      if (window) {
           insets = window.safeAreaInsets;
+          had_window = YES;
+      }
       dispatch_semaphore_signal(done);
     });
     dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC));
     dispatch_semaphore_wait(done, deadline);
+
+    // No window is not the same as no insets, and the caller must be able to
+    // tell them apart: Mob.Screen caches the first reading for the screen's
+    // lifetime, so returning zeros here would pin a screen under the notch
+    // permanently. The BEAM can reach Mob.Screen.init before a window exists —
+    // on a background launch, and on an iOS 15+ prewarmed launch, which runs
+    // didFinishLaunchingWithOptions: long before the user taps the icon.
+    if (!had_window)
+        return enif_make_atom(env, "no_window");
+
     return enif_make_tuple4(
         env, enif_make_double(env, insets.top), enif_make_double(env, insets.right),
         enif_make_double(env, insets.bottom), enif_make_double(env, insets.left));

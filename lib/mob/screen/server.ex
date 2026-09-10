@@ -446,28 +446,50 @@ defmodule Mob.Screen.Server do
   # recovers in practice, but "one dropped frame" would be the wrong summary.
   defp fingerprint(tree), do: :erlang.phash2({tree, Mob.Theme.current()}, 4_294_967_296)
 
-  defp initial_safe_area(:render, nif) do
-    {t, r, b, l} = nif.safe_area()
-    %{top: t, right: r, bottom: b, left: l}
-  end
+  @zero_insets %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
 
-  defp initial_safe_area(_mode, _nif), do: %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+  # The `:safe_area` assign is always present — screens are documented to read
+  # `assigns.safe_area` directly, so it must never be missing — but a reading
+  # taken before iOS has a window is a placeholder, not an answer, and must not
+  # be kept. `nif.safe_area()` answers `:no_window` for exactly that case.
+  #
+  # It matters because the BEAM can reach here before a window exists: a
+  # background launch connects no window scene at all, and an iOS 15+ prewarmed
+  # launch runs `didFinishLaunchingWithOptions:` long before the user taps the
+  # icon. `ensure_safe_area/3` used to stop asking as soon as the key existed,
+  # so a placeholder taken then left the root screen laid out under the notch
+  # and home indicator for the rest of its life.
+  defp initial_safe_area(:render, nif), do: read_safe_area(nif) |> elem(0)
+  defp initial_safe_area(_mode, _nif), do: @zero_insets
 
-  defp ensure_safe_area(socket, platform, nif) do
-    if Map.has_key?(socket.assigns, :safe_area) do
-      socket
-    else
-      safe_area =
-        if platform == :ios do
-          {t, r, b, l} = nif.safe_area()
-          %{top: t, right: r, bottom: b, left: l}
-        else
-          %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
-        end
-
-      Mob.Socket.assign(socket, :safe_area, safe_area)
+  defp read_safe_area(nif) do
+    case nif.safe_area() do
+      {t, r, b, l} -> {%{top: t, right: r, bottom: b, left: l}, :confirmed}
+      :no_window -> {@zero_insets, :placeholder}
     end
   end
+
+  defp ensure_safe_area(socket, platform, nif) do
+    cond do
+      platform != :ios ->
+        Mob.Socket.assign_new(socket, :safe_area, fn -> @zero_insets end)
+
+      # Confirmed once, kept forever: a real reading does not change under a
+      # screen, and re-reading costs a hop to the main thread every paint.
+      socket.__mob__[:safe_area_confirmed] ->
+        socket
+
+      true ->
+        {insets, status} = read_safe_area(nif)
+
+        socket
+        |> Mob.Socket.assign(:safe_area, insets)
+        |> put_mob(:safe_area_confirmed, status == :confirmed)
+    end
+  end
+
+  defp put_mob(socket, key, value),
+    do: %{socket | __mob__: Map.put(socket.__mob__, key, value)}
 
   defp maybe_load_state(module, socket) do
     if module.__mob_persist__() do

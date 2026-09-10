@@ -10,6 +10,25 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **A safe-area reading taken before iOS had a window is no longer kept for the
+  life of the screen** (MOB-166). `nif_safe_area` returned zeros when it could
+  find no window, which is indistinguishable from a device that genuinely has no
+  insets, and `ensure_safe_area/3` stopped asking once the assign existed. A
+  screen that painted before the window existed therefore rendered under the
+  notch and home indicator until it was replaced.
+
+  Two ordinary launches reach a paint that early: a background launch connects no
+  window scene at all, and an iOS 15+ prewarmed launch runs
+  `didFinishLaunchingWithOptions:` long before the user taps the icon.
+
+  The NIF now answers `:no_window` distinctly. Zeros are still assigned — screens
+  read `assigns.safe_area` directly, so a missing key would be a `KeyError` in
+  `render/1` — but marked unconfirmed, and re-read each paint until the platform
+  answers, then left alone. **Requires a native rebuild**
+  (`mix mob.deploy --native`); the Elixir half still handles a plain 4-tuple, so
+  it degrades safely without one.
+
 ### Added
 - **`mix mob.flake`** — run the suite repeatedly and report which tests are not
   deterministic. `--runs N`, `--until-failure`, `--keep-going`, `--seed`, and a

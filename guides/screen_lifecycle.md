@@ -201,6 +201,12 @@ assigns.safe_area
 #=> %{top: 62.0, right: 0.0, bottom: 34.0, left: 0.0}
 ```
 
+On iOS the insets are read from the active window. If the BEAM starts before
+that window exists — a background launch connects no window scene, and an
+iOS 15+ prewarmed launch runs long before the user taps the icon — the assign
+holds zeros and is refreshed on the next paint, until the platform gives a real
+answer. It is never missing, so `assigns.safe_area` is always safe to read.
+
 Use it to avoid content being obscured by the notch, home indicator, or status bar:
 
 ```elixir
