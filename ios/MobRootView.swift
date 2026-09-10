@@ -374,6 +374,12 @@ struct MobNodeView: View {
                     .multilineTextAlignment(node.textAlignEnum)
                     .lineSpacing(node.computedLineSpacing)
                     .kerning(node.letterSpacing)
+                    // `max_lines`: cap and tail-ellipsise, matching Android's
+                    // TextOverflow.Ellipsis. Unset (0) leaves the default
+                    // unlimited wrap exactly as it was.
+                    .ifLet(node.maxLines > 0 ? node.maxLines : nil) { view, lines in
+                        view.lineLimit(lines).truncationMode(.tail)
+                    }
                     .ifLet(textShouldFill ? () : nil) { view, _ in
                         view.frame(maxWidth: .infinity, alignment: node.frameTextAlignment)
                     }

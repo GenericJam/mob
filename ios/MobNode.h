@@ -61,6 +61,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy, nullable) NSString *text;
 @property(nonatomic) CGFloat textSize;
 @property(nonatomic, strong, nullable) UIColor *textColor;
+@property(nonatomic) NSInteger maxLines; // label only; 0 = unlimited (wrap). Button is always 1.
 
 // Tap
 @property(nonatomic, copy, nullable) void (^onTap)(void);

@@ -18,7 +18,7 @@ defmodule Mob.UI do
   All three forms produce identical output and are accepted by `Mob.Renderer`.
   """
 
-  @text_props [:text, :text_color, :text_size]
+  @text_props [:text, :text_color, :text_size, :max_lines]
 
   @doc """
   Returns a `:text` leaf node.
@@ -28,6 +28,8 @@ defmodule Mob.UI do
     * `:text` — the string to display (required)
     * `:text_color` — color value passed to `set_text_color/2` in the NIF
     * `:text_size` — font size in sp passed to `set_text_size/2` in the NIF
+    * `:max_lines` — integer from 1 through 2,147,483,647 that caps rendered
+      lines; overflow is truncated with an ellipsis. Omit to wrap without limit.
 
   ## Examples
 
