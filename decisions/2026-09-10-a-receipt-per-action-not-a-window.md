@@ -150,3 +150,21 @@ that overclaim cost a day.
   receipts. `tap_xy`'s window is still in place; replacing it needs the native
   half. The vocabulary beyond `[:mob, :action, :stop]` — deploy, code-load,
   frame prepared/dropped, component allocate/release — is not emitted yet.
+
+- **A test module that calls `Mob.Router.start_root/3` leaks two global
+  processes, and the failure lands somewhere else entirely.** `start_root/3`
+  brings up `Mob.Sender` and `Mob.Listener` under global names.
+  `Mob.Listener.handler/1` wraps a tap tag into `{:mob_route, ...}` *only when a
+  listener is running* — so leaving one behind changes what the renderer does
+  for every file that runs afterwards. The symptom was two `Mob.RendererTest`
+  assertions failing 2 runs in 12, in a file with no connection to this work,
+  and passing every time in isolation. CI found it before the pre-merge review
+  did.
+
+  The teardown stops the router first, then both globals. Two wrong turns on the
+  way: adding `stop_if_running(:mob_screen)` made it fail 12 runs out of 12,
+  because it killed whichever process held that name at the time rather than the
+  one this module started. `reset_transition_test.exs` already carried a comment
+  saying leaving Sender and Listener behind "is what produces cross-file
+  ordering flakes" — the precedent was there to read.
+

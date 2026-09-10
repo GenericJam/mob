@@ -67,7 +67,21 @@ defmodule Mob.Agent.ReceiptsIntegrationTest do
   setup do
     Receipts.reset()
     {:ok, pid} = Mob.Router.start_root(Screen, %{}, nif: Nif)
-    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
+
+    on_exit(fn ->
+      # `start_root/3` brings up Mob.Sender and Mob.Listener under global names,
+      # and leaving the Listener behind silently changes what the renderer does
+      # in every later file: `Mob.Listener.handler/1` wraps a tap tag into
+      # `{:mob_route, ...}` only when a listener is running, so Mob.RendererTest
+      # fails asserting on the unwrapped tag it registered — naming a file that
+      # has never heard of this one.
+      Mob.Test.ProcessHelpers.stop_all([
+        pid,
+        Process.whereis(Mob.Sender),
+        Process.whereis(Mob.Listener)
+      ])
+    end)
+
     %{pid: pid}
   end
 
@@ -188,7 +202,15 @@ defmodule Mob.Agent.ReceiptsIntegrationTest do
     Receipts.reset()
     Process.flag(:trap_exit, true)
     {:ok, pid} = Mob.Router.start_root(NoHandlers, %{}, nif: Nif)
-    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
+
+    on_exit(fn ->
+      Mob.Test.ProcessHelpers.stop_all([
+        pid,
+        Process.whereis(Mob.Sender),
+        Process.whereis(Mob.Listener)
+      ])
+    end)
+
     Mob.Screen.dispatch(pid, "anything", %{})
     [receipt] = Receipts.recent(1)
 
