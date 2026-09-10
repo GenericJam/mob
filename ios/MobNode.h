@@ -21,6 +21,7 @@ extern WKWebView *_Nullable g_webview;
 typedef NS_ENUM(NSInteger, MobNodeType) {
     MobNodeTypeColumn,
     MobNodeTypeRow,
+    MobNodeTypeWrap,
     MobNodeTypeLabel,
     MobNodeTypeButton,
     MobNodeTypeScroll,
@@ -155,6 +156,10 @@ NS_ASSUME_NONNULL_BEGIN
 // Row vertical alignment — "top" | "center" (default) | "bottom"
 @property(nonatomic, copy, nonnull) NSString *rowAlign;
 
+// Wrap spacing — horizontal space between items and vertical space between runs.
+@property(nonatomic) CGFloat wrapSpacing;
+@property(nonatomic) CGFloat wrapRunSpacing;
+
 // Box content alignment — "top_leading" (default) | "center" | "top_center" |
 // "bottom_leading" | "bottom_center" | "bottom_trailing" | "top_trailing".
 // Affects how a box's children are placed within its frame; relevant when
@@ -176,6 +181,7 @@ NS_ASSUME_NONNULL_BEGIN
 // Layout behaviour
 @property(nonatomic) CGFloat layoutWeight; // positive = expand on a row/column's main axis
 @property(nonatomic) BOOL fillWidth;       // fill parent width (default NO; button default YES)
+@property(nonatomic) BOOL fillWidthSet;    // distinguish an explicit false from an absent prop
 // scroll only: build content lazily (LazyVStack). Opt-in — see MOB-128.
 @property(nonatomic) BOOL lazyContent;
 @property(nonatomic)

@@ -24,7 +24,8 @@ defmodule Mob.Renderer do
   `:placeholder_color`): resolved via theme semantic tokens first, then the
   base palette. E.g. `:primary` → theme's primary → `:blue_500` → `0xFF2196F3`.
 
-  **Spacing props** (`:padding`, `:padding_top`, etc., `:gap`): accept spacing
+  **Spacing props** (`:padding`, `:padding_top`, etc., `:gap`, `:spacing`,
+  `:run_spacing`): accept spacing
   tokens (`:space_xs`, `:space_sm`, `:space_md`, `:space_lg`, `:space_xl`)
   that are scaled by `theme.space_scale`.
 
@@ -177,7 +178,7 @@ defmodule Mob.Renderer do
   # Props whose atom values are resolved as colors
   @color_props ~w(background text_color border_color color placeholder_color scrim drag_indicator_color)a
   # Props whose atom values are resolved as spacing or radius tokens
-  @spacing_props ~w(padding padding_top padding_right padding_bottom padding_left gap)a
+  @spacing_props ~w(padding padding_top padding_right padding_bottom padding_left gap spacing run_spacing)a
   @radius_props ~w(corner_radius)a
   # Props whose atom values are resolved as text sizes (scaled by type_scale)
   @size_props ~w(text_size font_size)a

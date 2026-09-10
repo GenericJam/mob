@@ -954,12 +954,14 @@ typedef NS_ENUM(NSUInteger, MobPropKey) {
     MOB_PROP_placeholder,
     MOB_PROP_placeholder_color,
     MOB_PROP_return_key,
+    MOB_PROP_run_spacing,
     MOB_PROP_scrolled_past_threshold,
     MOB_PROP_secure,
     MOB_PROP_shader,
     MOB_PROP_show_indicator,
     MOB_PROP_show_url,
     MOB_PROP_size,
+    MOB_PROP_spacing,
     MOB_PROP_src,
     MOB_PROP_sticky_when_scrolled_past,
     MOB_PROP_tabs,
@@ -983,7 +985,7 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
     dispatch_once(&once, ^{
       // Designated initializers: each entry names the slot it fills, so the
       // enum and this table cannot drift apart. They are two independently
-      // ordered lists of 99 strings joined by index — insert a key mid-enum and
+      // ordered lists joined by index — insert a key mid-enum and
       // append it here, the natural mistake when the two are a hundred lines
       // apart, and every slot after the insertion point reads a different
       // prop's value on every node. This makes that unrepresentable.
@@ -1069,12 +1071,14 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
           [MOB_PROP_placeholder] = @"placeholder",
           [MOB_PROP_placeholder_color] = @"placeholder_color",
           [MOB_PROP_return_key] = @"return_key",
+          [MOB_PROP_run_spacing] = @"run_spacing",
           [MOB_PROP_scrolled_past_threshold] = @"scrolled_past_threshold",
           [MOB_PROP_secure] = @"secure",
           [MOB_PROP_shader] = @"shader",
           [MOB_PROP_show_indicator] = @"show_indicator",
           [MOB_PROP_show_url] = @"show_url",
           [MOB_PROP_size] = @"size",
+          [MOB_PROP_spacing] = @"spacing",
           [MOB_PROP_src] = @"src",
           [MOB_PROP_sticky_when_scrolled_past] = @"sticky_when_scrolled_past",
           [MOB_PROP_tabs] = @"tabs",
@@ -1112,6 +1116,8 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         node.nodeType = MobNodeTypeColumn;
     else if ([type isEqualToString:@"row"])
         node.nodeType = MobNodeTypeRow;
+    else if ([type isEqualToString:@"wrap"])
+        node.nodeType = MobNodeTypeWrap;
     else if ([type isEqualToString:@"text"] || [type isEqualToString:@"label"])
         node.nodeType = MobNodeTypeLabel;
     else if ([type isEqualToString:@"button"])
@@ -1613,8 +1619,18 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             node.lazyContent = [lazyContent boolValue];
 
         id fillWidth = pv[MOB_PROP_fill_width];
-        if (fillWidth)
+        if (fillWidth) {
             node.fillWidth = [fillWidth boolValue];
+            node.fillWidthSet = YES;
+        }
+
+        id wrapSpacing = pv[MOB_PROP_spacing];
+        if (wrapSpacing)
+            node.wrapSpacing = [wrapSpacing doubleValue];
+
+        id wrapRunSpacing = pv[MOB_PROP_run_spacing];
+        if (wrapRunSpacing)
+            node.wrapRunSpacing = [wrapRunSpacing doubleValue];
 
         id fillHeight = pv[MOB_PROP_fill_height];
         if (fillHeight)

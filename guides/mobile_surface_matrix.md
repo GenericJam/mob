@@ -43,6 +43,7 @@ and orthogonal — composition over a fat component library.
 |--|--|--|--|--|
 | `<Box>` | ✅ | ✓ | ✓ | Container with align, padding, background, corner radius, border |
 | `<Column>`, `<Row>` | ✅ | ✓ | ✓ | Flex layouts |
+| `<Wrap>` | ✅ | ✓ | ✓ | Measured wrapping layout for chips, tags, and pills |
 | `<Text>` | ✅ | ✓ | ✓ | Font, color, size, weight, align, line height, letter spacing |
 | `<Button>` | ✅ | ✓ | ✓ | Tap handler, text, background, fill width |
 | `<Image>` | ✅ | ✓ | ✓ | Local + remote (Coil on Android, AsyncImage on iOS) |

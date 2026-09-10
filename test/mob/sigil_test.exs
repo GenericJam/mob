@@ -157,6 +157,19 @@ defmodule Mob.SigilTest do
       assert length(row.children) == 2
     end
 
+    test "wrap container preserves spacing props and children" do
+      node = ~MOB"""
+      <Wrap spacing={8} run_spacing={12}>
+        <Text text="one" />
+        <Text text="two" />
+      </Wrap>
+      """
+
+      assert node.type == :wrap
+      assert node.props == %{spacing: 8, run_spacing: 12}
+      assert Enum.map(node.children, & &1.props.text) == ["one", "two"]
+    end
+
     test "self-closing and container siblings" do
       node = ~MOB"""
       <Column>
