@@ -29,7 +29,7 @@ defmodule Mob.PluginsTier4Test do
 
   describe "settings" do
     setup do
-      tmp = Path.join(System.tmp_dir!(), "mob_set_#{System.unique_integer([:positive])}")
+      tmp = Mob.Test.ProcessHelpers.tmp_path("mob_set")
       File.mkdir_p!(tmp)
       System.put_env("MOB_DATA_DIR", tmp)
       start_supervised!(Mob.State)

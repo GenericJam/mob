@@ -88,25 +88,19 @@ defmodule Mob.ScreenRepaintTest do
     screen = Mob.Screen.get_screen_pid(router)
 
     on_exit(fn ->
-      stop_safely(router)
-      for pid <- started, do: stop_safely(pid)
+      Mob.Test.ProcessHelpers.stop_pid(router)
+      for pid <- started, do: Mob.Test.ProcessHelpers.stop_pid(pid)
       # Mob.Router.start_root starts Mob.Listener when render_mode is :render,
       # globally named and unlinked. Leaving it running makes Mob.Renderer route
       # every later tap through it, so other files see {listener_pid, {:mob_route,
       # ...}} where they assert {pid, tag}. Two renderer_test cases failed that
       # way, and only when the files happened to run in the wrong order.
-      if pid = Process.whereis(Mob.Listener), do: stop_safely(pid)
+      if pid = Process.whereis(Mob.Listener), do: Mob.Test.ProcessHelpers.stop_pid(pid)
       Mob.Theme.set(theme_before)
     end)
 
     settle(screen)
     %{screen: screen}
-  end
-
-  defp stop_safely(pid) do
-    GenServer.stop(pid)
-  catch
-    :exit, _ -> :ok
   end
 
   # Deterministic, not timing-based.

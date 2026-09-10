@@ -66,7 +66,7 @@ defmodule Mob.Event.TargetTest do
 
     test "dead pid errors" do
       pid = spawn(fn -> :ok end)
-      Process.sleep(10)
+      Mob.Test.ProcessHelpers.await_exit(pid)
       refute Process.alive?(pid)
       s = scope()
       assert Target.resolve(pid, s) == {:error, :dead_pid}

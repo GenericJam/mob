@@ -20,7 +20,7 @@ defmodule Mob.ThemeHostTest do
         Enum.each(tasks, &send(&1.pid, :go))
         results = Enum.map(tasks, &Task.await/1)
         true = Enum.all?(results, &(&1 in [:light, :ok]))
-        Process.sleep(100)
+        Logger.flush()
       end)
 
     1 = length(:binary.matches(log, "The on_load function for module mob_nif returned"))
@@ -69,7 +69,7 @@ defmodule Mob.ThemeHostTest do
       Code.compile_string(fake_nif)
       :dark = Mob.Theme.color_scheme()
       :available = :persistent_term.get(key)
-      Process.sleep(100)
+      Logger.flush()
     end)
 
     :persistent_term.erase(key)

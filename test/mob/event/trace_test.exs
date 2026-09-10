@@ -26,15 +26,21 @@ defmodule Mob.Event.TraceTest do
     end
 
     test "multiple subscribers all see the event" do
+      parent = self()
+
       task =
         Task.async(fn ->
           Trace.subscribe()
+          # The dispatch below must not run until this subscription is in the
+          # table. Sleeping guessed at how long that takes across processes;
+          # the ready-message is the actual ordering constraint.
+          send(parent, :subscribed)
           assert_receive {:mob_trace, _, :tap, nil}, 200
           :got_it
         end)
 
       Trace.subscribe()
-      Process.sleep(20)
+      assert_receive :subscribed
 
       :ok = Event.dispatch(self(), addr(), :tap, nil)
 
@@ -95,12 +101,14 @@ defmodule Mob.Event.TraceTest do
           # Exit immediately
         end)
 
-      Process.sleep(10)
+      Mob.Test.ProcessHelpers.await_exit(pid)
       refute Process.alive?(pid)
 
       # Now dispatch — broadcast should silently skip the dead pid and clean up.
+      # `broadcast/3` folds over the table in the *calling* process, so the
+      # delete has already happened by the time dispatch returns :ok. There is
+      # nothing to wait for.
       :ok = Event.dispatch(self(), addr(), :tap, nil)
-      Process.sleep(10)
 
       # Verify the dead pid was removed.
       assert :ets.lookup(:mob_event_trace, pid) == []

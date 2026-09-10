@@ -82,17 +82,11 @@ defmodule Mob.Screen.MigrationTest do
     def navigation(_), do: tab_bar([stack(:home, root: @home), stack(:settings, root: @settings)])
   end
 
-  defp stop_safely(pid) do
-    GenServer.stop(pid)
-  catch
-    :exit, _ -> :ok
-  end
-
   # Screens dump in their own terminate/2, which runs after the router exits —
   # so the router being down does not mean the writes have landed.
   defp stop_and_await_screens(router) do
     refs = for pid <- live_screen_pids(router), do: {pid, Process.monitor(pid)}
-    stop_safely(router)
+    Mob.Test.ProcessHelpers.stop_pid(router)
 
     for {pid, ref} <- refs do
       receive do
@@ -137,24 +131,24 @@ defmodule Mob.Screen.MigrationTest do
   defp reset_services do
     for name <- [Mob.Sender, Mob.Listener, Mob.ComponentRegistry, Mob.Nav.Registry],
         pid = Process.whereis(name),
-        do: stop_safely(pid)
+        do: Mob.Test.ProcessHelpers.stop_pid(pid)
   end
 
   describe "hot reload reaches every live screen" do
     setup do
       reset_services()
 
-      if pid = Process.whereis(Renders), do: Agent.stop(pid)
+      Mob.Test.ProcessHelpers.stop_if_running(Renders)
       {:ok, renders} = Renders.start()
       # Globally named and unlinked, so it outlives the suite unless stopped.
-      on_exit(fn -> if Process.alive?(renders), do: Agent.stop(renders) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(renders) end)
 
       {:ok, _} = Mob.ComponentRegistry.start_link()
       {:ok, _} = Mob.Nav.Registry.start_link(TabApp)
       {:ok, router} = Mob.Router.start_root(HomeScreen, %{}, nif: StubNif)
 
       on_exit(fn ->
-        stop_safely(router)
+        Mob.Test.ProcessHelpers.stop_pid(router)
         reset_services()
       end)
 

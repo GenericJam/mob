@@ -3,15 +3,6 @@ defmodule Mob.Nav.ScreenNavTest do
 
   import ExUnit.CaptureLog
 
-  # `if Process.alive?, do: GenServer.stop` races: the router dies with the test
-  # process, so it can exit between the check and the stop and fail the test
-  # from inside the on_exit runner.
-  defp stop_safely(pid) do
-    GenServer.stop(pid)
-  catch
-    :exit, _ -> :ok
-  end
-
   # ── Screen fixtures ────────────────────────────────────────────────────────
   # Bare module names inside nested defmodule blocks don't auto-alias to siblings.
   # Use module attributes with fully qualified names for cross-screen references.
@@ -93,7 +84,7 @@ defmodule Mob.Nav.ScreenNavTest do
     Mob.Test.ProcessHelpers.stop_if_running(Mob.Nav.Registry)
 
     {:ok, pid} = Mob.Nav.Registry.start_link(DemoApp)
-    on_exit(fn -> stop_safely(pid) end)
+    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
     :ok
   end
 
@@ -194,7 +185,18 @@ defmodule Mob.Nav.ScreenNavTest do
       {:ok, pid} = Mob.Screen.start_link(HomeScreen, %{})
       # Send an info message that would trigger pop — default handle_info is noop
       send(pid, :pop_test)
-      Process.sleep(10)
+
+      # `pid` is the owner. :pop_test travels owner -> screen, and if the screen
+      # produced a nav action, screen -> owner. The test is not party to either
+      # hop, so pairwise ordering against a test -> owner call proves nothing:
+      # an earlier version of this test deleted the wait on that reasoning and
+      # stopped catching the regression it exists for.
+      #
+      # Syncing with the *screen* is a real barrier. Once its handle_info has
+      # returned, any {:nav_action, ...} it sent is already sitting in the
+      # owner's mailbox, so the call below queues behind it.
+      pid |> Mob.Screen.get_screen_pid() |> :sys.get_state()
+
       assert Mob.Screen.get_current_module(pid) == HomeScreen
       GenServer.stop(pid)
     end
@@ -297,7 +299,7 @@ defmodule Mob.Nav.ScreenNavTest do
       # would take down every screen — over a typo in push_screen/2. It is
       # caught: navigation is left untouched and the app carries on.
       {:ok, pid} = Mob.Screen.start_link(UnknownNavScreen, %{})
-      on_exit(fn -> stop_safely(pid) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
 
       log = capture_log(fn -> assert :ok = Mob.Screen.dispatch(pid, "bad_nav", %{}) end)
 
