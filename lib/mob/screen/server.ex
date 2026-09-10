@@ -187,9 +187,53 @@ defmodule Mob.Screen.Server do
 
   @impl GenServer
   def handle_call({:event, event, params}, _from, state) do
-    case state.module.handle_event(event, params, state.socket) do
-      {:noreply, socket} -> reply_after_callback(socket, state)
-      {:reply, _payload, socket} -> reply_after_callback(socket, state)
+    # MOB-155. The receipt is assembled around the callback rather than inside
+    # it, so the stages are observed rather than reported: a handler cannot
+    # claim it changed something it did not.
+    started = System.monotonic_time(:microsecond)
+    # The term itself, not a hash of it. `!==` answers "did assigns change"
+    # exactly, and short-circuits: 0.01us against 43us for a deep phash2 over a
+    # 1000-row list screen's assigns, twice per event. The hash was answering a
+    # boolean question the expensive way, on the path of every event in the app.
+    before_assigns = state.socket.assigns
+    before_tree = Map.get(state.socket.__mob__, :last_frame)
+
+    receipt = %Mob.Agent.Receipt{
+      action_id: Mob.Agent.Receipt.new_action_id(),
+      screen: state.module,
+      event: event,
+      stages: [:dispatched],
+      before_frame_fingerprint: before_tree,
+      monotonic_us: started
+    }
+
+    try do
+      state.module.handle_event(event, params, state.socket)
+    catch
+      kind, reason ->
+        # `catch` hands back the raw Erlang reason — `:function_clause`, not a
+        # `%FunctionClauseError{}` — and the raw atom cannot say *which*
+        # function failed to match. Normalising recovers the module, function
+        # and arity, which is what separates "no clause for this event" from
+        # "the handler crashed".
+        # `catch` hands back the raw Erlang reason, and the raw atom cannot say
+        # *which* function failed to match, so normalise first — for `:error`
+        # only; `Exception.normalize/3` returns `:throw` and `:exit` reasons
+        # unchanged, which is fine because neither can be an unmatched event.
+        normalized = Exception.normalize(kind, reason, __STACKTRACE__)
+
+        record_receipt(receipt, state, before_assigns, before_tree, started,
+          error: {kind, normalized},
+          stacktrace: __STACKTRACE__
+        )
+
+        :erlang.raise(kind, reason, __STACKTRACE__)
+    else
+      {:noreply, socket} ->
+        finish_event(socket, state, receipt, before_assigns, before_tree, started)
+
+      {:reply, _payload, socket} ->
+        finish_event(socket, state, receipt, before_assigns, before_tree, started)
     end
   end
 
@@ -211,6 +255,81 @@ defmodule Mob.Screen.Server do
   def handle_call({:render_sync, transition, activation_token}, _from, state) do
     {:reply, :ok, %{state | socket: paint(state, transition, :sync, activation_token)}}
   end
+
+  defp finish_event(socket, state, receipt, before_assigns, before_tree, started) do
+    # Read before `reply_after_callback/2` clears it. A handler that navigated
+    # is the reason this screen does not paint, so without this the receipt
+    # infers "nothing happened" from an absence the framework created on
+    # purpose — and calls a screen push `:inert`.
+    navigated? = not is_nil(socket.__mob__.nav_action)
+
+    {:reply, reply, new_state} = reply_after_callback(socket, state)
+
+    record_receipt(receipt, new_state, before_assigns, before_tree, started,
+      navigated: navigated?
+    )
+
+    {:reply, reply, new_state}
+  end
+
+  # Stages are derived from what actually changed, not from what ran. `handled`
+  # is the only one the callback itself proves; every later stage is a
+  # comparison the screen makes for itself.
+  #
+  # Wrapped: this runs after a successful event, and a diagnostic that can crash
+  # the screen it is observing is worse than no diagnostic. In the `catch`
+  # clause it would be worse still — it would replace the handler's exception
+  # with its own and destroy the report the feature exists to produce.
+  defp record_receipt(receipt, state, before_assigns, before_tree, started, opts) do
+    build_receipt(receipt, state, before_assigns, before_tree, started, opts)
+    |> Mob.Agent.Receipts.record()
+  rescue
+    _ -> receipt
+  catch
+    _, _ -> receipt
+  end
+
+  defp build_receipt(receipt, state, before_assigns, before_tree, started, opts) do
+    error = Keyword.get(opts, :error)
+    navigated? = Keyword.get(opts, :navigated, false)
+    observable? = state.render_mode == :render
+    after_assigns = state.socket.assigns
+    after_frame = Map.get(state.socket.__mob__, :last_frame)
+
+    unmatched? = Mob.Agent.Receipt.unmatched_event?(error, state.module)
+
+    stages =
+      [:dispatched]
+      |> add_if(unmatched?, :unhandled)
+      |> add_if(is_nil(error), :handled)
+      |> add_if(is_nil(error) and after_assigns !== before_assigns, :assigns_changed)
+      |> add_if(is_nil(error) and navigated?, :navigated)
+      # A frame is only observable in :render mode — `do_paint/5`'s :no_render
+      # clause never touches :last_frame, so comparing it there would report
+      # "the render function ignored your assigns" for every action.
+      |> add_if(is_nil(error) and observable? and after_frame != before_tree, :frame_changed)
+      # Every event paint runs with skippable: false, so a paint that happened
+      # always handed a frame over. `navigated?` is exactly the case where no
+      # paint happened.
+      |> add_if(is_nil(error) and observable? and not navigated?, :committed)
+
+    %{
+      receipt
+      | stages: stages,
+        handler: {state.module, :handle_event, 3},
+        after_frame_fingerprint: after_frame,
+        error: summarize(error, Keyword.get(opts, :stacktrace, [])),
+        elapsed_us: System.monotonic_time(:microsecond) - started
+    }
+  end
+
+  defp add_if(list, true, stage), do: list ++ [stage]
+  defp add_if(list, false, _stage), do: list
+
+  defp summarize(nil, _stacktrace), do: nil
+
+  defp summarize({kind, reason}, stacktrace),
+    do: Mob.Agent.Receipt.summarize_error(kind, reason, stacktrace)
 
   @impl GenServer
   def handle_cast({:render, transition}, state) do
