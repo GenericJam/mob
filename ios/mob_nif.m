@@ -7295,16 +7295,31 @@ static void mob_deliver_alert_action(const char *action) {
     enif_free_env(env);
 }
 
-// Returns the root UIViewController for presenting dialogs.
+// Returns the topmost presented view controller in a foreground scene.
 static UIViewController *root_vc(void) {
-    for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if (scene.activationState == UISceneActivationStateForegroundActive) {
-            UIWindow *win = scene.windows.firstObject;
-            UIViewController *vc = win.rootViewController;
-            while (vc.presentedViewController)
-                vc = vc.presentedViewController;
-            return vc;
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]] ||
+            scene.activationState != UISceneActivationStateForegroundActive)
+            continue;
+
+        UIWindowScene *window_scene = (UIWindowScene *)scene;
+        UIViewController *vc = window_scene.keyWindow.rootViewController;
+
+        if (!vc) {
+            for (UIWindow *window in window_scene.windows) {
+                if (window.rootViewController) {
+                    vc = window.rootViewController;
+                    break;
+                }
+            }
         }
+
+        if (!vc)
+            continue;
+
+        while (vc.presentedViewController)
+            vc = vc.presentedViewController;
+        return vc;
     }
     return nil;
 }
