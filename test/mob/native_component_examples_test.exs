@@ -748,7 +748,19 @@ defmodule Mob.NativeComponentExamplesTest do
                ])
 
       :rpc.call(@node, Process, :exit, [pid, :shutdown])
-      Process.sleep(50)
+
+      # The registry prunes on a :DOWN from its own monitor, which this test
+      # never sent — so nothing here orders against it. Poll until it lands.
+      Mob.Test.ProcessHelpers.eventually(fn ->
+        match?(
+          {:error, :not_found},
+          :rpc.call(@node, Mob.ComponentRegistry, :lookup, [
+            screen_pid,
+            :od_pdf_term,
+            PDFComponent
+          ])
+        )
+      end)
 
       assert {:error, :not_found} =
                :rpc.call(@node, Mob.ComponentRegistry, :lookup, [

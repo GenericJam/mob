@@ -105,7 +105,7 @@ defmodule Mob.Nav.TabTransitionTest do
   setup do
     for name <- [Mob.Nav.Registry, Mob.Sender, Mob.Listener, Mob.ComponentRegistry],
         pid = Process.whereis(name) do
-      stop_safely(pid)
+      Mob.Test.ProcessHelpers.stop_pid(pid)
     end
 
     {:ok, components} = Mob.ComponentRegistry.start_link()
@@ -115,16 +115,13 @@ defmodule Mob.Nav.TabTransitionTest do
     {:ok, router} = Mob.Router.start_root(HomeScreen, %{}, nif: RecordingNif)
 
     on_exit(fn ->
-      stop_safely(router)
-      stop_safely(registry)
-      stop_safely(components)
-      stop_safely(crash_control)
+      Mob.Test.ProcessHelpers.stop_all([router, registry, components, crash_control])
 
       for name <- [Mob.Sender, Mob.Listener], pid = Process.whereis(name) do
-        stop_safely(pid)
+        Mob.Test.ProcessHelpers.stop_pid(pid)
       end
 
-      stop_safely(recording)
+      Mob.Test.ProcessHelpers.stop_pid(recording)
     end)
 
     # The router queues initial paint from its process. Dispatching through the
@@ -133,12 +130,6 @@ defmodule Mob.Nav.TabTransitionTest do
     Mob.Router.dispatch(router, "noop", %{})
     RecordingNif.reset()
     %{router: router}
-  end
-
-  defp stop_safely(pid) do
-    GenServer.stop(pid)
-  catch
-    :exit, _ -> :ok
   end
 
   defp transitions do

@@ -57,21 +57,12 @@ defmodule Mob.Screen.IsolationTest do
     Mob.Test.ProcessHelpers.stop_if_running(Mob.Nav.Registry)
 
     {:ok, registry} = Mob.Nav.Registry.start_link(DemoApp)
-    on_exit(fn -> stop_safely(registry) end)
+    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(registry) end)
 
     {:ok, owner} = Mob.Screen.start_link(HomeScreen, %{})
-    on_exit(fn -> stop_safely(owner) end)
+    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(owner) end)
 
     %{owner: owner}
-  end
-
-  # `if Process.alive?, do: GenServer.stop` races: the process can exit between
-  # the check and the stop, and the :noproc exit then fails the test from inside
-  # the on_exit runner. Screens and their owner die with the test process.
-  defp stop_safely(pid) do
-    GenServer.stop(pid)
-  catch
-    :exit, _ -> :ok
   end
 
   describe "one process per screen" do

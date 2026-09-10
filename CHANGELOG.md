@@ -10,6 +10,110 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **Runtime invariant registry — `Mob.Invariant`** (MOB-156). Checks the
+  framework can make about itself, with the rule that keeps them from becoming
+  noise: **a violation is recorded only if the same violation is still there at
+  the next sampling of that point, and is at least 50ms old**. Every check reads
+  live state from concurrently changing processes, so a screen mid-teardown looks
+  exactly like a leak.
+
+  Re-running the check immediately instead was measured filtering none of them —
+  two evaluations a microsecond apart cannot disagree — and reported a confirmed
+  `:critical` on 60 of 60 healthy teardowns. Deferring to the next sample, with
+  an age floor, gives 0 of 60 while still catching an injected regression in the
+  reaping path it guards.
+
+  `register/2` takes a sampling point (`:on_screen_stop`, `:periodic`,
+  `:after_committed_frame`), a severity and a check function. A check that raises
+  is reported rather than propagated — a diagnostic must never affect what it
+  observes.
+
+  Two built-ins ship. `orphaned_component` — a live component under a dead owning
+  screen, the leak class three of four agents in MOB-149 named independently —
+  runs at `:on_screen_stop`, which is wired. `dead_screen_in_nav` is registered
+  for `:periodic`, and **nothing drives `:periodic` yet**; it is reachable only
+  by an explicit call until the defect bus lands in MOB-159. The other eight
+  checks MOB-156 names are listed in `Builtins.unimplemented/0` with what each
+  needs, and a test asserts none is ever silently registered.
+
+  Measured through `run/2` at 1.6µs with an empty registry, 7µs at 100 live
+  components and 16µs at 100 orphaned ones, once per screen teardown rather than
+  per frame; `cost_us/2` re-measures on the device that matters. See
+  `decisions/2026-09-10-an-invariant-must-survive-to-the-next-sample.md`.
+
+- **Causal receipts — `Mob.Agent.Receipt`** (MOB-155). Every dispatched event now
+  gets an `action_id`, and the screen records which stages the action
+  reached: dispatched, handled (or unhandled), assigns changed, navigation
+  requested, frame changed, committed. The first stage it fails to reach names the layer answerable for it,
+  so "the tap did nothing" becomes "the handler ran and changed `:count`, and the
+  tree did not change" — which points at a `render/1` that never reads `:count`.
+
+  The stages are *observed*, not reported: only `handled` is proved by the
+  callback, and every later stage is a before/after comparison the screen makes
+  itself, so a handler cannot claim an effect it did not have.
+
+  A navigation is its own verdict, and explicitly a *request*: this screen does
+  not paint when the handler navigates, so deriving the answer from the absence
+  of a paint would report a screen push as "the handler did nothing" — but the
+  router may also refuse the request (a pop at the root), which this screen
+  cannot see, so the owner is `:unknown` rather than "nothing to answer for".
+
+  **Receipts carry no state read out of assigns.** They do carry the event tag,
+  which is the action's identity and whatever the render tree put in `on_tap`.
+  A crash is reduced to its kind,
+  exception module and top stack frame; the message is dropped unless the
+  framework built it, because `KeyError` and friends embed the term that failed
+  and would otherwise carry the whole assigns map into telemetry.
+  `Mob.Agent.Receipts.fetch/1` retrieves one by id; `recent/1` lists the newest.
+  Bounded at 256, with `count/0` and `dropped/0` so a missing receipt can be told
+  apart from an id that never existed.
+
+  Emits `[:mob, :action, :stop]` **only when the host app already has
+  `:telemetry` loaded** — `mob` keeps its single runtime dependency.
+
+  `native_commit` is `:unknown`: this says what the BEAM did, not that the pixels
+  changed. See
+  `decisions/2026-09-10-a-receipt-per-action-not-a-window.md`.
+
+### Fixed
+- **A safe-area reading taken before iOS had a window is no longer kept for the
+  life of the screen** (MOB-166). `nif_safe_area` returned zeros when it could
+  find no window, which is indistinguishable from a device that genuinely has no
+  insets, and `ensure_safe_area/3` stopped asking once the assign existed. A
+  screen that painted before the window existed was under-padded at the bottom
+  and sides until it was replaced.
+
+  Two ordinary launches reach a paint that early: a background launch connects no
+  window scene at launch, and an iOS 15+ prewarmed launch runs
+  `didFinishLaunchingWithOptions:` long before the user taps the icon.
+
+  The NIF now answers `:no_window` — on a genuine absence and on a timeout, both
+  of which mean "not an answer". Zeros are still assigned (screens read
+  `assigns.safe_area` directly, so a missing key would be a `KeyError` in
+  `render/1`) but marked unconfirmed and re-read on the next paint.
+
+  Re-reading on paint is not enough on its own, because nothing repaints when a
+  scene connects. New `mob_notify_window_connected()`, called from
+  `scene:willConnectToSession:`, sends `{:mob_window, :connected}`; the screen
+  invalidates its cached insets and repaints. That also covers insets changing
+  under a live screen — a rotation, a resized scene — which a confirmed-once
+  cache would otherwise never pick up.
+
+  **Requires a native rebuild** (`mix mob.deploy --native`), and the two halves
+  must move together. Old native with new Elixir degrades safely: a 4-tuple is
+  still handled. **New native with old Elixir crashes** — `{t, r, b, l} =
+  :no_window` raises in `Mob.Screen.Server.init/1` and the root screen never
+  starts — so do not point `mob.exs`'s `mob_dir` at a newer checkout than the
+  `mix.exs` dependency.
+
+### Added
+- **`mix mob.flake`** — run the suite repeatedly and report which tests are not
+  deterministic. `--runs N`, `--until-failure`, `--keep-going`, `--seed`, and a
+  path to narrow the target. A flake does not announce itself; it fails once on
+  someone else's branch and the natural response is to re-run and move on. This
+  makes looking cheap and deliberate.
+
 ### Fixed
 - **NIFs that wait on the UI thread no longer block the only scheduler**
   (MOB-164). Android runs the BEAM with `-S 1:1` — one normal scheduler — so a
@@ -33,6 +137,38 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   wrong when it is missing *and* when it is spurious, and the first draft of
   this change flagged two NIFs that do not block.
 
+- **Test-suite races that made every automated verdict unreliable** (MOB-154,
+  MOB-119, MOB-123). A 1-in-20 flake corrupted a mutation-testing result and,
+  a day later, sent a bisect down the wrong path when it appeared in the same
+  run as a real failure.
+
+  `Mob.ComponentRegistry` is a globally-named singleton owning a named ETS
+  table, and two `async: true` modules each started it with
+  `start_supervised/1` — so whichever test won the race owned it, and ExUnit
+  tore it down while the other module was still using it. It now starts in
+  `test_helper.exs`, owned by the run.
+
+  Fourteen `on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)`
+  sites across six modules were check-then-act across a process boundary;
+  thirteen further modules had each written the same correct workaround
+  privately. All now use `Mob.Test.ProcessHelpers`, which gains `stop_pid/2`,
+  `await_exit/2` and `eventually/2`.
+
+  All 35 `Process.sleep` calls were classified rather than swept. Twelve are
+  `Process.sleep(:infinity)`, which is not a wait. Of the 23 finite ones, 17
+  were dealt with and 6 kept — the kept ones measure elapsed time, back off a
+  poll loop that has its own deadline, or are a genuine bet that is recorded
+  rather than disguised. The 17 either had nothing to wait for (a
+  `GenServer.call` from the process that sent the earlier messages is already
+  an ordering barrier) or were replaced with the actual barrier: a
+  ready-message, `Logger.flush/0`, a monitor, or a bounded poll. See
+  `decisions/2026-09-06-tests-wait-for-events-not-durations.md`.
+
+  Also fixes a temp-directory collision between concurrent `mix test` runs:
+  `System.unique_integer/1` is unique per VM, so two suites running at once
+  (a CI matrix on one box) generated the same fixture directory and each
+  `on_exit` deleted the other's files. `ProcessHelpers.tmp_path/1` includes the
+  OS pid.
 
 ### Changed
 - **Input NIFs now run on a dirty IO scheduler.** `tap`, `tap_xy`,

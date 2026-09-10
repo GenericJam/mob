@@ -103,12 +103,6 @@ defmodule Mob.Nav.ResetTransitionTest do
     end
   end
 
-  defp stop_safely(pid) do
-    GenServer.stop(pid)
-  catch
-    :exit, _ -> :ok
-  end
-
   # The transition for the frame the reset painted, ignoring the initial mount.
   defp last_transition do
     Mob.Sender.sync(:infinity)
@@ -153,7 +147,7 @@ defmodule Mob.Nav.ResetTransitionTest do
   setup do
     for name <- [Mob.Nav.Registry, Mob.Sender, Mob.Listener, Mob.ComponentRegistry],
         pid = Process.whereis(name) do
-      stop_safely(pid)
+      Mob.Test.ProcessHelpers.stop_pid(pid)
     end
 
     # The render path reconciles components, which needs the registry's table.
@@ -163,28 +157,26 @@ defmodule Mob.Nav.ResetTransitionTest do
     # directly. Mob.Router brings up the Sender and Listener under their global
     # names; leaving them behind is what produces cross-file ordering flakes.
     on_exit(fn ->
-      stop_safely(components)
+      # One list, not a sequence of raising calls: stop_pid/2 raises on timeout,
+      # so a wedged `components` would otherwise leave Sender and Listener alive
+      # under their global names — the exact cross-file leak this is preventing.
+      Mob.Test.ProcessHelpers.stop_all([
+        components,
+        Process.whereis(Mob.Sender),
+        Process.whereis(Mob.Listener)
+      ])
 
-      for name <- [Mob.Sender, Mob.Listener], pid = Process.whereis(name) do
-        stop_safely(pid)
-      end
-
-      case Process.whereis(RecordingNif) do
-        nil -> :ok
-        pid -> Agent.stop(pid)
-      end
+      Mob.Test.ProcessHelpers.stop_if_running(RecordingNif)
     end)
 
-    case Process.whereis(RecordingNif) do
-      nil -> RecordingNif.start()
-      pid -> Agent.stop(pid) && RecordingNif.start()
-    end
+    Mob.Test.ProcessHelpers.stop_if_running(RecordingNif)
+    RecordingNif.start()
 
     {:ok, registry} = Mob.Nav.Registry.start_link(DemoApp)
-    on_exit(fn -> stop_safely(registry) end)
+    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(registry) end)
 
     {:ok, router} = Mob.Router.start_root(HomeScreen, %{}, nif: RecordingNif)
-    on_exit(fn -> stop_safely(router) end)
+    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(router) end)
 
     RecordingNif.reset()
     %{router: router}

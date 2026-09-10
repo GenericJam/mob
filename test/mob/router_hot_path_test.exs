@@ -64,20 +64,14 @@ defmodule Mob.RouterHotPathTest do
     def set_root(_json), do: :ok
   end
 
-  defp stop_safely(pid) do
-    GenServer.stop(pid)
-  catch
-    :exit, _ -> :ok
-  end
-
   setup do
     Mob.Test.ProcessHelpers.stop_if_running(Mob.Nav.Registry)
 
     {:ok, registry} = Mob.Nav.Registry.start_link(DemoApp)
-    on_exit(fn -> stop_safely(registry) end)
+    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(registry) end)
 
     {:ok, router} = Mob.Screen.start_link(HomeScreen, %{})
-    on_exit(fn -> stop_safely(router) end)
+    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(router) end)
 
     screen = Mob.Screen.get_screen_pid(router)
     %{router: router, screen: screen}
@@ -152,15 +146,14 @@ defmodule Mob.RouterHotPathTest do
   describe "the render path does not reach it either" do
     setup do
       services = [Mob.Sender, Mob.Listener, Mob.ComponentRegistry]
-      for name <- services, pid = Process.whereis(name), do: stop_safely(pid)
+      for name <- services, pid = Process.whereis(name), do: Mob.Test.ProcessHelpers.stop_pid(pid)
 
       # The render path reconciles components, which needs the registry's table.
       {:ok, _} = Mob.ComponentRegistry.start_link()
       {:ok, router} = Mob.Router.start_root(HomeScreen, %{}, nif: StubNif)
 
       on_exit(fn ->
-        stop_safely(router)
-        for name <- services, pid = Process.whereis(name), do: stop_safely(pid)
+        Mob.Test.ProcessHelpers.stop_all([router | Enum.map(services, &Process.whereis/1)])
       end)
 
       %{rendering_router: router, rendering_screen: Mob.Screen.get_screen_pid(router)}

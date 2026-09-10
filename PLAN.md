@@ -137,7 +137,9 @@ USB is only required for first deploy. After that, Erlang distribution is the tr
 
 **Shipped (2026-04-15):**
 
-- `mob_nif:safe_area/0` → `{top, right, bottom, left}` floats (logical points / dp)
+- `mob_nif:safe_area/0` → `{top, right, bottom, left}` floats (logical points / dp),
+  or the atom `no_window` on iOS when no window exists yet (the caller must not
+  cache that reading — see `decisions/2026-09-10-a-safe-area-read-with-no-window-is-not-an-answer.md`)
   - iOS: reads `UIWindow.safeAreaInsets` on the main thread via `dispatch_sync`
   - Android: reads `decorView.rootWindowInsets` via `CountDownLatch` in `MobBridge`
 - `Mob.Screen.init` injects `assigns.safe_area = %{top: t, right: r, bottom: b, left: l}` before `mount/3` is called — always available, zero opt-in

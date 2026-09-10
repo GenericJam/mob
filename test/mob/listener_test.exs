@@ -13,17 +13,8 @@ defmodule Mob.ListenerTest do
 
   defp start_listener do
     {:ok, pid} = Listener.start_link([])
-    on_exit(fn -> stop_safely(pid) end)
+    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
     pid
-  end
-
-  # `if Process.alive?, do: GenServer.stop` races: the process can exit between
-  # the check and the stop, and the :noproc exit then fails the test from inside
-  # the on_exit runner.
-  defp stop_safely(pid) do
-    GenServer.stop(pid)
-  catch
-    :exit, _ -> :ok
   end
 
   describe "handler/1 without a listener" do
@@ -175,10 +166,7 @@ defmodule Mob.ListenerTest do
     end
 
     setup do
-      case Process.whereis(FakeNative) do
-        nil -> :ok
-        pid -> Agent.stop(pid)
-      end
+      Mob.Test.ProcessHelpers.stop_if_running(FakeNative)
 
       FakeNative.start()
       :ok
@@ -284,7 +272,9 @@ defmodule Mob.ListenerTest do
       assert :ok = Listener.ensure_started()
       # Registered before the assertions below, so a failure cannot leak a
       # listener into unrelated test files.
-      on_exit(fn -> if pid = Process.whereis(Listener), do: stop_safely(pid) end)
+      on_exit(fn ->
+        if pid = Process.whereis(Listener), do: Mob.Test.ProcessHelpers.stop_pid(pid)
+      end)
 
       assert Listener.running?()
       pid = Process.whereis(Listener)
@@ -304,7 +294,7 @@ defmodule Mob.ListenerTest do
 
       assert_receive :started
       listener = Process.whereis(Listener)
-      on_exit(fn -> stop_safely(listener) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(listener) end)
 
       ref = Process.monitor(caller)
       send(caller, :die)

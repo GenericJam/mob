@@ -123,7 +123,10 @@ defmodule Mob.Event.IntegrationTest do
       send(screen, {:tap, {:list, :items, :select, 0}})
       send(screen, {:tap, :stop})
 
-      Process.sleep(20)
+      # No sleep: `get_log/1` is a GenServer.call from the same process that
+      # sent the events above. Erlang guarantees message order between a pair
+      # of processes, so every send is already in the mailbox ahead of the
+      # call, and the screen handles them in order before replying.
       log = TestScreen.get_log(screen)
 
       assert log == [
@@ -141,7 +144,6 @@ defmodule Mob.Event.IntegrationTest do
       send(screen, {:not_an_event, :ignored})
       send(screen, {:tap, :b})
 
-      Process.sleep(20)
       log = TestScreen.get_log(screen)
 
       # Only the two recognised taps:
@@ -204,7 +206,6 @@ defmodule Mob.Event.IntegrationTest do
         )
       end
 
-      Process.sleep(20)
       log = TestScreen.get_log(screen)
 
       seqs =

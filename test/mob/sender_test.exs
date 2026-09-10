@@ -41,10 +41,7 @@ defmodule Mob.SenderTest do
     # flush queued, and it would record into the fresh recorder.
     Mob.Test.ProcessHelpers.stop_if_running(Sender)
 
-    case Process.whereis(RecordingNif) do
-      nil -> :ok
-      pid -> Agent.stop(pid)
-    end
+    Mob.Test.ProcessHelpers.stop_if_running(RecordingNif)
 
     RecordingNif.start()
     :ok
@@ -52,7 +49,7 @@ defmodule Mob.SenderTest do
 
   defp start_sender(active) do
     {:ok, pid} = Sender.start_link(active: active)
-    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
     pid
   end
 
@@ -469,7 +466,7 @@ defmodule Mob.SenderTest do
       refute Sender.running?()
       assert :ok = Sender.ensure_started()
       assert Sender.running?()
-      on_exit(fn -> if Sender.running?(), do: GenServer.stop(Sender) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_if_running(Sender) end)
     end
 
     test "is a no-op when one is already running" do
@@ -495,7 +492,7 @@ defmodule Mob.SenderTest do
       assert_receive {:DOWN, ^ref, :process, ^caller, _}
 
       assert Process.alive?(sender)
-      on_exit(fn -> if Sender.running?(), do: GenServer.stop(Sender) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_if_running(Sender) end)
     end
   end
 

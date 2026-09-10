@@ -107,8 +107,12 @@ defmodule Mob.NativeLoggerTest do
 
     test "Logger.info/1 reaches the handler end-to-end", %{nif_pid: pid} do
       Logger.info("end-to-end test")
-      # Give the async logger handler a moment to flush
-      Process.sleep(50)
+      # Not really a barrier: `Mob.NativeLogger` is a plain :logger handler, and
+      # :logger invokes handlers synchronously in the calling process, so the
+      # mock has already been written by the time Logger.info/1 returns. The
+      # sleep here was guarding against nothing. `flush/0` is kept as the honest
+      # way to say "and nothing is queued", at no cost, rather than a duration.
+      Logger.flush()
       calls = MockNIF.calls(pid)
 
       assert Enum.any?(calls, fn {level, msg} ->
@@ -118,7 +122,7 @@ defmodule Mob.NativeLoggerTest do
 
     test "Logger.error/1 reaches the handler with :error level", %{nif_pid: pid} do
       Logger.error("something broke")
-      Process.sleep(50)
+      Logger.flush()
       calls = MockNIF.calls(pid)
 
       assert Enum.any?(calls, fn {level, msg} ->

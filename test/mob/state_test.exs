@@ -3,7 +3,7 @@ defmodule Mob.StateTest do
 
   # Each test uses an isolated DETS file so tests don't share state.
   setup do
-    tmp = Path.join(System.tmp_dir!(), "mob_state_test_#{System.unique_integer([:positive])}")
+    tmp = Mob.Test.ProcessHelpers.tmp_path("mob_state_test")
     File.mkdir_p!(tmp)
     System.put_env("MOB_DATA_DIR", tmp)
 
@@ -65,7 +65,7 @@ defmodule Mob.StateTest do
       Process.unlink(pid)
       # bypasses terminate/2, no dets.close
       Process.exit(pid, :kill)
-      Process.sleep(10)
+      Mob.Test.ProcessHelpers.await_exit(pid)
       {:ok, _} = Mob.State.start_link()
       assert Mob.State.get(:kill_survived) == :yes
     end
