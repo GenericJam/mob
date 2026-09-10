@@ -10,6 +10,41 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **Causal receipts — `Mob.Agent.Receipt`** (MOB-155). Every dispatched event now
+  gets an `action_id`, and the screen records which stages the action
+  reached: dispatched, handled (or unhandled), assigns changed, navigation
+  requested, frame changed, committed. The first stage it fails to reach names the layer answerable for it,
+  so "the tap did nothing" becomes "the handler ran and changed `:count`, and the
+  tree did not change" — which points at a `render/1` that never reads `:count`.
+
+  The stages are *observed*, not reported: only `handled` is proved by the
+  callback, and every later stage is a before/after comparison the screen makes
+  itself, so a handler cannot claim an effect it did not have.
+
+  A navigation is its own verdict, and explicitly a *request*: this screen does
+  not paint when the handler navigates, so deriving the answer from the absence
+  of a paint would report a screen push as "the handler did nothing" — but the
+  router may also refuse the request (a pop at the root), which this screen
+  cannot see, so the owner is `:unknown` rather than "nothing to answer for".
+
+  **Receipts carry no state read out of assigns.** They do carry the event tag,
+  which is the action's identity and whatever the render tree put in `on_tap`.
+  A crash is reduced to its kind,
+  exception module and top stack frame; the message is dropped unless the
+  framework built it, because `KeyError` and friends embed the term that failed
+  and would otherwise carry the whole assigns map into telemetry.
+  `Mob.Agent.Receipts.fetch/1` retrieves one by id; `recent/1` lists the newest.
+  Bounded at 256, with `count/0` and `dropped/0` so a missing receipt can be told
+  apart from an id that never existed.
+
+  Emits `[:mob, :action, :stop]` **only when the host app already has
+  `:telemetry` loaded** — `mob` keeps its single runtime dependency.
+
+  `native_commit` is `:unknown`: this says what the BEAM did, not that the pixels
+  changed. See
+  `decisions/2026-09-10-a-receipt-per-action-not-a-window.md`.
+
 ### Fixed
 - **A safe-area reading taken before iOS had a window is no longer kept for the
   life of the screen** (MOB-166). `nif_safe_area` returned zeros when it could

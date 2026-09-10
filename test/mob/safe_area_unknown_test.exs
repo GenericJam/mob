@@ -67,7 +67,12 @@ defmodule Mob.SafeAreaUnknownTest do
 
   defp start_screen do
     {:ok, pid} = Mob.Router.start_root(Screen, %{}, nif: Nif)
-    on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
+
+    # stop_root/2, not stop_pid/2: start_root/3 also registers Mob.Sender and
+    # Mob.Listener globally, and leaving the Listener behind makes the renderer
+    # wrap tap tags for every file that runs after this one — which failed two
+    # Mob.RendererTest assertions about 1 run in 4.
+    on_exit(fn -> Mob.Test.ProcessHelpers.stop_root(pid) end)
     pid
   end
 

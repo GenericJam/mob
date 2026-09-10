@@ -50,7 +50,7 @@ defmodule Mob.ScreenTest do
     test "injects default handle_event that raises" do
       socket = Mob.Socket.new(MinimalScreen)
 
-      assert_raise RuntimeError, ~r/unhandled event/, fn ->
+      assert_raise Mob.Screen.UnhandledEventError, ~r/unhandled event/, fn ->
         MinimalScreen.handle_event("unknown", %{}, socket)
       end
     end
@@ -96,7 +96,7 @@ defmodule Mob.ScreenTest do
     test "unknown event raises RuntimeError when screen has no handle_event at all" do
       socket = Mob.Socket.new(MinimalScreen)
 
-      assert_raise RuntimeError, ~r/unhandled event/, fn ->
+      assert_raise Mob.Screen.UnhandledEventError, ~r/unhandled event/, fn ->
         MinimalScreen.handle_event("unknown", %{}, socket)
       end
     end

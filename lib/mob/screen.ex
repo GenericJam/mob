@@ -124,8 +124,7 @@ defmodule Mob.Screen do
       def terminate(_reason, _socket), do: :ok
 
       def handle_event(event, _params, _socket) do
-        raise "unhandled event #{inspect(event)} in #{inspect(__MODULE__)}. " <>
-                "Add a handle_event/3 clause to handle it."
+        raise Mob.Screen.UnhandledEventError, event: event, screen: __MODULE__
       end
 
       @before_compile Mob.Screen
