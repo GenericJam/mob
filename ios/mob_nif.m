@@ -8046,6 +8046,277 @@ static ERL_NIF_TERM nif_vendor_usb_close(ErlNifEnv *env, int argc, const ERL_NIF
     return enif_make_atom(env, "ok");
 }
 
+// ── Mob.PostMortem.IOS — MetricKit ingest (MOB-179) ──────────────────────────
+//
+// MetricKit is the OS-delivered channel for crash / hang / CPU / disk /
+// launch diagnostics. Subscribers attach at any point in the app lifetime
+// and receive whatever the OS has queued via
+// `didReceiveDiagnosticPayloads:`, called on a background queue. We
+// register our subscriber lazily on the first drain call, buffer payloads
+// in a bounded queue guarded by an `os_unfair_lock`, and hand the queue's
+// contents to the BEAM when it asks.
+//
+// This ships in release builds — per MOB-158's decision record
+// `decisions/2026-09-04-defect-reports-are-a-shipped-feature.md`, the
+// interesting failures happen where no agent is watching, so gating this
+// out of production leaves the framework blind to exactly the crashes it
+// wants to see.
+//
+// Availability: `MXMetricManagerSubscriber` is iOS 13+ but
+// `didReceiveDiagnosticPayloads:` — the delivery hook — is iOS 14+. Guard
+// with `@available(iOS 14.0, *)`; older builds hit the fallback path and
+// return an empty list.
+//
+// Redaction: `MXCallStackTree` carries binary UUIDs, image names and
+// mangled symbol offsets — safe identifiers, no user data. We only keep
+// the top frame's binary + offset for the fingerprint and the payload's
+// JSON representation as evidence; the JSON is bounded by the capsule's
+// existing truncation rules on the Elixir side.
+
+#import <MetricKit/MetricKit.h>
+#import <os/lock.h>
+
+// Bounded queue depth. A busy app can ship a burst of diagnostics on a
+// slow morning after a bad night; the last few are the ones worth
+// prioritising, so an overflow drops the head, not the tail. 32 is
+// generous — MetricKit itself delivers roughly one payload per day per
+// diagnostic class.
+#define MOB_METRICKIT_QUEUE_CAP 32
+
+// Each entry is a plain ObjC object with public ivars — ARC manages the
+// NSString / NSData retention automatically, and the struct-like access
+// keeps the enqueue path tight.
+@interface MobMetricKitEntry : NSObject {
+  @public
+    NSString *kind;       // "native_crash" | "anr" | "perf_regression"
+    NSString *top_binary; // "MyApp" — from the deepest frame's binaryName
+    uint64_t top_offset;  // offsetIntoBinaryTextSegment — decimal, opaque
+    int64_t timestamp_ms; // millisecond epoch of the payload's timeStampBegin
+    NSData *raw_json;     // MXDiagnosticPayload.JSONRepresentation
+}
+@end
+
+@implementation MobMetricKitEntry
+@end
+
+@interface MobMetricSubscriber : NSObject <MXMetricManagerSubscriber>
+@end
+
+// Storage lives at file scope, not on the subscriber instance, so a
+// re-attach (test reload; unlikely in production but possible) does not
+// lose queued payloads. Guarded by an `os_unfair_lock` — the delegate
+// runs on a background queue and the drain runs on a BEAM scheduler, and
+// both mutate the queue.
+static NSMutableArray<MobMetricKitEntry *> *g_metric_queue = nil;
+static os_unfair_lock g_metric_lock = OS_UNFAIR_LOCK_INIT;
+static MobMetricSubscriber *g_metric_subscriber = nil;
+// Attached-once guard, atomic so a lazy-init race across two schedulers
+// cannot double-register.
+static atomic_flag g_metric_attached = ATOMIC_FLAG_INIT;
+
+// Extract the top stack frame's identity from a MetricKit diagnostic's
+// call-stack tree, and enqueue an entry. Runs on MetricKit's background
+// delivery queue; the work is bounded (a single JSON parse of the tree
+// document) so it does not block a subsequent delivery.
+API_AVAILABLE(ios(14.0))
+static void enqueue_diagnostic(MXDiagnostic *diag, NSString *kind, NSData *payload_json,
+                               int64_t timestamp_ms) {
+    // MXCallStackTree lives on the specific diagnostic subclass (crash,
+    // cpu, hang, disk, launch) — the abstract base class does not expose
+    // it. Reach through with `respondsToSelector` rather than switching
+    // on `isKindOfClass` so a future MetricKit diagnostic type still
+    // works without a compile change.
+    if (![diag respondsToSelector:@selector(callStackTree)])
+        return;
+    MXCallStackTree *tree = [diag performSelector:@selector(callStackTree)];
+    if (!tree)
+        return;
+    NSData *treeJson = [tree JSONRepresentation];
+    if (!treeJson)
+        return;
+
+    NSError *err = nil;
+    NSDictionary *parsed = [NSJSONSerialization JSONObjectWithData:treeJson options:0 error:&err];
+    if (err || ![parsed isKindOfClass:[NSDictionary class]])
+        return;
+
+    NSString *top_binary = @"(unknown)";
+    uint64_t top_offset = 0;
+    NSArray *stacks = parsed[@"callStacks"];
+    if ([stacks isKindOfClass:[NSArray class]] && stacks.count > 0) {
+        NSDictionary *stack = stacks[0];
+        NSArray *frames = stack[@"callStackRootFrames"];
+        if ([frames isKindOfClass:[NSArray class]] && frames.count > 0) {
+            NSDictionary *frame = frames[0];
+            id binary = frame[@"binaryName"];
+            id offset = frame[@"offsetIntoBinaryTextSegment"];
+            if ([binary isKindOfClass:[NSString class]])
+                top_binary = binary;
+            if ([offset isKindOfClass:[NSNumber class]])
+                top_offset = [offset unsignedLongLongValue];
+        }
+    }
+
+    MobMetricKitEntry *entry = [[MobMetricKitEntry alloc] init];
+    if (!entry)
+        return;
+    entry->kind = kind;
+    entry->top_binary = top_binary;
+    entry->top_offset = top_offset;
+    entry->timestamp_ms = timestamp_ms;
+    entry->raw_json = payload_json;
+
+    os_unfair_lock_lock(&g_metric_lock);
+    if (!g_metric_queue) {
+        g_metric_queue = [NSMutableArray arrayWithCapacity:MOB_METRICKIT_QUEUE_CAP];
+    }
+    if (g_metric_queue.count >= MOB_METRICKIT_QUEUE_CAP) {
+        // Drop the head — oldest — so the most recent, most relevant
+        // diagnostics survive an overflow.
+        [g_metric_queue removeObjectAtIndex:0];
+    }
+    [g_metric_queue addObject:entry];
+    os_unfair_lock_unlock(&g_metric_lock);
+}
+
+@implementation MobMetricSubscriber
+
+- (void)didReceiveDiagnosticPayloads:(NSArray<MXDiagnosticPayload *> *)payloads
+    API_AVAILABLE(ios(14.0)) {
+    // Called on a background queue per Apple docs. Cheap work only:
+    // extract fingerprint fields, capture the payload JSON for evidence,
+    // enqueue. Anything expensive (parsing every frame, symbolication)
+    // belongs on the BEAM side after the drain, so a MetricKit delivery
+    // burst does not block the OS's delivery queue.
+    for (MXDiagnosticPayload *payload in payloads) {
+        NSData *fullJson = [payload JSONRepresentation];
+        int64_t timestamp_ms = (int64_t)([payload.timeStampBegin timeIntervalSince1970] * 1000.0);
+
+        for (MXCrashDiagnostic *d in [payload crashDiagnostics]) {
+            enqueue_diagnostic(d, @"native_crash", fullJson, timestamp_ms);
+        }
+        for (MXHangDiagnostic *d in [payload hangDiagnostics]) {
+            enqueue_diagnostic(d, @"anr", fullJson, timestamp_ms);
+        }
+        for (MXCPUExceptionDiagnostic *d in [payload cpuExceptionDiagnostics]) {
+            enqueue_diagnostic(d, @"perf_regression", fullJson, timestamp_ms);
+        }
+        for (MXDiskWriteExceptionDiagnostic *d in [payload diskWriteExceptionDiagnostics]) {
+            enqueue_diagnostic(d, @"perf_regression", fullJson, timestamp_ms);
+        }
+    }
+}
+
+@end
+
+static void mob_metrickit_attach_if_needed(void) {
+    if (@available(iOS 14.0, *)) {
+        if (!atomic_flag_test_and_set(&g_metric_attached)) {
+            // First caller — attach the subscriber. The `set` on
+            // `atomic_flag_test_and_set` is what makes this idempotent
+            // across concurrent lazy-init callers.
+            dispatch_async(dispatch_get_main_queue(), ^{
+              if (!g_metric_subscriber) {
+                  g_metric_subscriber = [[MobMetricSubscriber alloc] init];
+              }
+              [[MXMetricManager sharedManager] addSubscriber:g_metric_subscriber];
+              LOGI(@"Mob.PostMortem.IOS: MetricKit subscriber attached");
+            });
+        }
+    }
+}
+
+static ERL_NIF_TERM nif_post_mortem_ios_drain(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+
+    if (@available(iOS 14.0, *)) {
+        mob_metrickit_attach_if_needed();
+
+        NSArray<MobMetricKitEntry *> *drained;
+        os_unfair_lock_lock(&g_metric_lock);
+        drained = g_metric_queue ? [g_metric_queue copy] : @[];
+        [g_metric_queue removeAllObjects];
+        os_unfair_lock_unlock(&g_metric_lock);
+
+        ERL_NIF_TERM list = enif_make_list(env, 0);
+        // Reverse iterate so the returned list is chronological (oldest
+        // first) — enif_make_list_cell prepends.
+        for (NSInteger i = drained.count - 1; i >= 0; i--) {
+            MobMetricKitEntry *e = drained[i];
+
+            // enif_alloc_binary returns 0 on OOM; the ErlNifBinary
+            // fields are undefined in that case and enif_make_binary
+            // would promote garbage to a term. The convention in this
+            // file (elsewhere: JSON blob builder, RGBA screenshot path)
+            // is to skip the entry on failure rather than propagate UB
+            // — a partial drain is honest, a corrupted capsule is not.
+            ErlNifBinary top_binary_bin;
+            const char *tb = e->top_binary.UTF8String;
+            size_t tb_len = tb ? strlen(tb) : 0;
+            if (!enif_alloc_binary(tb_len, &top_binary_bin)) {
+                LOGE(@"nif_post_mortem_ios_drain: enif_alloc_binary "
+                     @"(top_binary, %zu bytes) failed; dropping entry",
+                     tb_len);
+                continue;
+            }
+            if (tb_len)
+                memcpy(top_binary_bin.data, tb, tb_len);
+            ERL_NIF_TERM top_binary_term = enif_make_binary(env, &top_binary_bin);
+
+            ERL_NIF_TERM top_offset_term = enif_make_uint64(env, e->top_offset);
+
+            ERL_NIF_TERM top_frame_keys[] = {
+                enif_make_atom(env, "binary"),
+                enif_make_atom(env, "offset"),
+            };
+            ERL_NIF_TERM top_frame_vals[] = {top_binary_term, top_offset_term};
+            ERL_NIF_TERM top_frame_map;
+            enif_make_map_from_arrays(env, top_frame_keys, top_frame_vals, 2, &top_frame_map);
+
+            const char *kind = e->kind.UTF8String;
+            ERL_NIF_TERM kind_atom = enif_make_atom(env, kind ? kind : "unknown");
+
+            ErlNifBinary raw_bin;
+            NSUInteger raw_len = e->raw_json ? e->raw_json.length : 0;
+            if (!enif_alloc_binary(raw_len, &raw_bin)) {
+                LOGE(@"nif_post_mortem_ios_drain: enif_alloc_binary "
+                     @"(raw_json, %lu bytes) failed; dropping entry",
+                     (unsigned long)raw_len);
+                // top_binary_bin was already handed to enif_make_binary
+                // (line above), which transfers ownership to the BEAM
+                // — do not release it. Skip the entry.
+                continue;
+            }
+            if (raw_len)
+                memcpy(raw_bin.data, e->raw_json.bytes, raw_len);
+            ERL_NIF_TERM raw_term = enif_make_binary(env, &raw_bin);
+
+            ERL_NIF_TERM entry_keys[] = {
+                enif_make_atom(env, "kind"),
+                enif_make_atom(env, "top_frame"),
+                enif_make_atom(env, "timestamp_ms"),
+                enif_make_atom(env, "raw_json"),
+            };
+            ERL_NIF_TERM entry_vals[] = {
+                kind_atom,
+                top_frame_map,
+                enif_make_int64(env, e->timestamp_ms),
+                raw_term,
+            };
+            ERL_NIF_TERM entry_map;
+            enif_make_map_from_arrays(env, entry_keys, entry_vals, 4, &entry_map);
+
+            list = enif_make_list_cell(env, entry_map, list);
+        }
+
+        return list;
+    }
+
+    // iOS < 14 — MetricKit's delivery API is not available.
+    return enif_make_list(env, 0);
+}
+
 // Scheduling notes for nif_funcs[] below — see docs/decisions/0001-dirty-nifs.md
 // for the full rationale. Short version: most NIFs here either dispatch_async
 // to the main queue and return in microseconds, or dispatch_sync but read a
@@ -8187,6 +8458,14 @@ static ErlNifFunc nif_funcs[] = {
     // doesn't head-of-line-block the regular schedulers. See the impl
     // above for the iOS rationale.
     {"resolve_ipv4", 1, nif_resolve_ipv4, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    // Drains the MetricKit diagnostic queue. Returns promptly on a
+    // regular scheduler: the first-call subscriber attach is a
+    // fire-and-forget `dispatch_async` to the main queue (no wait); the
+    // drain itself is a bounded (≤ MOB_METRICKIT_QUEUE_CAP, 32) copy
+    // under `os_unfair_lock`, then term-building for each entry.
+    // Nothing blocks on another thread; nothing computes for
+    // scheduler-blocking durations.
+    {"post_mortem_ios_drain", 0, nif_post_mortem_ios_drain, 0},
 };
 
 static int nif_load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info) {

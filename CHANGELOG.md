@@ -46,11 +46,35 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `:fatal`; a literal `normal` exit is `:info`; anything else is
   `:critical`.
 
-- **iOS and Android post-mortem scaffolds — `Mob.PostMortem.IOS`,
-  `Mob.PostMortem.Android`**. `sweep/0` returns `[]` and logs once at
-  `:info`. The real native pipes (MetricKit for iOS,
-  `ApplicationExitInfo` for Android) are their own follow-up tickets
-  with per-platform device verification.
+- **iOS MetricKit ingest for `Mob.PostMortem.IOS`** (MOB-179). Replaces
+  the phase 1 scaffold. `Mob.PostMortem.sweep/0` on iOS now attaches an
+  `MXMetricManagerSubscriber` on first call (lazy — no work for apps
+  that never opt in), buffers OS-delivered payloads in a bounded native
+  queue (32 entries, oldest-dropped on overflow), and drains them into
+  `Mob.Defect.Capsule`s on each subsequent call. Ships in release —
+  MetricKit is the whole reason MOB-158 exists.
+
+  Payload → kind mapping: `MXCrashDiagnosticPayload` → `:native_crash`
+  / `:fatal`; `MXHangDiagnosticPayload` → `:anr` / `:critical`;
+  `MXCPUExceptionDiagnosticPayload` and
+  `MXDiskWriteExceptionDiagnosticPayload` → `:perf_regression` /
+  `:warning`.
+
+  Fingerprint groups a crash by (kind + top-frame binary + top-frame
+  offset) so the same crash across launches becomes one triage row.
+  Redaction: MetricKit call-stack payloads carry only mangled symbols,
+  binary UUIDs and image names — safe identifiers, no user data. The
+  full `MXDiagnosticPayload.JSONRepresentation` rides on evidence,
+  bounded by the capsule's existing truncation.
+
+  iOS 14+ required (`didReceiveDiagnosticPayloads:` is iOS 14+). Older
+  builds hit the fallback path and return `[]`. Android's stub NIF also
+  returns `[]` — `ApplicationExitInfo` is a separate ticket (MOB-180).
+
+- **Android post-mortem scaffold — `Mob.PostMortem.Android`**.
+  `sweep/0` returns `[]` and logs once at `:info`. The real native
+  pipe (`ApplicationExitInfo`) is a follow-up ticket (MOB-180) with
+  device verification.
 
 ---
 

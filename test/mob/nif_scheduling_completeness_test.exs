@@ -51,13 +51,13 @@ defmodule Mob.NifSchedulingCompletenessTest do
     device_low_power_mode device_model device_network_state device_os_version
     device_set_dispatcher device_thermal_state exit_app files_pick haptic log
     motion_start motion_stop native_stats_enable open_settings open_url
-    platform register_component register_tap request_permission share_text
-    storage_dir storage_external_files_dir storage_save_to_media_store
-    storage_save_to_photo_library take_launch_notification take_opened_document
-    toast_show torch tts_speak tts_stop vendor_usb_bulk_write vendor_usb_close
-    vendor_usb_list_devices vendor_usb_open vendor_usb_request_permission
-    vendor_usb_start_reading vendor_usb_stop_reading webview_eval_js
-    webview_go_back webview_post_message
+    platform post_mortem_ios_drain register_component register_tap
+    request_permission share_text storage_dir storage_external_files_dir
+    storage_save_to_media_store storage_save_to_photo_library
+    take_launch_notification take_opened_document toast_show torch tts_speak
+    tts_stop vendor_usb_bulk_write vendor_usb_close vendor_usb_list_devices
+    vendor_usb_open vendor_usb_request_permission vendor_usb_start_reading
+    vendor_usb_stop_reading webview_eval_js webview_go_back webview_post_message
   )
 
   setup_all do
