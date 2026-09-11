@@ -5,19 +5,26 @@ defmodule Mob.PostMortem do
 
   Three sources, each in its own submodule:
 
-  * `Mob.PostMortem.BeamCrashDump` — `erl_crash.dump` files (BEAM). Fully
-    implemented; the substrate this module was written around.
+  * `Mob.PostMortem.BeamCrashDump` — `erl_crash.dump` files (BEAM).
+    Scans configured paths, reads a bounded 8 KB header, dedups by
+    sha256, emits `:beam_crash` capsules.
   * `Mob.PostMortem.IOS` — MetricKit payloads (crash / hang / launch /
-    CPU / memory / disk). Scaffolded; returns an empty list until the
-    native pipe lands in a follow-up ticket. See its own moduledoc.
-  * `Mob.PostMortem.Android` — `ApplicationExitInfo` history (ANR, crash,
-    OOM, user kill). Same shape as iOS: scaffolded, follow-up.
+    CPU / memory / disk). Attaches an `MXMetricManagerSubscriber`
+    lazily on first sweep, buffers OS-delivered payloads in a bounded
+    native queue, emits `:native_crash` / `:anr` / `:perf_regression`
+    capsules on drain.
+  * `Mob.PostMortem.Android` — `ApplicationExitInfo` history (ANR,
+    crash, OOM, user kill). Pulls the OS-held exit-reason list on
+    demand (API 30+), filters against a persistent marker so each
+    exit emits exactly once across boots, emits `:native_crash` /
+    `:anr` / `:oom` / `:user_kill` capsules.
 
-  Nothing here runs automatically. An app opts in with
-  `Mob.PostMortem.sweep()` from its `on_start`, or a developer / CI runs
-  the equivalent `mix mob.post_mortems.sweep` task from the host. That
-  matches the discipline the whole `Mob.Defect` subsystem enforces:
-  mob owns the format and the bus but never becomes the collector.
+  Nothing here runs automatically. An app opts in by calling
+  `Mob.PostMortem.sweep/0` from its `on_start`, and a developer or CI
+  calls the same function from an IEx session (there is no dedicated
+  Mix task — the whole surface is one function). That matches the
+  discipline the `Mob.Defect` subsystem enforces: mob owns the format
+  and the bus but never becomes the collector.
 
   ## Idempotence
 
@@ -68,9 +75,11 @@ defmodule Mob.PostMortem do
     |> Kernel.++(sweep_native())
   end
 
-  # iOS + Android scaffolds intentionally return `[]` today. They exist
-  # as symbols so this coordinator does not have to grow a per-platform
-  # branch every time a native source lands.
+  # Both platform modules gate on `:mob_nif.platform/0` internally, so
+  # each call is a no-op on the wrong platform (and on host, where the
+  # NIF is not loaded). The coordinator therefore does not need a
+  # per-platform branch — it just asks both. On iOS the Android drain
+  # returns [] and vice versa.
   defp sweep_native do
     Mob.PostMortem.IOS.sweep() ++ Mob.PostMortem.Android.sweep()
   end

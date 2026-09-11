@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-09-11
+
 ### Added
 - **Post-mortem collection — `Mob.PostMortem` +
   `Mob.PostMortem.BeamCrashDump`** (MOB-158, phase 1). The framework
