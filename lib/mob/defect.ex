@@ -243,4 +243,107 @@ defmodule Mob.Defect do
   # type this dispatch does not know yet. Log severity, not silent
   # absorption.
   defp metrickit_severity(_), do: :critical
+
+  @doc """
+  Emit a defect for one Android `ApplicationExitInfo` entry.
+
+  Owner is `:mob` — an ApplicationExitInfo record describes the death
+  of this app's own process from the OS's point of view, and mob owns
+  the process during a mob-app lifetime.
+
+  The `entry` map comes from `Mob.PostMortem.Android.sweep/0`'s drain
+  of the native queue. Its shape:
+
+      %{
+        reason_code: 6,       # ApplicationExitInfo.REASON_* integer
+        pid: 12345,
+        timestamp_ms: 1_726_050_000_000,
+        process_name: "com.example.app",
+        description: "remote process crash"
+      }
+
+  Reason code → kind mapping (numeric constants from Android's
+  `android.app.ApplicationExitInfo` public API, hard-coded here rather
+  than depending on the JNI shim to name them):
+
+  | Reason(s) | `kind` | `severity` |
+  |---|---|---|
+  | `REASON_CRASH_NATIVE` (5), `REASON_CRASH` (4), `REASON_SIGNALED` (2) | `:native_crash` | `:fatal` |
+  | `REASON_ANR` (6) | `:anr` | `:critical` |
+  | `REASON_LOW_MEMORY` (3), `REASON_EXCESSIVE_RESOURCE_USAGE` (9) | `:oom` | `:fatal` |
+  | `REASON_USER_STOPPED` (11), `REASON_USER_REQUESTED` (10), `REASON_EXIT_SELF` (1), `REASON_DEPENDENCY_DIED` (12) | `:user_kill` | `:info` |
+  | anything else (unknown / rare) | `:user_kill` | `:info` |
+
+  The `:info` default for unrecognised reason codes is deliberate. A
+  novel reason a future Android version invents is not a defect to
+  page a triager on; downgrading to routine is safer than upgrading
+  to critical. The specific `REASON_*` mappings above match Android's
+  documented severity semantics.
+
+  Fingerprint groups by `(kind + process_name + reason_code)` — the
+  same class of exit for the same process across boots becomes one
+  triage row.
+  """
+  @spec emit_appexit_reason(map()) :: Capsule.t()
+  def emit_appexit_reason(
+        %{
+          reason_code: reason_code,
+          pid: _pid,
+          timestamp_ms: timestamp_ms,
+          process_name: process_name,
+          description: description
+        } = _entry
+      ) do
+    kind = appexit_kind(reason_code)
+
+    Capsule.new(
+      kind: kind,
+      owner: :mob,
+      severity: appexit_severity(kind),
+      fingerprint_key: %{
+        source: :application_exit_info,
+        kind: kind,
+        process_name: process_name,
+        reason_code: reason_code
+      },
+      evidence: %{
+        source: :application_exit_info,
+        reason_code: reason_code,
+        process_name: process_name,
+        description: description,
+        timestamp_ms: timestamp_ms
+      }
+    )
+    |> Bus.emit()
+  end
+
+  # Reason code → defect kind. Numeric constants from
+  # android.app.ApplicationExitInfo; source of truth is the Android
+  # SDK (stable across Android 11+).
+  #
+  # 4 = REASON_CRASH, 5 = REASON_CRASH_NATIVE, 2 = REASON_SIGNALED
+  defp appexit_kind(4), do: :native_crash
+  defp appexit_kind(5), do: :native_crash
+  defp appexit_kind(2), do: :native_crash
+
+  # 6 = REASON_ANR
+  defp appexit_kind(6), do: :anr
+
+  # 3 = REASON_LOW_MEMORY, 9 = REASON_EXCESSIVE_RESOURCE_USAGE
+  defp appexit_kind(3), do: :oom
+  defp appexit_kind(9), do: :oom
+
+  # 1 = REASON_EXIT_SELF, 10 = REASON_USER_REQUESTED,
+  # 11 = REASON_USER_STOPPED, 12 = REASON_DEPENDENCY_DIED,
+  # 13 = REASON_OTHER, 14 = REASON_FREEZER
+  defp appexit_kind(_other), do: :user_kill
+
+  # appexit_kind/1 above is total across the reason-code integer domain
+  # (the `defp appexit_kind(_other)` fallback catches everything not
+  # explicitly matched), so its return is one of these four atoms only.
+  # A `_` fallback here would be dead code the compiler rightly flags.
+  defp appexit_severity(:native_crash), do: :fatal
+  defp appexit_severity(:anr), do: :critical
+  defp appexit_severity(:oom), do: :fatal
+  defp appexit_severity(:user_kill), do: :info
 end

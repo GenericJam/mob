@@ -72,10 +72,38 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   builds hit the fallback path and return `[]`. Android's stub NIF also
   returns `[]` — `ApplicationExitInfo` is a separate ticket (MOB-180).
 
-- **Android post-mortem scaffold — `Mob.PostMortem.Android`**.
-  `sweep/0` returns `[]` and logs once at `:info`. The real native
-  pipe (`ApplicationExitInfo`) is a follow-up ticket (MOB-180) with
-  device verification.
+- **Android ApplicationExitInfo ingest for `Mob.PostMortem.Android`**
+  (MOB-180). Replaces the phase 1 scaffold. `Mob.PostMortem.sweep/0`
+  on Android now pulls the OS-held history of process exits via
+  `ActivityManager.getHistoricalProcessExitReasons` (API 30+), filters
+  against a persistent marker at
+  `<filesDir>/mob_post_mortem_appexit_marker.txt` so each exit emits
+  exactly once across boots, and turns each new entry into a
+  `Mob.Defect.Capsule` on `Mob.Defect.Bus`.
+
+  Reason code → kind mapping: `REASON_CRASH` / `REASON_CRASH_NATIVE`
+  / `REASON_SIGNALED` → `:native_crash` / `:fatal`; `REASON_ANR` →
+  `:anr` / `:critical`; `REASON_LOW_MEMORY` /
+  `REASON_EXCESSIVE_RESOURCE_USAGE` → `:oom` / `:fatal`;
+  `REASON_USER_STOPPED` / `REASON_USER_REQUESTED` / `REASON_EXIT_SELF`
+  / `REASON_DEPENDENCY_DIED` / `REASON_OTHER` / `REASON_FREEZER` →
+  `:user_kill` / `:info`.
+
+  Fingerprint groups by `(kind + process_name + reason_code)` — the
+  same class of exit for the same process across boots becomes one
+  triage row. The emitted capsule carries reason code, pid,
+  timestamp, process name, and the OS-generated description string.
+  Trace file contents (an ANR's stack text) are NOT included this
+  phase — they can carry app strings and need the same discipline the
+  receipt module documents before they can safely reach the bus.
+
+  Implementation is pure Zig JNI in `android/jni/mob_nif.zig` rather
+  than a `MobBridge.kt.eex` template addition. Every existing mob
+  app gets the feature the moment they bump mob, with no template
+  refresh dance. See
+  `decisions/2026-09-11-appexit-native-jni-not-bridge.md`. iOS
+  registers a stub `nif_post_mortem_android_drain` returning `[]` so
+  the shared `mob_nif.erl` NIF list resolves on both platforms.
 
 ---
 
