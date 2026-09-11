@@ -8,7 +8,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.8.0] - 2026-09-11
 
 ### Added
 - **`Mob.Differential.compare/3`** (MOB-157). A pure comparator over two
