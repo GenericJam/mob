@@ -8,6 +8,54 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Defect bus — `Mob.Defect`, `Mob.Defect.Capsule`, `Mob.Defect.Bus`,
+  `Mob.Defect.Sinks.Dev`** (MOB-159, phase 1). Capture + dedup + attribution
+  for defects the framework detects — steps 1-3 of the incident-to-draft-PR
+  loop. Not the loop itself; no auto-action, no auto-PR.
+
+  `Mob.Defect.Capsule` is the `mob.defect/1` schema from
+  `decisions/2026-09-04-defect-reports-are-a-shipped-feature.md` in Elixir:
+  `Capsule.new/1` builds the struct, populates `build` and `device`
+  automatically, tags `redaction: :applied` on the caller-trust contract,
+  and truncates evidence at 4096 bytes per string / 64 elements per list /
+  8 levels of depth so a malicious deep term cannot exhaust the packager.
+  `fingerprint/3` is a sha256 over `kind + owner + fingerprint_key` only —
+  time, id, build and device are excluded so a defect groups across
+  releases and devices. `to_json/1` produces the wire form; the whole
+  capsule round-trips through Jason.
+
+  `Mob.Defect.Bus` is an in-process pub/sub with two ETS tables (a
+  `classes` set keyed by fingerprint that carries the first capsule and an
+  occurrences counter, and a bounded ring of the 64 most-recent capsules).
+  `emit/1` is on the write path — no GenServer round-trip, mirroring
+  `Mob.Agent.Receipts.record/1`. Subscribers are stored in
+  `:persistent_term` and monitored by the owner GenServer so a subscriber
+  exit prunes itself; a dead pid in the fanout list is a no-op because
+  `send/2` does not raise on a dead pid.
+
+  `Mob.Defect.Sinks.Dev` is an opt-in GenServer that subscribes on
+  `init/1` and Logger-writes each capsule at a severity-driven level
+  (`:fatal` / `:critical` → `error`, `:warning` → `warning`, else `info`).
+  Not started by default — per the decision record, mob owns the format
+  and the bus but never the destination.
+
+  `Mob.Defect.emit_invariant_violation/1` and `emit_divergence/2`
+  encapsulate the mapping from a detector's native shape (`Mob.Invariant.Violation`,
+  `Mob.Differential`'s divergence map) to a capsule with the right owner,
+  kind, and fingerprint key.
+
+  Wired: `Mob.Invariant.record/1` now emits a capsule for every confirmed
+  violation. Not wired in this PR: the differential emit-point is a
+  follow-up mob_dev change that lands after this ships to Hex.
+
+  See `decisions/2026-09-11-fingerprint-and-evidence-are-separate.md` for
+  the fingerprint-vs-evidence design.
+
+---
+
 ## [0.8.0] - 2026-09-11
 
 ### Added
