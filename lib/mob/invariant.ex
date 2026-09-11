@@ -335,6 +335,12 @@ defmodule Mob.Invariant do
       :ets.select_delete(@violations, [{{:"$1", :_}, [{:<, :"$1", seq - @keep + 1}], [true]}])
     end
 
+    # A confirmed violation is a defect by definition — the maturation logic
+    # above is precisely the "this is real, not a transient" gate. Emit as a
+    # capsule so subscribers on the bus (a dev sink, an app's own reporter)
+    # see it. See `Mob.Defect.emit_invariant_violation/1`.
+    Mob.Defect.emit_invariant_violation(violation)
+
     violation
   end
 
