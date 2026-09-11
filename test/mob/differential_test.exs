@@ -273,6 +273,12 @@ defmodule Mob.DifferentialTest do
       # matching decision here breaks this assertion.
       canonical_keys = ~w(bg_color children class frame label text_color type value)a
       assert Enum.sort(Map.keys(hd(base.children))) == canonical_keys
+
+      # Cross-check against the real normalisation contract. A field added to
+      # `Mob.Test.normalize_view_tree/1` without updating this test would
+      # otherwise slip through the test-local `mk/2` shape.
+      normalised = Mob.Test.normalize_view_tree(%{"type" => "x"})
+      assert Enum.sort(Map.keys(normalised)) == canonical_keys
     end
   end
 

@@ -105,6 +105,14 @@ defmodule Mob.Differential do
   # Depth-first, root pair first, then children left-to-right. The recursion
   # returns as soon as any level reports a divergence, so the caller sees the
   # first thing that differs rather than the deepest.
+  #
+  # `compare_type` runs FIRST on purpose: a malformed child (nil, a string, a
+  # map without `:type`) doesn't match its `%{type: _}` head clause and raises
+  # `FunctionClauseError`, which `compare/3` catches and returns as
+  # `{:error, :not_ready}` — the harness-gap outcome the moduledoc promises.
+  # If a check using `Access` (like `compare_labels`, `ios[:label]`) ran first,
+  # `nil[:label]` would silently be `nil` and a bogus `%{reason: :label}`
+  # divergence would land in a report as a framework defect.
   defp walk(ios, android, path, tolerance, root?) do
     with :ok <- compare_type(ios, android, path),
          :ok <- compare_labels(ios, android, path),
