@@ -812,6 +812,19 @@ defmodule Mob.RendererTest do
       assert :json.decode(json)["props"]["padding"] == 32
     end
 
+    test "wrap spacing tokens resolve for both axes" do
+      tree = %{
+        type: :wrap,
+        props: %{spacing: :space_sm, run_spacing: :space_md},
+        children: []
+      }
+
+      Renderer.render(tree, :ios, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+
+      assert :json.decode(json)["props"] == %{"spacing" => 8, "run_spacing" => 16}
+    end
+
     test "radius token :radius_md resolves to theme value" do
       tree = %{type: :button, props: %{text: "x", corner_radius: :radius_md}, children: []}
       Renderer.render(tree, :android, MockNIF)
@@ -896,6 +909,7 @@ defmodule Mob.RendererTest do
     test "button → \"button\"", do: assert(rendered_type(:button) == "button")
     test "column → \"column\"", do: assert(rendered_type(:column) == "column")
     test "row → \"row\"", do: assert(rendered_type(:row) == "row")
+    test "wrap → \"wrap\"", do: assert(rendered_type(:wrap) == "wrap")
     test "image → \"image\"", do: assert(rendered_type(:image) == "image")
     test "scroll → \"scroll\"", do: assert(rendered_type(:scroll) == "scroll")
 

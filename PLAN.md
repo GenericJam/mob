@@ -1767,13 +1767,13 @@ A child that stretches to fill remaining space in a `column` or `row`. The singl
 iOS: `Spacer()` in HStack already does this; need to wire `spacer` with no `size` prop to it.
 Android: `Modifier.weight(1f)` on the child composable.
 
-**`wrap` layout ⬜**
+**`wrap` layout ✅**
 A row that wraps children to the next line when they overflow. Used for tag chips, filter pills, multi-select badge lists.
 ```elixir
 %{type: :wrap, props: %{spacing: 8, run_spacing: 8}, children: tag_chips}
 ```
-iOS: `FlowLayout` (iOS 16+) or manual `GeometryReader` + `LazyVGrid` workaround.
-Android: `FlowRow` (Compose 1.5+).
+iOS: measured custom SwiftUI `Layout` (iOS 17+).
+Android: `FlowRow`.
 
 **Absolute positioning ⬜**
 Position a child at exact coordinates within a `box` (ZStack). Needed for overlay badges, floating action buttons, custom tooltips, notification dots on icons.

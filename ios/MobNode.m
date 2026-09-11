@@ -28,6 +28,8 @@
         _axis = @"vertical";
         _showIndicator = YES;
         _rowAlign = @"center";
+        _wrapSpacing = 0.0;
+        _wrapRunSpacing = 0.0;
         _boxAlign = @"top_leading";
         _offsetX = 0.0;
         _offsetY = 0.0;
@@ -38,6 +40,7 @@
         _fixedHeight = 0.0;
         _layoutWeight = 0.0;
         _fillWidth = NO;
+        _fillWidthSet = NO;
         _lazyContent = NO;
         _cornerRadius = 0.0;
         _nativeViewHandle = -1;     // -1 = no native component slot assigned (MOB-100)

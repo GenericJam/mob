@@ -10,6 +10,7 @@ Mob does not wrap a web renderer — you are writing directly to SwiftUI and Com
 |---|---|---|
 | `:column` | `VStack(alignment: .leading, spacing: 0)` | `Column` |
 | `:row` | `HStack(spacing: 0)` | `Row` |
+| `:wrap` | custom measured `Layout` | `FlowRow` |
 | `:box` | `ZStack(alignment: .topLeading)` | `Box(contentAlignment = Alignment.TopStart)` |
 | `:scroll` | `ScrollView` (vertical or horizontal) | `Column/Row` + `.verticalScroll` / `.horizontalScroll` |
 | `:text` | `Text` | `Text` |
@@ -41,7 +42,15 @@ These props apply to every component via `nodeModifier` (Android) and view modif
 | `padding` | `.padding(EdgeInsets)` | `Modifier.padding(all =)` | Uniform on all sides |
 | `padding_top/right/bottom/left` | `.padding(EdgeInsets)` | `Modifier.padding(top=, end=, bottom=, start=)` | Per-edge; falls back to `padding` for unset edges |
 | `corner_radius` | `.clipShape(RoundedRectangle(cornerRadius:))` | `RoundedCornerShape(dp)` applied to background + clip | Applied after background, before children render |
-| `fill_width` | `.frame(maxWidth: .infinity)` | `Modifier.fillMaxWidth()` | Defaults `true` on `:button`; `false` on others unless set |
+| `fill_width` | `.frame(maxWidth: .infinity)` | `Modifier.fillMaxWidth()` | Defaults `true` on `:button` and `:box`; `false` on others unless set. Explicit `false` makes a box hug its content. |
+
+`wrap` greedily packs children in source order using their measured native size.
+`spacing` controls horizontal item spacing and `run_spacing` controls vertical
+spacing between rows; both accept numbers or theme spacing tokens. Intrinsic
+children that exceed the available width are proposed that width so text can
+wrap, and a child with `fill_width: true` occupies a complete run. An explicit
+fixed `width` remains an overflow escape hatch. `weight` has no meaning inside
+`wrap`; use it only for children of `row` or `column`.
 
 iOS reference: [SwiftUI Layout](https://developer.apple.com/documentation/swiftui/layout-fundamentals)
 Android reference: [Compose modifiers](https://developer.android.com/develop/ui/compose/modifiers)

@@ -203,6 +203,33 @@ A single weighted child expands into the parent's remaining main-axis space. Mul
 weighted children divide that space evenly on iOS; Android additionally honors unequal
 numeric ratios. Weight values must be positive. Use equal weights for cross-platform layouts.
 
+### `:wrap`
+
+Greedily lays out children from start to end and starts a new run when the
+next child's measured native width would exceed the available width. This is
+the layout to use for chips, tags, filters, and other content-sized items:
+
+```elixir
+~MOB"""
+<Wrap spacing={:space_sm} run_spacing={:space_sm} fill_width={true}>
+  <Box :for={tag <- @tags} fill_width={false} padding={:space_sm} corner_radius={:radius_lg}>
+    <Text text={tag} />
+  </Box>
+</Wrap>
+"""
+```
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `spacing` | number / token | Horizontal space between children |
+| `run_spacing` | number / token | Vertical space between runs |
+| `padding` | number / token | Uniform padding |
+| `background` | color | Background color |
+| `fill_width` | boolean | Stretch the wrap container to the available width |
+
+Children with `fill_width: true` occupy a complete run. `weight` is not
+supported inside a wrap; it remains a row/column main-axis concept.
+
 ### `:box`
 
 A single-child container. Use it to add background, padding, or corner radius to a child:

@@ -356,6 +356,9 @@ struct MobNodeView: View {
                 }
                 .mobGestures(node)
 
+            case .wrap:
+                MobWrap(node: node)
+
             case .box:
                 MobBox(node: node)
 
@@ -618,6 +621,150 @@ private struct MobLayoutWeight: ViewModifier {
     }
 }
 
+private struct MobFlowFillWidthKey: LayoutValueKey {
+    static let defaultValue = false
+}
+
+/// A measured, greedy flow layout. Children stay on the current run while
+/// their measured widths fit; the next child starts a new run when it would
+/// exceed the proposed width. A child with `fill_width: true` owns a full run.
+private struct MobFlowLayout: Layout {
+    let spacing: CGFloat
+    let runSpacing: CGFloat
+    let layoutDirection: LayoutDirection
+
+    private struct Item {
+        let index: Int
+        let origin: CGPoint
+        let size: CGSize
+    }
+
+    private struct Result {
+        let size: CGSize
+        let items: [Item]
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        arrange(in: finiteWidth(proposal.width), subviews: subviews).size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let result = arrange(in: bounds.width, subviews: subviews)
+
+        for item in result.items {
+            let itemX = layoutDirection == .rightToLeft
+                ? bounds.maxX - item.origin.x - item.size.width
+                : bounds.minX + item.origin.x
+            subviews[item.index].place(
+                at: CGPoint(x: itemX, y: bounds.minY + item.origin.y),
+                anchor: UnitPoint(x: 0, y: 0),
+                proposal: ProposedViewSize(width: item.size.width, height: item.size.height)
+            )
+        }
+    }
+
+    private func finiteWidth(_ width: CGFloat?) -> CGFloat? {
+        guard let width, width.isFinite else { return nil }
+        return max(0, width)
+    }
+
+    private func arrange(in availableWidth: CGFloat?, subviews: Subviews) -> Result {
+        var items: [Item] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var runHeight: CGFloat = 0
+        var runHasItems = false
+        var contentWidth: CGFloat = 0
+        var contentHeight: CGFloat = 0
+
+        for index in subviews.indices {
+            let subview = subviews[index]
+            let fillsRun = availableWidth != nil && subview[MobFlowFillWidthKey.self]
+            let ideal = subview.sizeThatFits(.unspecified)
+            var itemSize = ideal
+
+            if let availableWidth, fillsRun || ideal.width > availableWidth {
+                let constrained = subview.sizeThatFits(
+                    ProposedViewSize(width: availableWidth, height: nil)
+                )
+                itemSize = CGSize(
+                    width: fillsRun ? availableWidth : min(constrained.width, availableWidth),
+                    height: constrained.height
+                )
+            }
+
+            if let availableWidth,
+               runHasItems,
+               fillsRun || x + spacing + itemSize.width > availableWidth {
+                y += runHeight + runSpacing
+                x = 0
+                runHeight = 0
+                runHasItems = false
+            }
+
+            let itemX = runHasItems ? x + spacing : 0
+            let origin = CGPoint(x: itemX, y: y)
+            items.append(Item(index: index, origin: origin, size: itemSize))
+
+            x = itemX + itemSize.width
+            runHeight = max(runHeight, itemSize.height)
+            runHasItems = true
+            contentWidth = max(contentWidth, x)
+            contentHeight = max(contentHeight, y + itemSize.height)
+
+            if fillsRun {
+                y += runHeight + runSpacing
+                x = 0
+                runHeight = 0
+                runHasItems = false
+            }
+        }
+
+        return Result(size: CGSize(width: contentWidth, height: contentHeight), items: items)
+    }
+}
+
+private struct MobWrap: View {
+    let node: MobNode
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    var body: some View {
+        MobFlowLayout(
+            spacing: max(0, CGFloat(node.wrapSpacing)),
+            runSpacing: max(0, CGFloat(node.wrapRunSpacing)),
+            layoutDirection: layoutDirection
+        ) {
+            ForEach(mobIdentifiedChildren(node.childNodes)) { item in
+                MobNodeView(node: item.node)
+                    .layoutValue(
+                        key: MobFlowFillWidthKey.self,
+                        value: item.node.fillWidth ||
+                            (item.node.nodeType == .box &&
+                                !item.node.fillWidthSet && item.node.fixedWidth <= 0)
+                    )
+            }
+        }
+        .ifLet(node.fillWidth ? () : nil) { view, _ in
+            view.frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(node.paddingEdgeInsets)
+        .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
+        .ifLet(node.onTap) { view, tap in
+            view.contentShape(Rectangle()).onTapGesture { tap() }
+        }
+        .mobGestures(node)
+    }
+}
+
 // MobFrameTracker — for any node with an :id, set it as the accessibility
 // identifier and report the element's global frame (logical points) to the C
 // registry as it lays out / moves. Untagged nodes pass through untouched, so
@@ -852,17 +999,29 @@ private struct MobBox: View {
                     alignment: alignment
                 )
             } else if node.fixedHeight > 0 {
-                stack
-                    .frame(height: CGFloat(node.fixedHeight), alignment: alignment)
-                    .frame(maxWidth: .infinity, alignment: alignment)
+                if node.fillWidthSet && !node.fillWidth {
+                    stack.frame(height: CGFloat(node.fixedHeight), alignment: alignment)
+                } else {
+                    stack
+                        .frame(height: CGFloat(node.fixedHeight), alignment: alignment)
+                        .frame(maxWidth: .infinity, alignment: alignment)
+                }
             } else if node.fillHeight {
                 // fill_height: true is what lets a wrapping box stretch to the
                 // viewport so center alignment lands on the visible midpoint
                 // (e.g. for floating dialogs that need to sit mid-screen
                 // regardless of their sibling's content size).
-                stack.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
+                if node.fillWidthSet && !node.fillWidth {
+                    stack.frame(maxHeight: .infinity, alignment: alignment)
+                } else {
+                    stack.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
+                }
             } else {
-                stack.frame(maxWidth: .infinity, alignment: alignment)
+                if node.fillWidthSet && !node.fillWidth {
+                    stack
+                } else {
+                    stack.frame(maxWidth: .infinity, alignment: alignment)
+                }
             }
         }
         .padding(node.paddingEdgeInsets)
