@@ -54,11 +54,12 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `Mob.Defect.Capsule`s on each subsequent call. Ships in release —
   MetricKit is the whole reason MOB-158 exists.
 
-  Payload → kind mapping: `MXCrashDiagnosticPayload` → `:native_crash`
-  / `:fatal`; `MXHangDiagnosticPayload` → `:anr` / `:critical`;
-  `MXCPUExceptionDiagnosticPayload` and
-  `MXDiskWriteExceptionDiagnosticPayload` → `:perf_regression` /
-  `:warning`.
+  Payload → kind mapping: `MXCrashDiagnostic` → `:native_crash` /
+  `:fatal`; `MXHangDiagnostic` → `:anr` / `:critical`;
+  `MXCPUExceptionDiagnostic` and `MXDiskWriteExceptionDiagnostic` →
+  `:perf_regression` / `:warning`. (These are the individual
+  diagnostics; the `MXDiagnosticPayload` container that carries them
+  is what MetricKit hands the delegate.)
 
   Fingerprint groups a crash by (kind + top-frame binary + top-frame
   offset) so the same crash across launches becomes one triage row.

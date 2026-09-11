@@ -17,10 +17,14 @@ defmodule Mob.PostMortem.IOS do
 
   | MetricKit diagnostic | `kind` |
   |---|---|
-  | `MXCrashDiagnosticPayload` | `:native_crash` |
-  | `MXHangDiagnosticPayload` | `:anr` (iOS's word is "hang"; the defect taxonomy uses ANR) |
-  | `MXCPUExceptionDiagnosticPayload` | `:perf_regression` |
-  | `MXDiskWriteExceptionDiagnosticPayload` | `:perf_regression` |
+  | `MXCrashDiagnostic` | `:native_crash` |
+  | `MXHangDiagnostic` | `:anr` (iOS's word is "hang"; the defect taxonomy uses ANR) |
+  | `MXCPUExceptionDiagnostic` | `:perf_regression` |
+  | `MXDiskWriteExceptionDiagnostic` | `:perf_regression` |
+
+  The `Payload` suffix belongs on the container `MXDiagnosticPayload`
+  the OS hands to `didReceiveDiagnosticPayloads:`, which then exposes
+  the individual diagnostics above.
 
   ## What the delivery contract looks like from Elixir
 
