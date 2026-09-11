@@ -2,61 +2,217 @@ defmodule Mob.PostMortem.IOS do
   @moduledoc """
   MetricKit-backed post-mortem ingest for iOS.
 
-  ## Status: scaffolded, not implemented
+  The framework attaches an `MXMetricManagerSubscriber` in the NIF on
+  the first `sweep/0` call, receives MetricKit payloads on a background
+  queue thereafter, and drains the bounded in-memory queue into
+  `Mob.Defect.Capsule`s on `Mob.Defect.Bus` each time `sweep/0` is
+  called.
 
-  `sweep/0` returns `[]` today. The native pipe — an `MXMetricManager`
-  delegate that receives `MXCrashDiagnosticPayload`,
-  `MXHangDiagnosticPayload`, `MXCPUExceptionDiagnosticPayload`,
-  `MXDiskWriteExceptionDiagnosticPayload`, `MXAppLaunchDiagnosticPayload`
-  and `MXCallStackTree` values — is a follow-up ticket with its own
-  device-verification loop. This module exists as the symbol
-  `Mob.PostMortem.sweep/0` calls into so the coordinator does not have
-  to grow a per-platform branch when the native side lands.
+  ## Scope of a payload
 
-  ## The intended contract, for when it does land
+  MetricKit hands the OS-delivered payload to the delegate once per
+  incident class per day (approximately — the delivery cadence is under
+  Apple's control). Each delivery may contain one or more diagnostics of
+  different kinds:
 
-  * Called on any node, but does its work only when `:mob_nif.platform/0`
-    returns `:ios` and MetricKit reports at least one delivered payload.
-  * Each MetricKit payload becomes one `Mob.Defect.Capsule` on the bus,
-    with `owner: :mob` or `owner: {:plugin, ...}` depending on the
-    payload's process attribution.
-  * Payload delivery is asynchronous in iOS (up to 24 hours after the
-    incident); MetricKit itself deduplicates by day, and the capsule
-    fingerprint takes over from there. This module never polls; it
-    receives via the delegate and pushes into the bus.
-  * Redaction: the schema promises `redaction: :applied`. MetricKit's
-    call-stack payloads carry mangled symbol names, which are the safe
-    identifiers we keep; the file path portions and any embedded user
-    data are stripped in the native layer before the capsule is built.
+  | MetricKit diagnostic | `kind` |
+  |---|---|
+  | `MXCrashDiagnostic` | `:native_crash` |
+  | `MXHangDiagnostic` | `:anr` (iOS's word is "hang"; the defect taxonomy uses ANR) |
+  | `MXCPUExceptionDiagnostic` | `:perf_regression` |
+  | `MXDiskWriteExceptionDiagnostic` | `:perf_regression` |
+
+  The `Payload` suffix belongs on the container `MXDiagnosticPayload`
+  the OS hands to `didReceiveDiagnosticPayloads:`, which then exposes
+  the individual diagnostics above.
+
+  ## What the delivery contract looks like from Elixir
+
+  `sweep/0` is safe to call at any point; MetricKit's own delivery is
+  asynchronous and the queue accumulates until a caller drains it. A
+  typical shape:
+
+      # In your app's on_start
+      def on_start do
+        # ...
+        Mob.PostMortem.sweep()
+      end
+
+  The top-level `Mob.PostMortem.sweep/0` calls into this module. Nothing
+  auto-runs — that is the framework-wide discipline: mob owns the format
+  and the bus but never becomes the collector.
+
+  ## Redaction
+
+  MetricKit's `MXCallStackTree` carries binary UUIDs, image names and
+  mangled symbol offsets: safe identifiers, no user data. The
+  capsule's fingerprint key uses just the top frame's binary name and
+  offset — enough to group the same crash across launches without
+  embedding anything that varies per crash. The full payload JSON goes
+  onto evidence, bounded by the capsule's existing string-truncation
+  rule.
+
+  ## Platform gating
+
+  The NIF is registered on both iOS and Android (Android returns an
+  empty list unconditionally — see `android/jni/mob_nif.zig`). This
+  module additionally gates on `:mob_nif.platform() == :ios` so a
+  caller on Android does no work at all, and a caller in a host test
+  environment where the NIF is not loaded fails gracefully.
   """
 
   require Logger
 
+  alias Mob.Defect
   alias Mob.Defect.Capsule
+  alias Mob.PostMortem.Registry
 
   @doc """
-  Sweep any MetricKit payloads the OS has delivered since the last call.
+  Sweep the MetricKit queue and emit a capsule for each new payload.
 
-  Returns the list of capsules emitted (empty until the native pipe is
-  in place; today it is always `[]`).
-
-  Logs at `:info` on first call so an operator running `mix mob.post_mortems.sweep`
-  on an iOS host can see the "not yet wired" state rather than getting
-  silence and wondering.
+  Returns the list of capsules emitted, in the order they were
+  delivered by the OS. Empty on Android, on iOS < 14 (no MetricKit
+  delivery API), and any time the queue was already empty since the
+  last drain.
   """
   @spec sweep() :: [Capsule.t()]
   def sweep do
-    if :persistent_term.get({__MODULE__, :logged_scaffold_notice}, false) do
-      :ok
+    with :ios <- safe_platform(),
+         payloads when is_list(payloads) <- safe_drain() do
+      Registry.start()
+
+      Enum.flat_map(payloads, &emit_if_new/1)
     else
-      Logger.info(
-        "[Mob.PostMortem.IOS] MetricKit ingest is scaffolded; sweep returns [] until " <>
-          "the native MXMetricManager delegate lands (MOB-158 follow-up)."
+      _ -> []
+    end
+  end
+
+  # Called by tests to inject a fake NIF that returns hand-shaped
+  # payloads. Real callers should never pass this — the default reaches
+  # `:mob_nif.post_mortem_ios_drain/0` directly.
+  @doc false
+  @spec sweep_with(module()) :: [Capsule.t()]
+  def sweep_with(nif) when is_atom(nif) do
+    with :ios <- safe_platform_via(nif),
+         payloads when is_list(payloads) <- safe_drain_via(nif) do
+      Registry.start()
+      Enum.flat_map(payloads, &emit_if_new/1)
+    else
+      _ -> []
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Emit + dedup
+  # ---------------------------------------------------------------------------
+
+  # Emit gate. Two shape checks, in this order:
+  #
+  # 1. `is_map/1` catches an obviously wrong payload from the NIF (a
+  #    naked atom, a list, nil).
+  # 2. `valid_shape?/1` catches a *partial* map — one that would
+  #    pass `is_map` but crash `Defect.emit_metrickit_payload/1`'s
+  #    strict pattern match. A partial payload from a future NIF
+  #    version that grew a field the current Elixir side does not
+  #    know about is not this shape; a partial payload that dropped
+  #    a field this side needs would be, and would take out the
+  #    whole sweep — losing every later well-formed payload in the
+  #    same drain — if we did not gate.
+  #
+  # Well-formed payloads emit and mark seen; malformed ones log at
+  # :warning and are skipped. Neither raises out of the sweep.
+  defp emit_if_new(payload) when is_map(payload) do
+    if valid_shape?(payload) do
+      id = artifact_id(payload)
+
+      if Registry.mark_seen(id) do
+        [Defect.emit_metrickit_payload(payload)]
+      else
+        []
+      end
+    else
+      Logger.warning(
+        "[Mob.PostMortem.IOS] dropping malformed MetricKit payload " <>
+          "(missing required key): #{inspect(payload, limit: 4)}"
       )
 
-      :persistent_term.put({__MODULE__, :logged_scaffold_notice}, true)
+      []
     end
+  end
 
-    []
+  defp emit_if_new(_), do: []
+
+  defp valid_shape?(%{
+         kind: _,
+         top_frame: %{binary: _, offset: _},
+         timestamp_ms: _
+       }),
+       do: true
+
+  defp valid_shape?(_), do: false
+
+  # A MetricKit payload does not carry a stable id of its own — MetricKit
+  # deduplicates by day on its side, and we deduplicate by content on
+  # ours. sha256 of (kind + top_binary + top_offset + timestamp_ms) is
+  # unique per delivered diagnostic; the Registry then filters out
+  # re-emits within the same BEAM lifetime (a re-sweep produces no new
+  # capsules for the same drained payloads).
+  #
+  # No fallback clause: `valid_shape?/1` in the caller gates on exactly
+  # this pattern, so a malformed payload cannot reach here. A second
+  # clause that returned a synthetic id would be dead code the compiler
+  # rightly flags.
+  defp artifact_id(%{
+         kind: kind,
+         top_frame: %{binary: binary, offset: offset},
+         timestamp_ms: timestamp_ms
+       }) do
+    canonical = "#{kind}|#{binary}|#{offset}|#{timestamp_ms}"
+    hash = :crypto.hash(:sha256, canonical) |> Base.encode16(case: :lower)
+    "sha256:" <> hash
+  end
+
+  # ---------------------------------------------------------------------------
+  # Safe NIF wrappers
+  # ---------------------------------------------------------------------------
+
+  defp safe_platform do
+    try do
+      :mob_nif.platform()
+    rescue
+      _ -> :host
+    catch
+      _, _ -> :host
+    end
+  end
+
+  defp safe_platform_via(nif) do
+    try do
+      nif.platform()
+    rescue
+      _ -> :host
+    catch
+      _, _ -> :host
+    end
+  end
+
+  defp safe_drain do
+    try do
+      :mob_nif.post_mortem_ios_drain()
+    rescue
+      _ -> []
+    catch
+      _, _ -> []
+    end
+  end
+
+  defp safe_drain_via(nif) do
+    try do
+      nif.post_mortem_ios_drain()
+    rescue
+      _ -> []
+    catch
+      _, _ -> []
+    end
   end
 end

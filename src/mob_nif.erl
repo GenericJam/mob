@@ -51,6 +51,8 @@
     %% Notifications
     take_launch_notification/0,
     take_opened_document/0,
+    %% Post-mortem — iOS MetricKit ingest (drain-on-demand)
+    post_mortem_ios_drain/0,
     %% Storage
     storage_dir/1,
     storage_save_to_photo_library/1,
@@ -211,6 +213,8 @@
     element_frames/0,
     native_stats/0,
     native_stats_enable/1,
+    %% Post-mortem — iOS MetricKit ingest (drain-on-demand)
+    post_mortem_ios_drain/0,
     %% Storage
     storage_dir/1,
     storage_save_to_photo_library/1,
@@ -307,6 +311,15 @@ motion_start(_Sensors, _Interval) -> erlang:nif_error(not_loaded).
 motion_stop() -> erlang:nif_error(not_loaded).
 take_launch_notification() -> erlang:nif_error(not_loaded).
 take_opened_document() -> erlang:nif_error(not_loaded).
+%% post_mortem_ios_drain/0 — copy and clear the in-memory MetricKit payload
+%% queue. iOS attaches a MXMetricManagerSubscriber lazily on the first call
+%% and delivers payloads to it on a background queue thereafter; each call
+%% here returns whatever has accumulated since the last drain. Returns a
+%% list of #{kind => atom(), top_frame => #{binary => binary(), offset => integer()},
+%% timestamp_ms => integer(), raw_json => binary()} maps, or [] when the
+%% platform does not export MetricKit (Android, iOS < 14) or the queue is
+%% empty. Called by Mob.PostMortem.IOS.sweep/0.
+post_mortem_ios_drain() -> erlang:nif_error(not_loaded).
 battery_level() -> erlang:nif_error(not_loaded).
 device_set_dispatcher(_Pid) -> erlang:nif_error(not_loaded).
 device_battery_state() -> erlang:nif_error(not_loaded).

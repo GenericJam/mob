@@ -176,4 +176,71 @@ defmodule Mob.Defect do
 
   defp format_datetime(nil), do: nil
   defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+
+  @doc """
+  Emit a defect for one MetricKit diagnostic delivered on iOS.
+
+  Owner is `:mob` — a MetricKit payload names an event the OS
+  attributes to this app process, and mob owns the process during a
+  mob-app lifetime.
+
+  The `payload` map comes from `Mob.PostMortem.IOS.sweep/0`'s drain of
+  the native queue. Its shape:
+
+      %{
+        kind: :native_crash | :anr | :perf_regression,
+        top_frame: %{binary: "MyApp", offset: 123456},
+        timestamp_ms: 1_726_050_000_000,
+        raw_json: <<...>>  # MXDiagnosticPayload.JSONRepresentation
+      }
+
+  The fingerprint key is the top stack frame — a crash in the same
+  place across builds groups into one triage row. The frame's
+  `binary` name is not the human function name (MetricKit gives
+  mangled symbols only, no user data); it is the safe identifier the
+  OS gives us, which is what we can safely put on the wire.
+
+  Severity is picked from the diagnostic kind:
+  - `:native_crash` → `:fatal` (the app terminated abnormally)
+  - `:anr` → `:critical` (the main thread stalled past the OS's
+    hang threshold; the app may or may not have recovered)
+  - `:perf_regression` → `:warning` (CPU / disk exception; the app
+    kept running, this is a heads-up)
+  """
+  @spec emit_metrickit_payload(map()) :: Capsule.t()
+  def emit_metrickit_payload(
+        %{
+          kind: kind,
+          top_frame: %{binary: binary, offset: offset},
+          timestamp_ms: timestamp_ms
+        } = payload
+      ) do
+    Capsule.new(
+      kind: kind,
+      owner: :mob,
+      severity: metrickit_severity(kind),
+      fingerprint_key: %{
+        source: :metrickit,
+        kind: kind,
+        top_frame_binary: binary,
+        top_frame_offset: offset
+      },
+      evidence: %{
+        source: :metrickit,
+        top_frame_binary: binary,
+        top_frame_offset: offset,
+        timestamp_ms: timestamp_ms,
+        raw_json: Map.get(payload, :raw_json)
+      }
+    )
+    |> Bus.emit()
+  end
+
+  defp metrickit_severity(:native_crash), do: :fatal
+  defp metrickit_severity(:anr), do: :critical
+  defp metrickit_severity(:perf_regression), do: :warning
+  # Defensive: an unknown kind reaching us means the NIF grew a payload
+  # type this dispatch does not know yet. Log severity, not silent
+  # absorption.
+  defp metrickit_severity(_), do: :critical
 end

@@ -4091,6 +4091,26 @@ export fn nif_vendor_usb_close(
     return erts.ok(env);
 }
 
+// ── Mob.PostMortem.IOS — MetricKit drain (iOS-only, Android stub) ────────
+//
+// The MetricKit channel is iOS-only; the equivalent Android substrate is
+// `ApplicationExitInfo`, whose ingest is its own follow-up ticket
+// (MOB-180) with its own NIF. This stub exists so the shared
+// `mob_nif.erl` `-nifs([post_mortem_ios_drain/0])` declaration resolves
+// on Android without the loader raising. Returns [] unconditionally —
+// the Elixir side (Mob.PostMortem.IOS.sweep/0) also gates on
+// `Mob.PostMortem.platform() == :ios` before it even calls this, so a
+// well-formed caller never reaches here on Android.
+export fn nif_post_mortem_ios_drain(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    return erts.makeList(env, &.{});
+}
+
 // ── nif_load: cache all method IDs at BEAM startup ───────────────────────
 
 /// Required-method helper. Returns false if the method isn't on the
@@ -4435,6 +4455,8 @@ const nif_funcs = [_]erts.ErlNifFunc{
     // ── Mob.Bt (Bluetooth Classic) — extracted to the mob_bluetooth plugin ──
     // ── Mob.DNS (in-process IPv4 resolver via Bionic getaddrinfo) ────────
     .{ .name = "resolve_ipv4", .arity = 1, .fptr = nif_resolve_ipv4, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
+    // ── Mob.PostMortem.IOS (Android stub — the substrate is MOB-180) ─────
+    .{ .name = "post_mortem_ios_drain", .arity = 0, .fptr = nif_post_mortem_ios_drain, .flags = 0 },
 };
 
 var mob_nif_entry: erts.ErlNifEntry = .{
