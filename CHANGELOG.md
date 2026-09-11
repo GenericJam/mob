@@ -8,7 +8,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.8.1] - 2026-09-11
 
 ### Added
 - **Defect bus — `Mob.Defect`, `Mob.Defect.Capsule`, `Mob.Defect.Bus`,
@@ -47,9 +47,10 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `Mob.Differential`'s divergence map) to a capsule with the right owner,
   kind, and fingerprint key.
 
-  Wired: `Mob.Invariant.record/1` now emits a capsule for every confirmed
-  violation. Not wired in this PR: the differential emit-point is a
-  follow-up mob_dev change that lands after this ships to Hex.
+  Wired: the invariant registry's record path now emits a capsule for
+  every confirmed violation. Not wired in this release: the differential
+  emit-point, a follow-up mob_dev change that lands after this ships to
+  Hex.
 
   See `decisions/2026-09-11-fingerprint-and-evidence-are-separate.md` for
   the fingerprint-vs-evidence design.
