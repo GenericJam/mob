@@ -177,5 +177,11 @@ sampler can remove a given row, and the clock only ever moves forward.
   leaving to be discovered.
 - Violations are bounded at 128 and carry **no application state** — pids,
   module names and counts only, the same rule receipts follow.
-- Nothing consumes violations yet. There is no defect bus; `violations/1` is the
-  read surface. Wiring them to a sink is MOB-159's job.
+- ~~Nothing consumes violations yet. There is no defect bus; `violations/1` is the
+  read surface. Wiring them to a sink is MOB-159's job.~~ **Superseded by
+  MOB-159 phase 1 (2026-09-11):** `Mob.Invariant.record/1` now emits every
+  confirmed violation as a `Mob.Defect.Capsule` on `Mob.Defect.Bus`.
+  `violations/1` remains the direct read surface for a caller that wants the
+  registry's own state; the bus is the read surface for anyone subscribing to
+  the framework's defects as a stream. See
+  `decisions/2026-09-11-fingerprint-and-evidence-are-separate.md`.

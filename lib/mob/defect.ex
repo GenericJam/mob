@@ -57,6 +57,12 @@ defmodule Mob.Defect do
   @doc """
   Emit a defect for a differential-comparator divergence.
 
+  Real entrypoint, pending an in-tree caller. `Mob.Differential.compare/3`
+  is a pure comparator; the caller that runs it — currently `mob_dev`, via
+  `MobDev.Differential.run/3` — invokes this after a `:divergence` result to
+  put the class onto the bus. A follow-up mob_dev change wires that up
+  after this ships to Hex; nothing in `mob` itself calls this yet.
+
   Owner is `:mob` — the differential comparator asserts one design, both
   platforms, which is a framework-level promise. `kind: :divergence`.
 
