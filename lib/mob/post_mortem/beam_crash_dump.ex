@@ -24,7 +24,7 @@ defmodule Mob.PostMortem.BeamCrashDump do
     author might want the full file; deleting after emit would lose
     everything the capsule cannot fit.
   * **Idempotent.** A sha256 of the file becomes the artifact id, and the
-    `Mob.PostMortem.Registry` tracks emitted ids in `:persistent_term`. A
+    `Mob.PostMortem.Registry` tracks emitted ids in a public ETS table. A
     re-sweep against the same file finds it seen and does nothing.
   * **Bounded read.** A dump can be gigabytes on a busy scheduler. This
     module reads only the header window (default #{@header_bytes}) — that
