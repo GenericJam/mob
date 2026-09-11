@@ -4307,36 +4307,61 @@ fn readMarker(dir: []const u8) i64 {
 // which the Registry then dedups within the session. But cross-boot
 // dedup depends on the marker actually advancing, and an operator
 // staring at duplicate capsules across restarts needs a hint that
-// this write path is why. We log an :error line the first time each
-// failure kind is hit so a chatty NIF doesn't drown the console but
-// the pattern is discoverable.
+// this write path is why. We log an :error line the first time EACH
+// failure kind is hit — a per-kind flag so `open_failed` followed
+// later by `write_failed` (say, a disk that filled after install)
+// still produces a visible line, without a chatty NIF drowning the
+// console on a permanently-failing path.
 fn writeMarker(dir: []const u8, ts_ms: i64) void {
     var path_buf: [640]u8 = @splat(0);
     const path = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ dir, MARKER_FILENAME }) catch {
-        logMarkerFailureOnce("path_too_long");
+        logMarkerFailureOnce(.path_too_long);
         return;
     };
 
     const fd = posix_open(path.ptr, O_WRONLY | O_CREAT | O_TRUNC, 0o600);
     if (fd < 0) {
-        logMarkerFailureOnce("open_failed");
+        logMarkerFailureOnce(.open_failed);
         return;
     }
     defer _ = posix_close(fd);
 
     var out_buf: [32]u8 = @splat(0);
     const out = std.fmt.bufPrintZ(&out_buf, "{d}\n", .{ts_ms}) catch {
-        logMarkerFailureOnce("format_failed");
+        logMarkerFailureOnce(.format_failed);
         return;
     };
     const written = posix_write(fd, out.ptr, out.len);
-    if (written < 0) logMarkerFailureOnce("write_failed");
+    if (written < 0) logMarkerFailureOnce(.write_failed);
 }
 
-var g_marker_failure_logged = std.atomic.Value(bool).init(false);
+const MarkerFailure = enum { path_too_long, open_failed, format_failed, write_failed };
 
-fn logMarkerFailureOnce(reason: []const u8) void {
-    if (g_marker_failure_logged.swap(true, .seq_cst)) return;
+// One flag per kind so a later failure of a different kind is not
+// silenced by an earlier one. `.acq_rel` is enough for a set-once
+// flag with no other synchronization dependency (per the pre-merge
+// review nitpick — `.seq_cst` was overkill).
+var g_marker_failure_logged_path = std.atomic.Value(bool).init(false);
+var g_marker_failure_logged_open = std.atomic.Value(bool).init(false);
+var g_marker_failure_logged_format = std.atomic.Value(bool).init(false);
+var g_marker_failure_logged_write = std.atomic.Value(bool).init(false);
+
+fn logMarkerFailureOnce(kind: MarkerFailure) void {
+    const flag: *std.atomic.Value(bool) = switch (kind) {
+        .path_too_long => &g_marker_failure_logged_path,
+        .open_failed => &g_marker_failure_logged_open,
+        .format_failed => &g_marker_failure_logged_format,
+        .write_failed => &g_marker_failure_logged_write,
+    };
+    if (flag.swap(true, .acq_rel)) return;
+
+    const reason: []const u8 = switch (kind) {
+        .path_too_long => "path_too_long",
+        .open_failed => "open_failed",
+        .format_failed => "format_failed",
+        .write_failed => "write_failed",
+    };
+
     var buf: [128]u8 = @splat(0);
     const msg = std.fmt.bufPrintZ(&buf, "mob_post_mortem: marker write failed ({s}); cross-boot dedup will re-emit until this clears", .{reason}) catch return;
     jni.logWrite(jni.ANDROID_LOG_ERROR, "MobNIF", "{s}", .{msg});
@@ -4548,6 +4573,16 @@ export fn nif_post_mortem_android_drain(
             get_description = jni.getMethodID(jenv, aei_cls, "getDescription", "()Ljava/lang/String;");
             get_process_name = jni.getMethodID(jenv, aei_cls, "getProcessName", "()Ljava/lang/String;");
             if (get_pid == null or get_timestamp == null or get_reason == null or get_process_name == null) {
+                // Method-ID lookup failed on a documented public API —
+                // shouldn't happen on any Android 11+ device. Reset
+                // aei_cls so the next iteration retries the cache
+                // block; otherwise the loop would skip past the
+                // `if (aei_cls == null)` gate and call the still-null
+                // method IDs as if they were live. That would be UB
+                // from a hypothetical future OEM oddity rather than
+                // the [] we want on that path.
+                jni.deleteLocalRef(jenv, aei_cls);
+                aei_cls = null;
                 jni.exceptionClear(jenv);
                 continue;
             }
