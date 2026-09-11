@@ -8,6 +8,52 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Post-mortem collection — `Mob.PostMortem` +
+  `Mob.PostMortem.BeamCrashDump`** (MOB-158, phase 1). The framework
+  now picks up the crash dumps the BEAM leaves behind on disk and turns
+  each into a `Mob.Defect.Capsule` on `Mob.Defect.Bus` (kind:
+  `:beam_crash`, owner: `:mob`).
+
+  `Mob.PostMortem.sweep/0` and `Mob.PostMortem.sweep/1` do a one-shot
+  scan of default and caller-supplied paths. Nothing runs
+  automatically — an app opts in from its `on_start`; a developer or CI
+  can call it from IEx. Same discipline the rest of `Mob.Defect`
+  follows: mob owns the format and the bus, never becomes the
+  collector.
+
+  `Mob.PostMortem.BeamCrashDump` scans for `erl_crash.dump` files,
+  reads a bounded 8 KB header (slogan / system version / taints /
+  atoms / dump version), computes a sha256 for artifact identity, and
+  never touches the dump body. Dumps stay on disk for offline
+  inspection with `crashdump_viewer`. `Mob.PostMortem.Registry`
+  records emitted ids in a public ETS table so a re-sweep is a no-op;
+  registry state is intentionally not persisted across BEAM restarts,
+  because a fresh BEAM sweeps back into a fresh bus.
+
+  Fingerprint is the *normalized* slogan: binary literals (including
+  ones truncated by the 8 KB header cut-off) and long numeric runs
+  that are the printable form of the same are stripped, so two
+  `{badarg, ...}` crashes on `io:put_chars/2` with different embedded
+  payloads share a triage row instead of each opening one.
+
+  Severity is picked from the slogan: allocator panics
+  (`eheap_alloc`, `binary_alloc`, `ets_alloc`, `sl_alloc`,
+  `driver_alloc`, `fix_alloc`, `std_alloc`) and boot-time crashes
+  (`Kernel pid terminated`, `Runtime terminating during boot`) are
+  `:fatal`; a literal `normal` exit is `:info`; anything else is
+  `:critical`.
+
+- **iOS and Android post-mortem scaffolds — `Mob.PostMortem.IOS`,
+  `Mob.PostMortem.Android`**. `sweep/0` returns `[]` and logs once at
+  `:info`. The real native pipes (MetricKit for iOS,
+  `ApplicationExitInfo` for Android) are their own follow-up tickets
+  with per-platform device verification.
+
+---
+
 ## [0.8.1] - 2026-09-11
 
 ### Added
