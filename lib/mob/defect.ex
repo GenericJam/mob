@@ -93,4 +93,87 @@ defmodule Mob.Defect do
     )
     |> Bus.emit()
   end
+
+  @doc """
+  Emit a defect for an `erl_crash.dump` a scan turned up.
+
+  Owner is `:mob` — the BEAM is what mob depends on and what mob's own
+  invariants and scheduling assume; a hard crash there is a framework
+  concern before it is an application one. `kind: :beam_crash`.
+
+  Severity comes from what the slogan implies: OOM and out-of-memory
+  variants are `:fatal`; a normal termination is `:info`; everything
+  else defaults to `:critical`.
+
+  The fingerprint key is the *normalized* slogan (see
+  `Mob.PostMortem.BeamCrashDump.normalize_slogan/1`) rather than the raw
+  one, because raw slogans embed the exact runtime data that varied per
+  crash — a `{badarg, ...}` from `io:put_chars/2` carries a 4KB binary
+  literal that would otherwise open one triage row per unique input.
+
+  Evidence carries the human-facing fields plus the on-disk path so a
+  triager can open the dump in `crashdump_viewer` when they want more
+  than the header. The dump file itself is NOT read into evidence —
+  eight kilobytes is the ceiling and the header is what fits.
+  """
+  @spec emit_beam_crash(map()) :: Capsule.t()
+  def emit_beam_crash(%{sha256: sha256, slogan: slogan} = finding) do
+    normalized = Mob.PostMortem.BeamCrashDump.normalize_slogan(slogan)
+
+    Capsule.new(
+      kind: :beam_crash,
+      owner: :mob,
+      severity: severity_from_slogan(slogan),
+      fingerprint_key: %{slogan: normalized},
+      evidence: %{
+        path: Map.get(finding, :path),
+        sha256: sha256,
+        size: Map.get(finding, :size),
+        modified_at: format_datetime(Map.get(finding, :modified_at)),
+        slogan: slogan,
+        system_version: Map.get(finding, :system_version),
+        taints: Map.get(finding, :taints, []),
+        atoms: Map.get(finding, :atoms),
+        dump_version: Map.get(finding, :dump_version)
+      }
+    )
+    |> Bus.emit()
+  end
+
+  # Severity heuristic from the slogan text. Conservative: unknown text
+  # is `:critical`, not `:fatal`, so a novel crash class does not
+  # over-page a triager. The two OOM-family strings are explicit BEAM
+  # exits with those exact prefixes; a normal `:normal` termination is
+  # not a crash to page on but is still worth an :info row so a triager
+  # can see it happened.
+  defp severity_from_slogan(nil), do: :critical
+
+  defp severity_from_slogan(slogan) when is_binary(slogan) do
+    cond do
+      # Allocator panics — the process died because the OS refused a
+      # backing allocation. Fatal by definition.
+      String.contains?(slogan, "eheap_alloc") -> :fatal
+      String.contains?(slogan, "binary_alloc") -> :fatal
+      String.contains?(slogan, "ets_alloc") -> :fatal
+      String.contains?(slogan, "sl_alloc") -> :fatal
+      String.contains?(slogan, "driver_alloc") -> :fatal
+      String.contains?(slogan, "fix_alloc") -> :fatal
+      String.contains?(slogan, "std_alloc") -> :fatal
+      # OTP boot-time crashes and the kernel-supervisor-died panic — the
+      # BEAM refused to come up. The user sees nothing running.
+      String.starts_with?(slogan, "Kernel pid terminated") -> :fatal
+      String.starts_with?(slogan, "Runtime terminating during boot") -> :fatal
+      String.contains?(slogan, "out of memory") -> :fatal
+      # An explicit `:normal` exit is not a defect per se, but the fact
+      # that a crash dump exists at all is worth an :info row so a
+      # triager can see it happened. Everything unrecognised is :critical
+      # — do not upgrade to :fatal without evidence, since a novel
+      # slogan class could be routine.
+      slogan == "normal" -> :info
+      true -> :critical
+    end
+  end
+
+  defp format_datetime(nil), do: nil
+  defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
 end
