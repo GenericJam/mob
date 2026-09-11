@@ -8317,6 +8317,22 @@ static ERL_NIF_TERM nif_post_mortem_ios_drain(ErlNifEnv *env, int argc, const ER
     return enif_make_list(env, 0);
 }
 
+// ── Mob.PostMortem.Android drain (iOS stub for the Android substrate) ────
+//
+// The `ApplicationExitInfo` pipe is Android-only; the iOS substrate
+// is MetricKit (nif_post_mortem_ios_drain above). This stub exists so
+// the shared `mob_nif.erl` `-nifs([post_mortem_android_drain/0])`
+// declaration resolves on iOS without the loader raising. Returns []
+// unconditionally — the Elixir side (Mob.PostMortem.Android.sweep/0)
+// gates on platform == :android before it even calls this, so a
+// well-formed caller never reaches here on iOS.
+static ERL_NIF_TERM nif_post_mortem_android_drain(ErlNifEnv *env, int argc,
+                                                  const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    return enif_make_list(env, 0);
+}
+
 // Scheduling notes for nif_funcs[] below — see docs/decisions/0001-dirty-nifs.md
 // for the full rationale. Short version: most NIFs here either dispatch_async
 // to the main queue and return in microseconds, or dispatch_sync but read a
@@ -8466,6 +8482,9 @@ static ErlNifFunc nif_funcs[] = {
     // Nothing blocks on another thread; nothing computes for
     // scheduler-blocking durations.
     {"post_mortem_ios_drain", 0, nif_post_mortem_ios_drain, 0},
+    // iOS stub for the Android ApplicationExitInfo drain — the shared
+    // mob_nif.erl NIF list must resolve on both platforms. Returns [].
+    {"post_mortem_android_drain", 0, nif_post_mortem_android_drain, 0},
 };
 
 static int nif_load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info) {

@@ -53,6 +53,8 @@
     take_opened_document/0,
     %% Post-mortem — iOS MetricKit ingest (drain-on-demand)
     post_mortem_ios_drain/0,
+    %% Post-mortem — Android ApplicationExitInfo ingest (drain-on-demand)
+    post_mortem_android_drain/0,
     %% Storage
     storage_dir/1,
     storage_save_to_photo_library/1,
@@ -215,6 +217,8 @@
     native_stats_enable/1,
     %% Post-mortem — iOS MetricKit ingest (drain-on-demand)
     post_mortem_ios_drain/0,
+    %% Post-mortem — Android ApplicationExitInfo ingest (drain-on-demand)
+    post_mortem_android_drain/0,
     %% Storage
     storage_dir/1,
     storage_save_to_photo_library/1,
@@ -320,6 +324,13 @@ take_opened_document() -> erlang:nif_error(not_loaded).
 %% platform does not export MetricKit (Android, iOS < 14) or the queue is
 %% empty. Called by Mob.PostMortem.IOS.sweep/0.
 post_mortem_ios_drain() -> erlang:nif_error(not_loaded).
+%% post_mortem_android_drain/0 — pull ApplicationExitInfo history since the
+%% persisted last-seen marker. Returns a list of #{reason_code, pid,
+%% timestamp_ms, process_name, description} maps, or [] on iOS, on
+%% Android < 11 (API 30, where getHistoricalProcessExitReasons was added),
+%% or when the marker filters everything out. Called by
+%% Mob.PostMortem.Android.sweep/0.
+post_mortem_android_drain() -> erlang:nif_error(not_loaded).
 battery_level() -> erlang:nif_error(not_loaded).
 device_set_dispatcher(_Pid) -> erlang:nif_error(not_loaded).
 device_battery_state() -> erlang:nif_error(not_loaded).

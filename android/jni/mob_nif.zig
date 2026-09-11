@@ -4094,11 +4094,11 @@ export fn nif_vendor_usb_close(
 // ── Mob.PostMortem.IOS — MetricKit drain (iOS-only, Android stub) ────────
 //
 // The MetricKit channel is iOS-only; the equivalent Android substrate is
-// `ApplicationExitInfo`, whose ingest is its own follow-up ticket
-// (MOB-180) with its own NIF. This stub exists so the shared
-// `mob_nif.erl` `-nifs([post_mortem_ios_drain/0])` declaration resolves
-// on Android without the loader raising. Returns [] unconditionally —
-// the Elixir side (Mob.PostMortem.IOS.sweep/0) also gates on
+// `ApplicationExitInfo`, whose ingest is nif_post_mortem_android_drain
+// below. This stub exists so the shared `mob_nif.erl`
+// `-nifs([post_mortem_ios_drain/0])` declaration resolves on Android
+// without the loader raising. Returns [] unconditionally — the Elixir
+// side (Mob.PostMortem.IOS.sweep/0) also gates on
 // `Mob.PostMortem.platform() == :ios` before it even calls this, so a
 // well-formed caller never reaches here on Android.
 export fn nif_post_mortem_ios_drain(
@@ -4109,6 +4109,504 @@ export fn nif_post_mortem_ios_drain(
     _ = argc;
     _ = argv;
     return erts.makeList(env, &.{});
+}
+
+// ── Mob.PostMortem.Android — ApplicationExitInfo drain (MOB-180) ─────────
+//
+// ActivityManager.getHistoricalProcessExitReasons returns the OS-held
+// history of process exits — ANRs, crashes, OOMs, user-kills — that
+// this app's process has recorded across reboots. We pull it on demand
+// and hand each entry to the BEAM as an Elixir map. The Elixir side
+// (Mob.PostMortem.Android.sweep/0) then builds capsules via
+// Mob.Defect.emit_appexit_reason/1.
+//
+// **Availability.** Requires API 30 (Android 11). The Zig call checks
+// `Build.VERSION.SDK_INT` at runtime and returns [] on anything older,
+// so a debug build on an emulator ≤ API 29 does not raise.
+//
+// **Architectural choice.** All native access is through this NIF —
+// no MobBridge.kt template addition. MobBridge is app-owned and never
+// regenerated per `project_mob_plugin_permissions_host_drift`: a
+// template-addition would silently degrade to [] on every existing app,
+// exactly the wrong shape for a passive framework observability
+// feature. Pure JNI from mob-side works on every app the moment they
+// bump mob.
+//
+// **Persistent marker.** ApplicationExitInfo history survives across
+// app reboots — a fresh install would otherwise re-emit every historic
+// crash on first sweep, and every boot after would re-emit them again.
+// We persist the most-recent-seen exit timestamp to
+// `<filesDir>/mob_post_mortem_appexit_marker.txt` and filter the OS
+// list to entries strictly newer than that. First sweep on a fresh
+// install still emits the current history (that is the point); every
+// subsequent sweep emits only what accumulated since.
+//
+// **Redaction.** The emitted map carries: reason code (numeric enum),
+// process name (normally the app's package; not user data), OS-generated
+// description (a short string like "remote process crash"; not
+// app-controlled), pid, and timestamp. NOT included: trace file
+// contents (an ANR's trace can carry app strings — same discipline as
+// the receipt module; a follow-up phase can add it with per-capsule
+// truncation).
+
+// Android ApplicationExitInfo.REASON_* constants (public SDK API).
+// Hard-coded rather than reflected so a stale device with an odd
+// system image cannot desync us — these values are stable across
+// every Android 11+ release.
+const AEI_REASON_UNKNOWN: i32 = 0;
+const AEI_REASON_EXIT_SELF: i32 = 1;
+const AEI_REASON_SIGNALED: i32 = 2;
+const AEI_REASON_LOW_MEMORY: i32 = 3;
+const AEI_REASON_CRASH: i32 = 4;
+const AEI_REASON_CRASH_NATIVE: i32 = 5;
+const AEI_REASON_ANR: i32 = 6;
+const AEI_REASON_INITIALIZATION_FAILURE: i32 = 7;
+const AEI_REASON_PERMISSION_CHANGE: i32 = 8;
+const AEI_REASON_EXCESSIVE_RESOURCE_USAGE: i32 = 9;
+const AEI_REASON_USER_REQUESTED: i32 = 10;
+const AEI_REASON_USER_STOPPED: i32 = 11;
+const AEI_REASON_DEPENDENCY_DIED: i32 = 12;
+const AEI_REASON_OTHER: i32 = 13;
+const AEI_REASON_FREEZER: i32 = 14;
+
+// JNI method-call signatures we need beyond what mob_zig.zig types.
+//
+// The JNI `Call*Method` slots are variadic in C, and the ones we need
+// here are `?*anyopaque` or arity-mismatched in `mob_zig.zig`. Cast
+// the raw slot to a concrete arity per call site — Zig cannot call a
+// variadic function pointer with a fixed argument count directly, so
+// this cast is the standard idiom. The `mob_zig.zig` `callObjectMethod`
+// helper covers arity 0; the helpers below cover arities we hit in
+// this NIF.
+
+const CallIntMethodNoArgs = fn (env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID) callconv(.c) jni.JInt;
+const CallLongMethodNoArgs = fn (env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID) callconv(.c) i64;
+const CallObjOneObj = fn (env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID, a: jni.JObject) callconv(.c) jni.JObject;
+const CallObjOneInt = fn (env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID, a: jni.JInt) callconv(.c) jni.JObject;
+const CallObjObjIntInt = fn (env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID, a: jni.JObject, b: jni.JInt, c: jni.JInt) callconv(.c) jni.JObject;
+
+inline fn callIntNoArgs(env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID) jni.JInt {
+    const fptr: *const CallIntMethodNoArgs = @ptrCast(@alignCast(env.*.CallIntMethod.?));
+    return fptr(env, obj, mid);
+}
+
+inline fn callLongNoArgs(env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID) i64 {
+    const fptr: *const CallLongMethodNoArgs = @ptrCast(@alignCast(env.*.CallLongMethod.?));
+    return fptr(env, obj, mid);
+}
+
+inline fn callObjWithObj(env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID, a: jni.JObject) jni.JObject {
+    const fptr: *const CallObjOneObj = @ptrCast(@alignCast(env.*.CallObjectMethod.?));
+    return fptr(env, obj, mid, a);
+}
+
+inline fn callObjWithInt(env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID, a: jni.JInt) jni.JObject {
+    const fptr: *const CallObjOneInt = @ptrCast(@alignCast(env.*.CallObjectMethod.?));
+    return fptr(env, obj, mid, a);
+}
+
+inline fn callObjWithObjIntInt(env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID, a: jni.JObject, b: jni.JInt, c: jni.JInt) jni.JObject {
+    const fptr: *const CallObjObjIntInt = @ptrCast(@alignCast(env.*.CallObjectMethod.?));
+    return fptr(env, obj, mid, a, b, c);
+}
+
+// Cached Build.VERSION.SDK_INT. Populated lazily on the first drain
+// call via `buildSdkInt` rather than at nif_load time — nif_load runs
+// before `mob_init_bridge` captures `g_activity`, so there is no
+// Context to reach the class from yet. A drain that arrives before
+// the first successful lookup treats the field as unknown and
+// proceeds; on an API-29 device that means `getMethodID` for
+// `getHistoricalProcessExitReasons` returns null and the drain
+// returns [] cleanly. Zero is the "unknown" sentinel, matching
+// Android's convention that SDK_INT is always > 0 on a real device.
+var g_android_sdk_int: i32 = 0;
+
+// Cached filesDir absolute path. Written once on the first successful
+// getFilesDir call. Bounded at 512 bytes — mob's data dir path is well
+// under this on every device.
+var g_files_dir_buf: [512]u8 = @splat(0);
+var g_files_dir_len: usize = 0;
+
+fn filesDirPath(env: *jni.JNIEnv, context: jni.JObject) ?[]const u8 {
+    if (g_files_dir_len > 0) return g_files_dir_buf[0..g_files_dir_len];
+
+    // context.getFilesDir() → java.io.File
+    const ctx_cls = jni.getObjectClass(env, context);
+    defer jni.deleteLocalRef(env, ctx_cls);
+
+    const get_files_dir_mid = jni.getMethodID(env, ctx_cls, "getFilesDir", "()Ljava/io/File;");
+    if (get_files_dir_mid == null) {
+        jni.exceptionClear(env);
+        return null;
+    }
+
+    const files_dir = jni.callObjectMethod(env, context, get_files_dir_mid);
+    if (files_dir == null) {
+        jni.exceptionClear(env);
+        return null;
+    }
+    defer jni.deleteLocalRef(env, files_dir);
+
+    const file_cls = jni.getObjectClass(env, files_dir);
+    defer jni.deleteLocalRef(env, file_cls);
+
+    const get_abs_path_mid = jni.getMethodID(env, file_cls, "getAbsolutePath", "()Ljava/lang/String;");
+    if (get_abs_path_mid == null) {
+        jni.exceptionClear(env);
+        return null;
+    }
+
+    const jstr = jni.callObjectMethod(env, files_dir, get_abs_path_mid);
+    if (jstr == null) {
+        jni.exceptionClear(env);
+        return null;
+    }
+    defer jni.deleteLocalRef(env, jstr);
+
+    const chars = jni.getStringUTFChars(env, jstr) orelse return null;
+    defer jni.releaseStringUTFChars(env, jstr, chars);
+
+    var i: usize = 0;
+    while (chars[i] != 0 and i < g_files_dir_buf.len - 1) : (i += 1) {
+        g_files_dir_buf[i] = chars[i];
+    }
+    g_files_dir_buf[i] = 0;
+    g_files_dir_len = i;
+    return g_files_dir_buf[0..i];
+}
+
+const MARKER_FILENAME = "mob_post_mortem_appexit_marker.txt";
+
+// Read the persisted last-seen timestamp. Returns 0 on first-ever
+// sweep (no marker file), on parse failure, or on any I/O error —
+// treating any of those as "we have not seen anything yet" is the
+// safe direction: at worst we re-emit some historic capsules the
+// Registry then dedups within the current BEAM session.
+fn readMarker(dir: []const u8) i64 {
+    var path_buf: [640]u8 = @splat(0);
+    const path = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ dir, MARKER_FILENAME }) catch return 0;
+
+    const f = jni.fopen(path.ptr, "rb") orelse return 0;
+    defer _ = jni.fclose(f);
+
+    var buf: [32]u8 = @splat(0);
+    const n = jni.fread(&buf, 1, buf.len - 1, f);
+    if (n == 0) return 0;
+    buf[@min(n, buf.len - 1)] = 0;
+
+    const trimmed = std.mem.sliceTo(&buf, '\n');
+    return std.fmt.parseInt(i64, std.mem.trim(u8, trimmed, " \t\r\n"), 10) catch 0;
+}
+
+// Persist the last-seen timestamp via POSIX open+write+close. The file
+// is at most ~24 bytes ("9223372036854775807\n"), and we truncate on
+// every write so a stale longer content never leaks in.
+//
+// **Failure modes.** Marker advance is best-effort: the worst outcome
+// of a silent failure is that next boot re-emits already-emitted exits,
+// which the Registry then dedups within the session. But cross-boot
+// dedup depends on the marker actually advancing, and an operator
+// staring at duplicate capsules across restarts needs a hint that
+// this write path is why. We log an :error line the first time each
+// failure kind is hit so a chatty NIF doesn't drown the console but
+// the pattern is discoverable.
+fn writeMarker(dir: []const u8, ts_ms: i64) void {
+    var path_buf: [640]u8 = @splat(0);
+    const path = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ dir, MARKER_FILENAME }) catch {
+        logMarkerFailureOnce("path_too_long");
+        return;
+    };
+
+    const fd = posix_open(path.ptr, O_WRONLY | O_CREAT | O_TRUNC, 0o600);
+    if (fd < 0) {
+        logMarkerFailureOnce("open_failed");
+        return;
+    }
+    defer _ = posix_close(fd);
+
+    var out_buf: [32]u8 = @splat(0);
+    const out = std.fmt.bufPrintZ(&out_buf, "{d}\n", .{ts_ms}) catch {
+        logMarkerFailureOnce("format_failed");
+        return;
+    };
+    const written = posix_write(fd, out.ptr, out.len);
+    if (written < 0) logMarkerFailureOnce("write_failed");
+}
+
+var g_marker_failure_logged = std.atomic.Value(bool).init(false);
+
+fn logMarkerFailureOnce(reason: []const u8) void {
+    if (g_marker_failure_logged.swap(true, .seq_cst)) return;
+    var buf: [128]u8 = @splat(0);
+    const msg = std.fmt.bufPrintZ(&buf, "mob_post_mortem: marker write failed ({s}); cross-boot dedup will re-emit until this clears", .{reason}) catch return;
+    jni.logWrite(jni.ANDROID_LOG_ERROR, "MobNIF", "{s}", .{msg});
+}
+
+const O_WRONLY: c_int = 1;
+const O_CREAT: c_int = 0o100;
+const O_TRUNC: c_int = 0o1000;
+
+extern "c" fn open(path: [*:0]const u8, flags: c_int, mode: c_uint) c_int;
+extern "c" fn write(fd: c_int, buf: [*]const u8, count: usize) isize;
+extern "c" fn close(fd: c_int) c_int;
+
+inline fn posix_open(path: [*:0]const u8, flags: c_int, mode: c_uint) c_int {
+    return open(path, flags, mode);
+}
+inline fn posix_write(fd: c_int, buf: [*]const u8, count: usize) isize {
+    return write(fd, buf, count);
+}
+inline fn posix_close(fd: c_int) c_int {
+    return close(fd);
+}
+
+// Get Application context from the global Activity captured at BEAM
+// boot. Returns null if the activity hasn't been captured yet (before
+// mob_init_bridge runs) or if the JNI lookup fails.
+//
+// **Ownership**: the returned JObject is a local ref. Caller must
+// `jni.deleteLocalRef` it before returning to Java, or the ref lives
+// until the current JNI stack frame unwinds.
+fn applicationContext(env: *jni.JNIEnv) ?jni.JObject {
+    if (g_activity == null) return null;
+
+    const activity_cls = jni.getObjectClass(env, g_activity);
+    defer jni.deleteLocalRef(env, activity_cls);
+
+    const get_app_ctx = jni.getMethodID(env, activity_cls, "getApplicationContext", "()Landroid/content/Context;");
+    if (get_app_ctx == null) {
+        jni.exceptionClear(env);
+        return null;
+    }
+
+    const app_ctx = jni.callObjectMethod(env, g_activity, get_app_ctx);
+    if (app_ctx == null) {
+        jni.exceptionClear(env);
+        return null;
+    }
+    return app_ctx;
+}
+
+fn buildSdkInt(env: *jni.JNIEnv) i32 {
+    const cls = jni.findClass(env, "android/os/Build$VERSION");
+    if (cls == null) {
+        jni.exceptionClear(env);
+        return 0;
+    }
+    defer jni.deleteLocalRef(env, cls);
+
+    const fid = jni.getFieldID(env, cls, "SDK_INT", "I");
+    if (fid == null) {
+        jni.exceptionClear(env);
+        return 0;
+    }
+
+    // GetStaticIntField is typed opaque in mob_zig; cast inline.
+    const GetStaticIntField = fn (env_: *jni.JNIEnv, cls_: jni.JClass, fid_: jni.JFieldID) callconv(.c) jni.JInt;
+    const fptr: *const GetStaticIntField = @ptrCast(@alignCast(env.*.GetStaticIntField.?));
+    return fptr(env, cls, fid);
+}
+
+// Copy a Java String's UTF-8 into a Zig buffer, truncating to fit.
+// Returns the slice actually written. Buffer must be caller-provided so
+// this stays alloc-free on the hot path.
+fn copyJStringTruncated(env: *jni.JNIEnv, jstr: jni.JObject, buf: []u8) []const u8 {
+    if (jstr == null or buf.len == 0) return buf[0..0];
+    const chars = jni.getStringUTFChars(env, jstr) orelse return buf[0..0];
+    defer jni.releaseStringUTFChars(env, jstr, chars);
+
+    var i: usize = 0;
+    while (chars[i] != 0 and i < buf.len - 1) : (i += 1) {
+        buf[i] = chars[i];
+    }
+    buf[i] = 0;
+    return buf[0..i];
+}
+
+export fn nif_post_mortem_android_drain(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+
+    // API 30+ only. Older devices → [].
+    if (g_android_sdk_int > 0 and g_android_sdk_int < 30) {
+        return erts.makeList(env, &.{});
+    }
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.makeList(env, &.{});
+    defer detachIfAttached(attached);
+
+    const app_ctx = applicationContext(jenv) orelse return erts.makeList(env, &.{});
+    defer jni.deleteLocalRef(jenv, app_ctx);
+
+    // Recompute SDK_INT the first time — buildSdkInt is cheap enough
+    // to run per-drain if the nif_load-time cache wasn't set.
+    if (g_android_sdk_int == 0) {
+        g_android_sdk_int = buildSdkInt(jenv);
+        if (g_android_sdk_int > 0 and g_android_sdk_int < 30) {
+            return erts.makeList(env, &.{});
+        }
+    }
+
+    // Persistent marker read — filter to entries strictly newer.
+    const dir = filesDirPath(jenv, app_ctx) orelse return erts.makeList(env, &.{});
+    const last_seen_ms = readMarker(dir);
+
+    // context.getSystemService("activity") → ActivityManager
+    const ctx_cls = jni.getObjectClass(jenv, app_ctx);
+    defer jni.deleteLocalRef(jenv, ctx_cls);
+
+    const get_service_mid = jni.getMethodID(jenv, ctx_cls, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
+    if (get_service_mid == null) {
+        jni.exceptionClear(jenv);
+        return erts.makeList(env, &.{});
+    }
+
+    const svc_name = jni.newStringUTF(jenv, "activity");
+    defer jni.deleteLocalRef(jenv, svc_name);
+
+    const am = callObjWithObj(jenv, app_ctx, get_service_mid, svc_name);
+    if (am == null) {
+        jni.exceptionClear(jenv);
+        return erts.makeList(env, &.{});
+    }
+    defer jni.deleteLocalRef(jenv, am);
+
+    // ActivityManager.getHistoricalProcessExitReasons(packageName, pid, maxNum)
+    // — pass nulls / zeros to get the full list for this app.
+    const am_cls = jni.getObjectClass(jenv, am);
+    defer jni.deleteLocalRef(jenv, am_cls);
+
+    const get_history_mid = jni.getMethodID(
+        jenv,
+        am_cls,
+        "getHistoricalProcessExitReasons",
+        "(Ljava/lang/String;II)Ljava/util/List;",
+    );
+    if (get_history_mid == null) {
+        // Older API — should be caught by the SDK check above, but
+        // clear any exception just in case.
+        jni.exceptionClear(jenv);
+        return erts.makeList(env, &.{});
+    }
+
+    const list = callObjWithObjIntInt(jenv, am, get_history_mid, @as(jni.JObject, null), @as(jni.JInt, 0), @as(jni.JInt, 0));
+    if (list == null) {
+        jni.exceptionClear(jenv);
+        return erts.makeList(env, &.{});
+    }
+    defer jni.deleteLocalRef(jenv, list);
+
+    // List.size() / List.get(i)
+    const list_cls = jni.getObjectClass(jenv, list);
+    defer jni.deleteLocalRef(jenv, list_cls);
+    const size_mid = jni.getMethodID(jenv, list_cls, "size", "()I");
+    const get_mid = jni.getMethodID(jenv, list_cls, "get", "(I)Ljava/lang/Object;");
+    if (size_mid == null or get_mid == null) {
+        jni.exceptionClear(jenv);
+        return erts.makeList(env, &.{});
+    }
+
+    const n = callIntNoArgs(jenv, list, size_mid);
+    if (n <= 0) return erts.makeList(env, &.{});
+
+    // ApplicationExitInfo method IDs — resolved once per drain.
+    var aei_cls: jni.JClass = null;
+    var get_pid: jni.JMethodID = null;
+    var get_timestamp: jni.JMethodID = null;
+    var get_reason: jni.JMethodID = null;
+    var get_description: jni.JMethodID = null;
+    var get_process_name: jni.JMethodID = null;
+
+    // Build up a result list. We iterate in OS order (typically
+    // most-recent first per Android docs) and prepend each entry so
+    // the returned Elixir list ends up chronological — same shape as
+    // the iOS drain.
+    var out = erts.makeList(env, &.{});
+    var new_max_ts: i64 = last_seen_ms;
+    var name_buf: [128]u8 = @splat(0);
+    var desc_buf: [256]u8 = @splat(0);
+
+    var i: jni.JInt = 0;
+    while (i < n) : (i += 1) {
+        const entry = callObjWithInt(jenv, list, get_mid, i);
+        if (entry == null) {
+            jni.exceptionClear(jenv);
+            continue;
+        }
+        defer jni.deleteLocalRef(jenv, entry);
+
+        if (aei_cls == null) {
+            aei_cls = jni.getObjectClass(jenv, entry);
+            get_pid = jni.getMethodID(jenv, aei_cls, "getPid", "()I");
+            get_timestamp = jni.getMethodID(jenv, aei_cls, "getTimestamp", "()J");
+            get_reason = jni.getMethodID(jenv, aei_cls, "getReason", "()I");
+            get_description = jni.getMethodID(jenv, aei_cls, "getDescription", "()Ljava/lang/String;");
+            get_process_name = jni.getMethodID(jenv, aei_cls, "getProcessName", "()Ljava/lang/String;");
+            if (get_pid == null or get_timestamp == null or get_reason == null or get_process_name == null) {
+                jni.exceptionClear(jenv);
+                continue;
+            }
+        }
+
+        const ts_ms = callLongNoArgs(jenv, entry, get_timestamp);
+        if (ts_ms <= last_seen_ms) continue;
+        if (ts_ms > new_max_ts) new_max_ts = ts_ms;
+
+        const pid = callIntNoArgs(jenv, entry, get_pid);
+        const reason = callIntNoArgs(jenv, entry, get_reason);
+
+        // process_name and description are best-effort; a null return
+        // becomes an empty binary.
+        const jname = jni.callObjectMethod(jenv, entry, get_process_name);
+        const name_slice = copyJStringTruncated(jenv, jname, &name_buf);
+        if (jname != null) jni.deleteLocalRef(jenv, jname);
+
+        var desc_slice: []const u8 = &[_]u8{};
+        if (get_description != null) {
+            const jdesc = jni.callObjectMethod(jenv, entry, get_description);
+            desc_slice = copyJStringTruncated(jenv, jdesc, &desc_buf);
+            if (jdesc != null) jni.deleteLocalRef(jenv, jdesc);
+        }
+
+        // Build the Elixir map for this entry.
+        const proc_bin = makeBinaryFromSlice(env, name_slice) orelse continue;
+        const desc_bin = makeBinaryFromSlice(env, desc_slice) orelse continue;
+
+        const keys = [_]erts.ERL_NIF_TERM{
+            erts.atom(env, "reason_code"),
+            erts.atom(env, "pid"),
+            erts.atom(env, "timestamp_ms"),
+            erts.atom(env, "process_name"),
+            erts.atom(env, "description"),
+        };
+        const vals = [_]erts.ERL_NIF_TERM{
+            erts.enif_make_int(env, @intCast(reason)),
+            erts.enif_make_int(env, @intCast(pid)),
+            erts.enif_make_int64(env, ts_ms),
+            proc_bin,
+            desc_bin,
+        };
+        const entry_map = erts.makeMap(env, &keys, &vals) orelse continue;
+        out = erts.enif_make_list_cell(env, entry_map, out);
+    }
+
+    if (aei_cls != null) jni.deleteLocalRef(jenv, aei_cls);
+
+    if (new_max_ts > last_seen_ms) writeMarker(dir, new_max_ts);
+
+    return out;
+}
+
+fn makeBinaryFromSlice(env: ?*erts.ErlNifEnv, slice: []const u8) ?erts.ERL_NIF_TERM {
+    var bin: erts.ErlNifBinary = undefined;
+    if (erts.enif_alloc_binary(slice.len, &bin) == 0) return null;
+    if (slice.len > 0) @memcpy(bin.data[0..slice.len], slice);
+    return erts.enif_make_binary(env, &bin);
 }
 
 // ── nif_load: cache all method IDs at BEAM startup ───────────────────────
@@ -4455,8 +4953,13 @@ const nif_funcs = [_]erts.ErlNifFunc{
     // ── Mob.Bt (Bluetooth Classic) — extracted to the mob_bluetooth plugin ──
     // ── Mob.DNS (in-process IPv4 resolver via Bionic getaddrinfo) ────────
     .{ .name = "resolve_ipv4", .arity = 1, .fptr = nif_resolve_ipv4, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
-    // ── Mob.PostMortem.IOS (Android stub — the substrate is MOB-180) ─────
+    // ── Mob.PostMortem.IOS (Android stub — the iOS substrate is MOB-179) ─
     .{ .name = "post_mortem_ios_drain", .arity = 0, .fptr = nif_post_mortem_ios_drain, .flags = 0 },
+    // ── Mob.PostMortem.Android (ApplicationExitInfo, MOB-180) ────────────
+    // Dirty-IO: the JNI dance dispatches into ActivityManager and reads
+    // a small marker file; individually cheap, but chained JNI calls
+    // through opaque Java collections can be tens of ms on a slow phone.
+    .{ .name = "post_mortem_android_drain", .arity = 0, .fptr = nif_post_mortem_android_drain, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
 };
 
 var mob_nif_entry: erts.ErlNifEntry = .{
