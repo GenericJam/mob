@@ -11,6 +11,36 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 ## [Unreleased]
 
 ### Added
+- **`Mob.Differential.compare/3`** (MOB-157). A pure comparator over two
+  `Mob.Test.view_tree/1` snapshots — pass an iOS and an Android tree, get back
+  `:ok` or `{:divergence, %{path, reason, ios, android}}` naming the first node
+  that differs. Depth-first, left-to-right, short-circuit: a parent's own
+  divergence is reported before its children's; among children the leftmost
+  wins.
+
+  Compares **structure** (`type`, child count), **label**, and **value** at
+  every node. Compares **frames** only when both sides carry one, with a
+  configurable dp tolerance — Android's `MobBridge.uiViewTree()` reports frame
+  only for nodes with `props["id"]`, so requiring geometry on every node would
+  flag every non-id'd node as a divergence; fixture authors choose which nodes
+  need geometry compared. Root frame is not compared (it is the screen size).
+  `class`, `bg_color`, `text_color` are not compared yet — both are `null` on
+  Android today, and a partial answer would misattribute divergence.
+
+  Returns `{:error, :not_ready}` when either side is `nil`, `{:error, _}` or
+  `:no_window`, so a harness that samples too early does not file its own gap
+  as a framework defect.
+
+  Deliberately pure and stateless: rendering the same fixture on both devices
+  and feeding the two trees to this belongs with `mob_dev`, in its own change.
+  Every rule has a reversion-bar test verified by mutating that rule and
+  confirming the suite flips, including the tolerance boundary and the
+  asymmetric nil-frame cases that a previous version of the test suite failed
+  to distinguish. A schema-drift guard asserts the eight-key contract the
+  comparator assumes, so a new field lands with an intentional decision to
+  compare or skip rather than as silent divergence. See
+  `decisions/2026-09-10-differential-detector-is-a-pure-comparator.md`.
+
 - **Runtime invariant registry — `Mob.Invariant`** (MOB-156). Checks the
   framework can make about itself, with the rule that keeps them from becoming
   noise: **a violation is recorded only if the same violation is still there at
