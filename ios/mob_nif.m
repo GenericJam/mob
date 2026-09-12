@@ -400,6 +400,20 @@ static char g_transition[16] = "none";
 // covers every route into the BEAM (tap, focus, blur, submit, select, change).
 static _Atomic uint64_t g_ui_event_seq;
 
+// Set once nif_load has run, i.e. erts is fully initialised and enif_* calls
+// are safe. Notifiers the native shell fires from UIKit callbacks can arrive
+// BEFORE that — the generated SceneDelegate calls mob_notify_window_connected
+// from scene:willConnectToSession: ahead of mob_boot_runtime on first launch —
+// and enif_alloc_env before erts init jumps through a null allocator pointer,
+// which iOS reports as EXC_BAD_ACCESS at 0x0 / CODESIGNING "Invalid Page" and
+// kills the process (MOB-199). The simulator happened not to fault; every
+// physical-device launch did.
+static _Atomic(bool) g_runtime_up = false;
+
+bool mob_runtime_up(void) {
+    return atomic_load(&g_runtime_up);
+}
+
 #if !MOB_RELEASE // only the harness reads it; the writers stay unconditional
 static uint64_t mob_ui_event_seq(void) {
     return atomic_load_explicit(&g_ui_event_seq, memory_order_relaxed);
@@ -794,6 +808,10 @@ void mob_handle_back(void) {
 // current screen; Mob.Screen.Server invalidates its cached insets and repaints.
 
 void mob_notify_window_connected(void) {
+    // Before the BEAM is up there is no screen to tell, and the boot path reads
+    // the window's insets itself. Calling into erts here would crash (MOB-199).
+    if (!mob_runtime_up())
+        return;
     ErlNifEnv *env = enif_alloc_env();
     ErlNifPid pid;
     if (enif_whereis_pid(env, enif_make_atom(env, "mob_screen"), &pid)) {
@@ -2368,6 +2386,8 @@ static ERL_NIF_TERM nif_device_set_dispatcher(ErlNifEnv *env, int argc, const ER
 // subscribers without polling. Use this rather than UITraitChange APIs because
 // SwiftUI handles iOS 13–17 compatibility for us.
 void mob_notify_color_scheme(const char *scheme) {
+    if (!mob_runtime_up())
+        return;
     if (!g_device_dispatcher_set || !scheme)
         return;
     ErlNifEnv *e = enif_alloc_env();
@@ -8614,6 +8634,7 @@ static int nif_load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info) {
         return -1;
     }
     LOGI(@"nif_load: mob_nif ready");
+    atomic_store(&g_runtime_up, true);
     return 0;
 }
 

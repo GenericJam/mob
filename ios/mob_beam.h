@@ -4,6 +4,8 @@
 #ifndef MOB_BEAM_H
 #define MOB_BEAM_H
 
+#include <stdbool.h>
+
 // Call from application:didFinishLaunchingWithOptions: (main thread).
 // No-op in the SwiftUI build; kept for API compatibility.
 void mob_init_ui(void);
@@ -43,5 +45,8 @@ void mob_handle_opened_url(const char *url_cstr);
 // earlier — a background or prewarmed launch — can re-read its safe-area
 // insets and repaint. Safe to call when no BEAM is running: it is a no-op.
 void mob_notify_window_connected(void);
+// True once erts is initialised (mob_nif's load callback ran); the notifiers
+// above are no-ops before that.
+bool mob_runtime_up(void);
 
 #endif // MOB_BEAM_H

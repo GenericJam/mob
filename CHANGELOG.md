@@ -8,6 +8,21 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- **Physical iOS: every launch crashed before the BEAM printed a line**
+  (MOB-199, regression from MOB-166 in 0.8.0). The generated SceneDelegate
+  calls `mob_notify_window_connected()` before `mob_boot_runtime()` on first
+  launch, and that notifier called `enif_alloc_env()` unconditionally; before
+  erl_start has initialised erts that jumps through a null allocator pointer,
+  which iOS reports as `EXC_BAD_ACCESS` at `0x0` with a `CODESIGNING`
+  "Invalid Page" termination and kills the app. The simulator happened not to
+  fault, and `mix mob.deploy` reported "Apps restarted" over a dead process.
+  `mob_notify_window_connected` and `mob_notify_color_scheme` now return
+  early until `nif_load` has run (`mob_runtime_up/0`). Generated apps pick
+  the fix up on their next native build; no template change needed.
+
 ## [0.8.3] - 2026-09-12
 
 ### Added
