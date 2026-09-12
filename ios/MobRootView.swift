@@ -306,12 +306,35 @@ struct MobNodeView: View {
                         MobNodeView(node: item.node, layoutWeightAxis: .vertical)
                     }
                 }
+                // MOB-181: honor fixed_width / fixed_height on columns.
+                // The inner .frame pins whichever fixed dim is set (nil for
+                // unset dims leaves the child's own size intact). The outer
+                // .frame keeps the default fill-width behavior and adds
+                // fill_height, but suppresses the outer growth on whichever
+                // axis is already pinned — otherwise a fixed dim would fight
+                // maxWidth/maxHeight: .infinity and read as ignored. Fixed
+                // beats fill on iOS for internal consistency (SwiftUI would
+                // apply the outer maxWidth after the inner width, effectively
+                // overriding it). See decisions/2026-09-11-column-row-fixed-dims-precedence.md.
+                // `MobLayoutWeight` below is also fixed-dim-aware so weight
+                // on the pinned axis is likewise suppressed.
+                //
                 // fill_height: true lets a column flex to fill its parent so children
-                // with Spacer() or fill_height of their own can pin to the bottom.
+                // with Spacer() or fill_height of their own can pin to the bottom
+                // (unless fixed_height is set, which wins for iOS consistency).
                 // Without maxHeight the VStack hugs its content vertically and a
                 // trailing footer sits directly below the last child instead of the
                 // parent's bottom edge.
-                .frame(maxWidth: .infinity, maxHeight: node.fillHeight ? .infinity : nil, alignment: .topLeading)
+                .frame(
+                    width: node.fixedWidth > 0 ? CGFloat(node.fixedWidth) : nil,
+                    height: node.fixedHeight > 0 ? CGFloat(node.fixedHeight) : nil,
+                    alignment: .topLeading
+                )
+                .frame(
+                    maxWidth: node.fixedWidth > 0 ? nil : .infinity,
+                    maxHeight: (node.fillHeight && node.fixedHeight <= 0) ? .infinity : nil,
+                    alignment: .topLeading
+                )
                 .padding(node.paddingEdgeInsets)
                 .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
                 .ifLet(node.onTap) { view, tap in
@@ -333,6 +356,13 @@ struct MobNodeView: View {
                         MobNodeView(node: item.node, layoutWeightAxis: .horizontal)
                     }
                 }
+                // MOB-181: honor fixed_width / fixed_height on rows. Same
+                // shape as the column case above: inner .frame pins the
+                // fixed dims (nil leaves the child alone) and the fill_width
+                // outer frame is suppressed on the axis a fixed dim is
+                // already pinning. Fixed beats fill on iOS (see the column
+                // note above and the decision record).
+                //
                 // Without maxWidth: .infinity an HStack hugs its content.
                 // Flex Spacers inside then have nothing to expand into and
                 // centering tricks (spacer / content / spacer) collapse.
@@ -346,7 +376,12 @@ struct MobNodeView: View {
                 // rows each centred independently and read as ragged. The
                 // column case above already passes .topLeading for the same
                 // reason.
-                .ifLet(node.fillWidth ? () : nil) { view, _ in
+                .frame(
+                    width: node.fixedWidth > 0 ? CGFloat(node.fixedWidth) : nil,
+                    height: node.fixedHeight > 0 ? CGFloat(node.fixedHeight) : nil,
+                    alignment: .leading
+                )
+                .ifLet((node.fillWidth && node.fixedWidth <= 0) ? () : nil) { view, _ in
                     view.frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(node.paddingEdgeInsets)
@@ -600,9 +635,22 @@ private struct MobLayoutWeight: ViewModifier {
         if node.layoutWeight > 0, let axis {
             switch axis {
             case .horizontal:
-                decorate(content.frame(maxWidth: .infinity, alignment: .leading))
+                // MOB-181: a fixed_width on the flexing axis wins over
+                // layout_weight for iOS internal consistency — otherwise
+                // this outer maxWidth: .infinity would hide the inner
+                // .frame(width:) applied by the container case, and the
+                // caller would see fixed_width silently ignored.
+                if node.fixedWidth > 0 {
+                    decorate(content)
+                } else {
+                    decorate(content.frame(maxWidth: .infinity, alignment: .leading))
+                }
             case .vertical:
-                decorate(content.frame(maxHeight: .infinity, alignment: .top))
+                if node.fixedHeight > 0 {
+                    decorate(content)
+                } else {
+                    decorate(content.frame(maxHeight: .infinity, alignment: .top))
+                }
             }
         } else {
             content
