@@ -10,6 +10,20 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+
+- **iOS: `Mob.Audio.start_recording/2` now honors `:format` and
+  `:quality`** (MOB-52). The NIF received the encoded opts as a JSON
+  binary but silently discarded them — every recording was AAC/m4a at
+  medium quality regardless of what the caller asked for.
+  `nif_audio_start_recording` now parses the opts, chooses
+  `kAudioFormatMPEG4AAC`/`AVEncoderAudioQualityKey` for `:aac` and
+  `kAudioFormatLinearPCM` + `AVLinearPCMBitDepthKey` (8/16/24 bit per
+  quality) for `:wav`, and writes to a `.wav` / `.m4a` temp file to
+  match. `Mob.Audio.recording_opts/1`'s existing wire shape is
+  preserved.
+
+
 ### Docs
 - **`guides/components.md` — document `width` / `height` on `:column`
   and `:row`** (follow-up to MOB-181 / PR #158). The attributes exist

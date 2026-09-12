@@ -3609,25 +3609,78 @@ static ErlNifPid g_audio_pid;
 static NSString *g_audio_path = nil;
 static NSDate *g_audio_start = nil;
 
+// MOB-52: parses the JSON opts sent by Mob.Audio.start_recording/2
+// (`recording_opts/1` shape: `{"format": "aac"|"wav", "quality": "low"|"medium"|"high"}`)
+// and applies them to the AVAudioRecorder settings + file extension.
+// Before this the opts argument was silently discarded and every recording
+// was AAC/m4a at medium quality, regardless of what the caller asked for.
 static ERL_NIF_TERM nif_audio_start_recording(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifBinary opts_bin;
+    if (argc < 1 || (!enif_inspect_binary(env, argv[0], &opts_bin) &&
+                     !enif_inspect_iolist_as_binary(env, argv[0], &opts_bin)))
+        return enif_make_badarg(env);
+
+    NSString *opts_str = [[NSString alloc] initWithBytes:opts_bin.data
+                                                  length:opts_bin.size
+                                                encoding:NSUTF8StringEncoding];
+
     ErlNifPid pid;
     enif_self(env, &pid);
     g_audio_pid = pid;
     dispatch_async(dispatch_get_main_queue(), ^{
+      NSDictionary *opts =
+          [NSJSONSerialization JSONObjectWithData:[opts_str dataUsingEncoding:NSUTF8StringEncoding]
+                                          options:0
+                                            error:nil];
+      NSString *format =
+          [opts[@"format"] isKindOfClass:[NSString class]] ? opts[@"format"] : @"aac";
+      NSString *quality =
+          [opts[@"quality"] isKindOfClass:[NSString class]] ? opts[@"quality"] : @"medium";
+
+      BOOL wav = [format isEqualToString:@"wav"];
+      AVAudioQuality qualityLevel = AVAudioQualityMedium;
+      if ([quality isEqualToString:@"low"])
+          qualityLevel = AVAudioQualityLow;
+      if ([quality isEqualToString:@"high"])
+          qualityLevel = AVAudioQualityHigh;
+
+      // WAV = uncompressed linear PCM; bit depth tracks quality (16 is the
+      // audio-CD default, 24 is high-end voice recording, 8 is a low-fidelity
+      // fallback). AAC settings ignore bit-depth keys — the encoder picks
+      // internal precision from the quality knob.
+      NSDictionary *settings;
+      if (wav) {
+          int bitDepth = 16;
+          if ([quality isEqualToString:@"low"])
+              bitDepth = 8;
+          if ([quality isEqualToString:@"high"])
+              bitDepth = 24;
+          settings = @{
+              AVFormatIDKey : @(kAudioFormatLinearPCM),
+              AVSampleRateKey : @44100,
+              AVNumberOfChannelsKey : @1,
+              AVLinearPCMBitDepthKey : @(bitDepth),
+              AVLinearPCMIsFloatKey : @NO,
+              AVLinearPCMIsBigEndianKey : @NO
+          };
+      } else {
+          settings = @{
+              AVFormatIDKey : @(kAudioFormatMPEG4AAC),
+              AVSampleRateKey : @44100,
+              AVNumberOfChannelsKey : @1,
+              AVEncoderAudioQualityKey : @(qualityLevel)
+          };
+      }
+
       [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryRecord error:nil];
       [[AVAudioSession sharedInstance] setActive:YES error:nil];
+      NSString *ext = wav ? @"wav" : @"m4a";
       NSString *tmp = [NSTemporaryDirectory()
-          stringByAppendingPathComponent:[NSString stringWithFormat:@"mob_audio_%@.m4a",
-                                                                    [NSUUID UUID].UUIDString]];
+          stringByAppendingPathComponent:[NSString stringWithFormat:@"mob_audio_%@.%@",
+                                                                    [NSUUID UUID].UUIDString, ext]];
       g_audio_path = tmp;
       g_audio_start = [NSDate date];
       NSURL *url = [NSURL fileURLWithPath:tmp];
-      NSDictionary *settings = @{
-          AVFormatIDKey : @(kAudioFormatMPEG4AAC),
-          AVSampleRateKey : @44100,
-          AVNumberOfChannelsKey : @1,
-          AVEncoderAudioQualityKey : @(AVAudioQualityMedium)
-      };
       g_audio_recorder = [[AVAudioRecorder alloc] initWithURL:url settings:settings error:nil];
       [g_audio_recorder record];
     });
