@@ -26,3 +26,4 @@ Video
 CameraPreview
 WebView
 GpuView
+Anchored

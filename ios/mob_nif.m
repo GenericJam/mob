@@ -976,6 +976,17 @@ typedef NS_ENUM(NSUInteger, MobPropKey) {
     MOB_PROP_value,
     MOB_PROP_weight,
     MOB_PROP_width,
+    // anchored (MOB-190)
+    MOB_PROP_align_offset,
+    MOB_PROP_clamp,
+    MOB_PROP_edge_padding,
+    MOB_PROP_flip,
+    MOB_PROP_panel_max_height,
+    MOB_PROP_panel_max_width,
+    MOB_PROP_panel_offset_x,
+    MOB_PROP_panel_offset_y,
+    MOB_PROP_side,
+    MOB_PROP_side_offset,
     MOB_PROP__COUNT
 };
 
@@ -1073,6 +1084,16 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
           [MOB_PROP_return_key] = @"return_key",
           [MOB_PROP_run_spacing] = @"run_spacing",
           [MOB_PROP_scrolled_past_threshold] = @"scrolled_past_threshold",
+          [MOB_PROP_align_offset] = @"align_offset",
+          [MOB_PROP_clamp] = @"clamp",
+          [MOB_PROP_edge_padding] = @"edge_padding",
+          [MOB_PROP_flip] = @"flip",
+          [MOB_PROP_panel_max_height] = @"panel_max_height",
+          [MOB_PROP_panel_max_width] = @"panel_max_width",
+          [MOB_PROP_panel_offset_x] = @"panel_offset_x",
+          [MOB_PROP_panel_offset_y] = @"panel_offset_y",
+          [MOB_PROP_side] = @"side",
+          [MOB_PROP_side_offset] = @"side_offset",
           [MOB_PROP_secure] = @"secure",
           [MOB_PROP_shader] = @"shader",
           [MOB_PROP_show_indicator] = @"show_indicator",
@@ -1160,6 +1181,8 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         node.nodeType = MobNodeTypeGpuView;
     else if ([type isEqualToString:@"sheet"])
         node.nodeType = MobNodeTypeSheet;
+    else if ([type isEqualToString:@"anchored"])
+        node.nodeType = MobNodeTypeAnchored;
 
     NSDictionary *props = dict[@"props"];
 
@@ -1301,6 +1324,38 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         id offsetY = pv[MOB_PROP_offset_y];
         if (offsetY)
             node.offsetY = [offsetY doubleValue];
+
+        // anchored — all read off THIS node, never off a child (MOB-190).
+        id anchoredSide = pv[MOB_PROP_side];
+        if ([anchoredSide isKindOfClass:[NSString class]])
+            node.anchoredSide = anchoredSide;
+        id sideOffset = pv[MOB_PROP_side_offset];
+        if (sideOffset)
+            node.anchoredSideOffset = [sideOffset doubleValue];
+        id alignOffset = pv[MOB_PROP_align_offset];
+        if (alignOffset)
+            node.anchoredAlignOffset = [alignOffset doubleValue];
+        id panelOffsetX = pv[MOB_PROP_panel_offset_x];
+        if (panelOffsetX)
+            node.anchoredPanelOffsetX = [panelOffsetX doubleValue];
+        id panelOffsetY = pv[MOB_PROP_panel_offset_y];
+        if (panelOffsetY)
+            node.anchoredPanelOffsetY = [panelOffsetY doubleValue];
+        id edgePadding = pv[MOB_PROP_edge_padding];
+        if (edgePadding)
+            node.anchoredEdgePadding = [edgePadding doubleValue];
+        id flip = pv[MOB_PROP_flip];
+        if (flip)
+            node.anchoredFlip = [flip boolValue];
+        id clamp = pv[MOB_PROP_clamp];
+        if (clamp)
+            node.anchoredClamp = [clamp boolValue];
+        id panelMaxWidth = pv[MOB_PROP_panel_max_width];
+        if (panelMaxWidth)
+            node.anchoredPanelMaxWidth = [panelMaxWidth doubleValue];
+        id panelMaxHeight = pv[MOB_PROP_panel_max_height];
+        if (panelMaxHeight)
+            node.anchoredPanelMaxHeight = [panelMaxHeight doubleValue];
 
         id showIndicator = pv[MOB_PROP_show_indicator];
         if (showIndicator)

@@ -613,6 +613,48 @@ content has been measured.
 
 See `Mob.UI.sheet/2` for the full option reference and validation rules.
 
+### `:anchored`
+
+A floating panel positioned relative to an in-flow anchor: the first child is
+the **anchor** (a popover's trigger) and renders in place; the second child is
+the **panel** and renders over the page, above every Box and Scroll between it
+and the screen root, so nothing on the way up can clip it. Omit the panel to
+render the anchor alone (a closed popover). The screen owns open and closed:
+the panel never dismisses itself.
+
+```elixir
+close = {self(), :close_menu}
+
+~MOB"""
+<Anchored side="bottom" align="start" side_offset={4} on_tap={close}>
+  <Button text="Options" on_tap={{self(), :open_menu}} />
+  <Box :if={@menu_open} background={:surface} corner_radius={:radius_md} padding={:space_sm}>
+    <Text text="Rename" />
+  </Box>
+</Anchored>
+"""
+```
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `side` | `"top"` / `"right"` / `"bottom"` / `"left"` | Which side of the anchor the panel sits on (default `"bottom"`) |
+| `align` | `"start"` / `"center"` / `"end"` | Alignment along the other axis (default `"center"`) |
+| `side_offset` | number | Gap between anchor and panel |
+| `align_offset` | number | Nudge along the align axis; positive pushes inward on `"end"` |
+| `panel_offset_x`, `panel_offset_y` | number | Raw nudge applied last (the node's own `offset_x`/`offset_y` would move the anchor) |
+| `flip` | boolean | Swap to the opposite side when the requested one has no room and the other does (default `true`) |
+| `clamp` | boolean | Keep the panel inside the window while the anchor is on screen (default `true`) |
+| `edge_padding` | number | Distance kept from the window edges, added to the safe area (default `8`) |
+| `panel_max_width`, `panel_max_height` | number | Caps on the panel (default: window minus twice `edge_padding`) |
+| `on_tap` | `{pid, tag}` | A tap **outside** the panel delivers `{:tap, tag}` — the dismiss request. Without it an outside tap does nothing. |
+
+Placement is the same arithmetic on both platforms (the web `positionPopup()`
+transliterated): a main-axis flip only when both conditions hold, then a clamp
+on both axes. Android renders the panel in its own window; iOS collects the
+anchor's bounds with an anchor preference and draws the panel at the root.
+The Mishka Chelekom popover, tooltip, menu, select and combobox ports build on
+it.
+
 ## Native view components
 
 ### `:webview`
