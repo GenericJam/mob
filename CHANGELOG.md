@@ -8,7 +8,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.8.3] - 2026-09-12
 
 ### Added
 - **`config :mob, :extra_tags` — app-declared `~MOB` tags** (MOB-188). A
