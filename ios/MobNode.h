@@ -43,6 +43,7 @@ typedef NS_ENUM(NSInteger, MobNodeType) {
     MobNodeTypeCanvas,
     MobNodeTypeGpuView,
     MobNodeTypeSheet,
+    MobNodeTypeAnchored,
 };
 
 NS_ASSUME_NONNULL_BEGIN
@@ -244,6 +245,20 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) int nativeViewHandle; // NIF component handle for event callbacks
 @property(nonatomic, strong, nullable)
     NSDictionary *nativeViewProps; // full props dict forwarded to the factory
+
+// Anchored — a floating panel positioned relative to an in-flow anchor
+// (children[0] = anchor, children[1] = panel). `align` reuses boxAlign
+// ("start" | "center" | "end"). See MobAnchoredView in MobAnchored.swift.
+@property(nonatomic, copy, nullable) NSString *anchoredSide; // top|right|bottom|left; nil = bottom
+@property(nonatomic) CGFloat anchoredSideOffset;             // pt gap between anchor and panel
+@property(nonatomic) CGFloat anchoredAlignOffset;            // pt nudge along the align axis
+@property(nonatomic) CGFloat anchoredPanelOffsetX;           // pt raw nudge, applied last
+@property(nonatomic) CGFloat anchoredPanelOffsetY;
+@property(nonatomic) CGFloat anchoredEdgePadding;    // pt kept clear of the window edges; 8
+@property(nonatomic) BOOL anchoredFlip;              // flip sides when out of room; YES
+@property(nonatomic) BOOL anchoredClamp;             // keep the panel in the window; YES
+@property(nonatomic) CGFloat anchoredPanelMaxWidth;  // 0 = window - 2 * edge
+@property(nonatomic) CGFloat anchoredPanelMaxHeight; // 0 = window - 2 * edge
 
 // Accessibility — identifiers support test addressing; labels and disabled
 // state describe composite controls such as tappable boxes.

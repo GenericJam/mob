@@ -32,6 +32,9 @@
         _wrapRunSpacing = 0.0;
         _boxAlign = @"top_leading";
         _offsetX = 0.0;
+        _anchoredEdgePadding = 8.0;
+        _anchoredFlip = YES;
+        _anchoredClamp = YES;
         _offsetY = 0.0;
         _keyboardTypeStr = @"default";
         _returnKeyStr = @"done";

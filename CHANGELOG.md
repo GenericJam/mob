@@ -20,6 +20,18 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   snake_case atoms), read from the calling app's config at its compile time.
   Companion to mob_new #68, which lists the vendored Mishka Chelekom
   catalog's tags in a generated app's `config.exs`.
+- **`:anchored` node type on iOS** (MOB-190). Children `[anchor, panel]`: the
+  anchor renders in flow, the panel floats over the page at the root ZStack
+  (anchor preference + root overlay, so no `corner_radius` Box or Scroll on
+  the way up can clip it), placed by a verbatim port of the Android bridge's
+  `MobAnchoredPositionProvider` — `side` / `align` / `side_offset` /
+  `align_offset` / `panel_offset_*` / `flip` / `clamp` / `edge_padding` /
+  `panel_max_*`; `on_tap` on the node is the outside-tap dismiss request.
+  Before this `mob_nif.m` had no mapping for the type, so it fell to the
+  zero-initialised `MobNodeTypeColumn` and every Mishka Chelekom popover,
+  tooltip, menu, select and combobox stacked inline instead of floating.
+  `Anchored` joins `priv/tags/ios.txt`; the Android half lives in the
+  mob_new bridge template (MOB-189). Documented in `guides/components.md`.
 
 ### Fixed
 - **`Canvas` added to the tag whitelist** on both platforms. `Mob.UI.canvas/1`

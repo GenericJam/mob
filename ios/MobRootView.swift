@@ -605,6 +605,9 @@ struct MobNodeView: View {
             case .sheet:
                 MobSheetView(node: node)
 
+            case .anchored:
+                MobAnchoredView(node: node)
+
             @unknown default:
                 EmptyView()
             }
@@ -2687,6 +2690,11 @@ public struct MobRootView: View {
             }
         }
         .environment(\.mobAvailableSheetHeight, availableSheetHeight)
+        // Every open `:anchored` panel on the active screen is drawn here, at
+        // the root, so no Box or Scroll between it and its anchor can clip it.
+        .overlayPreferenceValue(MobAnchoredKey.self) { entries in
+            MobAnchoredPanelHost(entries: entries)
+        }
         .ignoresSafeArea(.container, edges: [.bottom, .horizontal])
         .onChange(of: model.rootVersion) {
             applyRoot(
