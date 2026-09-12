@@ -18,8 +18,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `deps/mob/priv/tags` (which `mix deps.get` undid). The sigil now also accepts
   tags listed under `config :mob, :extra_tags` (PascalCase strings or
   snake_case atoms), read from the calling app's config at its compile time.
-  Companion to the mob_new change (same issue) that lists the vendored
-  Mishka Chelekom catalog's tags in a generated app's `config.exs`.
+  Companion to mob_new #68, which lists the vendored Mishka Chelekom
+  catalog's tags in a generated app's `config.exs`.
 
 ### Fixed
 - **`Canvas` added to the tag whitelist** on both platforms. `Mob.UI.canvas/1`

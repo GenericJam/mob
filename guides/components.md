@@ -838,8 +838,12 @@ your app registers and the warning goes away:
 
 ```elixir
 # config/config.exs
-config :mob, :extra_tags, ~w(Card LabeledButton)   # PascalCase strings, or [:card, ...]
+config :mob, :extra_tags, ~w(Card LabeledButton)   # PascalCase strings, [:card, ...], or [Card, ...]
 ```
+
+This whitelists the tag for the sigil only. `Mob.ScreenCase.assert_renderable/2`
+checks the *expanded* tree against the native whitelist, so expand composites
+first (`Mob.Composite.expand/2`) or pass the type via `extra:`.
 
 The list is read at each screen's compile time from the app's own config, so
 nothing in `deps/mob` is edited. Mix does not track that read: after editing

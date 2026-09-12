@@ -530,7 +530,7 @@ defmodule Mob.SigilExtraTagsTest do
   import ExUnit.CaptureIO, only: [with_io: 2]
 
   setup do
-    Application.put_env(:mob, :extra_tags, ["AcmeGauge", :acme_dial, "acme_meter"])
+    Application.put_env(:mob, :extra_tags, ["AcmeGauge", :acme_dial, "acme_meter", AcmeScope])
     on_exit(fn -> Application.delete_env(:mob, :extra_tags) end)
   end
 
@@ -559,6 +559,12 @@ defmodule Mob.SigilExtraTagsTest do
     {node, warnings} = expand("~MOB(<AcmeMeter />)")
     assert node.type == :acme_meter
     refute warnings =~ "AcmeMeter"
+  end
+
+  test "a bare alias in :extra_tags names the same tag" do
+    {node, warnings} = expand("~MOB(<AcmeScope />)")
+    assert node.type == :acme_scope
+    refute warnings =~ "AcmeScope"
   end
 
   test "tags outside :extra_tags still warn" do

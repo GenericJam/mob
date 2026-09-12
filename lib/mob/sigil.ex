@@ -545,6 +545,11 @@ defmodule Mob.Sigil do
     |> Enum.any?(&(normalize_tag(&1) == tag))
   end
 
-  defp normalize_tag(tag) when is_atom(tag), do: tag |> Atom.to_string() |> Macro.camelize()
+  # A bare alias (`MishkaChip`) is the atom `:"Elixir.MishkaChip"`; strip the
+  # prefix so that natural spelling names the same tag as the string form.
+  defp normalize_tag(tag) when is_atom(tag) do
+    tag |> Atom.to_string() |> String.replace_prefix("Elixir.", "") |> Macro.camelize()
+  end
+
   defp normalize_tag(tag) when is_binary(tag), do: Macro.camelize(tag)
 end
