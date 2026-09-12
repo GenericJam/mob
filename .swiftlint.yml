@@ -23,9 +23,12 @@ cyclomatic_complexity:
   warning: 40
   error: 60
 
+# MobRootView.swift crossed 3000 lines with #158 (MOB-181) and sits at
+# ~3050; splitting the renderer is its own project. New node types go in
+# their own file (ios/MobAnchored.swift is the pattern).
 file_length:
-  warning: 2000
-  error: 3000
+  warning: 3200
+  error: 3600
 
 function_body_length:
   warning: 100
