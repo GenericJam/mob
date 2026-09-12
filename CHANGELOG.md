@@ -30,8 +30,9 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   Before this `mob_nif.m` had no mapping for the type, so it fell to the
   zero-initialised `MobNodeTypeColumn` and every Mishka Chelekom popover,
   tooltip, menu, select and combobox stacked inline instead of floating.
-  `Anchored` joins `priv/tags/ios.txt`; the Android half lives in the
-  mob_new bridge template (MOB-189). Documented in `guides/components.md`.
+  `Anchored` joins `priv/tags/ios.txt`; the Android half is the mob_new
+  bridge template (mob_new #69, MOB-189). Documented in
+  `guides/components.md`.
 
 ### Fixed
 - **`Canvas` added to the tag whitelist** on both platforms. `Mob.UI.canvas/1`
@@ -39,7 +40,13 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   never listed it, so `~MOB(<Canvas />)` warned and
   `Mob.ScreenCase.assert_renderable/2` needed `extra: [:canvas]` on every
   screen that draws.
-
+- **iOS: Column and Row honor `width` / `height`, and fixed beats `fill_*`
+  and `layout_weight` on the pinned axis** (MOB-181, #158). The iOS renderer
+  ignored `fixed_width` / `fixed_height` on Column and Row entirely (Box was
+  fixed in #104); they now apply, and when both a fixed size and `fill_*`
+  are set the fixed size wins on iOS, matching the Box rule. Android is
+  unchanged and still lets fill win in that corner — see
+  `decisions/2026-09-11-column-row-fixed-dims-precedence.md`.
 - **iOS: `Mob.Audio.start_recording/2` now honors `:format` and
   `:quality`** (MOB-52). The NIF received the encoded opts as a JSON
   binary but silently discarded them — every recording was AAC/m4a at

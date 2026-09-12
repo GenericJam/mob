@@ -47,8 +47,7 @@ then clamp to the window (edge padding plus the safe area) only while the
 anchor is on screen. `on_tap` on the node is the outside-tap dismiss request:
 a clear full-window shape under the panel reports it; nothing closes itself.
 
-The code lives in `ios/MobAnchored.swift`. `MobRootView.swift` was already
-past swiftlint's 3000-line limit, and the generated `build.zig` globs every
+The code lives in `ios/MobAnchored.swift`. `MobRootView.swift` crossed swiftlint's 3000-line limit with #158, and the generated `build.zig` globs every
 `ios/*.swift`, so a new file costs nothing downstream.
 
 ## Consequences

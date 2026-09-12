@@ -169,8 +169,8 @@ Stacks children vertically.
 | `padding_top`, `padding_bottom`, `padding_left`, `padding_right` | number / token | Per-side padding |
 | `gap` | number / token | Space between children |
 | `background` | color | Background color |
-| `width` | number | Fixed width in dp/pt. Overrides `fill_width`. |
-| `height` | number | Fixed height in dp/pt. Overrides `fill_height`. |
+| `width` | number | Fixed width in dp/pt. Overrides `fill_width` on iOS; Android lets `fill_width` win when both are set. |
+| `height` | number | Fixed height in dp/pt. Overrides `fill_height` on iOS; Android lets `fill_height` win when both are set. |
 | `fill_width` | boolean | Stretch to fill available width (default `true`) |
 | `fill_height` | boolean | Stretch to fill available height |
 | `align` | `:start` / `:center` / `:end` | Cross-axis alignment of children |
@@ -190,7 +190,7 @@ Lays out children horizontally.
 | `padding` | number / token | Uniform padding |
 | `gap` | number / token | Space between children |
 | `background` | color | Background color |
-| `width` | number | Fixed width in dp/pt. Overrides `fill_width`. |
+| `width` | number | Fixed width in dp/pt. Overrides `fill_width` on iOS; Android lets `fill_width` win when both are set. |
 | `height` | number | Fixed height in dp/pt. |
 | `fill_width` | boolean | Stretch to fill available width |
 | `align` | `:start` / `:center` / `:end` | Cross-axis alignment of children |
