@@ -6,6 +6,7 @@
 defmodule Mob.SigilTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureIO, only: [with_io: 2]
   import Mob.Sigil
 
   # ── self-closing: string attributes ─────────────────────────────────────────
@@ -253,10 +254,9 @@ defmodule Mob.SigilTest do
     end
 
     test "GpuView resolves to :gpu_view (and is on the iOS whitelist)" do
-      # If GpuView drops off priv/tags/ios.txt, the sigil emits a
-      # compile-time warning and the test breaks loudly via the stderr
-      # capture used elsewhere in this file. For the type atom alone,
-      # this just checks the snake_case conversion.
+      # If GpuView drops off priv/tags/ios.txt the sigil emits a compile-time
+      # warning (nothing here captures it). This only checks the snake_case
+      # conversion of the type atom.
       node = ~MOB(<GpuView />)
       assert node.type == :gpu_view
     end
@@ -288,14 +288,20 @@ defmodule Mob.SigilTest do
   # ── unknown tags pass through with warning ───────────────────────────────────
 
   describe "unknown tag pass-through" do
-    test "unknown tag produces a node with the derived type atom" do
+    test "unknown tag produces a node with the derived type atom, and warns" do
       # MapView is not in the whitelist — should warn but still compile
-      node = Code.eval_string(~S[
-        import Mob.Sigil
-        ~MOB(<MapView zoom={10} />)
-      ]) |> elem(0)
+      {node, warnings} =
+        with_io(:stderr, fn ->
+          Code.eval_string(~S[
+            import Mob.Sigil
+            ~MOB(<MapView zoom={10} />)
+          ])
+          |> elem(0)
+        end)
+
       assert node.type == :map_view
       assert node.props.zoom == 10
+      assert warnings =~ "~MOB: <MapView> is not in the Mob tag whitelist"
     end
   end
 
@@ -513,5 +519,57 @@ defmodule Mob.SigilTest do
         """])
       end
     end
+  end
+end
+
+# Separate module, async: false: these tests mutate the global app env, which
+# an async module must not do while other modules may expand the sigil.
+defmodule Mob.SigilExtraTagsTest do
+  use ExUnit.Case, async: false
+
+  import ExUnit.CaptureIO, only: [with_io: 2]
+
+  setup do
+    Application.put_env(:mob, :extra_tags, ["AcmeGauge", :acme_dial, "acme_meter"])
+    on_exit(fn -> Application.delete_env(:mob, :extra_tags) end)
+  end
+
+  # Expands `source` under the sigil, returning `{node, captured_stderr}` —
+  # IO.warn from the sigil lands on stderr, where the whitelist warning lives.
+  defp expand(source) do
+    with_io(:stderr, fn ->
+      Code.eval_string("import Mob.Sigil\n" <> source) |> elem(0)
+    end)
+  end
+
+  test "a PascalCase string in :extra_tags compiles without a warning" do
+    {node, warnings} = expand("~MOB(<AcmeGauge level={1} />)")
+    assert node.type == :acme_gauge
+    assert node.props.level == 1
+    refute warnings =~ "AcmeGauge"
+  end
+
+  test "a snake_case atom in :extra_tags names the same tag" do
+    {node, warnings} = expand("~MOB(<AcmeDial />)")
+    assert node.type == :acme_dial
+    refute warnings =~ "AcmeDial"
+  end
+
+  test "a snake_case string in :extra_tags names the same tag" do
+    {node, warnings} = expand("~MOB(<AcmeMeter />)")
+    assert node.type == :acme_meter
+    refute warnings =~ "AcmeMeter"
+  end
+
+  test "tags outside :extra_tags still warn" do
+    {_node, warnings} = expand("~MOB(<AcmeKnob />)")
+    assert warnings =~ "~MOB: <AcmeKnob> is not in the Mob tag whitelist"
+  end
+
+  test "a single value instead of a list is accepted" do
+    Application.put_env(:mob, :extra_tags, "AcmeGauge")
+    {node, warnings} = expand("~MOB(<AcmeGauge />)")
+    assert node.type == :acme_gauge
+    refute warnings =~ "AcmeGauge"
   end
 end

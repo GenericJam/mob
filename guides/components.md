@@ -822,21 +822,30 @@ Mob.Composite.register(:card, {MyApp.UI.Card, :expand})
 Mob.Composite.register(:labeled_button, {MyApp.UI.LabeledButton, :expand})
 ```
 
-**Expect a compile-time warning on a registered tag; it's harmless.**
+**Declare the tag in config so the sigil accepts it at compile time.**
 Registration happens at *runtime* (from `on_start/0` or a plugin manifest), so
-the `~MOB` macro can't see it while compiling a screen. Every custom tag
-therefore prints a warning the first time it's compiled:
+the `~MOB` macro can't see it while compiling a screen. Without a declaration
+every custom tag prints a warning the first time it's compiled:
 
 ```
 ~MOB: <Card> is not in the Mob tag whitelist — pass-through as :card
 ```
 
-That is informational, not an error. The sigil compiles `<Card>` to the atom
+That is informational, not an error — the sigil compiles `<Card>` to the atom
 `:card` and defers resolution to whatever expander is registered under that atom
-at render time. As long as you registered one in Step 2, the tag renders; the
-warning is just the compiler telling you it recognized a non-built-in tag and
-passed it through. (A genuinely unregistered tag renders nothing, which is the
-real "it doesn't work" symptom to look for.)
+at render time — but under `--warnings-as-errors` it is a wall. List the tags
+your app registers and the warning goes away:
+
+```elixir
+# config/config.exs
+config :mob, :extra_tags, ~w(Card LabeledButton)   # PascalCase strings, or [:card, ...]
+```
+
+The list is read at each screen's compile time from the app's own config, so
+nothing in `deps/mob` is edited. Mix does not track that read: after editing
+the list, `mix compile --force` (or touching the screens) recompiles modules
+that were already built. (A tag that is declared but never registered
+renders nothing, which is the real "it doesn't work" symptom to look for.)
 
 **Step 3 — use them in a screen.** Note there is no `self()` anywhere in this
 markup:
