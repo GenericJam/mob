@@ -53,8 +53,16 @@ past swiftlint's 3000-line limit, and the generated `build.zig` globs every
 
 ## Consequences
 
-- Both platforms now agree on placement by construction. Any future change to
-  the arithmetic has to land in both files; do not "improve" one side.
+- Both platforms run the same arithmetic. Any future change to it has to land
+  in both files; do not "improve" one side. One input differs: Android tests
+  "anchor on screen" against the real display and clamps to the window, while
+  iOS uses the root container for both, and that container starts below the
+  status bar. An anchor scrolled up into the status-bar band is on screen to
+  Android and off screen to iOS, which then skips the clamp for it.
+- A screen parked behind a push (depth-1 retention) publishes no entries: the
+  view reads `mobScreenIsActive` and returns `[]` while inactive, the way
+  `MobSheetView` hides a parked sheet. Without that, a panel left open on the
+  outgoing screen would keep its dismiss scrim over the incoming one.
 - A panel inside a presented `:sheet` is not seen by the root host: sheets
   are presented in a separate window and their preferences do not propagate
   to the root ZStack. No Mishka component nests a popover in a sheet today;
@@ -63,5 +71,6 @@ past swiftlint's 3000-line limit, and the generated `build.zig` globs every
   at opacity 0 until measured. One frame, invisible, but a test that reads
   `element_frames` immediately after opening may see the pre-measure position.
 - `Anchored` is on `priv/tags/ios.txt` only until the Android bridge template
-  (mob_new, MOB-189) carries `MobAnchored`; the sigil reports it as iOS-only
-  until then, which is the truth.
+  (mob_new, MOB-189) carries `MobAnchored`. The sigil does not flag it as
+  iOS-only: its whitelist check tests the union of both files, so the
+  per-platform branches never fire (MOB-194).

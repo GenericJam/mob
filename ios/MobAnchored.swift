@@ -38,25 +38,47 @@ struct MobAnchoredKey: PreferenceKey {
 struct MobAnchoredView: View {
     let node: MobNode
 
+    // A screen parked behind a push keeps its tree (depth-1 retention, see
+    // MobRootView) and a preference bubbles through `.offset`, `.opacity` and
+    // `.allowsHitTesting(false)` alike — so a panel left open on the outgoing
+    // screen would keep drawing its scrim over the incoming one, at the root,
+    // where the slot's hit-test block does not reach. Publish nothing while
+    // parked; the environment read is tracked past `.equatable()`.
+    @Environment(\.mobScreenIsActive) private var isActive
+
     var body: some View {
         let children = node.childNodes
-        let anchor = children.first
         let panel = children.count > 1 ? children[1] : nil
 
+        // The anchor is rendered unconditionally, in the same structural
+        // position whether or not a panel is present, so opening the panel
+        // does not change the trigger's identity (a combobox's text field
+        // would otherwise lose the keyboard the moment typing opens the list).
+        // A lone child of either kind renders in flow; only a real
+        // [anchor, panel] pair on the active screen publishes an entry.
         Group {
-            if let anchor, let panel {
+            if let anchor = children.first {
                 MobNodeView(node: anchor)
                     .anchorPreference(key: MobAnchoredKey.self, value: .bounds) { bounds in
-                        [MobAnchoredEntry(owner: node, panel: panel, bounds: bounds)]
+                        guard isActive, let panel else { return [] }
+                        return [MobAnchoredEntry(owner: node, panel: panel, bounds: bounds)]
                     }
-            } else if let only = anchor ?? panel {
-                // Closed (anchor alone) and pinned-open-with-no-trigger both
-                // degrade to a plain in-flow child, so the node keeps its id,
-                // its frame and its identity either way.
-                MobNodeView(node: only)
             }
         }
+        // The node's own decoration, as the Android bridge's `Box(modifier = m)`
+        // keeps it — everything but the clickable branch, since `on_tap` on an
+        // anchored node is the dismiss handler, not a tap on the anchor.
+        .frame(
+            width: node.fixedWidth > 0 ? CGFloat(node.fixedWidth) : nil,
+            height: node.fixedHeight > 0 ? CGFloat(node.fixedHeight) : nil,
+            alignment: .leading
+        )
+        .ifLet((node.fillWidthSet && node.fillWidth && node.fixedWidth <= 0) ? () : nil) { view, _ in
+            view.frame(maxWidth: .infinity, alignment: .leading)
+        }
         .padding(node.paddingEdgeInsets)
+        .background(node.backgroundColor.map { Color($0) } ?? Color.clear)
+        .mobGestures(node)
     }
 }
 
@@ -68,14 +90,22 @@ struct MobAnchoredPanelHost: View {
         if !entries.isEmpty {
             GeometryReader { proxy in
                 ZStack(alignment: .topLeading) {
+                    // Every scrim below every panel: with a panel open inside
+                    // another (a select inside a popover) a tap on the outer
+                    // panel must reach it, not a scrim layered over it. A tap
+                    // outside all panels lands on the topmost scrim, the
+                    // innermost entry's — the one Android's focusable inner
+                    // Popup would consume.
                     ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
                         if let dismiss = entry.owner.onTap {
-                            // A tap anywhere outside the panel is a dismiss
+                            // A tap anywhere outside the panels is a dismiss
                             // request. Reported, not acted on: the BEAM decides.
                             Color.clear
                                 .contentShape(Rectangle())
                                 .onTapGesture { dismiss() }
                         }
+                    }
+                    ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
                         MobAnchoredPanel(
                             entry: entry,
                             anchorRect: proxy[entry.bounds],

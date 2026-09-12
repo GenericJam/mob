@@ -248,7 +248,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 // Anchored — a floating panel positioned relative to an in-flow anchor
 // (children[0] = anchor, children[1] = panel). `align` reuses boxAlign
-// ("start" | "center" | "end"). See MobAnchoredView in MobRootView.swift.
+// ("start" | "center" | "end"). See MobAnchoredView in MobAnchored.swift.
 @property(nonatomic, copy, nullable) NSString *anchoredSide; // top|right|bottom|left; nil = bottom
 @property(nonatomic) CGFloat anchoredSideOffset;             // pt gap between anchor and panel
 @property(nonatomic) CGFloat anchoredAlignOffset;            // pt nudge along the align axis
