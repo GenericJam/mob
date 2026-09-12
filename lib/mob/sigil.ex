@@ -80,6 +80,18 @@ defmodule Mob.Sigil do
   atom is derived by converting PascalCase to snake_case (e.g. `TabBar` →
   `:tab_bar`). This allows new native tags to be used before the whitelist is
   updated.
+
+  Composite tags an app registers at boot (`Mob.Composite.register/2`, or a UI
+  kit's own registry) are invisible to that compile-time check, so declare them
+  in config and the sigil accepts them silently:
+
+      # config/config.exs
+      config :mob, :extra_tags, ~w(MishkaChip MishkaDrawer)   # or [:mishka_chip, ...]
+
+  Read at each `~MOB` call site's compile time, so it lives in the app's own
+  config — no edit to mob's `priv/tags` files, which `mix deps.get` would undo.
+  Mix does not track the read, so after changing the list run `mix compile
+  --force` (or touch the screens) for already-compiled modules to pick it up.
   """
 
   # ── Whitelist ────────────────────────────────────────────────────────────────
@@ -498,7 +510,7 @@ defmodule Mob.Sigil do
   defp resolve_type(tag, caller) do
     atom = tag |> Macro.underscore() |> String.to_atom()
 
-    unless MapSet.member?(@known_tags.both, tag) do
+    unless MapSet.member?(@known_tags.both, tag) or extra_tag?(tag) do
       ios_only =
         MapSet.member?(@known_tags.ios, tag) and not MapSet.member?(@known_tags.android, tag)
 
@@ -517,4 +529,27 @@ defmodule Mob.Sigil do
 
     atom
   end
+
+  # `config :mob, :extra_tags` — composite tags the app registers at boot.
+  # Evaluated when the CALLER compiles (this runs inside the macro), which is
+  # when Mix has the app's config loaded. `Application.get_env`, not
+  # `compile_env`: the macro form raises inside a function body, and `~MOB`
+  # sits in `render/1`. The trade is that Mix does not track this read, so a
+  # config edit alone does not recompile the screens that used the sigil (see
+  # the moduledoc). Snake_case names are accepted as the same tag their
+  # PascalCase form would be; `Macro.camelize/1` is idempotent on PascalCase.
+  defp extra_tag?(tag) do
+    :mob
+    |> Application.get_env(:extra_tags, [])
+    |> List.wrap()
+    |> Enum.any?(&(normalize_tag(&1) == tag))
+  end
+
+  # A bare alias (`MishkaChip`) is the atom `:"Elixir.MishkaChip"`; strip the
+  # prefix so that natural spelling names the same tag as the string form.
+  defp normalize_tag(tag) when is_atom(tag) do
+    tag |> Atom.to_string() |> String.replace_prefix("Elixir.", "") |> Macro.camelize()
+  end
+
+  defp normalize_tag(tag) when is_binary(tag), do: Macro.camelize(tag)
 end

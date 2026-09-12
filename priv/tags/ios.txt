@@ -5,6 +5,7 @@
 
 Box
 Button
+Canvas
 Column
 Divider
 Image

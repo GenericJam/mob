@@ -10,7 +10,23 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **`config :mob, :extra_tags` — app-declared `~MOB` tags** (MOB-188). A
+  composite a UI kit registers at boot (`Mob.Composite.register/2`) was
+  invisible to the sigil's compile-time whitelist, so every `<MishkaChip />`
+  warned "not in the Mob tag whitelist" and the only silence was rewriting
+  `deps/mob/priv/tags` (which `mix deps.get` undid). The sigil now also accepts
+  tags listed under `config :mob, :extra_tags` (PascalCase strings or
+  snake_case atoms), read from the calling app's config at its compile time.
+  Companion to mob_new #68, which lists the vendored Mishka Chelekom
+  catalog's tags in a generated app's `config.exs`.
+
 ### Fixed
+- **`Canvas` added to the tag whitelist** on both platforms. `Mob.UI.canvas/1`
+  and both renderers have handled `:canvas` for some time, but the whitelist
+  never listed it, so `~MOB(<Canvas />)` warned and
+  `Mob.ScreenCase.assert_renderable/2` needed `extra: [:canvas]` on every
+  screen that draws.
 
 - **iOS: `Mob.Audio.start_recording/2` now honors `:format` and
   `:quality`** (MOB-52). The NIF received the encoded opts as a JSON
