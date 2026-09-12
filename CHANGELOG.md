@@ -11,6 +11,13 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 ## [Unreleased]
 
 ### Docs
+- **`guides/components.md` — document `width` / `height` on `:column`
+  and `:row`** (follow-up to MOB-181 / PR #158). The attributes exist
+  and the native side maps them to `node.fixedWidth` /
+  `node.fixedHeight`, but they weren't listed in the Column and Row prop
+  tables (only `<Box>` and `<Image>` had them). Follow-up caller
+  guidance for the iOS precedence rule (fixed beats fill on the pinned
+  axis, including a `weight`-flexed child) added inline.
 - **`guides/device_capabilities.md` — Clipboard and Share sections rewritten
   to the real API** (MOB-47, MOB-48). The guide called
   `Mob.Clipboard.write/2` and `Mob.Clipboard.read/1` (undefined; the real

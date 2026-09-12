@@ -169,9 +169,17 @@ Stacks children vertically.
 | `padding_top`, `padding_bottom`, `padding_left`, `padding_right` | number / token | Per-side padding |
 | `gap` | number / token | Space between children |
 | `background` | color | Background color |
+| `width` | number | Fixed width in dp/pt. Overrides `fill_width`. |
+| `height` | number | Fixed height in dp/pt. Overrides `fill_height`. |
 | `fill_width` | boolean | Stretch to fill available width (default `true`) |
 | `fill_height` | boolean | Stretch to fill available height |
 | `align` | `:start` / `:center` / `:end` | Cross-axis alignment of children |
+
+`width` and `height` win over `fill_*` on iOS for internal
+consistency (a chained outer `maxWidth: .infinity` would otherwise hide
+the inner fixed frame — see mob PR #158 / MOB-181). Setting `width`
+also pins a `weight`-flexed child on the parent's flex axis, so
+`<Column width={90} weight={1}>` inside a Row stays 90 wide.
 
 ### `:row`
 
@@ -182,6 +190,8 @@ Lays out children horizontally.
 | `padding` | number / token | Uniform padding |
 | `gap` | number / token | Space between children |
 | `background` | color | Background color |
+| `width` | number | Fixed width in dp/pt. Overrides `fill_width`. |
+| `height` | number | Fixed height in dp/pt. |
 | `fill_width` | boolean | Stretch to fill available width |
 | `align` | `:start` / `:center` / `:end` | Cross-axis alignment of children |
 
