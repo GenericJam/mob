@@ -8,7 +8,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.8.4] - 2026-09-12
 
 ### Fixed
 - **Physical iOS: every launch crashed before the BEAM printed a line**
