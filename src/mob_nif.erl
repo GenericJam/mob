@@ -121,23 +121,13 @@
     vendor_usb_start_reading/2,
     vendor_usb_stop_reading/1,
     vendor_usb_close/1,
-    %% Bluetooth Classic (Android; iOS returns :unsupported)
-    bt_list_paired/0,
-    bt_start_discovery/0,
-    bt_cancel_discovery/0,
-    bt_pair/1,
-    bt_unpair/1,
-    bt_disconnect/1,
-    bt_hfp_connect/1,
-    bt_hfp_subscribe_vendor_at/2,
-    bt_hfp_send_vendor_at/3,
-    bt_hfp_start_sco/1,
-    bt_hfp_stop_sco/1,
-    bt_hfp_send_audio/2,
-    bt_spp_connect/1,
-    bt_spp_write/2,
-    bt_hid_connect/1,
-    bt_hid_subscribe_raw/1,
+    %% Bluetooth Classic (bt_*) was moved to the mob_bluetooth plugin in
+    %% Wave 2. Callers should depend on {:mob_bluetooth, "~> ..."} and use
+    %% `MobBluetooth.*` — the erl declarations that used to live here were
+    %% removed in MOB-54 because they were never wired into iOS
+    %% `nif_funcs[]`, so `:mob_nif.bt_*(...)` calls raised `nif_error` at
+    %% runtime instead of the plugin surface's documented `:unsupported`
+    %% shape.
     %% DNS — see Mob.DNS and guides/dns_on_ios.md
     resolve_ipv4/1
 ]).
@@ -244,23 +234,10 @@
     vendor_usb_start_reading/2,
     vendor_usb_stop_reading/1,
     vendor_usb_close/1,
-    %% Bluetooth Classic
-    bt_list_paired/0,
-    bt_start_discovery/0,
-    bt_cancel_discovery/0,
-    bt_pair/1,
-    bt_unpair/1,
-    bt_disconnect/1,
-    bt_hfp_connect/1,
-    bt_hfp_subscribe_vendor_at/2,
-    bt_hfp_send_vendor_at/3,
-    bt_hfp_start_sco/1,
-    bt_hfp_stop_sco/1,
-    bt_hfp_send_audio/2,
-    bt_spp_connect/1,
-    bt_spp_write/2,
-    bt_hid_connect/1,
-    bt_hid_subscribe_raw/1,
+    %% Bluetooth Classic (bt_*) was moved to the mob_bluetooth plugin in
+    %% Wave 2 — see the -export note above. Removed from -nifs here so
+    %% load_nif no longer looks for symbols that don't exist in iOS
+    %% nif_funcs[]. MOB-54.
     %% DNS — in-process getaddrinfo so iOS apps bypass BEAM's
     %% broken inet_gethost path. See `Mob.DNS` for the Elixir
     %% wrapper and `guides/dns_on_ios.md` for the why.
