@@ -10,6 +10,15 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Docs
+- **`guides/device_capabilities.md` — Clipboard and Share sections rewritten
+  to the real API** (MOB-47, MOB-48). The guide called
+  `Mob.Clipboard.write/2` and `Mob.Clipboard.read/1` (undefined; the real
+  API is `put/2` and `get/1`, and `get/1` is synchronous — no
+  `{:clipboard, :read, text}` message ever arrives). The Share section
+  called `Mob.Share.sheet(socket, text:, url:, title:)` with options that
+  don't exist; the real API is `Mob.Share.text(socket, binary)`.
+
 ## [0.8.2] - 2026-09-11
 
 ### Added

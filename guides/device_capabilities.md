@@ -64,36 +64,36 @@ iOS uses `UIImpactFeedbackGenerator` / `UINotificationFeedbackGenerator`. Androi
 
 ## Clipboard
 
+`Mob.Clipboard.get/1` dispatches to the main thread synchronously (same model as `safe_area/0`); no `handle_info` needed. `put/2` is fire-and-forget.
+
 ```elixir
 # Write to clipboard
 def handle_info({:tap, :copy}, socket) do
-  socket = Mob.Clipboard.write(socket, socket.assigns.code)
+  socket = Mob.Clipboard.put(socket, socket.assigns.code)
   {:noreply, socket}
 end
 
-# Read from clipboard — result arrives in handle_info
+# Read from clipboard — result returned synchronously
 def handle_info({:tap, :paste}, socket) do
-  socket = Mob.Clipboard.read(socket)
-  {:noreply, socket}
-end
-
-def handle_info({:clipboard, :read, text}, socket) do
-  {:noreply, Mob.Socket.assign(socket, :pasted_text, text)}
+  case Mob.Clipboard.get(socket) do
+    {:clipboard, :ok, text} -> {:noreply, Mob.Socket.assign(socket, :pasted_text, text)}
+    {:clipboard, :empty}    -> {:noreply, socket}
+  end
 end
 ```
 
 ## Share sheet
 
-Opens the platform's native share sheet (iOS: `UIActivityViewController`, Android: `ACTION_SEND`):
+Opens the platform's native share sheet (iOS: `UIActivityViewController`, Android: `ACTION_SEND` via `Intent.createChooser`). Fire-and-forget — no response arrives in the BEAM.
 
 ```elixir
 def handle_info({:tap, :share}, socket) do
-  socket = Mob.Share.sheet(socket, text: "Check out this app!", url: "https://example.com")
+  socket = Mob.Share.text(socket, "Check out this app! https://example.com")
   {:noreply, socket}
 end
 ```
 
-Options: `:text`, `:url`, `:title`
+Plain text only. URLs go inside the text; iOS auto-detects and offers URL-appropriate share targets. If you need multi-part sharing (title/url/image separately), file a ticket describing the use case.
 
 ## Camera
 
