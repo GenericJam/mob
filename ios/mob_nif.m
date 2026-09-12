@@ -414,6 +414,12 @@ bool mob_runtime_up(void) {
     return atomic_load(&g_runtime_up);
 }
 
+// Called when erl_start returns: erts is torn down, and a notifier calling
+// into it afterwards would fault the way a pre-boot one did.
+void mob_runtime_down(void) {
+    atomic_store(&g_runtime_up, false);
+}
+
 #if !MOB_RELEASE // only the harness reads it; the writers stay unconditional
 static uint64_t mob_ui_event_seq(void) {
     return atomic_load_explicit(&g_ui_event_seq, memory_order_relaxed);
@@ -783,6 +789,11 @@ static void mob_send_scrolled_past(int handle) {
 // Non-static so Swift can call it via the bridging header.
 
 void mob_handle_back(void) {
+    // A left-edge swipe during the boot splash lands here before erts is up
+    // (the pan recognizer is installed by the root controller the SceneDelegate
+    // creates before mob_boot_runtime). No screen to tell yet (MOB-199).
+    if (!mob_runtime_up())
+        return;
     ErlNifEnv *env = enif_alloc_env();
     ErlNifPid pid;
     if (enif_whereis_pid(env, enif_make_atom(env, "mob_screen"), &pid)) {

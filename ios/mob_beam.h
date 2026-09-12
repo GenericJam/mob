@@ -48,5 +48,6 @@ void mob_notify_window_connected(void);
 // True once erts is initialised (mob_nif's load callback ran); the notifiers
 // above are no-ops before that.
 bool mob_runtime_up(void);
+void mob_runtime_down(void);
 
 #endif // MOB_BEAM_H

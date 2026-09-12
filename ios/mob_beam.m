@@ -461,6 +461,7 @@ void mob_start_beam(const char *app_module) {
 
     void erl_start(int, char **);
     erl_start(ac, (char **)args);
+    mob_runtime_down();
     mob_write_diag(docs_dir, "mob_diag_e_erl_exited.txt", "erl_start returned");
     mob_set_startup_error("BEAM exited unexpectedly — check Documents/mob_erl_crash.dump");
     NSLog(@"[MobBeam] mob_start_beam: erl_start returned (unexpected)");
