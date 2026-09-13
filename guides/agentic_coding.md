@@ -204,7 +204,9 @@ nothing else in the harness set.
 
 Regenerating against 0.4.32 or newer flips `tap_xy`, `long_press_xy`,
 `swipe_xy`, `type_text` and `delete_backward` to `true` (MOB-160) and
-`native_stats` to `true` (MOB-146). `clear_text` stays `false` there on
+`native_stats` to `true` (MOB-146); 0.4.33 or newer also flips `view_tree`
+(MOB-157: the Android bridge walks the Mob node tree and emits the same
+eight-key shape iOS does, with `frame` only on nodes that carry an `:id`). `clear_text` stays `false` there on
 purpose — two implementations of it reported success while clearing nothing,
 so the bridge ships without one rather than lie. Which is the point of asking
 the build instead of reading a table: this paragraph is already a snapshot of
@@ -238,6 +240,115 @@ Four answers, and three of them are not "the app is fine":
 `capabilities/2` takes a timeout, defaulting to 5s. That matters here because
 this is the first call an agent makes, and a wedged-but-reachable device would
 otherwise hang it indefinitely.
+
+#### Layer 1, continued — what happened, not just what is
+
+Everything above answers "what is the app showing now". Since mob 0.8 the app
+can also answer "what did my action do", "is the framework healthy", "what
+crashed while nobody was looking", "does the other platform agree", and "how
+long did that take". All of it is read over the same distribution link, and
+none of it needs a screenshot.
+
+**Receipts: which layer is answerable.** Every dispatched event gets an
+`action_id`, and the screen records the stages the action reached —
+dispatched, handled (or unhandled), assigns changed, navigation requested,
+frame changed, committed. The first stage it fails to reach names the layer
+to look at, so "the tap did nothing" becomes "the handler ran and changed
+`:count`, and the tree did not change", which points at a `render/1` that
+never reads `:count`.
+
+```elixir
+Mob.Test.tap(node, :increment)
+Mob.Test.settle(node)
+
+:rpc.call(node, Mob.Agent.Receipts, :recent, [1])
+#=> [%Mob.Agent.Receipt{event: "increment", screen: MyApp.CounterScreen,
+#=>                     stages: [:dispatched, :handled, :assigns_changed],
+#=>                     error: nil, elapsed_us: 412, ...}]
+
+[receipt] = :rpc.call(node, Mob.Agent.Receipts, :recent, [1])
+Mob.Agent.Receipt.owner(receipt)   #=> :render_function
+```
+
+The receipt records *which* stages were reached, not which keys changed:
+`:assigns_changed` means the assigns map differed. `Mob.Agent.Receipt.owner/1`
+turns the stage list into the layer answerable, and `effect/1` into a
+one-word verdict.
+
+`recent/1` lists the newest, `fetch/1` retrieves one by id, and `count/0` /
+`dropped/0` tell a missing receipt apart from an id that never existed (the
+store is bounded at 256). The stages are observed by the screen's own
+before/after comparison, so a handler cannot claim an effect it did not have.
+Receipts carry the event tag and a reduced crash, never the assigns. See
+`Mob.Agent.Receipt`.
+
+**Invariants: the framework checking itself.** `Mob.Invariant` runs checks an
+application cannot make — a live component under a dead owning screen, a dead
+screen still in the navigation stack — at sampling points such as screen
+teardown, and only records a violation that is still there at the next sample
+and at least 50 ms old, so a screen mid-teardown does not read as a leak.
+
+```elixir
+:rpc.call(node, Mob.Invariant, :violations, [])
+#=> []                          # or [%Mob.Invariant.Violation{...}, ...]
+:rpc.call(node, Mob.Invariant, :cost_us, [:on_screen_stop])
+```
+
+**The defect bus: defects as data.** Confirmed invariant violations,
+cross-platform divergences and post-mortems become `Mob.Defect.Capsule`s on
+`Mob.Defect.Bus`: fingerprinted (so one class groups across devices and
+releases), deduplicated, with bounded, redaction-tagged evidence.
+
+```elixir
+:rpc.call(node, Mob.Defect.Bus, :classes, [])   # every class held, with counts
+:rpc.call(node, Mob.Defect.Bus, :recent, [])    # the newest capsules
+:rpc.call(node, Mob.Defect.Bus, :subscribe, []) # push each new capsule to self()
+```
+
+`Mob.Defect.Sinks.Dev` logs every capsule at a severity-driven level if you
+start it; mob owns the format and the bus, never the destination.
+
+**Post-mortems: what died while nobody was looking.** `Mob.PostMortem.sweep/0`
+picks up the evidence the OS and the BEAM leave behind and puts it on the bus:
+`erl_crash.dump` files (`:beam_crash`, with the normalised slogan as the
+fingerprint), iOS MetricKit crash, hang and CPU/disk diagnostics, and
+Android's `ApplicationExitInfo` history (crashes, ANRs, OOM kills, each exit
+emitted exactly once across boots). Nothing runs automatically; call it from
+`on_start/0` or from your session after a launch you did not watch.
+
+```elixir
+:rpc.call(node, Mob.PostMortem, :sweep, [])
+#=> [%Mob.Defect.Capsule{kind: :native_crash, severity: :fatal, ...}]
+```
+
+**Differential: does the other platform agree?** `Mob.Differential.compare/3`
+takes an iOS and an Android `view_tree/1` and returns `:ok` or the first
+divergence (structure, label, value, and frames within a dp tolerance where
+both sides carry one), or `{:error, :not_ready}` when either snapshot is not
+a tree yet (no window, or a `view_tree/1` error): a harness gap, not a
+framework defect. `MobDev.Differential.run/3` in mob_dev samples both
+live devices and feeds the pair through it. A divergence is the framework
+failing its own one-design-both-platforms promise, and it lands on the bus
+too.
+
+**Render timing: measure before optimising.** `Mob.RenderStats` times the
+BEAM half of every frame by stage (`enable/0`, `summary/0`) and, with
+`native_enable/0` / `native_summary/0`, the native apply on both platforms,
+which is additionally split by transition so a steady-state re-render is
+not pooled with a push.
+It is a before-and-after tool for one platform, not a cross-platform
+comparison.
+
+**Proving the push landed.** `mix mob.attest` compares each module's
+`module_info(:md5)` on the device with the local `.beam`, so a push that never
+landed, landed in the wrong container, or landed and was never loaded all
+show up — and it exits non-zero when the check itself could not run.
+`mix mob.deploy --json` gives an orchestrator one machine-readable document
+naming the deployed, failed and skipped devices. `mix mob.mutate` breaks the
+lines a branch changed one at a time and reports what no test noticed;
+`mix mob.flake` (in mob itself) runs the suite repeatedly to surface tests
+that are not deterministic. Three ways to learn that a green run proved less
+than it looked.
 
 #### Layer 2 — MCP platform tools (for rendering and layout)
 
@@ -280,13 +391,15 @@ or a specific low-level query has no higher-level equivalent.
 ```
 1. Edit Elixir source
 2. mix mob.push                      ← push changed BEAMs (no restart needed)
-3. Mob.Test.screen(node)             ← confirm which screen is active
-4. Mob.Test.assigns(node)            ← confirm data state is what you expect
-5. Mob.Test.tap(node, :some_tag)     ← drive an interaction
-6. Mob.Test.assigns(node)            ← confirm state updated
+3. mix mob.attest                    ← prove the device runs the code you pushed
+4. Mob.Test.screen(node)             ← confirm which screen is active
+5. Mob.Test.assigns(node)            ← confirm data state is what you expect
+6. Mob.Test.tap(node, :some_tag)     ← drive an interaction
 7. Mob.Test.settle(node)             ← wait for the frame to commit…
-8. mcp__ios-simulator__screenshot    ← …before any visual check (only if layout matters)
-9. repeat from 1
+8. Mob.Test.assigns(node)            ← …then confirm state updated
+9. Mob.Agent.Receipts.recent(1)      ← if it did not: which stage did the action reach?
+10. mcp__ios-simulator__screenshot   ← only if layout matters
+11. repeat from 1
 ```
 
 `tap/2` is fire-and-forget, and rendering is committed asynchronously by
@@ -326,9 +439,18 @@ Mob.Test.screen(node)
 # {:badrpc, :nodedown} here means the deploy did NOT land — stop and find out why
 ```
 
-For a code push, prove the code changed: bump something observable (a version
-assign, a log line) and read it back through `Mob.Test.assigns/1` before
-trusting any further conclusions.
+For a code push, prove the code changed. `mix mob.attest` does it by
+checksum — the device's `module_info(:md5)` against the local `.beam`, for
+exactly the set `mix mob.deploy` pushes — and exits non-zero on a mismatch or
+when the check could not run at all. Failing that, bump something observable
+(a version assign, a log line) and read it back through `Mob.Test.assigns/1`
+before trusting any further conclusions.
+
+A deploy to a physical iPhone deserves one more check: `mix mob.deploy` can
+report "Apps restarted" over a process iOS killed at launch. An empty
+`Documents/beam_stdout.log` in the app container, or a fresh `.ips` from
+`xcrun devicectl device copy from --domain-type systemCrashLogs`, is the tell
+(MOB-199 was found this way).
 
 ### The honesty contract
 
@@ -346,7 +468,9 @@ assert Mob.Test.assigns(node).count == before + 1
 
 If the state didn't change, the tap didn't reach a handler — wrong tag, a
 `handle_info/2` clause that doesn't match, or a stale handle. That is a
-first-class diagnostic signal, not a flake to retry.
+first-class diagnostic signal, not a flake to retry — and the receipt for the
+action (`Mob.Agent.Receipts.recent/1`) says which stage it stopped at, so the
+next question is never a guess.
 
 Coordinate driving is held to the same contract by the framework itself:
 `Mob.Test.tap_xy/3` (and `tap_id/2`, which inherits its contract) returns
@@ -479,6 +603,7 @@ Mob.Test.screen(node)` — what screen is active?
    - `Mob.Test.assigns(node)` — what is the live data?
    - `Mob.Test.tap(node, :tag)` — drive a tap by tag atom
    - `Mob.Test.find(node, "text")` — locate a widget by visible text
+   - `Mob.Agent.Receipts.recent(1)` (via :rpc) — what the last action reached
 3. Only reach for `mcp__ios-simulator__screenshot` or `mcp__adb__dump_image` when
    you need to verify rendering or layout — not to check app state.
 
@@ -620,7 +745,10 @@ a restart clears it — but the other agents' evidence is now polluted.)
 Fleet rule: treat `mob.push`/`mob.watch` as single-developer conveniences.
 Agents in a fleet deploy per device with `mix mob.deploy --device <id>`, or
 hot-push over their own distribution connection (`nl/1` from their named
-session pushes only to the nodes *that session* is connected to).
+session pushes only to the nodes *that session* is connected to). Read the
+result as data — `mix mob.deploy --json` names the deployed, failed and
+skipped devices — and attest per node (`mix mob.attest --node <name>`)
+before reporting that anything landed.
 
 ### Durable artifacts outlive the context window
 
