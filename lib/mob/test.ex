@@ -123,9 +123,9 @@ defmodule Mob.Test do
   | `back/1`, `pop/1`, `navigate`| ✅            | ✅            | ✅              |
   | `send_message/2`             | ✅            | ✅            | ✅              |
   | `screen_info/1`              | ✅            | ✅            | ✅              |
-  | `view_tree/1`                | ✅ (shallow†) | ✅ (shallow†) | ✅ ⊕ (0.4.33+)‡ |
+  | `view_tree/1`                | ✅ (shallow†) | ✅ (shallow†) | ✅ (0.4.33+)‡   |
   | `sample_color/2`             | ✅            | ✅            | ❌ not_loaded°  |
-  | `find_view/2`                | ✅            | ✅            | ✅ ⊕ (0.4.33+)‡ |
+  | `find_view/2`                | ✅            | ✅            | ✅ (0.4.33+)‡   |
   | `ui_tree/1` (legacy AX)      | ⚠️ AX active§ | ⚠️ AX active§ | ❌ not_loaded   |
   | `ax_action/3`                | ⚠️ AX active§ | ⚠️ AX active§ | ❌ not_supported |
   | `ax_action_at_xy/4`          | ⚠️ AX active§ | ⚠️ AX active§ | ❌ not_supported |

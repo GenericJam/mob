@@ -262,9 +262,18 @@ Mob.Test.tap(node, :increment)
 Mob.Test.settle(node)
 
 :rpc.call(node, Mob.Agent.Receipts, :recent, [1])
-#=> [%Mob.Agent.Receipt{tag: :increment, handled: true, assigns_changed: [:count],
-#=>                     frame_changed: true, committed: true, owner: :ok, ...}]
+#=> [%Mob.Agent.Receipt{event: "increment", screen: MyApp.CounterScreen,
+#=>                     stages: [:dispatched, :handled, :assigns_changed],
+#=>                     error: nil, elapsed_us: 412, ...}]
+
+[receipt] = :rpc.call(node, Mob.Agent.Receipts, :recent, [1])
+Mob.Agent.Receipt.owner(receipt)   #=> :render_function
 ```
+
+The receipt records *which* stages were reached, not which keys changed:
+`:assigns_changed` means the assigns map differed. `Mob.Agent.Receipt.owner/1`
+turns the stage list into the layer answerable, and `effect/1` into a
+one-word verdict.
 
 `recent/1` lists the newest, `fetch/1` retrieves one by id, and `count/0` /
 `dropped/0` tell a missing receipt apart from an id that never existed (the
@@ -315,15 +324,18 @@ emitted exactly once across boots). Nothing runs automatically; call it from
 **Differential: does the other platform agree?** `Mob.Differential.compare/3`
 takes an iOS and an Android `view_tree/1` and returns `:ok` or the first
 divergence (structure, label, value, and frames within a dp tolerance where
-both sides carry one). `MobDev.Differential.run/3` in mob_dev samples both
+both sides carry one), or `{:error, :not_ready}` when either snapshot is not
+a tree yet (no window, or a `view_tree/1` error): a harness gap, not a
+framework defect. `MobDev.Differential.run/3` in mob_dev samples both
 live devices and feeds the pair through it. A divergence is the framework
 failing its own one-design-both-platforms promise, and it lands on the bus
 too.
 
 **Render timing: measure before optimising.** `Mob.RenderStats` times the
-BEAM half of every frame (`enable/1`, `summary/1`) and, with
-`native_enable/1` / `native_summary/1`, the native apply on both platforms,
-split by transition so a steady-state re-render is not pooled with a push.
+BEAM half of every frame by stage (`enable/0`, `summary/0`) and, with
+`native_enable/0` / `native_summary/0`, the native apply on both platforms,
+which is additionally split by transition so a steady-state re-render is
+not pooled with a push.
 It is a before-and-after tool for one platform, not a cross-platform
 comparison.
 
@@ -436,8 +448,9 @@ before trusting any further conclusions.
 
 A deploy to a physical iPhone deserves one more check: `mix mob.deploy` can
 report "Apps restarted" over a process iOS killed at launch. An empty
-`Documents/beam_stdout.log` in the app container, or a fresh `.ips` under the
-device's crash logs, is the tell (MOB-199 was found this way).
+`Documents/beam_stdout.log` in the app container, or a fresh `.ips` from
+`xcrun devicectl device copy from --domain-type systemCrashLogs`, is the tell
+(MOB-199 was found this way).
 
 ### The honesty contract
 
@@ -734,7 +747,7 @@ Agents in a fleet deploy per device with `mix mob.deploy --device <id>`, or
 hot-push over their own distribution connection (`nl/1` from their named
 session pushes only to the nodes *that session* is connected to). Read the
 result as data — `mix mob.deploy --json` names the deployed, failed and
-skipped devices — and attest per device (`mix mob.attest --device <id>`)
+skipped devices — and attest per node (`mix mob.attest --node <name>`)
 before reporting that anything landed.
 
 ### Durable artifacts outlive the context window
