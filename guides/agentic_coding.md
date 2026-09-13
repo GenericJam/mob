@@ -159,12 +159,19 @@ serial **and** the app name (mob_dev 0.7.5+), so two Mob apps on one device
 no longer collide.
 
 `Mob.Test` and every `:rpc.call` need a distributed caller with the app's
-cookie (`mob_secret` by default). From a shell, one-shot:
+cookie. It is private per app: mob_dev generates it under `~/.mob/dist_cookies/`
+and hands it to the app at deploy/connect time. `mix mob.cookie` prints it, from
+the project directory. From a shell, one-shot:
 
 ```bash
-elixir --name agent_$$@127.0.0.1 --cookie mob_secret -S mix run --no-start \
+elixir --name agent_$$@127.0.0.1 --cookie "$(mix mob.cookie)" -S mix run --no-start \
   -e 'IO.inspect Mob.Test.screen(:"my_app_ios_1a2b3c4d@127.0.0.1")'
 ```
+
+An app built against mob before MOB-49 still answers only to the old public
+`mob_secret`; mob_dev's own tasks fall back to it with a warning. Update the
+`mob` dependency and run `mix mob.deploy` (`--native` for iOS) to move the app to
+the private cookie.
 
 A host node name already in use isn't fatal for the mob_dev tasks: `mix
 mob.connect`, `mix mob.deploy` and `mix mob.watch` fall back to
@@ -199,7 +206,7 @@ Mob.Test.inspect(node)
 #=> %{screen: MobDemo.CounterScreen, assigns: %{count: 4}, nav_history: [], tree: ...}
 ```
 
-This is available from `iex --name me@127.0.0.1 --cookie mob_secret -S mix` (after
+This is available from `iex --name me@127.0.0.1 --cookie "$(mix mob.cookie)" -S mix` (after
 `mix mob.connect` has set up the tunnels), from `mix mob.connect`'s own IEx
 session, or from an agent that can run shell commands with the one-shot
 `elixir --name … -S mix run --no-start -e …` form under Prerequisites. A plain
@@ -689,7 +696,7 @@ screenshots or adb screencap as your primary inspection method.
 Instead:
 1. Run `mix mob.connect --no-iex` to establish distribution tunnels and print the
    node names (it restarts the app; add `--no-restart` to keep a running session)
-2. Use `Mob.Test` from a distributed IEx (`iex --name me@127.0.0.1 --cookie mob_secret -S mix`)
+2. Use `Mob.Test` from a distributed IEx (`iex --name me@127.0.0.1 --cookie "$(mix mob.cookie)" -S mix`)
    to query exact state:
    - `Mob.Test.capabilities(node)` — ask FIRST: which probes does this build serve?
    - `Mob.Test.screen(node)` — what screen is active?
