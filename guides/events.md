@@ -41,13 +41,18 @@ def handle_info({:tap, :save}, socket), do: ...
 def handle_info({:change, :email_changed, value}, socket), do: ...
 ```
 
-### Selection (pickers, menus)
+### Selection (lists)
 
 ```elixir
-picker(items: @options, on_select: {self(), :picked})
+%{type: :list, props: %{id: :options, items: @options}, children: []}
 
-def handle_info({:select, :picked}, socket), do: ...
+def handle_info({:select, :options, index}, socket), do: ...
 ```
+
+Mob does not currently expose a core picker, menu, or segmented-control
+primitive. The native `on_select` bridge slot is reserved for a future
+selection primitive; ordinary list selection is implemented by tappable rows
+and includes the row index as shown above.
 
 ### Gestures
 

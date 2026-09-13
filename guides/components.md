@@ -390,13 +390,12 @@ A platform-native scrolling list optimised for rendering many rows efficiently. 
 
 | Prop | Type | Description |
 |------|------|-------------|
+| `id` | atom | Required list identity; selections arrive as `{:select, id, index}`. |
 | `items` | list | Data items. Each renders as a child. |
-| `on_select` | `{pid, tag}` | Called when a row is tapped: `{:select, tag, index}` |
 
 ```elixir
-select = {self(), :item_tapped}
 ~MOB"""
-<List items={assigns.names} on_select={select}>
+<List id={:names} items={assigns.names}>
   {Enum.map(assigns.names, fn name ->
     ~MOB(<Text text={name} padding={:space_md} />)
   end)}
@@ -491,9 +490,9 @@ An editable text input. Has defaults injected by the renderer (surface_raised ba
 | `value` | string | Current text (controlled) |
 | `placeholder` | string | Hint text when empty |
 | `on_change` | `{pid, tag}` | Fires as the user types. Delivers `{:change, tag, value}` to `handle_info/2`. |
-| `on_submit` | `{pid, tag}` | Fires on keyboard return. Delivers `{:tap, tag}`. |
-| `on_focus` | `{pid, tag}` | Fires when the field gains focus. Delivers `{:tap, tag}`. |
-| `on_blur` | `{pid, tag}` | Fires when the field loses focus. Delivers `{:tap, tag}`. |
+| `on_submit` | `{pid, tag}` | Fires on keyboard return. Delivers `{:submit, tag}`. |
+| `on_focus` | `{pid, tag}` | Fires when the field gains focus. Delivers `{:focus, tag}`. |
+| `on_blur` | `{pid, tag}` | Fires when the field loses focus. Delivers `{:blur, tag}`. |
 | `secure` | boolean | Password masking |
 | `keyboard_type` | `:default` / `:email` / `:number` / `:phone` | Keyboard variant |
 | `background` | color | Background (default `:surface_raised`) |
@@ -987,16 +986,16 @@ end
 
 ## Event routing
 
-**All events are delivered to the screen process via `handle_info/2`.** `self()` inside `render/1` is always the screen's GenServer pid. Every `on_tap`, `on_change`, `on_select`, and similar handler sends its message directly to the screen process — regardless of how deeply the component is nested in the tree.
+**All events are delivered to the screen process via `handle_info/2`.** `self()` inside `render/1` is always the screen's GenServer pid. Event handler props such as `on_tap` and `on_change` send directly to that process, regardless of how deeply the component is nested in the tree. `Mob.List` selections are routed separately through the list's `id`.
 
-| Handler prop | Message delivered to `handle_info/2` |
+| Handler or component | Message delivered to `handle_info/2` |
 |---|---|
 | `on_tap: {pid, tag}` | `{:tap, tag}` |
 | `on_change: {pid, tag}` | `{:change, tag, value}` |
-| `on_select: {pid, tag}` (list) | `{:select, tag, index}` |
-| `on_submit: {pid, tag}` | `{:tap, tag}` |
-| `on_focus: {pid, tag}` | `{:tap, tag}` |
-| `on_blur: {pid, tag}` | `{:tap, tag}` |
+| `Mob.List` with `id: id` | `{:select, id, index}` |
+| `on_submit: {pid, tag}` | `{:submit, tag}` |
+| `on_focus: {pid, tag}` | `{:focus, tag}` |
+| `on_blur: {pid, tag}` | `{:blur, tag}` |
 
 ### Handle limits
 
