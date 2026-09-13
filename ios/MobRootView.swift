@@ -626,6 +626,10 @@ struct MobNodeView: View {
         // carrying an :id, so the agent can read positions via the
         // element_frames NIF without a screenshot.
         .modifier(MobFrameTracker(node: node))
+        // Pinch, rotation, and pointer hover belong to the rendered node as a
+        // whole. Keeping this outside the type switch covers every primitive,
+        // including GPU/native views that do not use mobGestures().
+        .modifier(MobContinuousInputModifier(node: node))
     }
 }
 
@@ -1779,18 +1783,39 @@ private struct MobTextField: View {
         }
     }
 
+    private var returnKeyType: UIReturnKeyType {
+        switch node.returnKeyStr {
+        case "next":   return .next
+        case "go":     return .go
+        case "search": return .search
+        case "send":   return .send
+        default:       return .done
+        }
+    }
+
     @ViewBuilder
     private var field: some View {
-        if node.isSecure {
+        if node.onCompose != nil {
+            MobComposingTextField(
+                node: node,
+                placeholder: placeholder,
+                keyboardType: keyboardType,
+                returnKeyType: returnKeyType,
+                text: $text,
+                isFocused: isFocused,
+                onFocusChange: { focused in isFocused = focused }
+            )
+        } else if node.isSecure {
             SecureField(placeholder, text: $text)
+                .focused($isFocused)
         } else {
             TextField(placeholder, text: $text)
+                .focused($isFocused)
         }
     }
 
     var body: some View {
         field
-            .focused($isFocused)
             .keyboardType(keyboardType)
             .submitLabel(submitLabel)
             .onSubmit {

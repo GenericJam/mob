@@ -24,7 +24,7 @@ registrations. Each is opt-in per widget; absence means no event delivery.
 
 | Prop | Form accepted | Native message | Status |
 |------|---------------|----------------|--------|
-| `on_select` | `{pid, tag}` | `{:select, tag}` | Renderer + iOS NIF wired; Android wired |
+| `on_select` | `{pid, tag}` | `{:select, tag}` | Reserved for a future native selection primitive; no core picker/menu currently emits it. `Mob.List` routes indexed selection through row taps instead. |
 | `on_long_press` | `{pid, tag}` | `{:long_press, tag}` | Renderer + iOS NIF + native gesture; Android wired |
 | `on_double_tap` | `{pid, tag}` | `{:double_tap, tag}` | Same |
 | `on_swipe` | `{pid, tag}` | `{:swipe, tag, direction}` | Direction is `:left \| :right \| :up \| :down` |
