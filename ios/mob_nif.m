@@ -515,10 +515,18 @@ static void mob_send_compose(int handle, const char *text, const char *phase) {
         enif_make_atom(msg_env, "text"),
         enif_make_atom(msg_env, "phase"),
     };
-    ERL_NIF_TERM vals[2] = {
-        enif_make_string(msg_env, text ? text : "", ERL_NIF_LATIN1),
-        enif_make_atom(msg_env, phase),
-    };
+    const char *utf8 = text ? text : "";
+    size_t text_len = strlen(utf8);
+    ERL_NIF_TERM text_term;
+    unsigned char *text_data = enif_make_new_binary(msg_env, text_len, &text_term);
+    if (text_len > 0 && !text_data) {
+        enif_free_env(msg_env);
+        return;
+    }
+    if (text_len > 0)
+        memcpy(text_data, utf8, text_len);
+
+    ERL_NIF_TERM vals[2] = {text_term, enif_make_atom(msg_env, phase)};
     ERL_NIF_TERM payload;
     enif_make_map_from_arrays(msg_env, keys, vals, 2, &payload);
     ERL_NIF_TERM msg =
