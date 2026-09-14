@@ -169,15 +169,13 @@ Stacks children vertically.
 | `padding_top`, `padding_bottom`, `padding_left`, `padding_right` | number / token | Per-side padding |
 | `gap` | number / token | Space between children |
 | `background` | color | Background color |
-| `width` | number | Fixed width in dp/pt. Overrides `fill_width` on iOS; Android lets `fill_width` win when both are set. |
-| `height` | number | Fixed height in dp/pt. Overrides `fill_height` on iOS; Android lets `fill_height` win when both are set. |
+| `width` | positive number | Fixed width in dp/pt. Overrides `fill_width`. |
+| `height` | positive number | Fixed height in dp/pt. Overrides `fill_height`. |
 | `fill_width` | boolean | Stretch to fill available width (default `true`) |
 | `fill_height` | boolean | Stretch to fill available height |
 | `align` | `:start` / `:center` / `:end` | Cross-axis alignment of children |
 
-`width` and `height` win over `fill_*` on iOS for internal
-consistency (a chained outer `maxWidth: .infinity` would otherwise hide
-the inner fixed frame — see mob PR #158 / MOB-181). Setting `width`
+Positive `width` and `height` win over `fill_*` on both platforms. Setting `width`
 also pins a `weight`-flexed child on the parent's flex axis, so
 `<Column width={90} weight={1}>` inside a Row stays 90 wide.
 
@@ -190,8 +188,8 @@ Lays out children horizontally.
 | `padding` | number / token | Uniform padding |
 | `gap` | number / token | Space between children |
 | `background` | color | Background color |
-| `width` | number | Fixed width in dp/pt. Overrides `fill_width` on iOS; Android lets `fill_width` win when both are set. |
-| `height` | number | Fixed height in dp/pt. |
+| `width` | positive number | Fixed width in dp/pt. Overrides `fill_width`. |
+| `height` | positive number | Fixed height in dp/pt. |
 | `fill_width` | boolean | Stretch to fill available width |
 | `align` | `:start` / `:center` / `:end` | Cross-axis alignment of children |
 
@@ -269,6 +267,11 @@ A vertically scrolling container.
 | `padding` | number / token | Padding inside the scroll area |
 | `background` | color | Background color |
 | `lazy` | boolean | Build only the rows currently on screen. Opt-in; see below |
+
+For a scrolling body with a pinned footer, use
+`box(width, fill_height) > column(fill_width, fill_height) > [header, scroll(weight: 1), footer]`.
+This gives the weighted scroll bounded height while the footer remains in the
+column's non-scrolling space.
 
 #### `lazy: true`
 
