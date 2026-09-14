@@ -10,6 +10,14 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **iOS Row and Column now honor `gap`, and direct Row labels resist flexible
+  Spacer compression** (MOB-234). The native prop table now carries `gap` into
+  eager and lazy SwiftUI stacks instead of hard-coding zero spacing. An
+  unweighted text node directly beside a flexible Spacer receives horizontal
+  layout priority, so the Spacer gives up slack before an otherwise-fitting
+  label wraps.
+
 ### Docs
 - **The component guide names the cross-platform scrolling-body + pinned-footer
   recipe and documents fixed dimensions winning over same-axis fills on both

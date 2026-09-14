@@ -28,7 +28,8 @@ defmodule Mob.NativeLayoutWeightTest do
     # the identified wrapper. The property being pinned is unchanged — a column
     # passes .vertical, a row .horizontal.
     assert source =~ "MobNodeView(node: item.node, layoutWeightAxis: .vertical)"
-    assert source =~ "MobNodeView(node: item.node, layoutWeightAxis: .horizontal)"
+    assert source =~ "layoutWeightAxis: .horizontal,"
+    assert source =~ "prioritizeHorizontalText: prioritizesText"
     assert source =~ ".modifier(MobLayoutWeight(node: node, axis: layoutWeightAxis))"
     assert source =~ "frame(maxHeight: .infinity, alignment: .top)"
     assert source =~ "frame(maxWidth: .infinity, alignment: .leading)"
