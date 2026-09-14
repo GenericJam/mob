@@ -3,6 +3,8 @@
 defmodule Mob.NativeColumnRowLayoutTest do
   use ExUnit.Case, async: true
 
+  alias Mob.Test.NativeSource
+
   @root Path.expand("../..", __DIR__)
 
   # MOB-181. Column previously used `.frame(maxWidth: .infinity, maxHeight: ...)`
@@ -17,7 +19,14 @@ defmodule Mob.NativeColumnRowLayoutTest do
     source = File.read!(Path.join(@root, "ios/MobRootView.swift"))
 
     assert source =~
-             "                MobEitherStack(lazy: lazyContainer, alignment: .leading) {"
+             "                MobEitherStack(\n" <>
+               "                    lazy: lazyContainer,\n" <>
+               "                    alignment: .leading,\n" <>
+               "                    spacing: CGFloat(node.gap)\n" <>
+               "                ) {"
+
+    assert source =~ "LazyVStack(alignment: alignment, spacing: spacing) { content }"
+    assert source =~ "VStack(alignment: alignment, spacing: spacing) { content }"
 
     assert source =~
              "                .frame(\n" <>
@@ -41,7 +50,7 @@ defmodule Mob.NativeColumnRowLayoutTest do
     source = File.read!(Path.join(@root, "ios/MobRootView.swift"))
 
     assert source =~
-             "                HStack(alignment: alignment, spacing: 0) {"
+             "                HStack(alignment: alignment, spacing: CGFloat(node.gap)) {"
 
     assert source =~
              "                .frame(\n" <>
@@ -52,6 +61,58 @@ defmodule Mob.NativeColumnRowLayoutTest do
                "                .ifLet((node.fillWidth && node.fixedWidth <= 0) ? () : nil) { view, _ in\n" <>
                "                    view.frame(maxWidth: .infinity, alignment: .leading)\n" <>
                "                }"
+  end
+
+  test "iOS parses stack gap at the native boundary" do
+    header = File.read!(Path.join(@root, "ios/MobNode.h"))
+    implementation = File.read!(Path.join(@root, "ios/MobNode.m"))
+    nif = File.read!(Path.join(@root, "ios/mob_nif.m"))
+
+    prop_enum =
+      NativeSource.region(
+        nif,
+        "typedef NS_ENUM(NSUInteger, MobPropKey) {",
+        "static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {"
+      )
+      |> NativeSource.code_only(:objc)
+
+    prop_slots =
+      NativeSource.region(
+        nif,
+        "static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {",
+        "static MobNode *mob_node_from_dict(NSDictionary *dict) {"
+      )
+      |> NativeSource.code_only(:objc)
+
+    node_builder =
+      NativeSource.region(
+        nif,
+        "static MobNode *mob_node_from_dict(NSDictionary *dict) {",
+        "static ERL_NIF_TERM nif_exit_app"
+      )
+      |> NativeSource.code_only(:objc)
+
+    assert header =~ "@property(nonatomic) CGFloat gap;"
+    assert implementation =~ "_gap = 0.0"
+    assert prop_enum =~ "MOB_PROP_gap"
+    assert prop_slots =~ ~s|[MOB_PROP_gap] = @"gap"|
+    assert node_builder =~ "id gap = pv[MOB_PROP_gap]"
+    assert node_builder =~ "node.gap = [gap doubleValue]"
+  end
+
+  test "iOS gives direct row labels priority over flexible spacers" do
+    source = File.read!(Path.join(@root, "ios/MobRootView.swift")) |> NativeSource.code_only()
+
+    assert source =~ "let prioritizesText = node.childNodes.contains { child in"
+    assert source =~ "child.nodeType == .spacer && child.fixedSize <= 0"
+
+    assert source =~
+             "prioritizeHorizontalText: prioritizesText"
+
+    assert source =~
+             "prioritizeHorizontalText && node.nodeType == .label && node.layoutWeight <= 0 ? 1 : 0"
+
+    assert source =~ "&& lhs.prioritizeHorizontalText == rhs.prioritizeHorizontalText"
   end
 
   # MOB-181. `MobLayoutWeight` wraps every node with an axis-appropriate

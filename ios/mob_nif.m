@@ -939,6 +939,7 @@ typedef NS_ENUM(NSUInteger, MobPropKey) {
     MOB_PROP_fill_width,
     MOB_PROP_font,
     MOB_PROP_font_weight,
+    MOB_PROP_gap,
     MOB_PROP_glass,
     MOB_PROP_height,
     MOB_PROP_id,
@@ -1067,6 +1068,7 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
           [MOB_PROP_fill_width] = @"fill_width",
           [MOB_PROP_font] = @"font",
           [MOB_PROP_font_weight] = @"font_weight",
+          [MOB_PROP_gap] = @"gap",
           [MOB_PROP_glass] = @"glass",
           [MOB_PROP_height] = @"height",
           [MOB_PROP_id] = @"id",
@@ -1354,6 +1356,10 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             node.rowAlign = alignProp;
             node.boxAlign = alignProp;
         }
+
+        id gap = pv[MOB_PROP_gap];
+        if ([gap isKindOfClass:[NSNumber class]])
+            node.gap = [gap doubleValue];
 
         id offsetX = pv[MOB_PROP_offset_x];
         if (offsetX)

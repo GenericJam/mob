@@ -263,6 +263,7 @@ extension MobNodeView: Equatable {
         lhs.node === rhs.node
             && lhs.layoutWeightAxis == rhs.layoutWeightAxis
             && lhs.lazyContainer == rhs.lazyContainer
+            && lhs.prioritizeHorizontalText == rhs.prioritizeHorizontalText
     }
 }
 
@@ -280,15 +281,20 @@ struct MobNodeView: View {
     // `lazy_list` already makes that trade explicitly; silently applying it to
     // every scroll would change harness behaviour under apps that never asked.
     private let lazyContainer: Bool
+    // True only for direct children of a Row containing a flexible Spacer.
+    // This lets labels claim the Spacer's slack before they are compressed.
+    private let prioritizeHorizontalText: Bool
 
     init(
         node: MobNode,
         layoutWeightAxis: MobLayoutWeightAxis? = nil,
-        lazyContainer: Bool = false
+        lazyContainer: Bool = false,
+        prioritizeHorizontalText: Bool = false
     ) {
         self.node = node
         self.layoutWeightAxis = layoutWeightAxis
         self.lazyContainer = lazyContainer
+        self.prioritizeHorizontalText = prioritizeHorizontalText
     }
 
     var body: some View {
@@ -301,7 +307,11 @@ struct MobNodeView: View {
                 // that has 200 children. Rendering the column itself lazily keeps
                 // every one of its modifiers below intact, which flattening the
                 // column away would not.
-                MobEitherStack(lazy: lazyContainer, alignment: .leading) {
+                MobEitherStack(
+                    lazy: lazyContainer,
+                    alignment: .leading,
+                    spacing: CGFloat(node.gap)
+                ) {
                     ForEach(mobIdentifiedChildren(node.childNodes)) { item in
                         MobNodeView(node: item.node, layoutWeightAxis: .vertical)
                     }
@@ -351,9 +361,16 @@ struct MobNodeView: View {
                     default:         return .center
                     }
                 }()
-                HStack(alignment: alignment, spacing: 0) {
+                let prioritizesText = node.childNodes.contains { child in
+                    child.nodeType == .spacer && child.fixedSize <= 0
+                }
+                HStack(alignment: alignment, spacing: CGFloat(node.gap)) {
                     ForEach(mobIdentifiedChildren(node.childNodes)) { item in
-                        MobNodeView(node: item.node, layoutWeightAxis: .horizontal)
+                        MobNodeView(
+                            node: item.node,
+                            layoutWeightAxis: .horizontal,
+                            prioritizeHorizontalText: prioritizesText
+                        )
                     }
                 }
                 // MOB-181: honor fixed_width / fixed_height on rows. Same
@@ -630,6 +647,12 @@ struct MobNodeView: View {
         // whole. Keeping this outside the type switch covers every primitive,
         // including GPU/native views that do not use mobGestures().
         .modifier(MobContinuousInputModifier(node: node))
+        // In a Row, flexible Spacer views yield only after direct text labels
+        // reach their ideal width. Without this priority, SwiftUI compresses
+        // labels before consuming the Spacer's slack, producing avoidable wraps.
+        .layoutPriority(
+            prioritizeHorizontalText && node.nodeType == .label && node.layoutWeight <= 0 ? 1 : 0
+        )
     }
 }
 
@@ -3058,23 +3081,26 @@ struct MobScrollObserver: ViewModifier {
 struct MobEitherStack<Content: View>: View {
     let lazy: Bool
     let alignment: HorizontalAlignment
+    let spacing: CGFloat
     @ViewBuilder let content: Content
 
     init(
         lazy: Bool,
         alignment: HorizontalAlignment,
+        spacing: CGFloat,
         @ViewBuilder content: () -> Content
     ) {
         self.lazy = lazy
         self.alignment = alignment
+        self.spacing = spacing
         self.content = content()
     }
 
     var body: some View {
         if lazy {
-            LazyVStack(alignment: alignment, spacing: 0) { content }
+            LazyVStack(alignment: alignment, spacing: spacing) { content }
         } else {
-            VStack(alignment: alignment, spacing: 0) { content }
+            VStack(alignment: alignment, spacing: spacing) { content }
         }
     }
 }

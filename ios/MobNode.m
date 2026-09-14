@@ -28,6 +28,7 @@
         _axis = @"vertical";
         _showIndicator = YES;
         _rowAlign = @"center";
+        _gap = 0.0;
         _wrapSpacing = 0.0;
         _wrapRunSpacing = 0.0;
         _boxAlign = @"top_leading";

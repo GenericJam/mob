@@ -157,6 +157,9 @@ NS_ASSUME_NONNULL_BEGIN
 // Row vertical alignment — "top" | "center" (default) | "bottom"
 @property(nonatomic, copy, nonnull) NSString *rowAlign;
 
+// Row / Column spacing between adjacent children.
+@property(nonatomic) CGFloat gap;
+
 // Wrap spacing — horizontal space between items and vertical space between runs.
 @property(nonatomic) CGFloat wrapSpacing;
 @property(nonatomic) CGFloat wrapRunSpacing;
