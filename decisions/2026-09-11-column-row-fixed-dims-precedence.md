@@ -1,7 +1,7 @@
 # iOS: fixed_width / fixed_height beat fill_* on Column and Row
 
 - Date: 2026-09-11
-- Status: accepted
+- Status: amended by MOB-233 on 2026-09-13
 - Linear: MOB-181
 - GitHub: mob#110
 
@@ -47,12 +47,16 @@ either. Without the `MobLayoutWeight` half, "fixed always wins" would be
 false in that corner and the fix would be silently partial for flex layouts
 that use `layout_weight` — the dominant Compose analogue for rows/columns.
 
-Android's `nodeModifier` currently lets fill coerce fixed (fill wins). This
-is a real cross-platform divergence in the contradictory-props corner. We
-are NOT harmonising Android in this change — the issue is iOS ignoring
-fixed at all, which is the observable problem callers hit. A follow-up
-issue can revisit Android if we ever need parity in the both-set corner;
-today no production screen sets both.
+At the time of MOB-181, Android's `nodeModifier` still let fill coerce fixed
+(fill won). MOB-181 intentionally changed only iOS, leaving the divergence for
+a follow-up.
+
+MOB-233 supplied that follow-up on 2026-09-13. A fixed-width, full-height
+column with a weighted scroll exposed an Android renderer failure, so generated
+Android bridges now apply authored dimensions before cross-axis fills and
+suppress a same-axis fill when a positive fixed dimension exists. The shared
+contract is therefore fixed-over-fill for valid positive dimensions. See
+`mob_new/decisions/2026-09-13-fixed-dimensions-wrap-fill-constraints.md`.
 
 ## Consequences
 
@@ -61,9 +65,9 @@ today no production screen sets both.
   over `layout_weight`.
 - `fill_width` / `fill_height` remain the default behavior when no fixed dim
   is set on the corresponding axis.
-- Contradictory-props corner: iOS returns the fixed dim, Android returns
-  the filled parent. Callers should not set both; if a future
-  cross-platform screen needs the both-set case, we harmonise then, not now.
+- Since MOB-233, both renderers return the positive fixed dimension in the
+  contradictory-props corner. Apps generated before that change retain the
+  old Android behavior until their app-owned bridge is regenerated or updated.
 - Source-contract regression: `test/mob/native_column_row_layout_test.exs`
   string-matches the Column, Row and `MobLayoutWeight` blocks so reverting
   any of them fails the test.

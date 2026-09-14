@@ -19,6 +19,9 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   label wraps.
 
 ### Docs
+- **The component guide names the cross-platform scrolling-body + pinned-footer
+  recipe and documents fixed dimensions winning over same-axis fills on both
+  renderers** (MOB-233).
 - **`guides/agentic_coding.md` covers the 0.8 agent surface** (MOB-212): what
   an action did (`Mob.Agent.Receipts`), the framework's own checks
   (`Mob.Invariant`), defects as data (`Mob.Defect.Bus`), post-mortems
