@@ -684,6 +684,25 @@ Top-level optional:
   as a warning block, so a missing manual step can't fail silently at first
   feature use. Declare one entry per step, with the exact XML/snippet the
   host author must add.
+- `:tags` — PascalCase tag names the `~MOB` sigil should recognize as
+  whitelisted. For **composite** plugins whose components are pure-Elixir
+  expansions registered at boot via `Mob.Composite.register/2` (canonical
+  example: a UI kit like `mob_mishka`). A **tier-2 native plugin does not
+  need to list its `ui_components` tags here** — those are auto-whitelisted
+  from the `ui_components: [%{tag: ...}]` entries below. Accepts the same
+  shapes `config :mob, :extra_tags` does, plus per-platform maps:
+
+      tags: ~w(MishkaChip MishkaDrawer)                  # flat list
+      tags: "MishkaChip"                                  # bare string
+      tags: MishkaChip                                    # bare alias
+      tags: %{ios: ~w(FooIOS), android: ~w(FooAndroid)}  # per-platform
+
+  Read at each `~MOB` call site's compile time — plugin authors get sigil
+  whitelist membership without asking the host to edit `config :mob,
+  :extra_tags`. Snake-case atoms are accepted equivalently to their
+  PascalCase form. Mix does not track the read, so `mix compile --force`
+  after a plugin update is needed to pick up new tags on already-compiled
+  screens.
 
 Capability sections (any combination):
 

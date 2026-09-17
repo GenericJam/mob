@@ -83,15 +83,27 @@ defmodule Mob.Sigil do
 
   Composite tags an app registers at boot (`Mob.Composite.register/2`, or a UI
   kit's own registry) are invisible to that compile-time check, so declare them
-  in config and the sigil accepts them silently:
+  either at the app level or, for a Hex-shipped kit, at the plugin level:
 
-      # config/config.exs
+      # app-level: config/config.exs
       config :mob, :extra_tags, ~w(MishkaChip MishkaDrawer)   # or [:mishka_chip, ...]
 
-  Read at each `~MOB` call site's compile time, so it lives in the app's own
-  config — no edit to mob's `priv/tags` files, which `mix deps.get` would undo.
-  Mix does not track the read, so after changing the list run `mix compile
-  --force` (or touch the screens) for already-compiled modules to pick it up.
+      # plugin-level: priv/mob_plugin.exs
+      %{
+        name: :mob_mishka,
+        mob_version: "~> 0.8",
+        plugin_spec_version: 1,
+        tags: ~w(MishkaChip MishkaDrawer)                # flat list
+        # or per-platform:
+        # tags: %{ios: ~w(FooIOS), android: ~w(FooAndroid), both: ~w(FooShared)}
+      }
+
+  Both surfaces are read at each `~MOB` call site's compile time, so tags a Hex
+  plugin ships flow into the whitelist automatically — no user-side config edit
+  and no writing into mob's `priv/tags` files (which `mix deps.get` would undo).
+  Mix does not track the reads, so after changing the config or updating a
+  plugin run `mix compile --force` (or touch the screens) for already-compiled
+  modules to pick it up.
   """
 
   # ── Whitelist ────────────────────────────────────────────────────────────────
@@ -510,7 +522,7 @@ defmodule Mob.Sigil do
   defp resolve_type(tag, caller) do
     atom = tag |> Macro.underscore() |> String.to_atom()
 
-    unless MapSet.member?(@known_tags.both, tag) or extra_tag?(tag) do
+    unless MapSet.member?(@known_tags.both, tag) or extra_tag?(tag) or plugin_tag?(tag) do
       ios_only =
         MapSet.member?(@known_tags.ios, tag) and not MapSet.member?(@known_tags.android, tag)
 
@@ -544,6 +556,128 @@ defmodule Mob.Sigil do
     |> List.wrap()
     |> Enum.any?(&(normalize_tag(&1) == tag))
   end
+
+  # Tags declared by installed Hex plugins via their `priv/mob_plugin.exs`
+  # manifest `:tags` field. Same compile-time-in-the-macro trick as
+  # `extra_tag?/1`, so a plugin with `tags: ~w(MishkaChip)` in its manifest
+  # makes `<MishkaChip />` compile silently in any consumer app without a
+  # user-side `config :mob, :extra_tags` edit. See `MOB_PLUGINS.md` for the
+  # manifest schema.
+  #
+  # Cached in the process dictionary. The parallel compiler spawns one
+  # process per source file, so a file with N modules and M sigil call sites
+  # reads the manifest set at most once, not N or M times. Same "no Mix
+  # tracking" caveat as `extra_tag?/1`: after a plugin update, `mix compile
+  # --force` to pick up new tags.
+  @plugin_tags_cache_key {__MODULE__, :plugin_tags}
+
+  defp plugin_tag?(tag) do
+    MapSet.member?(plugin_tags(), tag)
+  end
+
+  defp plugin_tags do
+    case Process.get(@plugin_tags_cache_key) do
+      nil ->
+        set = load_plugin_tags()
+        Process.put(@plugin_tags_cache_key, set)
+        set
+
+      set ->
+        set
+    end
+  end
+
+  defp load_plugin_tags do
+    for {app, _desc, _vsn} <- Application.loaded_applications(),
+        path = plugin_manifest_path(app),
+        is_binary(path),
+        File.exists?(path),
+        manifest = read_plugin_manifest(path),
+        is_map(manifest),
+        tag <- extract_plugin_tags(manifest),
+        into: MapSet.new(),
+        do: normalize_tag(tag)
+  end
+
+  defp plugin_manifest_path(app) do
+    Application.app_dir(app, "priv/mob_plugin.exs")
+  rescue
+    # `app_dir/2` raises if the app isn't loaded — treat as no manifest.
+    ArgumentError -> nil
+  end
+
+  defp read_plugin_manifest(path) do
+    {result, _} = Code.eval_file(path)
+    result
+  rescue
+    # A broken manifest shouldn't break the host's compile — but log so the
+    # plugin author (and anyone triaging a "why isn't my tag whitelisted?"
+    # question) can see it. `Mob.Plugins.read_path/1` is stricter for the
+    # generated host manifest (a broken one is a fatal authoring error); a
+    # broken *plugin* manifest here is more graceful because one bad plugin
+    # shouldn't wedge every other plugin's whitelist contribution.
+    e ->
+      require Logger
+
+      Logger.warning(
+        "[Mob.Sigil] could not read plugin manifest #{path}: " <>
+          Exception.format(:error, e, __STACKTRACE__)
+      )
+
+      nil
+  end
+
+  # Two shapes contribute plugin-declared tags:
+  #
+  # 1. A `tags:` field on the manifest, meant for composite plugins whose
+  #    components are pure-Elixir expansions (e.g. mob_mishka). Accepts
+  #    the same shapes `extra_tag?/1` does, plus per-platform maps:
+  #
+  #        tags: ~w(Foo Bar)                               # flat list
+  #        tags: "Foo"                                     # bare string
+  #        tags: MishkaChip                                # bare alias
+  #        tags: %{ios: ~w(A), android: ~w(B), both: ~w(C)}   # per-platform
+  #
+  # 2. The existing `ui_components: [%{tag: "Chart", ...}]` list from tier-2
+  #    plugins that ship native components. A plugin already declaring
+  #    `ui_components` gets whitelist coverage for free — no need to also
+  #    duplicate the tag names into a top-level `tags:` field.
+  #
+  # Platform scoping for warning messages is intentionally NOT honored here —
+  # the whitelist union treats any plugin-declared tag as known; refining
+  # "iOS-only" warnings for plugin tags is a follow-up if it turns out to
+  # matter.
+  defp extract_plugin_tags(manifest) do
+    from_tags_field(manifest) ++ from_ui_components(manifest)
+  end
+
+  defp from_tags_field(%{tags: %{} = platform_map}) do
+    platform_map
+    |> Enum.flat_map(fn
+      {_platform, values} -> values |> List.wrap() |> Enum.filter(&valid_tag?/1)
+    end)
+  end
+
+  defp from_tags_field(%{tags: tags}) do
+    tags |> List.wrap() |> Enum.filter(&valid_tag?/1)
+  end
+
+  defp from_tags_field(_), do: []
+
+  defp from_ui_components(%{ui_components: components}) when is_list(components) do
+    for %{tag: tag} <- components, valid_tag?(tag), do: tag
+  end
+
+  defp from_ui_components(_), do: []
+
+  # Guards every tag before it reaches `normalize_tag/1`, which only has
+  # clauses for atoms and binaries. Rejects `nil` / `true` / `false`
+  # explicitly — `is_atom/1` admits them (they're atoms), but
+  # `Macro.camelize("nil")` would silently whitelist `Nil`, which is not
+  # what an author writing `tag: nil` meant.
+  defp valid_tag?(tag) when is_binary(tag), do: true
+  defp valid_tag?(tag) when is_atom(tag) and tag not in [nil, true, false], do: true
+  defp valid_tag?(_), do: false
 
   # A bare alias (`MishkaChip`) is the atom `:"Elixir.MishkaChip"`; strip the
   # prefix so that natural spelling names the same tag as the string form.

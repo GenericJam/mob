@@ -579,3 +579,196 @@ defmodule Mob.SigilExtraTagsTest do
     refute warnings =~ "AcmeGauge"
   end
 end
+
+# Plugin-manifest tag discovery (MOB-247): a plugin declaring `:tags` in its
+# `priv/mob_plugin.exs` makes those tags whitelist-known in the sigil, without
+# the host having to edit `config :mob, :extra_tags`. Same for the existing
+# `:ui_components` list — tier-2 plugins get whitelist coverage automatically.
+#
+# Separate module, `async: false`, for the same reason as SigilExtraTagsTest:
+# the test mutates global process/application state (the code path + loaded
+# applications) that async modules must not race on.
+defmodule Mob.SigilPluginTagsTest do
+  use ExUnit.Case, async: false
+
+  import ExUnit.CaptureIO, only: [with_io: 2]
+
+  @plugin_app :mob_sigil_plugin_tags_fixture
+
+  setup_all do
+    # `:code.lib_dir/1` (which Application.app_dir/2 uses) requires the
+    # directory to be named after the app, so the layout is
+    # `<tmp>/<app>/ebin/` and `<tmp>/<app>/priv/` rather than a flat
+    # `<tmp>/ebin/`.
+    tmp =
+      Path.join(System.tmp_dir!(), "mob_sigil_plugin_tags_#{System.unique_integer([:positive])}")
+
+    app_root = Path.join(tmp, Atom.to_string(@plugin_app))
+    ebin = Path.join(app_root, "ebin")
+    priv = Path.join(app_root, "priv")
+    File.mkdir_p!(ebin)
+    File.mkdir_p!(priv)
+
+    # Minimal Erlang .app resource so `Application.load/1` accepts it and
+    # `Application.app_dir/2` can resolve the priv dir.
+    app_resource = ~c"""
+    {application, #{@plugin_app}, [
+      {description, "sigil plugin-tags test fixture"},
+      {vsn, "0.0.1"},
+      {modules, []},
+      {registered, []},
+      {applications, [kernel, stdlib]}
+    ]}.
+    """
+
+    File.write!(Path.join(ebin, "#{@plugin_app}.app"), app_resource)
+
+    File.write!(Path.join(priv, "mob_plugin.exs"), """
+    %{
+      name: :#{@plugin_app},
+      mob_version: "~> 0.8",
+      plugin_spec_version: 1,
+      tags: ~w(FixtureFlatTag FixtureAnotherFlat),
+      ui_components: [
+        %{
+          tag: "FixtureUiComponent",
+          atom: :fixture_ui_component,
+          props: [:x],
+          ios: %{view_module: "FixtureView"},
+          android: %{composable: "FixtureComp"}
+        }
+      ]
+    }
+    """)
+
+    true = :code.add_path(String.to_charlist(ebin))
+
+    # Tolerate a prior test run that crashed after Application.load but before
+    # on_exit fired: `Application.load/1` returns `{:error, {:already_loaded,
+    # _}}` in that case, not `:ok`.
+    case Application.load(@plugin_app) do
+      :ok -> :ok
+      {:error, {:already_loaded, _}} -> :ok
+    end
+
+    on_exit(fn ->
+      _ = Application.unload(@plugin_app)
+      _ = :code.del_path(String.to_charlist(ebin))
+      _ = File.rm_rf(tmp)
+    end)
+
+    :ok
+  end
+
+  # Same helper as SigilExtraTagsTest — a fresh process per test picks up the
+  # loaded fixture app, and the sigil's per-process plugin-tag cache is
+  # populated on first read inside that process.
+  defp expand(source) do
+    with_io(:stderr, fn ->
+      Code.eval_string("import Mob.Sigil\n" <> source) |> elem(0)
+    end)
+  end
+
+  test "a tag listed in a plugin manifest's :tags compiles silently" do
+    {node, warnings} = expand("~MOB(<FixtureFlatTag />)")
+    assert node.type == :fixture_flat_tag
+    refute warnings =~ "FixtureFlatTag"
+  end
+
+  test "a second tag from the same manifest also compiles silently" do
+    {node, warnings} = expand("~MOB(<FixtureAnotherFlat />)")
+    assert node.type == :fixture_another_flat
+    refute warnings =~ "FixtureAnotherFlat"
+  end
+
+  test "a plugin's :ui_components tag is auto-whitelisted" do
+    {node, warnings} = expand("~MOB(<FixtureUiComponent x={1} />)")
+    assert node.type == :fixture_ui_component
+    assert node.props.x == 1
+    refute warnings =~ "FixtureUiComponent"
+  end
+
+  test "tags NOT in any plugin manifest still warn" do
+    {_node, warnings} = expand("~MOB(<FixtureUnknown />)")
+    assert warnings =~ "~MOB: <FixtureUnknown> is not in the Mob tag whitelist"
+  end
+
+  test "junk in :tags (integers, nil, booleans) does not crash the host compile" do
+    priv = Application.app_dir(@plugin_app, "priv/mob_plugin.exs")
+    original = File.read!(priv)
+    on_exit(fn -> File.write!(priv, original) end)
+
+    File.write!(priv, """
+    %{
+      name: :#{@plugin_app},
+      mob_version: "~> 0.8",
+      plugin_spec_version: 1,
+      tags: [1, nil, true, false, "GoodTag", :OtherGoodTag],
+      ui_components: [%{tag: nil}, %{tag: "GoodUiTag"}]
+    }
+    """)
+
+    # Compile should succeed for the good tags AND the unknown one (which
+    # warns) without any FunctionClauseError from `normalize_tag/1` on the
+    # junk values.
+    {nodes, warnings} =
+      with_io(:stderr, fn ->
+        Code.eval_string("""
+        import Mob.Sigil
+        [~MOB(<GoodTag />), ~MOB(<OtherGoodTag />), ~MOB(<GoodUiTag />)]
+        """)
+        |> elem(0)
+      end)
+
+    assert Enum.map(nodes, & &1.type) == [:good_tag, :other_good_tag, :good_ui_tag]
+    refute warnings =~ "GoodTag"
+    refute warnings =~ "OtherGoodTag"
+    refute warnings =~ "GoodUiTag"
+    refute warnings =~ "Nil"
+  end
+
+  test "a per-platform :tags map contributes tags too" do
+    # Rewrite the fixture manifest with the map shape. The write MUST land
+    # before the first sigil expansion in this test process — the sigil's
+    # per-process plugin-tag cache reads once and never re-reads within a
+    # process. ExUnit gives each test a fresh process, so this test's cache
+    # is empty at entry, and the write above happens before any `expand/1`
+    # call below.
+    priv = Application.app_dir(@plugin_app, "priv/mob_plugin.exs")
+    original = File.read!(priv)
+
+    on_exit(fn -> File.write!(priv, original) end)
+
+    File.write!(priv, """
+    %{
+      name: :#{@plugin_app},
+      mob_version: "~> 0.8",
+      plugin_spec_version: 1,
+      tags: %{ios: ~w(FixtureIosTag), android: ~w(FixtureAndroidTag), both: ~w(FixtureBothTag)}
+    }
+    """)
+
+    {nodes, warnings} =
+      with_io(:stderr, fn ->
+        Code.eval_string("""
+        import Mob.Sigil
+        [
+          ~MOB(<FixtureIosTag />),
+          ~MOB(<FixtureAndroidTag />),
+          ~MOB(<FixtureBothTag />)
+        ]
+        """)
+        |> elem(0)
+      end)
+
+    assert Enum.map(nodes, & &1.type) == [
+             :fixture_ios_tag,
+             :fixture_android_tag,
+             :fixture_both_tag
+           ]
+
+    refute warnings =~ "FixtureIosTag"
+    refute warnings =~ "FixtureAndroidTag"
+    refute warnings =~ "FixtureBothTag"
+  end
+end
