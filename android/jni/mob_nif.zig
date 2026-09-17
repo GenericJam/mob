@@ -4320,19 +4320,19 @@ fn writeMarker(dir: []const u8, ts_ms: i64) void {
         return;
     };
 
-    const fd = posix_open(path.ptr, O_WRONLY | O_CREAT | O_TRUNC, 0o600);
+    const fd = jni.open(path.ptr, jni.O_WRONLY | jni.O_CREAT | jni.O_TRUNC, 0o600);
     if (fd < 0) {
         logMarkerFailureOnce(.open_failed);
         return;
     }
-    defer _ = posix_close(fd);
+    defer _ = jni.close(fd);
 
     var out_buf: [32]u8 = @splat(0);
     const out = std.fmt.bufPrintZ(&out_buf, "{d}\n", .{ts_ms}) catch {
         logMarkerFailureOnce(.format_failed);
         return;
     };
-    const written = posix_write(fd, out.ptr, out.len);
+    const written = jni.write(fd, out.ptr, out.len);
     if (written < 0) logMarkerFailureOnce(.write_failed);
 }
 
@@ -4366,24 +4366,6 @@ fn logMarkerFailureOnce(kind: MarkerFailure) void {
     var buf: [128]u8 = @splat(0);
     const msg = std.fmt.bufPrintZ(&buf, "mob_post_mortem: marker write failed ({s}); cross-boot dedup will re-emit until this clears", .{reason}) catch return;
     jni.logWrite(jni.ANDROID_LOG_ERROR, "MobNIF", "{s}", .{msg});
-}
-
-const O_WRONLY: c_int = 1;
-const O_CREAT: c_int = 0o100;
-const O_TRUNC: c_int = 0o1000;
-
-extern "c" fn open(path: [*:0]const u8, flags: c_int, mode: c_uint) c_int;
-extern "c" fn write(fd: c_int, buf: [*]const u8, count: usize) isize;
-extern "c" fn close(fd: c_int) c_int;
-
-inline fn posix_open(path: [*:0]const u8, flags: c_int, mode: c_uint) c_int {
-    return open(path, flags, mode);
-}
-inline fn posix_write(fd: c_int, buf: [*]const u8, count: usize) isize {
-    return write(fd, buf, count);
-}
-inline fn posix_close(fd: c_int) c_int {
-    return close(fd);
 }
 
 // Get Application context from the global Activity captured at BEAM
