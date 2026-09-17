@@ -8,7 +8,17 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.9.0] - 2026-09-17
+
+### Added
+- **`~MOB` sigil recognises tags declared by installed plugins' manifests**
+  (MOB-247). `Mob.Sigil` now unions plugin-manifest `:tags` and
+  `ui_components[].tag` into the tag whitelist at compile time, so a
+  plugin like `mob_mishka` can ship its own `<MishkaHueSlider>` without
+  the user adding a `config :mob, :extra_tags` block. Per-process cache
+  keeps compile-time overhead flat. `deps/mob/priv/tags/*.txt` remains a
+  supported source but is no longer required for tags shipped by plugins.
+  See `decisions/2026-09-15-plugin-manifest-tag-discovery.md`.
 
 ### Fixed
 - **iOS Row and Column now honor `gap`, and direct Row labels resist flexible
