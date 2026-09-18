@@ -39,6 +39,7 @@
         _offsetY = 0.0;
         _keyboardTypeStr = @"default";
         _returnKeyStr = @"done";
+        _textContentTypeStr = @""; // empty = no hint (default UITextContentType behaviour)
         _contentModeStr = @"fit";
         _fixedWidth = 0.0;
         _fixedHeight = 0.0;

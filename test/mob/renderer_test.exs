@@ -648,6 +648,52 @@ defmodule Mob.RendererTest do
       assert decoded["props"]["return_key"] == "next"
     end
 
+    test "text_content_type atom is serialised as string" do
+      # Pairs with mob_sms's SMS Retriever for a cross-platform OTP flow:
+      # iOS surfaces the SMS-delivered code in QuickType above the keyboard
+      # when a text field with textContentType = .oneTimeCode is focused.
+      # (mob_sms 0.2.0 depends on this shipping.)
+      tree = %{
+        type: :text_field,
+        props: %{value: "", text_content_type: :one_time_code},
+        children: []
+      }
+
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["text_content_type"] == "one_time_code"
+    end
+
+    test "text_content_type absent when not set on the node" do
+      # The Elixir renderer must not synthesise a key for a prop the caller
+      # never wrote. Native init already defaults textContentTypeStr to "",
+      # so an absent key means "no hint" without a redundant round-trip.
+      tree = %{type: :text_field, props: %{value: ""}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      refute Map.has_key?(decoded["props"], "text_content_type")
+    end
+
+    test "unknown text_content_type atom falls through as its own string (native chooses default)" do
+      # A typo'd atom (`:one_time_cade`) should not raise at the Elixir layer —
+      # the renderer's job is transport, not validation. Native maps unknown
+      # values to nil / no-hint. Adversarial review flagged this as a silent
+      # failure mode for callers; the test pins the pass-through behaviour so
+      # a future decision to reject typos happens explicitly, not by accident.
+      tree = %{
+        type: :text_field,
+        props: %{value: "", text_content_type: :one_time_cade},
+        children: []
+      }
+
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert decoded["props"]["text_content_type"] == "one_time_cade"
+    end
+
     test "secure boolean is passed through unchanged" do
       tree = %{type: :text_field, props: %{value: "", secure: true}, children: []}
       Renderer.render(tree, :android, MockNIF)

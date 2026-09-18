@@ -133,6 +133,11 @@ struct MobComposingTextField: UIViewRepresentable {
     let placeholder: String
     let keyboardType: UIKeyboardType
     let returnKeyType: UIReturnKeyType
+    // SwiftUI's .textContentType(_:) modifier does NOT propagate to a
+    // UITextField wrapped in a UIViewRepresentable — it only affects native
+    // SwiftUI TextField / SecureField. Callers must pass the hint in here
+    // and configure(_:) sets it directly on the UITextField. Nil = no hint.
+    let textContentType: UITextContentType?
     @Binding var text: String
     let isFocused: Bool
     let onFocusChange: (Bool) -> Void
@@ -178,6 +183,9 @@ struct MobComposingTextField: UIViewRepresentable {
         field.placeholder = placeholder
         field.keyboardType = keyboardType
         field.returnKeyType = returnKeyType
+        // UITextField.textContentType is optional; nil = no hint (system
+        // default heuristic). See the property comment above.
+        field.textContentType = textContentType
         field.isSecureTextEntry = node.isSecure
         field.autocorrectionType = .default
         field.autocapitalizationType = .sentences

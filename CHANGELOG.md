@@ -8,6 +8,20 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.9.1] - 2026-09-18
+
+### Added
+- **`text_content_type` prop on `:text_field`** — iOS wires it to
+  `UITextContentType` so QuickType autofills SMS-delivered one-time
+  codes above the keyboard. `text_content_type: :one_time_code` is
+  the flagship value; `:username`, `:password`, `:email_address`,
+  `:telephone_number` are mapped too. Empty string / unknown value
+  = nil (no hint, default iOS heuristic). Pairs with mob_sms's
+  Android SMS Retriever for a cross-platform OTP flow. Android
+  side has no change here — Android delivers the code
+  programmatically via a broadcast receiver, not via keyboard
+  autofill.
+
 ## [0.9.0] - 2026-09-17
 
 ### Added

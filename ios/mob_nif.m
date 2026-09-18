@@ -1006,6 +1006,7 @@ typedef NS_ENUM(NSUInteger, MobPropKey) {
     MOB_PROP_text,
     MOB_PROP_text_align,
     MOB_PROP_text_color,
+    MOB_PROP_text_content_type,
     MOB_PROP_text_size,
     MOB_PROP_thickness,
     MOB_PROP_title,
@@ -1145,6 +1146,7 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
           [MOB_PROP_text] = @"text",
           [MOB_PROP_text_align] = @"text_align",
           [MOB_PROP_text_color] = @"text_color",
+          [MOB_PROP_text_content_type] = @"text_content_type",
           [MOB_PROP_text_size] = @"text_size",
           [MOB_PROP_thickness] = @"thickness",
           [MOB_PROP_title] = @"title",
@@ -1438,6 +1440,10 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         id returnKey = pv[MOB_PROP_return_key];
         if ([returnKey isKindOfClass:[NSString class]])
             node.returnKeyStr = returnKey;
+
+        id textContentType = pv[MOB_PROP_text_content_type];
+        if ([textContentType isKindOfClass:[NSString class]])
+            node.textContentTypeStr = textContentType;
 
         id secure = pv[MOB_PROP_secure];
         if ([secure isKindOfClass:[NSNumber class]])

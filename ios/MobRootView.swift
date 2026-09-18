@@ -1816,6 +1816,25 @@ private struct MobTextField: View {
         }
     }
 
+    // Maps the `text_content_type` prop into UITextContentType. Only the values
+    // we've had a concrete ask for are enumerated; adding a case here + a native
+    // format test is trivial when a new value shows up. Empty string / unknown =
+    // nil (no hint, iOS's default heuristic).
+    //
+    // one_time_code: the flagship pairing. Set on a text field, iOS surfaces an
+    //   SMS-received code in the QuickType bar above the keyboard. Pairs with
+    //   mob_sms's SMS Retriever on Android for a cross-platform OTP flow.
+    private var textContentType: UITextContentType? {
+        switch node.textContentTypeStr {
+        case "one_time_code":  return .oneTimeCode
+        case "username":       return .username
+        case "password":       return .password
+        case "email_address":  return .emailAddress
+        case "telephone_number": return .telephoneNumber
+        default:               return nil
+        }
+    }
+
     @ViewBuilder
     private var field: some View {
         if node.onCompose != nil {
@@ -1824,6 +1843,7 @@ private struct MobTextField: View {
                 placeholder: placeholder,
                 keyboardType: keyboardType,
                 returnKeyType: returnKeyType,
+                textContentType: textContentType,
                 text: $text,
                 isFocused: isFocused,
                 onFocusChange: { focused in isFocused = focused }
@@ -1840,6 +1860,7 @@ private struct MobTextField: View {
     var body: some View {
         field
             .keyboardType(keyboardType)
+            .textContentType(textContentType)
             .submitLabel(submitLabel)
             .onSubmit {
                 node.onSubmit?()

@@ -132,6 +132,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy, nonnull)
     NSString *keyboardTypeStr; // "default","number","decimal","email","phone","url"
 @property(nonatomic, copy, nonnull) NSString *returnKeyStr; // "done","next","go","search","send"
+// UITextContentType hint for QuickType autofill above the keyboard. "one_time_code"
+// is the flagship value — pairs with mob_sms's SMS Retriever on Android to give
+// a cross-platform OTP flow. Empty string = no hint. Additional values map onto
+// UITextContentType (username, password, email_address, etc.) as callers ask.
+@property(nonatomic, copy, nonnull) NSString *textContentTypeStr;
 @property(nonatomic, assign) BOOL isSecure;                 // mask input (SecureField on iOS)
 @property(nonatomic, copy, nullable) void (^onFocus)(void);
 @property(nonatomic, copy, nullable) void (^onBlur)(void);
