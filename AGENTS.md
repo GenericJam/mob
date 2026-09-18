@@ -169,6 +169,49 @@ Two rules that outrank the list:
   not prove a build happened, a deploy landed, or a screen rendered. After a
   deploy, prove the app is up and answering before believing anything else.
 
+## When the ladder can't be climbed, propose the missing readback
+
+Before falling back to a screenshot or a "looks right to me", ask yourself:
+
+- Can I interact with this thing as text?
+- Can I ask it for its state and get a machine-parseable answer?
+- If not, is there a small hook I could suggest that would make its state
+  legible to future agents?
+
+If the answer to the last question is yes, **file it in the right issue
+tracker**:
+
+- Working *on* mob, mob_dev, or mob_new? Those use Linear — file a Linear
+  issue (the API key lives in `~/code/mob/.env` as `LINEAR_API_KEY`; the raw
+  GraphQL endpoint works fine, no MCP needed).
+- Working *on a plugin* (mob_scene3d, mob_bluetooth, mob_camera, etc.)? Those
+  use `bd` (beads) — file it in the plugin's own bd.
+- Working on a mob-derived app that hit the gap while consuming the framework?
+  File a GitHub issue on the framework repo with the observation. A
+  well-described gap from a downstream consumer is worth as much as an
+  in-team bead — the "concrete case that forced the ask" section is what
+  makes it actionable.
+
+Describe:
+
+1. What state the agent needs to see.
+2. The smallest API that would expose it (a NIF, an RPC helper, a `Mob.Test`
+   assertion, a readback JSON — smallest surface that answers the question).
+3. The concrete case that forced the ask ("I hit X while trying to verify Y").
+
+This is the framework's agent-first bet made explicit: `Mob.Test.assigns/1`,
+the screenshot/scroll NIFs, `Mob.Scene3d.scene/frame_stats/sample_region`, and
+the BEAM observability MCP tools all exist because someone noticed a gap and
+wrote the readback instead of squinting at a screenshot. Do the same. Don't
+silently skip opportunities to make mob and its plugins more legible — file
+the issue (or bead, or GH issue — whichever the current repo uses), and if
+it's small, ship it alongside the work that revealed the gap.
+
+Corollary: when you build a new NIF, plugin, or subsystem, design its
+introspection surface up front. The question is not "does this render", it's
+"can an agent verify this rendered". If the answer needs a screenshot, add a
+readback.
+
 ## Pre-empt-failure rules — read before you touch anything
 
 These are the things we've burned ourselves on. Following them isn't optional.
