@@ -172,11 +172,27 @@ one is two lines:
 config :mob, :plugins, [:mob_camera]
 ```
 
-In core: `Mob.Clipboard`, `Mob.Share`, `Mob.Files`, `Mob.Audio`, `Mob.Motion`,
-`Mob.Permissions`. As plugins: `MobCamera` (`mob_camera`), `MobLocation`
-(`mob_location`), `MobNotify` (`mob_notify`), `MobPhotos` (`mob_photos`),
-`MobBiometric` (`mob_biometric`), `MobScanner` (`mob_scanner` — also needs
-`mob_camera`), `MobBluetooth` (`mob_bluetooth`).
+**In core:** `Mob.Clipboard`, `Mob.Share`, `Mob.Files`, `Mob.Audio`,
+`Mob.Motion`, `Mob.Permissions`.
+
+**As first-party plugins:** `mob_camera`, `mob_location`, `mob_notify`,
+`mob_photos`, `mob_biometric`, `mob_scanner` (also needs `mob_camera`),
+`mob_bluetooth`, `mob_video`, `mob_midi`, `mob_touch`, `mob_screencast`,
+`mob_sms`, `mob_background` (keep-alive), `mob_nx` (ML backends spike).
+
+**Component kits:** `mob_mishka` — 73 Mishka Chelekom composites for
+Mob apps (dialogs, tabs, sliders, colour pickers, etc.), with
+`mix mob_mishka.gen <name>` to eject a specific composite for editing
+and `mix mob_mishka.migrate` to convert apps from the pre-plugin
+vendored shape.
+
+**Styles:** `mob_themes` (five preset looks).
+
+**Server companions:** `mob_push` (APNs + FCM send from Elixir).
+
+See the [First-Party Packages catalog](guides/packages.md) for what each
+plugin does, per-platform status, and pairing hints for common shapes
+(OTP verification, camera flows, background sync, etc.).
 
 For a full audit of what mob covers vs. what's missing vs. what's
 out of scope (compared against React Native + Expo SDK capabilities),
