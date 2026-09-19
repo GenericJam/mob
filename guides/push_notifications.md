@@ -304,8 +304,34 @@ environment returns `{:error, {:apns_error, "BadDeviceToken"}}`.
 
 ---
 
+## Silent pushes and OS-triggered handlers
+
+Everything above covers user-visible notifications — the ones with a
+title and body that show in the tray. There's a second, silent variant
+you'd use for waking the app to run code without showing anything:
+sync data, refresh a cache, respond to a peer signal. That's what the
+[`mob_wake`](https://hexdocs.pm/mob_wake) plugin is for, and it uses
+the same `mob_push` send-side pipeline with a specific payload shape:
+
+```elixir
+# Device — register the handler once at boot
+Mob.Wake.register(:sync_notes, :push, {MyApp.Sync, :run_sync})
+
+# Server — send a silent push that fires that handler
+payload = MobWake.wake_payload(:sync_notes, data: %{"peer" => "abc"})
+MobPush.send(ios_token, :ios, payload)
+```
+
+`mob_wake`'s moduledoc covers the three-device-state matrix (foreground,
+backgrounded, force-quit) and lays out the iOS-specific first-time
+setup — the App ID Push capability, the provisioning profile
+regeneration, and the AppDelegate dispatch handler that mob_new ships
+in its template (MOB-271).
+
 ## Further reading
 
 - [`mob_push` on HexDocs](https://hexdocs.pm/mob_push) — full server-side documentation: credential setup, all payload options, notification appearance, token lifecycle
 - [`MobNotify`](https://hexdocs.pm/mob_notify) — schedule/cancel local notifications, register for push (ships in the `mob_notify` plugin)
+- [`MobWake`](https://hexdocs.pm/mob_wake) — OS-triggered background handlers via scheduler firings and silent pushes; complements the user-visible flow above
+- [`MobBackground`](https://hexdocs.pm/mob_background) — keep the app alive continuously while backgrounded (a different concern than push wake)
 - [`Mob.Permissions`](Mob.Permissions.html) — request OS permission

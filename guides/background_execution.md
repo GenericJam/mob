@@ -27,6 +27,15 @@ open indefinitely while the app is backgrounded.
 See [Push Notifications](push_notifications.md) for token registration,
 payloads, and notification tap handling.
 
+For **silent** wakes (no visible notification — just "run this handler
+in the background"), use the [`mob_wake`](https://hexdocs.pm/mob_wake)
+plugin. It ships one identifier → MFA dispatch table with four
+trigger sources: iOS `BGTaskScheduler`, iOS silent APNs (paired with
+`mob_push` on the server), Android `WorkManager`, and Android FCM data
+messages. Verified end-to-end on both platforms in the foreground and
+backgrounded states; force-quit drop is intentional platform behaviour
+on both OSes.
+
 ## iOS
 
 iOS suspends normal apps shortly after they enter the background. When that
@@ -62,7 +71,9 @@ patterns for deferred work.
 
 | Goal | Recommended path |
 |---|---|
-| Show or route a server event to a screen | Push notification via APNs / FCM |
+| Show or route a server event to a screen | Push notification via APNs / FCM ([`mob_notify`](https://hexdocs.pm/mob_notify) + [`mob_push`](https://hexdocs.pm/mob_push)) |
+| Run a specific handler when a silent push arrives | Silent push via [`mob_wake`](https://hexdocs.pm/mob_wake) (`:push` trigger) + `MobWake.wake_payload/2` |
+| Run a handler on the OS's own opportunistic schedule | iOS `BGTaskScheduler` / Android `WorkManager` via [`mob_wake`](https://hexdocs.pm/mob_wake) (`:refresh` or `:processing` trigger) |
 | Refresh local state after a user taps a notification | Handle `{:notification, notif}` and fetch from your server |
 | Run continuously while visible | Normal Mob screen / supervision tree |
 | Run continuously in Android background | `MobBackground.keep_alive/0` foreground service |

@@ -48,8 +48,9 @@ distribution — is in mob itself. Everything below is opt-in.
 | Package | Gives you | Notes |
 |---|---|---|
 | [mob_sms](https://hexdocs.pm/mob_sms) | System SMS composer pre-filled with recipient + body | `MobSms.compose/2` on both platforms. iOS observes send / cancel via the MessageUI delegate; Android hands off to the user's SMS app (outcome unobservable — see the plugin's per-platform-delivery docs). No permissions on either platform. |
-| [mob_notify](https://hexdocs.pm/mob_notify) | Local notification scheduling + push registration | Pairs with the server-side [mob_push](https://hexdocs.pm/mob_push) below; delivery into `handle_info` is core behaviour |
-| [mob_background](https://hexdocs.pm/mob_background) | Keep-alive execution while backgrounded — iOS silent-audio session, Android foreground service | For long-running work (music, upload, walk tracker). Not to be confused with `mob_wake` (planned) — the OS-triggered opportunistic execution / silent-push receive plugin. See [Background execution](background_execution.md). |
+| [mob_notify](https://hexdocs.pm/mob_notify) | Local notification scheduling + push token registration (device-side) | Two ends of the same wire as [mob_push](https://hexdocs.pm/mob_push) (server-side); delivery into `handle_info` is core behaviour. See [Push notifications](push_notifications.md). |
+| [mob_wake](https://hexdocs.pm/mob_wake) | OS-triggered background execution (device-side) — iOS `BGTaskScheduler` + silent APNs, Android `WorkManager` + FCM data messages | For episodic work fired by the OS or a silent push (server-side push via [mob_push](https://hexdocs.pm/mob_push) using `MobWake.wake_payload/2`). Foreground + backgrounded verified end-to-end on Moto G Power 5G 2024 + iPhone SE 3rd-gen (MOB-268 / MOB-271); force-quit drop is intentional platform behaviour on both OSes. |
+| [mob_background](https://hexdocs.pm/mob_background) | Keep-alive execution while backgrounded — iOS silent-audio session, Android foreground service | For continuous work (music, upload, walk tracker) that the user has explicitly kicked off. **Not the same as `mob_wake`** — mob_background keeps a process *alive* while backgrounded; mob_wake *wakes* a specific handler on an OS event. They stack. See [Background execution](background_execution.md). |
 
 ### ML
 
@@ -98,11 +99,11 @@ Some pairing hints:
 - **Sensor / peripheral app.** `mob_bluetooth` for BLE + BR/EDR,
   `mob_midi` for musical instruments, `mob_location` for GPS,
   `mob_touch` if you need the raw touch stream.
-- **Background sync.** `mob_notify` for local reminders, the planned
-  `mob_wake` epic ([MOB-257](https://linear.app/mobframework/issue/MOB-257))
-  for OS-triggered opportunistic execution + silent-push receive.
-  `mob_background` (keep-alive) is a DIFFERENT plugin — it keeps a
-  process alive while backgrounded, not opportunistically wakes you.
+- **Background sync.** `mob_notify` for local reminders, `mob_wake`
+  for OS-triggered handlers (scheduler firings + silent-push receive),
+  `mob_background` for continuous keep-alive while the app is
+  backgrounded. Three distinct concerns — see each plugin's moduledoc
+  for the "which one do I want" table.
 - **Design system.** `mob_mishka` gives you 73 composites; `mob_themes`
   gives you five preset visual looks that all composites read from.
 - **Push notifications end-to-end.** `mob_notify` on the client
