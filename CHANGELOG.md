@@ -8,9 +8,12 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [0.9.2] - 2026-09-19
+## [0.9.3] - 2026-09-19
 
-Docs-only refresh — no code changes vs 0.9.1.
+Docs-only refresh — no code changes vs 0.9.1. (0.9.2 was cut and
+aborted mid-workflow when the mob_nx → mob_nx_eigen rename in
+`packages.md` was found missing from the tarball; the retry as 0.9.3
+includes it.)
 
 ### Changed
 - **`guides/packages.md`** — updated the first-party plugin catalog
