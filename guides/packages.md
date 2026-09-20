@@ -56,7 +56,7 @@ distribution — is in mob itself. Everything below is opt-in.
 
 | Package | Gives you | Notes |
 |---|---|---|
-| [mob_nx](https://hexdocs.pm/mob_nx) | Pluginised Nx ML backends — Eigen (CPU baseline) shipped, Vulkan compute + others under development | Spike; API surface still narrow |
+| [mob_nx_eigen](https://hexdocs.pm/mob_nx_eigen) | On-device [Nx](https://github.com/elixir-nx/nx) backend backed by [Eigen](https://eigen.tuxfamily.org/) — the header-only C++ linear-algebra library, NEON-vectorised on ARM. Always-available CPU baseline for on-device numerics — needs no GPU, runs anywhere mob runs. | GPU-accelerated backends (`mob_nx_vulkan`, `mob_nx_mlx`, `mob_nx_tflite`) planned to layer on top; NxEigen is the fallback that always works. Spike; API surface still narrow. |
 
 ## Style packages
 
