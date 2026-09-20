@@ -8,6 +8,32 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.9.2] - 2026-09-19
+
+Docs-only refresh — no code changes vs 0.9.1.
+
+### Changed
+- **`guides/packages.md`** — updated the first-party plugin catalog
+  for the current ecosystem shape:
+  - New `mob_wake` row under **Messaging + wake** (Hex 0.1.0), now
+    that the epic's iOS + Android silent-push receive paths are
+    verified end-to-end (MOB-268 + MOB-271).
+  - `mob_notify` row reframed as the device-side end of the
+    server/device push wire, pointing at `mob_push`.
+  - `mob_background` row sharpens the "not the same as `mob_wake`"
+    distinction (continuous keep-alive vs episodic OS-fired handler).
+  - `mob_nx` renamed to `mob_nx_eigen` (the actual Hex-published
+    name; `mob_nx_vulkan` / `mob_nx_mlx` / `mob_nx_tflite` planned).
+- **`guides/push_notifications.md`** — new "Silent pushes and
+  OS-triggered handlers" section pointing at `mob_wake` for silent
+  APNs / FCM data messages, with the `wake_payload`/`register` pair.
+  Expanded Further Reading with `mob_wake` + `mob_background`.
+- **`guides/background_execution.md`** — new paragraph in the
+  default-model section covering the silent-wake path via `mob_wake`;
+  rebuilt the "Choosing a pattern" table with dedicated rows for
+  silent-push handlers and opportunistic scheduler handlers so it
+  stops implying push notifications are the only OS-driven wake path.
+
 ## [0.9.1] - 2026-09-18
 
 ### Added
