@@ -46,10 +46,20 @@ pub fn logWrite(prio: c_int, comptime tag: [*:0]const u8, comptime fmt: []const 
 pub const STDOUT_FILENO: c_int = 1;
 pub const STDERR_FILENO: c_int = 2;
 
+// open(2) flag values on Linux/Bionic (arch-invariant on the ABIs mob
+// targets: aarch64, armv7, x86_64, x86). Kept next to the fd-lifecycle
+// bindings so callers reference them by name rather than repeating the
+// octal literals inline.
+pub const O_WRONLY: c_int = 1;
+pub const O_CREAT: c_int = 0o100;
+pub const O_TRUNC: c_int = 0o1000;
+
 pub extern fn pipe(fds: *[2]c_int) c_int;
 pub extern fn dup2(oldfd: c_int, newfd: c_int) c_int;
+pub extern fn open(pathname: [*:0]const u8, flags: c_int, mode: c_uint) c_int;
 pub extern fn close(fd: c_int) c_int;
 pub extern fn read(fd: c_int, buf: [*]u8, count: usize) isize;
+pub extern fn write(fd: c_int, buf: [*]const u8, count: usize) isize;
 pub extern fn setvbuf(stream: *FILE, buf: ?[*]u8, mode: c_int, size: usize) c_int;
 pub extern fn fopen(pathname: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
 pub extern fn fread(ptr: [*]u8, size: usize, nmemb: usize, stream: *FILE) usize;

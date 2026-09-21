@@ -64,6 +64,24 @@ includes it.)
   See `decisions/2026-09-15-plugin-manifest-tag-discovery.md`.
 
 ### Fixed
+- **Android: fresh `mix mob.deploy --native --android` failed on every app
+  generated before mob_new 0.5.1** (MOB-226, regression from MOB-180 in
+  0.8.0). MOB-180 added `extern "c" fn open/write/close` to the
+  post_mortem marker write path in `android/jni/mob_nif.zig`, and zig
+  0.17-dev refuses to compile that form when the surrounding module was
+  built without `link_libc = true`. MOB-196 fixed newly-generated apps by
+  adding the flag in the template, but pre-existing apps kept a stale
+  app-owned `build.zig` and hit a compile error at `mob_nif.zig:4374`
+  that said nothing about mob. The three declarations now live in
+  `android/jni/mob_zig.zig` as `pub extern fn` — the `"c"` qualifier is
+  what tripped zig's libc-dependency check for those specific symbol
+  names; a bare `extern fn` in an imported module sidesteps the check
+  and the runtime linkage against Bionic's `libc.so` is unchanged.
+  Existing apps pick the fix up on their next native build, no template
+  change or app edit needed. `link_libc = true` in mob_new 0.5.1's
+  Android `build.zig.eex` becomes redundant but is not removed — costs
+  nothing and covers a future addition that does need libc.
+
 - **iOS Row and Column now honor `gap`, and direct Row labels resist flexible
   Spacer compression** (MOB-234). The native prop table now carries `gap` into
   eager and lazy SwiftUI stacks instead of hard-coding zero spacing. An
