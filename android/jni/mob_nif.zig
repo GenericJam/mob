@@ -311,6 +311,7 @@ pub const BridgeMethods = extern struct {
     vendor_usb_start_reading: jni.JMethodID = null,
     vendor_usb_stop_reading: jni.JMethodID = null,
     vendor_usb_close: jni.JMethodID = null,
+    dismiss_keyboard: jni.JMethodID = null,
     // ── Mob.Bt (Bluetooth Classic) — extracted to the mob_bluetooth plugin ──
     // The bt method-id cache lives in the plugin NIF's own globals now.
 };
@@ -2322,6 +2323,24 @@ export fn nif_haptic(
     const jtype = jni.newStringUTF(jenv, jni.asCStr(&type_buf));
     jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.haptic, jtype);
     jni.deleteLocalRef(jenv, jtype);
+    detachIfAttached(attached);
+    return erts.ok(env);
+}
+
+// nif_dismiss_keyboard/0 — MobBridge.dismissKeyboard(): hide the soft input.
+// Optional on the bridge (templates generated before it lack the method), in
+// which case this returns {error, not_loaded} like the other optional calls.
+export fn nif_dismiss_keyboard(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    if (Bridge.dismiss_keyboard == null) return notLoaded(env);
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.dismiss_keyboard);
     detachIfAttached(attached);
     return erts.ok(env);
 }
@@ -4707,6 +4726,8 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     cacheOptional(jenv, "setTheme", "(Ljava/lang/String;)V", &Bridge.set_theme);
 
     if (!cacheRequired(jenv, "haptic", "(Ljava/lang/String;)V", &Bridge.haptic)) return -1;
+    // Optional: apps generated before Mob.Keyboard existed lack this method.
+    cacheOptional(jenv, "dismissKeyboard", "()V", &Bridge.dismiss_keyboard);
     if (!cacheRequired(jenv, "torch", "(Ljava/lang/String;)V", &Bridge.torch)) return -1;
     if (!cacheRequired(jenv, "clipboardPut", "(Ljava/lang/String;)V", &Bridge.clipboard_put)) return -1;
     if (!cacheRequired(jenv, "clipboardGet", "()Ljava/lang/String;", &Bridge.clipboard_get)) return -1;
@@ -4925,6 +4946,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "exit_app", .arity = 0, .fptr = nif_exit_app, .flags = 0 },
     .{ .name = "safe_area", .arity = 0, .fptr = nif_safe_area, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
     .{ .name = "haptic", .arity = 1, .fptr = nif_haptic, .flags = 0 },
+    .{ .name = "dismiss_keyboard", .arity = 0, .fptr = nif_dismiss_keyboard, .flags = 0 },
     .{ .name = "torch", .arity = 1, .fptr = nif_torch, .flags = 0 },
     .{ .name = "clipboard_put", .arity = 1, .fptr = nif_clipboard_put, .flags = 0 },
     .{ .name = "clipboard_get", .arity = 0, .fptr = nif_clipboard_get, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
