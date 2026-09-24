@@ -6379,6 +6379,34 @@ static ERL_NIF_TERM nif_delete_backward(ErlNifEnv *env, int argc, const ERL_NIF_
                             enif_make_atom(env, "no_first_responder"));
 }
 
+// ─── dismiss_keyboard/0 — take the keyboard down from the BEAM ───────────────
+//
+// Resigns the first responder found in any visible window of a connected
+// scene — the walk delete_backward and key_press use — which is the view the
+// keyboard is up for. Fire-and-forget (dispatch_async, returns ok at once):
+// the caller is a screen deciding "we're done typing", not a test waiting to
+// observe an effect — key_press(escape) is the observing form. Nothing
+// focused is not an error; the keyboard is already down.
+
+static ERL_NIF_TERM nif_dismiss_keyboard(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+          if (![scene isKindOfClass:[UIWindowScene class]])
+              continue;
+          for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+              if (win.isHidden)
+                  continue;
+              id fr = find_first_responder_in(win);
+              if (fr) {
+                  [fr resignFirstResponder];
+                  return;
+              }
+          }
+      }
+    });
+    return enif_make_atom(env, "ok");
+}
+
 // ─── key_press/1 — send a special key to the focused text input ───────────────
 //
 // Accepts an atom:
@@ -8583,6 +8611,7 @@ static ErlNifFunc nif_funcs[] = {
     {"exit_app", 0, nif_exit_app, 0},
     {"safe_area", 0, nif_safe_area, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"haptic", 1, nif_haptic, 0},
+    {"dismiss_keyboard", 0, nif_dismiss_keyboard, 0},
     {"torch", 1, nif_torch, 0},
     {"clipboard_put", 1, nif_clipboard_put, 0},
     {"clipboard_get", 0, nif_clipboard_get, ERL_NIF_DIRTY_JOB_IO_BOUND},

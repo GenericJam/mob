@@ -193,6 +193,7 @@ defmodule Mob.MixProject do
         Plugins: [Mob.Plugins, Mob.Plugins.Supervisor, Mob.Plugins.Lifecycle],
         "Device APIs": [
           Mob.Haptic,
+          Mob.Keyboard,
           Mob.Clipboard,
           Mob.Share,
           Mob.Permissions,
