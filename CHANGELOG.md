@@ -10,6 +10,23 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **`Mob.Keyboard.dismiss/1` — take the on-screen keyboard down from the
+  BEAM.** A screen had no way to dismiss the keyboard from its own handler —
+  a Save button, a tap on blank space, a committed value — short of removing
+  the field from the tree. The built-in exits are the return key (which the
+  decimal and number keyboards don't have, so `on_submit` never fires for
+  them), another field taking focus, and the iOS keyboard-toolbar "Done".
+  New `dismiss_keyboard/0` NIF: iOS resigns the first responder in any
+  visible window (fire-and-forget, returns promptly); Android calls
+  `MobBridge.dismissKeyboard()` when the generated bridge defines it — no
+  template does yet, so there the NIF returns `{:error, :not_loaded}` and
+  `dismiss/1` is a no-op. `dismiss/1` returns the socket and is a no-op on
+  the host. Act in the dismissing handler rather than in the field's
+  `on_blur`, which may not arrive when that handler also re-renders. Guide:
+  `guides/device_capabilities.md` → Keyboard. Decision:
+  `decisions/2026-09-24-keyboard-dismiss-is-a-device-api.md`.
+
 ### Changed
 - **Zig pin is 0.17.0.** Replaces `0.17.0-dev.269+ebff43698`. That nightly
   existed because 0.15.x could not link on the macOS 26 SDK; 0.17.0 is the

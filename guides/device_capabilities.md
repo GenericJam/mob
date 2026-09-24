@@ -35,7 +35,7 @@ end
 
 **Capabilities that require permission:** `:camera`, `:microphone`, `:photo_library`, `:location`, `:notifications`
 
-**No permission needed:** haptics, clipboard, share sheet, file picker.
+**No permission needed:** haptics, keyboard, clipboard, share sheet, file picker.
 
 > **`Mob.Permissions.request/2` is only half the picture.** Each
 > permission-gated capability also needs an `Info.plist` usage
@@ -61,6 +61,20 @@ end
 Feedback types: `:light`, `:medium`, `:heavy`, `:success`, `:error`, `:warning`
 
 iOS uses `UIImpactFeedbackGenerator` / `UINotificationFeedbackGenerator`. Android uses `View.performHapticFeedback`.
+
+## Keyboard
+
+`Mob.Keyboard.dismiss/1` takes the on-screen keyboard down and returns the socket. The keyboard goes down by itself on the field's return key, when another field takes focus, when the field leaves the tree, and on iOS via the "Done" button on the keyboard toolbar. Use this for the app's own done — a Save button, a tap on blank space, a committed value — which none of those cover. It matters most for `keyboard: "decimal"` / `"number"`, whose iOS keyboards have no return key, so `on_submit` never fires:
+
+```elixir
+def handle_info({:tap, :save}, socket) do
+  {:noreply, socket |> Mob.Keyboard.dismiss() |> save_weight()}
+end
+```
+
+Act in the dismissing handler, not in the field's `on_blur`: when that handler also re-renders, the new `value:` reaches the field but the blur may not arrive (it fires after the new render committed and is dropped as stale). The handler already knows the field lost focus.
+
+iOS resigns the first responder in any visible window. Android calls `MobBridge.dismissKeyboard()` (`InputMethodManager.hideSoftInputFromWindow`) when the generated bridge defines it; today's templates don't, so on Android the keyboard stays up and nothing else changes.
 
 ## Clipboard
 

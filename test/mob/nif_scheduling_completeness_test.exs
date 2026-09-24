@@ -50,7 +50,7 @@ defmodule Mob.NifSchedulingCompletenessTest do
     audio_stop_recording capabilities clear_taps clipboard_put
     deregister_component device_app_version device_keep_awake
     device_lock_orientation device_low_power_mode device_model
-    device_network_state device_os_version
+    device_network_state device_os_version dismiss_keyboard
     device_set_dispatcher device_thermal_state exit_app files_pick haptic log
     motion_start motion_stop native_stats_enable open_settings open_url
     press_down_xy press_move_xy press_up_xy
