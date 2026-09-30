@@ -143,6 +143,33 @@ bundling, migration copying, and a regeneration of the runtime plugin manifest
 (`priv/generated/mob_plugins.exs`) so the device's tier-3/4 wiring always matches
 what the plugins declare.
 
+## Boot order and configuration on device
+
+A Mob app boots from its own BEAM entry, not a release, so `Mob.App.start/0`
+does the work a release would. In order:
+
+1. **App config.** `config/config.exs` (and `config/runtime.exs`, evaluated
+   **on the build machine at build time**, not on the phone) is put into the
+   application environment from the `:mob_app_config` module mob_dev ships
+   with every build and BEAM push. `Application.get_env(:my_plugin, :key)`
+   therefore works on device, and the values survive the plugin's own
+   application being loaded later (they're put with `persistent: true`).
+   The `:mob_dev` key is dropped. Logged as
+   `[mob] app config: loaded :mob_app_config (my_plugin: 3 keys, …)`.
+2. **Framework services** (navigation registry, state, sender, device, …).
+3. **Plugin OTP applications.** `Application.ensure_all_started/1` for each
+   activated plugin (its manifest `name` is its OTP app), so the plugin's
+   supervision tree and its deps (Req, Finch, …) are up. A failure, a crash,
+   or a start that takes longer than 5 s is logged
+   (`[mob] plugin :my_plugin: OTP application failed to start, continuing
+   boot: …`) and boot continues.
+4. **Plugin `lifecycle.on_start`**, then the plugins' `supervised` children.
+5. **The app's own `on_start/0`**, which starts the root screen.
+
+Because step 1 can be absent (an app built with an older mob_dev, or a host
+test), a plugin should still treat a missing setting as "not configured" and
+keep running, not crash.
+
 ## Router hooks
 
 A plugin that needs to act around navigation registers a hook at runtime —
@@ -151,11 +178,20 @@ screen — with `Mob.Router.Hooks.register/2`. No app configuration.
 
 - `:before_navigate` — called with the destination before a push or reset
   mounts a screen. Return `:ok`, `{:redirect, module}` to mount another
-  screen instead, or `{:error, reason}` to refuse (navigation stays put, as
-  for an unknown destination). Runs in the router process: keep it fast
-  when there's nothing to do.
-- `:after_first_render` — called once per VM, in its own process, after the
-  root screen's first paint.
+  screen instead (same kind of navigation: a push still pushes, so BACK
+  returns to the screen underneath), `{:reset, module}` to replace **all**
+  navigation with `module` (every stack discarded, persisted screen state
+  cleared, empty params; BACK leaves the app), or `{:error, reason}` to
+  refuse (navigation stays put, as for an unknown destination). Runs in
+  the router process: keep it fast when there's nothing to do.
+- `:after_first_render` — called once per VM, in its own process, once the
+  app's first frame has actually reached the native layer: the root
+  screen's `render/1` returned without raising and `Mob.Sender` committed
+  the tree (`set_root`). The router's first paint is asynchronous, so this is later
+  than the router starting. A root screen whose `render/1` raises never
+  triggers it; if a restart of that screen later renders, it fires then. If
+  the root screen navigates away before painting, the destination's first
+  frame counts.
 
 ```elixir
 def on_start do
@@ -165,8 +201,9 @@ end
 ```
 
 `mob_deliver` uses both: `:before_navigate` fetches a just-in-time screen
-(or redirects to its "please update" screen), `:after_first_render` ends a
-freshly installed update's probation.
+(or resets to its "please update" screen), `:after_first_render` ends a
+freshly installed update's probation — safe only because a crash in the
+root screen's render never reaches it.
 
 ## Multiple plugins and conflicts
 

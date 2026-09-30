@@ -104,8 +104,29 @@ defmodule Mob.Router do
   def start_root(screen_module, params \\ %{}, opts \\ []) do
     {nif, opts} = Keyword.pop(opts, :nif, :mob_nif)
     platform = nif.platform()
-    GenServer.start_link(__MODULE__, {screen_module, params, :render, platform, nif}, opts)
+
+    case GenServer.start_link(__MODULE__, {screen_module, params, :render, platform, nif}, opts) do
+      {:error, reason} = error ->
+        # A failed init leaves no crash log of its own, and the caller is
+        # usually an on_start that ignores the result: without this the app
+        # sits on a black screen with nothing in logcat.
+        Logger.error(
+          "[mob] root screen #{inspect(screen_module)} failed to start; the app has no screen: " <>
+            format_start_error(reason)
+        )
+
+        error
+
+      started ->
+        started
+    end
   end
+
+  defp format_start_error({exception, stacktrace})
+       when is_exception(exception) and is_list(stacktrace),
+       do: Exception.format(:error, exception, stacktrace)
+
+  defp format_start_error(reason), do: inspect(reason)
 
   @doc """
   Dispatch a UI event to the screen process. Returns `:ok` synchronously once
@@ -213,7 +234,6 @@ defmodule Mob.Router do
           end
 
           paint(entry, :none, state)
-          Mob.Router.Hooks.after_first_render()
         end
 
         {:ok, state}
@@ -709,7 +729,7 @@ defmodule Mob.Router do
   defp apply_nav_action(nil, state, _mode), do: state
 
   defp apply_nav_action({:push, dest, params}, state, mode) do
-    with {:ok, new_module, route_params} <- mounting_resolve(dest, state) do
+    with {:ok, new_module, route_params} <- mounting_resolve(dest, state, mode) do
       push_resolved(new_module, Map.merge(route_params, params), state, mode)
     end
   end
@@ -771,23 +791,18 @@ defmodule Mob.Router do
   end
 
   defp apply_nav_action({:reset, dest, params, transition}, state, mode) do
-    with {:ok, new_module, route_params} <- mounting_resolve(dest, state) do
+    with {:ok, new_module, route_params} <- mounting_resolve(dest, state, mode) do
       reset_resolved(new_module, Map.merge(route_params, params), transition, state, mode)
     end
   end
 
   defp apply_nav_action({:reset, dest, params, transition, :all}, state, mode) do
     if reset_all_supported?() do
-      with {:ok, new_module, route_params} <- mounting_resolve(dest, state) do
+      with {:ok, new_module, route_params} <- mounting_resolve(dest, state, mode) do
         reset_all_resolved(new_module, Map.merge(route_params, params), transition, state, mode)
       end
     else
-      Logger.error(
-        "[mob] all-stack reset was ignored while older navigation lifecycle code was loaded. " <>
-          "Retry after the code push finishes or restart the app."
-      )
-
-      repaint_current(state, mode)
+      refuse_reset_all(state, mode)
     end
   end
 
@@ -969,15 +984,28 @@ defmodule Mob.Router do
   end
 
   # Destinations that mount a new screen go past the plugins' navigation
-  # hooks first (Mob.Router.Hooks): they may redirect or refuse. A refusal
-  # behaves like a bad destination — navigation untouched, repaint.
-  defp mounting_resolve(dest, state) do
+  # hooks first (Mob.Router.Hooks): they may redirect, reset or refuse. A
+  # refusal behaves like a bad destination — navigation untouched, repaint.
+  #
+  # A reset verdict is carried out here and returns the resulting state, which
+  # the callers' `with` passes straight through like a refusal's: the caller's
+  # own action (push, reset, reset :all) no longer applies, and neither do its
+  # params. The hook is not consulted again for the reset's own destination —
+  # a gate that resets to its "please update" screen would otherwise loop.
+  defp mounting_resolve(dest, state, mode) do
     case Mob.Router.Hooks.before_navigate(dest) do
       :ok ->
         safe_resolve(dest, state)
 
       {:redirect, target} ->
         safe_resolve(target, state)
+
+      {:reset, target} ->
+        with {:ok, module, route_params} <- safe_resolve(target, state) do
+          if reset_all_supported?(),
+            do: reset_all_resolved(module, route_params, :reset, state, mode),
+            else: refuse_reset_all(state, mode)
+        end
 
       {:error, reason} ->
         Logger.warning(
@@ -986,6 +1014,15 @@ defmodule Mob.Router do
 
         repaint_current(state, :async)
     end
+  end
+
+  defp refuse_reset_all(state, mode) do
+    Logger.error(
+      "[mob] all-stack reset was ignored while older navigation lifecycle code was loaded. " <>
+        "Retry after the code push finishes or restart the app."
+    )
+
+    repaint_current(state, mode)
   end
 
   # `push_screen/2` and friends take any atom, and an unregistered one raises.

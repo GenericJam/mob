@@ -76,8 +76,11 @@ defmodule Mob.App do
       `mob_demo.erl`) after OTP applications have started.
 
       Installs `Mob.NativeLogger` so all Elixir Logger output is routed to
-      the platform system log (logcat / NSLog) from this point forward, seeds
-      the `Mob.Nav.Registry` from this module's `navigation/1` declarations,
+      the platform system log (logcat / NSLog) from this point forward,
+      applies the project's config (`Mob.AppConfig`), seeds the
+      `Mob.Nav.Registry` from this module's `navigation/1` declarations,
+      starts the framework services and the activated plugins
+      (`Mob.Plugins.start/0`: their OTP applications, then their `on_start`),
       then calls `on_start/0` for app-specific initialization.
 
       Do not override — implement `on_start/0` instead.
@@ -95,6 +98,11 @@ defmodule Mob.App do
         Mob.App.configure_ios_inet_db()
 
         Mob.NativeLogger.install()
+
+        # config/*.exs never reaches the device on its own; mob_dev ships it
+        # as :mob_app_config. Before anything below reads the environment, and
+        # after the logger so a failure is visible. No-op when absent.
+        Mob.AppConfig.load()
 
         # Compile theme from options passed to `use Mob.App, theme: [...]`
         # and store it so Mob.Renderer picks it up on every render.
@@ -162,14 +170,16 @@ defmodule Mob.App do
           {:error, {:already_started, _}} -> :ok
         end
 
-        # Start the tier-4 plugins' lifecycle (on_start MFAs, supervised
-        # children, fore/background dispatcher) BEFORE the host's own on_start.
-        # The framework services a plugin's on_start depends on (State, Device,
-        # ComponentRegistry, …) are already up; running here means a host
-        # on_start that never returns (e.g. one that blocks on a run loop —
-        # observed on iOS via Mob.Dist.ensure_started) can't starve plugin
-        # startup. No-op when no plugin declares a :lifecycle.
-        Mob.Plugins.start_lifecycle()
+        # Start the activated plugins BEFORE the host's own on_start: first
+        # their OTP applications (nothing else starts a plugin's supervision
+        # tree or its deps on device; a failure is logged and boot continues),
+        # then the tier-4 lifecycle (on_start MFAs, supervised children,
+        # fore/background dispatcher). The framework services a plugin's
+        # on_start depends on (State, Device, ComponentRegistry, …) are
+        # already up; running here means a host on_start that never returns
+        # (e.g. one that blocks on a run loop — observed on iOS via
+        # Mob.Dist.ensure_started) can't starve plugin startup.
+        Mob.Plugins.start()
 
         __MODULE__.on_start()
       end

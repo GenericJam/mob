@@ -491,6 +491,28 @@ mix mob.watch
 Watches for file changes and runs `mob.push` automatically. Combine with
 `mix mob.connect` to keep an IEx session open alongside.
 
+### App configuration on device
+
+`config/config.exs` works on the device the way it does on your machine:
+`Application.get_env(:my_app, :key)` returns what you configured. There's no
+release on the phone, so mob_dev evaluates your config **at build time** —
+`config/config.exs` for the build's Mix env and target, then
+`config/runtime.exs` if you have one, also on your machine, not the phone —
+and ships the result with the app. `Mob.App.start/0` puts it into the
+application environment before anything else runs. The `:mob_dev` key stays
+on your machine.
+
+Two consequences worth knowing:
+
+- `runtime.exs` sees your build machine's environment variables, not the
+  phone's. Don't put secrets there that you wouldn't ship inside the app.
+- The values are read once, at app start. After changing config, run
+  `mix mob.deploy` (which restarts the app); `mix mob.push` alone doesn't
+  reapply it.
+
+The device log shows what was applied, names and key counts only:
+`[mob] app config: loaded :mob_app_config (my_app: 2 keys, mob_deliver: 4 keys)`.
+
 ---
 
 ## Deployment reference

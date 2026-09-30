@@ -30,6 +30,27 @@ defmodule Mob.Router.HooksTest do
     def render(_assigns), do: %{type: :text, props: %{text: "update"}, children: []}
   end
 
+  # Raises in render until the test lets it through, like delivered code that
+  # crashes the root screen. Mount succeeds, so the router keeps restarting it.
+  defmodule CrashingScreen do
+    use Mob.Screen
+    def mount(_params, _session, socket), do: {:ok, socket}
+
+    def render(_assigns) do
+      case :persistent_term.get({__MODULE__, :crashes_left}, :infinity) do
+        0 ->
+          %{type: :text, props: %{text: "recovered"}, children: []}
+
+        :infinity ->
+          raise "render crash"
+
+        n ->
+          :persistent_term.put({__MODULE__, :crashes_left}, n - 1)
+          raise "render crash"
+      end
+    end
+  end
+
   defmodule DemoApp do
     @behaviour Mob.App
     import Mob.App
@@ -99,6 +120,36 @@ defmodule Mob.Router.HooksTest do
     assert navigate(router, screen, :push) == {DetailScreen, UpdateScreen}
   end
 
+  # mob_deliver's forced-update gate: past the deadline, a navigation must not
+  # leave a user screen underneath for BACK to return to.
+  test "a reset verdict replaces all navigation with the hook's screen", %{
+    router: router,
+    screen: screen
+  } do
+    assert navigate(router, screen, :push) == {DetailScreen, DetailScreen}
+
+    :persistent_term.put({Probe, :verdict}, {:reset, UpdateScreen})
+    :ok = GenServer.call(router, {:navigate, {:push, HomeScreen, %{}}})
+    assert_receive {:hook_called, HomeScreen}
+
+    assert GenServer.call(router, :get_current_module) == UpdateScreen
+    assert Mob.Router.get_nav_history(router) == []
+  end
+
+  @tag :capture_log
+  test "a reset verdict whose screen can't be resolved leaves navigation alone", %{
+    router: router,
+    screen: screen
+  } do
+    assert navigate(router, screen, :push) == {DetailScreen, DetailScreen}
+
+    :persistent_term.put({Probe, :verdict}, {:reset, :no_such_screen})
+    :ok = GenServer.call(router, {:navigate, {:push, HomeScreen, %{}}})
+
+    assert GenServer.call(router, :get_current_module) == DetailScreen
+    assert [{HomeScreen, _}] = Mob.Router.get_nav_history(router)
+  end
+
   test "a refusal leaves navigation where it was", %{router: router, screen: screen} do
     :persistent_term.put({Probe, :verdict}, {:error, :not_now})
     assert navigate(router, screen, :reset) == {DetailScreen, HomeScreen}
@@ -145,6 +196,27 @@ defmodule Mob.Router.HooksTest do
 
       {:ok, again} = Mob.Router.start_root(HomeScreen, %{}, nif: StubNif)
       on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(again) end)
+      refute_receive :first_render, 100
+    end
+
+    @tag :capture_log
+    test "never fires while the root screen's render raises" do
+      on_exit(fn -> :persistent_term.erase({CrashingScreen, :crashes_left}) end)
+      {:ok, router} = Mob.Router.start_root(CrashingScreen, %{}, nif: StubNif)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(router) end)
+
+      refute_receive :first_render, 300
+    end
+
+    @tag :capture_log
+    test "fires once when a restarted root screen renders after crashing" do
+      :persistent_term.put({CrashingScreen, :crashes_left}, 2)
+      on_exit(fn -> :persistent_term.erase({CrashingScreen, :crashes_left}) end)
+      {:ok, router} = Mob.Router.start_root(CrashingScreen, %{}, nif: StubNif)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(router) end)
+
+      assert_receive :first_render, 1_000
+      assert GenServer.call(router, :get_current_module) == CrashingScreen
       refute_receive :first_render, 100
     end
   end

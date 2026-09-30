@@ -140,4 +140,65 @@ defmodule Mob.DistTest do
       assert Mob.Dist.env_dist_port() == nil
     end
   end
+
+  describe "android_settings/1" do
+    @vars ["MOB_DIST_PORT", "MOB_NODE_SUFFIX", "MOB_BEAMS_DIR"]
+
+    setup do
+      previous = Map.new(@vars, &{&1, System.get_env(&1)})
+      dir = Mob.Test.ProcessHelpers.tmp_path("mob_dist")
+      File.mkdir_p!(dir)
+      Enum.each(@vars, &System.delete_env/1)
+      System.put_env("MOB_BEAMS_DIR", dir)
+
+      on_exit(fn ->
+        File.rm_rf!(dir)
+
+        for {var, value} <- previous do
+          if value, do: System.put_env(var, value), else: System.delete_env(var)
+        end
+      end)
+
+      %{deploy_file: Path.join(dir, "mob_dist")}
+    end
+
+    test "defaults to no suffix and port 9100 without env or deploy file" do
+      assert Mob.Dist.android_settings([]) == {nil, 9100}
+    end
+
+    # A launch from the home screen carries no intent extras.
+    test "a launcher start takes the suffix and port the last deploy wrote", %{deploy_file: file} do
+      File.write!(file, "suffix=emulator_5558\nport=9123\n")
+      assert Mob.Dist.android_settings([]) == {"emulator_5558", 9123}
+    end
+
+    test "env and explicit opts win over the deploy file, per setting", %{deploy_file: file} do
+      File.write!(file, "suffix=emulator_5558\nport=9123\n")
+
+      System.put_env("MOB_NODE_SUFFIX", "zy22cr")
+      assert Mob.Dist.android_settings([]) == {"zy22cr", 9123}
+
+      System.put_env("MOB_DIST_PORT", "9200")
+      assert Mob.Dist.android_settings([]) == {"zy22cr", 9200}
+      assert Mob.Dist.android_settings(dist_port: 9300) == {"zy22cr", 9300}
+    end
+
+    test "empty env vars fall through to the deploy file", %{deploy_file: file} do
+      File.write!(file, "suffix=emulator_5558\nport=9123\n")
+      System.put_env("MOB_NODE_SUFFIX", "")
+      System.put_env("MOB_DIST_PORT", "")
+      assert Mob.Dist.android_settings([]) == {"emulator_5558", 9123}
+    end
+
+    test "a garbled file or key falls back to the defaults", %{deploy_file: file} do
+      File.write!(file, "suffix=bad name@host\nport=99999\n")
+      assert Mob.Dist.android_settings([]) == {nil, 9100}
+
+      File.write!(file, <<0xFF, 0xFE, "port=9123">>)
+      assert Mob.Dist.android_settings([]) == {nil, 9100}
+
+      File.write!(file, "port=9123\nsuffix=\n")
+      assert Mob.Dist.android_settings([]) == {nil, 9123}
+    end
+  end
 end

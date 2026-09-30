@@ -6,10 +6,11 @@ defmodule Mob.Plugins.Supervisor do
   return bubbles up and fails boot loud, per the spec), then supervises the
   plugins' declared `lifecycle.supervised` child specs alongside the
   `Mob.Plugins.Lifecycle` event dispatcher. Started from `Mob.App.start/0`
-  (just before the host's own `on_start/0`, so a host `on_start` that blocks on
-  a run loop can't starve plugin startup — the framework services a plugin's
-  `on_start` needs are already up), and only when a plugin declares a
-  `:lifecycle` (see `Mob.Plugins.start_lifecycle/0`).
+  via `Mob.Plugins.start/0`, after the plugins' OTP applications (so an
+  `on_start` can rely on its own supervision tree and deps) and just before
+  the host's own `on_start/0` (so a host `on_start` that blocks on a run loop
+  can't starve plugin startup — the framework services a plugin's `on_start`
+  needs are already up), and only when a plugin declares a `:lifecycle`.
   """
 
   use Supervisor

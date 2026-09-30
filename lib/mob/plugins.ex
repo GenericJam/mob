@@ -33,6 +33,10 @@ defmodule Mob.Plugins do
   @pt_asset_root {__MODULE__, :asset_root}
   @rel_path ["generated", "mob_plugins.exs"]
 
+  # A plugin application's start callback runs before the root screen exists, so
+  # time spent here is time on the launch splash.
+  @app_start_timeout_ms 5_000
+
   @doc """
   Reads the host app's generated manifest and caches it in `:persistent_term`.
 
@@ -133,13 +137,88 @@ defmodule Mob.Plugins do
   end
 
   @doc """
-  Starts the tier-4 plugin supervisor (runs each plugin's `lifecycle.on_start`,
-  starts its `supervised` children, and the lifecycle event dispatcher). Called
-  from `Mob.App.start/0` after the host's own `on_start/0`. No-op when no plugin
-  declares a `:lifecycle`.
+  Starts the activated plugins. Called from `Mob.App.start/0` after the
+  framework services are up and before the host's own `on_start/0`:
+
+    1. each plugin's OTP application, with its dependencies
+       (`Application.ensure_all_started/1`, in `names/0` order). A Mob app
+       boots from a custom BEAM entry rather than a release, so nothing else
+       starts a plugin's supervision tree or the libraries it uses (Req,
+       Finch, …) on device;
+    2. the tier-4 plugin supervisor: each plugin's `lifecycle.on_start`, its
+       `supervised` children and the fore/background dispatcher — only when a
+       plugin declares a `:lifecycle`.
+
+  An application that fails to start, crashes, or hasn't finished starting
+  after `timeout` ms is logged at error level and boot continues: the plugin's
+  `on_start` still runs and must cope. One that is still starting keeps
+  starting in the background.
   """
-  @spec start_lifecycle() :: :ok
-  def start_lifecycle do
+  @spec start(timeout()) :: :ok
+  def start(timeout \\ @app_start_timeout_ms) do
+    Enum.each(names(), &start_application(&1, timeout))
+    start_lifecycle()
+  end
+
+  @doc """
+  The activated plugins' names, which are also their OTP application names.
+
+  mob_dev writes them to the manifest's `:plugins` key. A manifest from an
+  older mob_dev lacks it, and the names come from the `:plugin` tag on each
+  runtime declaration instead, which covers every plugin that has one.
+  """
+  @spec names() :: [atom()]
+  def names do
+    case Map.fetch(manifest(), :plugins) do
+      {:ok, names} when is_list(names) -> Enum.filter(names, &(is_atom(&1) and not is_nil(&1)))
+      _absent -> tagged_names(manifest())
+    end
+  end
+
+  defp tagged_names(manifest) do
+    for key <- [:lifecycle, :screens, :settings, :notification_handlers, :composites],
+        entry <- Map.get(manifest, key, []),
+        is_map(entry),
+        name = entry[:plugin],
+        is_atom(name) and not is_nil(name),
+        uniq: true,
+        do: name
+  end
+
+  # In its own process so a start callback that blocks can't hold up boot. The
+  # result travels as the exit reason, so nothing is left in this mailbox when
+  # the wait gives up.
+  defp start_application(app, timeout) do
+    {pid, ref} = spawn_monitor(fn -> exit({:started, Application.ensure_all_started(app)}) end)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, {:started, {:ok, _apps}}} ->
+        Logger.info("[mob] plugin #{inspect(app)}: OTP application started")
+
+      {:DOWN, ^ref, :process, ^pid, {:started, {:error, reason}}} ->
+        log_start_failure(app, reason)
+
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        log_start_failure(app, reason)
+    after
+      timeout ->
+        Process.demonitor(ref, [:flush])
+
+        Logger.error(
+          "[mob] plugin #{inspect(app)}: OTP application did not start within #{timeout}ms, " <>
+            "continuing boot"
+        )
+    end
+  end
+
+  defp log_start_failure(app, reason) do
+    Logger.error(
+      "[mob] plugin #{inspect(app)}: OTP application failed to start, continuing boot: " <>
+        inspect(reason)
+    )
+  end
+
+  defp start_lifecycle do
     if lifecycle() == [] do
       :ok
     else

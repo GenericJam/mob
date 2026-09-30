@@ -223,12 +223,13 @@ defmodule Mob.PluginsTier4Test do
       :ok
     end
 
+    @tag :capture_log
     test "runs on_start, starts supervised children + the lifecycle dispatcher" do
       Mob.Plugins.install(%{
         lifecycle: [%{plugin: :chat, on_start: {Hooks, :started, []}, supervised: [Worker]}]
       })
 
-      assert :ok = Mob.Plugins.start_lifecycle()
+      assert :ok = Mob.Plugins.start()
       assert_received :on_start
       assert Process.whereis(Worker)
       assert Process.whereis(Mob.Plugins.Lifecycle)
@@ -241,10 +242,135 @@ defmodule Mob.PluginsTier4Test do
       assert {:error, _} = Mob.Plugins.Supervisor.start_link([])
     end
 
-    test "start_lifecycle is a no-op when no plugin declares a lifecycle" do
+    test "start starts no lifecycle when no plugin declares one" do
       Mob.Plugins.install(%{})
-      assert :ok = Mob.Plugins.start_lifecycle()
+      assert :ok = Mob.Plugins.start()
       refute Process.whereis(Mob.Plugins.Lifecycle)
+    end
+  end
+
+  # A plugin's OTP application, loaded from an in-memory spec the way a real
+  # one is loaded from its .app file. The start argument picks the behaviour.
+  defmodule PluginApp do
+    use Application
+
+    @impl Application
+    def start(_type, :ok), do: Supervisor.start_link([], strategy: :one_for_one)
+    def start(_type, :fail), do: {:error, :boom}
+
+    def start(_type, :hang) do
+      Process.register(self(), :mob_hanging_plugin_app)
+
+      receive do
+        :release -> {:error, :released}
+      end
+    end
+
+    def running?(app), do: send_test({:running_at_on_start, app, app_running?(app)}) && :ok
+
+    def app_running?(app),
+      do: Enum.any?(Application.started_applications(), &(elem(&1, 0) == app))
+
+    defp send_test(msg), do: send(Process.whereis(:tier4_test), msg)
+  end
+
+  describe "plugin OTP applications" do
+    setup do
+      start_supervised!({Mob.Device, []})
+      :ok
+    end
+
+    defp load_plugin_app(app, behaviour) do
+      :ok =
+        :application.load(
+          {:application, app,
+           [
+             description: ~c"test plugin",
+             vsn: ~c"0.0.0",
+             modules: [PluginApp],
+             registered: [],
+             applications: [:kernel, :stdlib],
+             mod: {PluginApp, behaviour}
+           ]}
+        )
+
+      on_exit(fn ->
+        Application.stop(app)
+        Application.unload(app)
+      end)
+    end
+
+    defp lifecycle_probe(app),
+      do: %{plugin: app, on_start: {PluginApp, :running?, [app]}}
+
+    @tag :capture_log
+    test "each plugin's application is running before any plugin's on_start" do
+      load_plugin_app(:mob_test_plugin_ok, :ok)
+
+      Mob.Plugins.install(%{
+        plugins: [:mob_test_plugin_ok],
+        lifecycle: [lifecycle_probe(:mob_test_plugin_ok)]
+      })
+
+      assert :ok = Mob.Plugins.start()
+      assert_received {:running_at_on_start, :mob_test_plugin_ok, true}
+    end
+
+    test "an application that fails to start is logged and boot continues" do
+      load_plugin_app(:mob_test_plugin_fail, :fail)
+
+      Mob.Plugins.install(%{
+        plugins: [:mob_test_plugin_fail, :mob_test_plugin_missing],
+        lifecycle: [lifecycle_probe(:mob_test_plugin_fail)]
+      })
+
+      log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = Mob.Plugins.start() end)
+
+      assert log =~
+               "[mob] plugin :mob_test_plugin_fail: OTP application failed to start, continuing boot"
+
+      assert log =~ ":boom"
+
+      assert log =~
+               "[mob] plugin :mob_test_plugin_missing: OTP application failed to start, continuing boot"
+
+      assert_received {:running_at_on_start, :mob_test_plugin_fail, false}
+    end
+
+    test "an application whose start hangs doesn't hold up boot" do
+      load_plugin_app(:mob_test_plugin_hang, :hang)
+      on_exit(fn -> send(:mob_hanging_plugin_app, :release) end)
+
+      Mob.Plugins.install(%{
+        plugins: [:mob_test_plugin_hang],
+        lifecycle: [lifecycle_probe(:mob_test_plugin_hang)]
+      })
+
+      log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = Mob.Plugins.start(50) end)
+
+      assert log =~
+               "[mob] plugin :mob_test_plugin_hang: OTP application did not start within 50ms, " <>
+                 "continuing boot"
+
+      assert_received {:running_at_on_start, :mob_test_plugin_hang, false}
+    end
+  end
+
+  describe "names/0" do
+    test "is the manifest's plugin list when mob_dev wrote one" do
+      Mob.Plugins.install(%{plugins: [:b, :a], lifecycle: [%{plugin: :c}]})
+      assert Mob.Plugins.names() == [:b, :a]
+    end
+
+    test "falls back to the plugins tagged on runtime declarations, once each" do
+      Mob.Plugins.install(%{
+        lifecycle: [%{plugin: :deliver}],
+        screens: [%{plugin: :chat, module: Chat.Screen, default_route: "chat"}],
+        settings: [%{plugin: :deliver, schema: []}],
+        nifs: [Some.Nif]
+      })
+
+      assert Mob.Plugins.names() == [:deliver, :chat]
     end
   end
 end

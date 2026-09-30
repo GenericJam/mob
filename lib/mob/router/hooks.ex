@@ -13,7 +13,15 @@ defmodule Mob.Router.Hooks do
 
     * `:ok` — navigate as usual.
     * `{:redirect, module}` — mount `module` instead (e.g. a "please
-      update" screen).
+      update" screen), with the same kind of navigation: a push still
+      pushes, so BACK returns to the screen underneath.
+    * `{:reset, module}` — mount `module` with empty params and replace
+      **all** navigation with it, whatever the original action was: every
+      stack and tab is discarded, persisted screen state is cleared and the
+      history is empty, as `reset_to(socket, module, stack: :all)` does.
+      BACK then leaves the app instead of revealing a user screen. If
+      `module` fails to resolve or mount, navigation is left untouched and
+      the current screen repaints.
     * `{:error, reason}` — refuse: navigation is left untouched and the
       current screen repaints, as for an unknown destination.
 
@@ -25,10 +33,17 @@ defmodule Mob.Router.Hooks do
 
   ## `:after_first_render`
 
-  Called once per VM, in its own process, after the router's first paint
-  of the root screen: the supervision tree is up and the first screen has
-  mounted and been handed to the renderer. Not called by test routers that
-  don't render (`Mob.Router.start_link/3`).
+  Called once per VM, in its own process, after the app's first frame has
+  actually been handed to the native layer: the root screen's `render/1`
+  returned, and `Mob.Sender` committed the resulting tree (`set_root`)
+  without raising. The router's own first paint is asynchronous, so this is
+  the first point at which "the app came up" is true rather than hoped for.
+
+  A root screen whose `render/1` raises never triggers it; if a restart of
+  that screen later renders successfully, it fires then. If the root screen
+  navigates away before its first paint, the first committed frame is the
+  destination's. Nothing fires in a VM that never commits a frame, including
+  test routers that don't render (`Mob.Router.start_link/3`).
 
       Mob.Router.Hooks.register(:before_navigate, {MyPlugin, :before_navigate, []})
       Mob.Router.Hooks.register(:after_first_render, {MyPlugin, :first_render, []})
@@ -41,7 +56,7 @@ defmodule Mob.Router.Hooks do
 
   @type hook :: :before_navigate | :after_first_render
   @type mfa_hook :: {module(), atom(), list()}
-  @type verdict :: :ok | {:redirect, module()} | {:error, term()}
+  @type verdict :: :ok | {:redirect, module()} | {:reset, module()} | {:error, term()}
 
   @hooks {__MODULE__, :hooks}
   @first_render {__MODULE__, :first_render_fired}
@@ -75,6 +90,7 @@ defmodule Mob.Router.Hooks do
       case call(module, fun, args ++ [dest]) do
         :ok -> {:cont, :ok}
         {:redirect, target} = redirect when is_atom(target) -> {:halt, redirect}
+        {:reset, target} = reset when is_atom(target) -> {:halt, reset}
         {:error, _} = error -> {:halt, error}
         other -> {:halt, {:error, {:bad_hook_return, {module, fun}, other}}}
       end

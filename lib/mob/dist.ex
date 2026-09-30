@@ -56,6 +56,13 @@ defmodule Mob.Dist do
   Android shell launcher reads `mob_node_suffix` from the launch intent
   extras and exports it). When present, the resolved node becomes
   `<base_name>_<suffix>@<host>` — e.g. `test_nif_android_zy22cr@127.0.0.1`.
+
+  A launch from the home screen carries no intent extras, so `mix mob.deploy`
+  also writes the suffix and port it chose to `$MOB_BEAMS_DIR/mob_dist`
+  (`suffix=<suffix>` and `port=<port>`, one per line). Each is used when its
+  env var is unset or empty, so a launcher restart comes back under the name
+  and port the tooling already forwards. A missing or garbled file, or key,
+  falls back to the defaults.
   """
   @spec ensure_started(keyword()) :: :ok
   def ensure_started(opts \\ []) do
@@ -76,24 +83,8 @@ defmodule Mob.Dist do
             base_node = Keyword.fetch!(opts, :node)
             cookie = Keyword.fetch!(opts, :cookie)
             delay = Keyword.get(opts, :delay, @default_delay)
-            # Resolution order:
-            #   1. explicit `:dist_port` opt (overrides everything)
-            #   2. MOB_DIST_PORT env (set by Android launcher from the
-            #      `mob_dist_port` intent extra — carries the per-device
-            #      port mob_dev's Tunnel allocated)
-            #   3. 9100 default
-            #
-            # Without (2), every device's BEAM listened on 9100 regardless
-            # of which host port mob_dev forwarded; for any non-zero device
-            # index the EPMD-broadcast port and the actual forward target
-            # disagreed, leaving the second device's BEAM unreachable from
-            # the Mac side.
-            dist_port =
-              Keyword.get(opts, :dist_port) ||
-                env_dist_port() ||
-                9100
-
-            node = apply_suffix(base_node, System.get_env("MOB_NODE_SUFFIX"))
+            {suffix, dist_port} = android_settings(opts)
+            node = apply_suffix(base_node, suffix)
 
             if node != base_node do
               :mob_nif.log("Mob.Dist: node suffix applied — #{base_node} → #{node}")
@@ -128,20 +119,78 @@ defmodule Mob.Dist do
   end
 
   @doc false
+  # Resolution order, per setting:
+  #   port:   explicit `:dist_port` opt, MOB_DIST_PORT env (set by the Android
+  #           launcher from the `mob_dist_port` intent extra — the per-device
+  #           port mob_dev's Tunnel allocated), the deploy file, then 9100.
+  #   suffix: MOB_NODE_SUFFIX env, then the deploy file.
+  #
+  # Without the per-device port every device's BEAM listened on 9100 whatever
+  # host port mob_dev forwarded; for any non-zero device index the
+  # EPMD-broadcast port and the actual forward target disagreed, leaving the
+  # second device's BEAM unreachable from the Mac side.
+  @spec android_settings(keyword()) :: {String.t() | nil, pos_integer()}
+  def android_settings(opts) do
+    deployed = deploy_settings()
+
+    suffix =
+      case System.get_env("MOB_NODE_SUFFIX") do
+        env when env in [nil, ""] -> Map.get(deployed, :suffix)
+        env -> env
+      end
+
+    port =
+      Keyword.get(opts, :dist_port) || env_dist_port() || Map.get(deployed, :port) || 9100
+
+    {suffix, port}
+  end
+
+  @doc false
   @spec env_dist_port() :: pos_integer() | nil
-  def env_dist_port do
-    case System.get_env("MOB_DIST_PORT") do
-      nil ->
-        nil
+  def env_dist_port, do: parse_port(System.get_env("MOB_DIST_PORT"))
 
-      "" ->
-        nil
+  @doc false
+  @spec deploy_settings() :: %{optional(:suffix) => String.t(), optional(:port) => pos_integer()}
+  def deploy_settings do
+    with dir when dir not in [nil, ""] <- System.get_env("MOB_BEAMS_DIR"),
+         {:ok, contents} <- File.read(Path.join(dir, "mob_dist")) do
+      contents |> String.split("\n") |> Enum.reduce(%{}, &put_deploy_setting/2)
+    else
+      _ -> %{}
+    end
+  end
 
-      raw ->
-        case Integer.parse(raw) do
-          {port, ""} when port > 0 and port < 65_536 -> port
-          _ -> nil
+  defp put_deploy_setting(line, acc) do
+    case line |> String.trim() |> String.split("=", parts: 2) do
+      ["suffix", suffix] ->
+        if valid_suffix?(suffix), do: Map.put(acc, :suffix, suffix), else: acc
+
+      ["port", raw] ->
+        case parse_port(raw) do
+          nil -> acc
+          port -> Map.put(acc, :port, port)
         end
+
+      _ ->
+        acc
+    end
+  end
+
+  # The suffix becomes part of an atom and a node name; anything but the
+  # characters mob_dev emits means the file isn't what it wrote.
+  defp valid_suffix?(suffix) do
+    suffix != "" and
+      suffix
+      |> String.to_charlist()
+      |> Enum.all?(&(&1 in ?a..?z or &1 in ?A..?Z or &1 in ?0..?9 or &1 in [?_, ?-]))
+  end
+
+  defp parse_port(raw) when raw in [nil, ""], do: nil
+
+  defp parse_port(raw) do
+    case Integer.parse(raw) do
+      {port, ""} when port > 0 and port < 65_536 -> port
+      _ -> nil
     end
   end
 

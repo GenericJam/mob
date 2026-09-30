@@ -402,7 +402,13 @@ defmodule Mob.Sender do
   end
 
   defp commit({tree, platform, nif, transition}) do
-    Mob.Renderer.render(tree, platform, nif, transition)
+    result = Mob.Renderer.render(tree, platform, nif, transition)
+    # Here, not in the router: its first paint is a cast, so the root screen's
+    # render/1 has not run when the router's init returns. A plugin that ends
+    # an update's probation on this hook (mob_deliver) must not hear "stable"
+    # from a screen whose render raises on every attempt.
+    Mob.Router.Hooks.after_first_render()
+    result
   rescue
     error ->
       # A render that raises must not take the sender down with it: every other

@@ -8,6 +8,66 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Project config reaches the device.** `Mob.App.start/0` now applies the
+  `:mob_app_config` module mob_dev ships with every build (your
+  `config/config.exs`, plus `config/runtime.exs` evaluated on the build
+  machine), with `Application.put_all_env(config, persistent: true)`, right
+  after installing the native logger and before anything reads the
+  environment. Until now `Application.get_env/2` returned `nil` on device
+  for everything but `compile_env`. `persistent: true` keeps the values when
+  an application is loaded later (starting a plugin's application loads
+  it). A missing module (older mob_dev, host tests) is a no-op; one that
+  can't be applied is logged and boot continues. New `Mob.AppConfig.load/1`.
+  Logs `[mob] app config: loaded :mob_app_config (<app>: <n> keys, …)` or
+  `[mob] app config: :mob_app_config could not be applied, continuing
+  without it: …`. See `guides/getting_started.md` → "App configuration on
+  device".
+- **Plugin OTP applications are started on device.** A Mob app boots from
+  its own BEAM entry, so no dependency application was ever started: a
+  plugin's supervision tree and its deps (Req, Finch, …) were missing and
+  `mob_deliver` failed its own boot. `Mob.Plugins.start/0` (called by
+  `Mob.App.start/0` in place of `start_lifecycle/0`) now runs
+  `Application.ensure_all_started/1` for each activated plugin before any
+  plugin's `lifecycle.on_start`. The names come from the runtime manifest's
+  `:plugins` key (`Mob.Plugins.names/0`), or from the `:plugin` tags when an
+  older mob_dev didn't write it. A start that fails, crashes or takes more
+  than 5 s is logged (`[mob] plugin :<name>: OTP application failed to
+  start, continuing boot: …` / `… did not start within 5000ms, continuing
+  boot`) and boot continues. See `guides/plugins.md` → "Boot order and
+  configuration on device".
+- **`{:reset, module}` verdict for `:before_navigate` hooks.** Replaces all
+  navigation with `module` (every stack discarded, persisted screen state
+  cleared, empty params, `:reset` transition), whatever the original
+  action was, so BACK can't return to the screen underneath. For
+  `mob_deliver`'s forced-update screen. A `{:redirect, module}` still keeps
+  the original kind of navigation.
+- **`Mob.Dist` on Android falls back to the deploy's node suffix and port.**
+  A launch from the home screen carries no intent extras, so the node came
+  back as `<app>_android` on 9100 and tooling lost it. When
+  `MOB_NODE_SUFFIX` / `MOB_DIST_PORT` are unset or empty, each now comes
+  from `$MOB_BEAMS_DIR/mob_dist` (`suffix=…` / `port=…`, written by
+  `mix mob.deploy`). Explicit options and env still win; a missing or
+  garbled file keeps today's defaults.
+
+### Fixed
+- **`:after_first_render` no longer fires before the root screen has
+  rendered.** The router fired it right after casting its first paint, so a
+  root screen whose `render/1` raised on every attempt was still reported as
+  stable, and `mob_deliver` ended the probation of an update that crashed
+  the app, leaving the device in a crash loop. It now fires from
+  `Mob.Sender`, once per VM, after the first frame is committed to the
+  native layer without raising. A root screen that keeps crashing in render
+  never triggers it; one that recovers after a restart triggers it then.
+- **A root screen that fails to start is logged.** `Mob.Screen.start_root/1`
+  returning `{:error, _}` (mount returned an error or raised) left a black
+  screen and nothing in the log, because init failures produce no crash log
+  and generated apps ignored the result. It now logs
+  `[mob] root screen <Module> failed to start; the app has no screen: <reason
+  or formatted exception>` at error level.
+
 ## [0.9.5] - 2026-09-30
 
 ### Added

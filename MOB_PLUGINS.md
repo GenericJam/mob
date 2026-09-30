@@ -304,7 +304,9 @@ supervisor (no independent OTP app), it's still a plugin.
   # ... tier 1/2/3 fields ...
 
   lifecycle: %{
-    # Called from Mob.App.on_start/0 after the host's own setup.
+    # Called from Mob.App.start/0 before the host's own on_start/0, after
+    # this plugin's OTP application (and its deps) has been started and the
+    # project's config applied (guides/plugins.md → "Boot order").
     # Returns :ok or {:error, reason} — error bubbles to host.
     on_start: {MobChatKit, :start, []},
 

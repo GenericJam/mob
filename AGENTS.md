@@ -227,6 +227,8 @@ These are the things we've burned ourselves on. Following them isn't optional.
    via `{:error, ...}`. If you don't pattern-match, the screen never renders and
    the app sits on the "Starting BEAM…" splash forever. The on_start callback
    should `{:ok, _} = Mob.Screen.start_root(...)` so failures crash loudly.
+   Mob itself logs `[mob] root screen <Module> failed to start; …` at error
+   level either way, since init failures leave no crash log of their own.
 
 3. **Never call the render NIFs outside `Mob.Sender`.** `clear_taps`,
    `register_tap`, `set_transition`, and `set_root` are one build-then-commit
