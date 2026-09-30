@@ -3848,6 +3848,66 @@ export fn nif_device_os_version(
     return erts.enif_make_string(env, "", erts.ERL_NIF_LATIN1);
 }
 
+export fn nif_device_app_version(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    const nil = erts.atom(env, "nil");
+    if (g_activity == null) return nil;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return nil;
+    defer detachIfAttached(attached);
+
+    const activity_cls = jni.getObjectClass(jenv, g_activity);
+    defer jni.deleteLocalRef(jenv, activity_cls);
+    const get_pm = jni.getMethodID(jenv, activity_cls, "getPackageManager", "()Landroid/content/pm/PackageManager;");
+    const get_name = jni.getMethodID(jenv, activity_cls, "getPackageName", "()Ljava/lang/String;");
+    if (get_pm == null or get_name == null) {
+        jni.exceptionClear(jenv);
+        return nil;
+    }
+
+    const pm = jni.callObjectMethod(jenv, g_activity, get_pm);
+    if (pm == null) {
+        jni.exceptionClear(jenv);
+        return nil;
+    }
+    defer jni.deleteLocalRef(jenv, pm);
+    const pkg = jni.callObjectMethod(jenv, g_activity, get_name);
+    if (pkg == null) {
+        jni.exceptionClear(jenv);
+        return nil;
+    }
+    defer jni.deleteLocalRef(jenv, pkg);
+
+    const pm_cls = jni.getObjectClass(jenv, pm);
+    defer jni.deleteLocalRef(jenv, pm_cls);
+    const get_info = jni.getMethodID(jenv, pm_cls, "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;");
+    if (get_info == null) {
+        jni.exceptionClear(jenv);
+        return nil;
+    }
+    // Throws NameNotFoundException on failure; the null check covers it.
+    const info = callObjWithObjInt(jenv, pm, get_info, pkg, 0);
+    if (info == null) {
+        jni.exceptionClear(jenv);
+        return nil;
+    }
+    defer jni.deleteLocalRef(jenv, info);
+
+    const info_cls = jni.getObjectClass(jenv, info);
+    defer jni.deleteLocalRef(jenv, info_cls);
+    const version_fid = jni.getFieldID(jenv, info_cls, "versionName", "Ljava/lang/String;");
+    if (version_fid == null) {
+        jni.exceptionClear(jenv);
+        return nil;
+    }
+    return jstringToBin(env, jenv, jni.getObjectField(jenv, info, version_fid));
+}
+
 export fn nif_device_model(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -4185,6 +4245,7 @@ const CallLongMethodNoArgs = fn (env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JM
 const CallObjOneObj = fn (env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID, a: jni.JObject) callconv(.c) jni.JObject;
 const CallObjOneInt = fn (env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID, a: jni.JInt) callconv(.c) jni.JObject;
 const CallObjObjIntInt = fn (env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID, a: jni.JObject, b: jni.JInt, c: jni.JInt) callconv(.c) jni.JObject;
+const CallObjObjInt = fn (env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID, a: jni.JObject, b: jni.JInt) callconv(.c) jni.JObject;
 
 inline fn callIntNoArgs(env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID) jni.JInt {
     const fptr: *const CallIntMethodNoArgs = @ptrCast(@alignCast(env.*.CallIntMethod.?));
@@ -4199,6 +4260,11 @@ inline fn callLongNoArgs(env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID)
 inline fn callObjWithObj(env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID, a: jni.JObject) jni.JObject {
     const fptr: *const CallObjOneObj = @ptrCast(@alignCast(env.*.CallObjectMethod.?));
     return fptr(env, obj, mid, a);
+}
+
+inline fn callObjWithObjInt(env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID, a: jni.JObject, b: jni.JInt) jni.JObject {
+    const fptr: *const CallObjObjInt = @ptrCast(@alignCast(env.*.CallObjectMethod.?));
+    return fptr(env, obj, mid, a, b);
 }
 
 inline fn callObjWithInt(env: *jni.JNIEnv, obj: jni.JObject, mid: jni.JMethodID, a: jni.JInt) jni.JObject {
@@ -4974,6 +5040,8 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "device_low_power_mode", .arity = 0, .fptr = nif_device_low_power_mode, .flags = 0 },
     .{ .name = "device_foreground", .arity = 0, .fptr = nif_device_foreground, .flags = 0 },
     .{ .name = "device_os_version", .arity = 0, .fptr = nif_device_os_version, .flags = 0 },
+    // Dirty: getPackageInfo is a binder round-trip to PackageManagerService.
+    .{ .name = "device_app_version", .arity = 0, .fptr = nif_device_app_version, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
     .{ .name = "device_model", .arity = 0, .fptr = nif_device_model, .flags = 0 },
     .{ .name = "device_orientation", .arity = 0, .fptr = nif_device_orientation, .flags = 0 },
     .{ .name = "device_lock_orientation", .arity = 1, .fptr = nif_device_lock_orientation, .flags = 0 },

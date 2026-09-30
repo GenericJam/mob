@@ -82,6 +82,7 @@
     device_low_power_mode/0,
     device_foreground/0,
     device_os_version/0,
+    device_app_version/0,
     device_model/0,
     device_orientation/0,
     device_lock_orientation/1,
@@ -178,6 +179,7 @@
     device_low_power_mode/0,
     device_foreground/0,
     device_os_version/0,
+    device_app_version/0,
     device_model/0,
     device_orientation/0,
     device_lock_orientation/1,
@@ -316,6 +318,9 @@ device_network_state() -> erlang:nif_error(not_loaded).
 device_low_power_mode() -> erlang:nif_error(not_loaded).
 device_foreground() -> erlang:nif_error(not_loaded).
 device_os_version() -> erlang:nif_error(not_loaded).
+%% device_app_version() -> binary() | nil
+%% Store-visible version: CFBundleShortVersionString / PackageInfo.versionName.
+device_app_version() -> erlang:nif_error(not_loaded).
 device_model() -> erlang:nif_error(not_loaded).
 device_orientation() -> erlang:nif_error(not_loaded).
 device_lock_orientation(_Orientation) -> erlang:nif_error(not_loaded).

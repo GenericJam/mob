@@ -346,6 +346,7 @@ defmodule Mob.DeviceTest do
           :network_state,
           :online?,
           :os_version,
+          :app_version,
           :model
         ] do
       @fun fun

@@ -41,6 +41,7 @@ defmodule Mob.Device do
       Mob.Device.low_power_mode?()    # boolean
       Mob.Device.foreground?()        # boolean
       Mob.Device.os_version()         # binary
+      Mob.Device.app_version()        # binary | nil
       Mob.Device.model()              # binary
       Mob.Device.orientation()        # :portrait | :landscape_left | ...
 
@@ -218,6 +219,20 @@ defmodule Mob.Device do
   @doc "OS version string (e.g. \"17.4\")."
   @spec os_version() :: String.t()
   def os_version, do: to_string(:mob_nif.device_os_version())
+
+  @doc """
+  The app's store-visible version string, read from the running binary:
+  `CFBundleShortVersionString` on iOS, `PackageInfo.versionName` on Android.
+  Returns `nil` when the platform can't report it.
+
+  Prefer this over a compile-time config value for update gates — config can
+  drift from the version the store actually shipped.
+
+      Mob.Device.app_version()
+      #=> "1.4.0"
+  """
+  @spec app_version() :: String.t() | nil
+  def app_version, do: :mob_nif.device_app_version()
 
   @doc "Device model (e.g. \"iPhone\", \"Pixel 8\")."
   @spec model() :: String.t()

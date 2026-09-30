@@ -93,6 +93,7 @@ and orthogonal — composition over a fat component library.
 |--|--|--|--|--|
 | Platform detection | ✅ | ✓ | ✓ | `Mob.Device.platform/0` returns `:ios` or `:android` |
 | OS version | ✅ | ✓ | ✓ | `Mob.Device.os_version/0` |
+| App version | ✅ | ✓ | ✓ | `Mob.Device.app_version/0` — `CFBundleShortVersionString` / `PackageInfo.versionName`; `nil` if unavailable |
 | Device model | ✅ | ✓ | ✓ | `Mob.Device.model/0` |
 | Foreground / background state | ✅ | ✓ | ✓ | `Mob.Device.foreground?/0` + `{:device, :foreground/:background, ...}` events |
 | Battery level + state | ✅ | ✓ | ✓ | `Mob.Device.battery_level/0`, `battery_state/0` |

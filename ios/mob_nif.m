@@ -2477,6 +2477,20 @@ static ERL_NIF_TERM nif_device_os_version(ErlNifEnv *env, int argc, const ERL_NI
     return enif_make_string(env, cstr ? cstr : "", ERL_NIF_LATIN1);
 }
 
+static ERL_NIF_TERM nif_device_app_version(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    id v = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+    if (![v isKindOfClass:[NSString class]])
+        return enif_make_atom(env, "nil");
+    const char *cstr = [(NSString *)v UTF8String];
+    if (!cstr)
+        return enif_make_atom(env, "nil");
+    size_t len = strlen(cstr);
+    ERL_NIF_TERM bin;
+    unsigned char *buf = enif_make_new_binary(env, len, &bin);
+    memcpy(buf, cstr, len);
+    return bin;
+}
+
 static ERL_NIF_TERM nif_device_model(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     NSString *m = [[UIDevice currentDevice] model];
     const char *cstr = m.UTF8String;
@@ -8567,6 +8581,7 @@ static ErlNifFunc nif_funcs[] = {
     {"device_low_power_mode", 0, nif_device_low_power_mode, 0},
     {"device_foreground", 0, nif_device_foreground, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"device_os_version", 0, nif_device_os_version, 0},
+    {"device_app_version", 0, nif_device_app_version, 0},
     {"device_model", 0, nif_device_model, 0},
     {"device_orientation", 0, nif_device_orientation, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"device_lock_orientation", 1, nif_device_lock_orientation, 0},

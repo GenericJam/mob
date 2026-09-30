@@ -18,6 +18,11 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   paint). A crashing or malformed hook counts as a refusal. Used by
   `mob_deliver` for just-in-time screens, its update gate, and ending an
   update's probation. See `guides/plugins.md` → "Router hooks".
+- **`Mob.Device.app_version/0`** — the running binary's store-visible
+  version (`CFBundleShortVersionString` on iOS, `PackageInfo.versionName`
+  on Android), or `nil` when unavailable. Lets update gates such as
+  `mob_deliver`'s read the shipped version instead of a config value that
+  can drift from it.
 
 ## [0.9.4] - 2026-09-30
 
