@@ -477,6 +477,11 @@ defmodule Mob.Router do
   # The single place `current` changes. The sender is told here and nowhere
   # else, so only the screen the user is looking at can commit a frame.
   defp make_current(state, entry, transition) do
+    # Before activating, from this process, so the sender has it when this
+    # screen's first frame commits (:after_first_render names the screen).
+    if function_exported?(Mob.Sender, :note_active_screen, 2),
+      do: Mob.Sender.note_active_screen(entry.ref, entry.module)
+
     activation_token =
       if activation_frame_supported?() do
         Mob.Sender.activate_frame(entry.ref, transition)

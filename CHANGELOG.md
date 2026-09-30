@@ -81,6 +81,19 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `.../jni/beam_jni.c.eex` (with your package in place of
   `<%= jni_package %>`).
 
+### Changed
+- **`:after_first_render` hooks receive the committed screen's module** as
+  an extra last argument (`apply(m, f, args ++ [screen_module])`, as
+  `:before_navigate` appends the destination), and
+  **`Mob.Router.Hooks.rearm_first_render/0`** makes the next committed
+  frame, from any screen, fire the hook again. A plugin that must see a
+  frame from one particular screen rearms until it gets it; mob_deliver
+  ends an update's probation only on a frame from the app's own root, not
+  its "please update" screen. **Upgrade:** a hook registered as
+  `{M, :f, args}` is now called with one more argument, so `M.f` needs the
+  extra arity. `nil` is passed only while a hot code push has mixed old and
+  new framework modules.
+
 ### Fixed
 - **`:after_first_render` no longer fires before the root screen has
   rendered.** The router fired it right after casting its first paint, so a

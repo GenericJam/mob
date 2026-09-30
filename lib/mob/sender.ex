@@ -93,7 +93,8 @@ defmodule Mob.Sender do
             pending: %{},
             reserved_transition: nil,
             activation_gate: nil,
-            frames: %{}
+            frames: %{},
+            active_screen: nil
 
   @doc "Start the sender. Named, so there is exactly one."
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -160,6 +161,17 @@ defmodule Mob.Sender do
     if running?() do
       GenServer.call(__MODULE__, {:activate_frame, ref, transition})
     end
+  end
+
+  @doc false
+  # The router names the module of the screen it is about to activate, so a
+  # committed frame can say which screen it came from (the :after_first_render
+  # hook's argument). Sent before the activation from the same process, so it
+  # arrives first. Only the active ref's trees are committed, so one pair is
+  # all the sender needs to hold.
+  @spec note_active_screen(screen_ref(), module()) :: :ok
+  def note_active_screen(ref, module) do
+    if running?(), do: GenServer.cast(__MODULE__, {:active_screen, ref, module}), else: :ok
   end
 
   @doc """
@@ -261,6 +273,10 @@ defmodule Mob.Sender do
     {:noreply, %{state | active: ref, reserved_transition: nil}}
   end
 
+  def handle_cast({:active_screen, ref, module}, state) do
+    {:noreply, Map.put(state, :active_screen, {ref, module})}
+  end
+
   # Staged, not paired: the screen process casts its stats immediately before the
   # render they describe, so this frame belongs to the very next `:render` for
   # `ref`. Pairing happens there, not here, so that a frame and the tree it
@@ -355,7 +371,7 @@ defmodule Mob.Sender do
     case committed do
       {tree, platform, nif, transition, frame} ->
         Mob.RenderStats.resume_frame(frame)
-        commit({tree, platform, nif, transition})
+        commit({tree, platform, nif, transition}, active_screen(state))
 
       nil ->
         :ok
@@ -381,6 +397,14 @@ defmodule Mob.Sender do
     %{state | pending: %{}, frames: sweep_stale(state.frames)}
   end
 
+  # Map.get: a sender started before this field existed (hot code push).
+  defp active_screen(%{active: ref} = state) do
+    case Map.get(state, :active_screen) do
+      {^ref, module} -> module
+      _other -> nil
+    end
+  end
+
   # A staged frame is claimed by the render cast that follows it from the same
   # process, so anything still waiting after this long belongs to a screen that
   # is never going to send one.
@@ -401,13 +425,13 @@ defmodule Mob.Sender do
     end)
   end
 
-  defp commit({tree, platform, nif, transition}) do
+  defp commit({tree, platform, nif, transition}, screen) do
     result = Mob.Renderer.render(tree, platform, nif, transition)
     # Here, not in the router: its first paint is a cast, so the root screen's
     # render/1 has not run when the router's init returns. A plugin that ends
     # an update's probation on this hook (mob_deliver) must not hear "stable"
     # from a screen whose render raises on every attempt.
-    Mob.Router.Hooks.after_first_render()
+    Mob.Router.Hooks.after_first_render(screen)
     result
   rescue
     error ->
