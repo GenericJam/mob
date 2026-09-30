@@ -104,6 +104,16 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   library ".../exqlite-<v>/priv/sqlite3_nif.so" not found` and anything
   using SQLite crashed at startup. Every `exqlite-*` directory now gets the
   symlink.
+- **Hostname lookups work on Android after the first few seconds.**
+  `Mob.DNS.configure_pure_beam/1` seeded nameservers, but `:inet_db` keeps
+  watching `/etc/resolv.conf`, which Android doesn't have, and on a lookup
+  every 5 s it applied the missing file as an empty nameserver list. From
+  then on `:inet.gethostbyname/1` (and Req, Finch, Mint) got `:nxdomain`.
+  When the watched file doesn't exist, `configure_pure_beam/1` now stops the
+  watch before seeding and keeps the nameservers already configured. A
+  resolv.conf that exists (iOS simulator, host) is still followed. iOS's
+  `Mob.App.configure_ios_inet_db/0` seeds only a hosts entry, which the
+  hosts-file re-read doesn't touch.
 
 ## [0.9.5] - 2026-09-30
 

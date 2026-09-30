@@ -250,6 +250,17 @@ defmodule Mob.DNS do
   Calling this twice is a no-op on the second call — duplicate
   nameservers aren't added, the lookup chain isn't reordered.
 
+  ## No resolv.conf (Android)
+
+  `:inet_db` watches `/etc/resolv.conf` and, every few seconds on the next
+  lookup, replaces its nameservers with the file's. Where the file doesn't
+  exist (Android, or any platform without one) it replaces them with none,
+  so seeded nameservers used to vanish within 5 s and every lookup after
+  that was `:nxdomain`. When the watched file is missing, this stops the
+  watch before seeding. The nameservers already configured are kept. A
+  resolv.conf that exists (iOS simulator, host) is still watched and
+  followed.
+
   ## Examples
 
       # Default — most apps need nothing more
@@ -266,6 +277,7 @@ defmodule Mob.DNS do
     nameservers = Keyword.get(opts, :nameservers, [{8, 8, 8, 8}, {1, 1, 1, 1}])
 
     set_lookup_chain([:file, :dns])
+    stop_watching_missing_resolv_conf()
     Enum.each(nameservers, &add_ns_if_missing/1)
 
     :ok
@@ -328,6 +340,22 @@ defmodule Mob.DNS do
     end
 
     :ok
+  end
+
+  # Clearing the watch empties the nameserver list itself (inet_db applies an
+  # empty file), so the configured ones are put back afterwards.
+  defp stop_watching_missing_resolv_conf do
+    case :inet_db.res_option(:resolv_conf) do
+      [_ | _] = file ->
+        unless File.exists?(List.to_string(file)) do
+          existing = :inet_db.res_option(:nameservers)
+          :inet_db.set_resolv_conf(~c"")
+          Enum.each(existing, fn {ip, port} -> :inet_db.add_ns(ip, port) end)
+        end
+
+      _none ->
+        :ok
+    end
   end
 
   # Add a nameserver to `:inet_db` if not already configured.
