@@ -320,7 +320,10 @@ often it was `reset` (everything recorded before a reset is gone):
 :rpc.call(node, Mob.Diag, :health, [])
 ```
 
-A non-zero `lost` or `resets` means the store's answers are incomplete.
+A non-zero `lost` or `resets` means the store's answers are incomplete. An
+`owner` that stays `nil` while its tables are `held_by: :heir` means the owner
+died and its restart failed (the log says why). Its rows are kept for now, but
+they are lost if the heir dies too.
 
 **Post-mortems: what died while nobody was looking.** `Mob.PostMortem.sweep/0`
 picks up the evidence the OS and the BEAM leave behind and puts it on the bus:

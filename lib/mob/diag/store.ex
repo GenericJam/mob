@@ -20,8 +20,9 @@ defmodule Mob.Diag.Store do
       call queues behind `init/1`.
     * **Evidence outlives its owner.** Tables are created with
       `Mob.Diag.Heir` as their ETS heir. If an owner dies, its tables and rows
-      pass to the heir and stay writable; the next owner takes them back. The
-      owner re-points the heir if the heir itself restarts.
+      pass to the heir and stay writable, and the heir starts the next owner,
+      which takes them back. The owner re-points the heir if the heir itself
+      restarts.
     * **Setup is idempotent.** It creates only what is missing, and a store's
       state (counters, sequence numbers) is carried into the new state, so
       `reload/1` re-reads configuration without resetting counters.
@@ -240,11 +241,58 @@ defmodule Mob.Diag.Store do
     end
   end
 
+  @doc false
+  # `Mob.Diag.Heir` calls this once a dead owner's tables have all passed to
+  # it. A new owner's `init/1` takes them back. An owner someone else started
+  # first may have set up before they arrived, so it sets up again; a new one
+  # does not, because it just did. A store a hot push removed has no owner to
+  # start, and its tables stay with the heir.
+  @spec restart(module()) :: :ok
+  def restart(store) do
+    if store?(store) do
+      case GenServer.start(__MODULE__, store, name: owner_name(store)) do
+        {:ok, _pid} ->
+          :ok
+
+        {:error, {:already_started, pid}} ->
+          GenServer.call(pid, :ensure, :infinity)
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Mob.Diag] #{inspect(store)}'s owner did not restart: " <>
+              "#{inspect(reason, limit: 8)}. Its tables stay with Mob.Diag.Heir " <>
+              "until the next setup."
+          )
+      end
+    end
+
+    :ok
+  end
+
+  defp store?(module) do
+    Code.ensure_loaded?(module) and
+      __MODULE__ in Enum.concat(Keyword.get_values(module.module_info(:attributes), :behaviour))
+  end
+
+  @doc false
+  # Moves each time an owner of `store` finishes `init/1`; `nil` before the
+  # first. The counters are part of it so that it never repeats, even if the
+  # store's state is dropped and its counts start again.
+  @spec owner_generation(module()) :: {:atomics.atomics_ref(), non_neg_integer()} | nil
+  def owner_generation(store) do
+    case :persistent_term.get(key(store), nil) do
+      %{counters: counters} -> {counters, :atomics.get(counters, @owner_starts)}
+      nil -> nil
+    end
+  end
+
   @impl GenServer
   def init(store) do
     heir = Mob.Diag.Heir.ensure()
     state = %{store: store, heir: heir, heir_ref: Process.monitor(heir)}
     setup(store, heir)
+    # Counted only once setup succeeded: `Mob.Diag.Heir` restarts an owner
+    # only if one has finished starting since its last restart.
     bump(store, @owner_starts)
     {:ok, state}
   end

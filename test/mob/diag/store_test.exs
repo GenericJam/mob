@@ -3,6 +3,8 @@ defmodule Mob.Diag.StoreTest do
   # the subscriber registry, which every other diagnostic test uses too.
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Mob.Defect.{Bus, Capsule}
   alias Mob.Diag.Store
   alias Mob.Test.ProcessHelpers
@@ -35,6 +37,29 @@ defmodule Mob.Diag.StoreTest do
     end
   end
 
+  defmodule ProbeStore do
+    @moduledoc false
+    @behaviour Mob.Diag.Store
+
+    @impl true
+    def tables, do: [{:diag_probe_rows, [:set, :public]}, {:diag_probe_flag, [:set, :public]}]
+
+    @impl true
+    def state_vsn, do: 1
+
+    @impl true
+    def new_state(_previous), do: %{}
+
+    # Reports every setup to the test, and dies after taking its tables back
+    # when told to: a store whose setup crashes.
+    @impl true
+    def after_setup do
+      if test = :persistent_term.get({__MODULE__, :test}, nil), do: send(test, {:setup, self()})
+      if :persistent_term.get({__MODULE__, :crash}, false), do: raise("setup failed")
+      :ok
+    end
+  end
+
   defp owner(store), do: Process.whereis(Store.owner_name(store))
 
   defp kill(pid) when is_pid(pid) do
@@ -42,9 +67,23 @@ defmodule Mob.Diag.StoreTest do
     ProcessHelpers.await_exit(pid)
   end
 
+  # Tables first: an owner stopped while it holds them hands them to the heir,
+  # which starts another.
   defp tear_down(store) do
-    ProcessHelpers.stop_if_running(Store.owner_name(store))
     for {t, _} <- store.tables(), :ets.whereis(t) != :undefined, do: :ets.delete(t)
+    ProcessHelpers.stop_if_running(Store.owner_name(store))
+  end
+
+  # The heir restarts a killed owner. Tests wait for the replacement to hold
+  # every table before going on, so it cannot recreate tables under the next
+  # test's teardown.
+  defp await_replacement(store, dead) do
+    ProcessHelpers.eventually(fn ->
+      owner = owner(store)
+      is_pid(owner) and owner != dead and Enum.all?(held_by(store), &(&1 == :owner))
+    end)
+
+    owner(store)
   end
 
   defp held_by(store),
@@ -134,23 +173,79 @@ defmodule Mob.Diag.StoreTest do
   end
 
   describe "evidence outlives its owner" do
-    test "an owner killed mid-life leaves its rows with the heir, writable, and the next owner reclaims them" do
+    test "every store's killed owner is replaced without any write, keeping its tables and rows" do
+      # MOB-302: nothing started the next owner. `ensure/1` only checks that
+      # the tables exist, and the heir held them, so on a Moto G the receipts
+      # owner stayed down until the heir died too and took every receipt.
+      Mob.Agent.Receipts.record(%Mob.Agent.Receipt{
+        action_id: "mob-302",
+        screen: X,
+        handler: {X, :h, 3},
+        event: "kept",
+        stages: []
+      })
+
+      on_exit(&Mob.Agent.Receipts.reset/0)
+
+      stores = Map.keys(Mob.Diag.health().stores)
+      for store <- stores, do: Store.ensure(store)
+      before = Mob.Diag.health().stores
+      for store <- stores, do: kill(before[store].owner)
+
+      ProcessHelpers.eventually(fn ->
+        Enum.all?(Mob.Diag.health().stores, fn {store, now} ->
+          is_pid(now.owner) and now.owner != before[store].owner and
+            Enum.all?(now.tables, &(&1.held_by == :owner))
+        end)
+      end)
+
+      now = Mob.Diag.health().stores
+
+      for store <- stores do
+        assert now[store].owner_starts == before[store].owner_starts + 1
+        assert now[store].resets == before[store].resets
+        assert Enum.map(now[store].tables, & &1.size) == Enum.map(before[store].tables, & &1.size)
+      end
+
+      assert {:ok, %{event: "kept"}} = Mob.Agent.Receipts.fetch("mob-302")
+    end
+
+    test "tables stay writable while the heir holds them, and the replacement keeps what was written" do
       :ok = TestStore.write(:before)
-      kill(owner(TestStore))
+      first = owner(TestStore)
+      heir = Process.whereis(Mob.Diag.Heir)
+      # Held still, the heir cannot restart the owner yet.
+      :sys.suspend(heir)
 
-      assert held_by(TestStore) == [:heir, :heir]
-      assert :ets.lookup(:diag_test_rows, :before) == [{:before}]
-      assert TestStore.write(:while_orphaned) == :ok
+      try do
+        kill(first)
+        assert held_by(TestStore) == [:heir, :heir]
+        assert TestStore.write(:while_orphaned) == :ok
+      after
+        :sys.resume(heir)
+      end
 
-      :ok = Store.reload(TestStore)
-
-      assert held_by(TestStore) == [:owner, :owner]
+      await_replacement(TestStore, first)
       assert :ets.tab2list(:diag_test_rows) |> Enum.sort() == [{:before}, {:while_orphaned}]
 
       health = Store.health(TestStore)
       assert health.owner_starts == 2
       assert health.resets == 0
       assert health.store.written == 2
+    end
+
+    test "killing the heir once the replacement holds the tables loses nothing" do
+      :ok = TestStore.write(:kept)
+      first = owner(TestStore)
+      kill(first)
+      replacement = await_replacement(TestStore, first)
+
+      kill(Process.whereis(Mob.Diag.Heir))
+
+      assert owner(TestStore) == replacement
+      assert held_by(TestStore) == [:owner, :owner]
+      assert :ets.lookup(:diag_test_rows, :kept) == [{:kept}]
+      assert Store.health(TestStore).resets == 0
     end
 
     test "a restarted heir is re-appointed, so a later owner death still keeps the rows" do
@@ -163,14 +258,19 @@ defmodule Mob.Diag.StoreTest do
         is_pid(heir) and heir != old_heir and :ets.info(:diag_test_rows, :heir) == heir
       end)
 
-      kill(owner(TestStore))
+      first = owner(TestStore)
+      kill(first)
+      await_replacement(TestStore, first)
       assert :ets.lookup(:diag_test_rows, :kept) == [{:kept}]
     end
 
     test "losing owner and heir together is counted as a reset, and the store recovers" do
       :ok = TestStore.write(:gone)
+      heir = Process.whereis(Mob.Diag.Heir)
+      # Held still, the heir cannot hand the tables to a replacement first.
+      :sys.suspend(heir)
       kill(owner(TestStore))
-      kill(Process.whereis(Mob.Diag.Heir))
+      kill(heir)
       assert held_by(TestStore) == [:missing, :missing]
 
       assert TestStore.write(:after) == :ok
@@ -179,6 +279,104 @@ defmodule Mob.Diag.StoreTest do
       assert health.resets == 1
       assert health.store.written == 2
       assert :ets.tab2list(:diag_test_rows) == [{:after}]
+    end
+
+    @tag :capture_log
+    test "each owner death gets one restart, and an owner that dies in setup gets none" do
+      on_exit(fn ->
+        tear_down(ProbeStore)
+
+        for key <- [{Store, ProbeStore}, {ProbeStore, :test}, {ProbeStore, :crash}],
+            do: :persistent_term.erase(key)
+      end)
+
+      :ok = Store.ensure(ProbeStore)
+      :ets.insert(:diag_probe_rows, {:kept})
+      :persistent_term.put({ProbeStore, :test}, self())
+
+      # Two tables pass to the heir, one message each. A restart per message
+      # would set the replacement up twice.
+      first = owner(ProbeStore)
+      kill(first)
+      assert_receive {:setup, second}
+      assert await_replacement(ProbeStore, first) == second
+      refute_receive {:setup, _}, 100
+
+      # Its replacement takes the tables back and dies, handing them to the
+      # heir again. Restarting that would never end.
+      :persistent_term.put({ProbeStore, :crash}, true)
+      kill(second)
+      assert_receive {:setup, third}
+      ProcessHelpers.await_exit(third)
+      refute_receive {:setup, _}, 200
+
+      assert owner(ProbeStore) == nil
+      assert held_by(ProbeStore) == [:heir, :heir]
+      assert :ets.lookup(:diag_probe_rows, :kept) == [{:kept}]
+    end
+
+    test "tables whose heir data names no store stay with the heir, which keeps restarting the rest" do
+      :ok = TestStore.write(:kept)
+      heir = Process.whereis(Mob.Diag.Heir)
+      former = Module.concat(__MODULE__, FormerStore)
+      never = Module.concat(__MODULE__, NeverAStore)
+
+      on_exit(fn ->
+        for t <- [:diag_former_rows, :diag_never_a_store],
+            :ets.whereis(t) != :undefined,
+            do: :ets.delete(t)
+
+        :persistent_term.erase({Store, former})
+        :code.delete(former)
+        :code.purge(former)
+      end)
+
+      # A store a hot push removed: its state and tables outlive its module.
+      Module.create(
+        former,
+        quote do
+          @behaviour Mob.Diag.Store
+          def tables, do: [{:diag_former_rows, [:set, :public]}]
+          def state_vsn, do: 1
+          def new_state(_previous), do: %{}
+        end,
+        Macro.Env.location(__ENV__)
+      )
+
+      :ok = Store.ensure(former)
+      :ets.insert(:diag_former_rows, {:former})
+      :code.delete(former)
+      :code.purge(former)
+
+      log =
+        capture_log(fn ->
+          kill(owner(former))
+          parent = self()
+
+          holder =
+            spawn(fn ->
+              :ets.new(:diag_never_a_store, [:named_table, :public, {:heir, heir, never}])
+              send(parent, :held)
+              Process.sleep(:infinity)
+            end)
+
+          assert_receive :held
+          kill(holder)
+
+          first = owner(TestStore)
+          kill(first)
+          await_replacement(TestStore, first)
+        end)
+
+      # Skipped, not attempted and failed.
+      refute log =~ inspect(former)
+
+      assert Process.whereis(Mob.Diag.Heir) == heir
+      assert :ets.info(:diag_never_a_store, :owner) == heir
+      assert :ets.info(:diag_former_rows, :owner) == heir
+      assert :ets.lookup(:diag_former_rows, :former) == [{:former}]
+      assert owner(former) == nil
+      assert :ets.lookup(:diag_test_rows, :kept) == [{:kept}]
     end
   end
 
