@@ -96,6 +96,8 @@ defmodule Mob.Differential do
     try do
       walk(ios, android, [], tolerance, _root? = true)
     rescue
+      # malformed harness tree must yield {:error, :not_ready}, not crash
+      # credo:disable-for-next-line ExSlop.Check.Warning.BlanketRescue
       _ -> {:error, :not_ready}
     end
   end

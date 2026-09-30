@@ -72,7 +72,7 @@ defmodule Mob.Onboarding.FailureModesTest do
       erts_dirs =
         File.ls!(Path.join(otp_cache, ios_dir)) |> Enum.filter(&String.starts_with?(&1, "erts-"))
 
-      assert length(erts_dirs) >= 1, "otp-ios-sim cache has no erts- dirs — empty download?"
+      assert erts_dirs != [], "otp-ios-sim cache has no erts- dirs — empty download?"
       mark_passed()
     end
 
@@ -92,7 +92,7 @@ defmodule Mob.Onboarding.FailureModesTest do
         File.ls!(Path.join(otp_cache, android_dir))
         |> Enum.filter(&String.starts_with?(&1, "erts-"))
 
-      assert length(erts_dirs) >= 1, "otp-android cache has no erts- dirs — empty download?"
+      assert erts_dirs != [], "otp-android cache has no erts- dirs — empty download?"
       mark_passed()
     end
   end

@@ -280,7 +280,7 @@ defmodule Mob.InvariantTest do
       register(:same, fn _ctx -> :ok end)
       register(:same, fn _ctx -> {:violation, %{}} end)
 
-      assert length(Invariant.registered(:periodic)) == 1
+      assert Enum.count(Invariant.registered(:periodic)) == 1
       Invariant.run(:periodic)
       assert [%Violation{invariant: :same}] = Invariant.run(:periodic)
     end

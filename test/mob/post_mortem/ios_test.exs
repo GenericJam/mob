@@ -76,7 +76,7 @@ defmodule Mob.PostMortem.IOSTest do
       ])
 
       capsules = IOS.sweep_with(FakeNIF)
-      assert length(capsules) == 3
+      assert Enum.count(capsules) == 3
 
       kinds = Enum.map(capsules, & &1.kind)
       assert kinds == [:native_crash, :anr, :perf_regression]
@@ -149,7 +149,7 @@ defmodule Mob.PostMortem.IOSTest do
       # sweep again with the same payloads still in the fake's return
       second = IOS.sweep_with(FakeNIF)
 
-      assert length(first) == 1
+      assert Enum.count(first) == 1
       assert second == []
     end
   end
@@ -162,7 +162,7 @@ defmodule Mob.PostMortem.IOSTest do
       Process.put(:test_payloads, [:garbage, crash_payload(), nil])
 
       capsules = IOS.sweep_with(FakeNIF)
-      assert length(capsules) == 1
+      assert Enum.count(capsules) == 1
     end
 
     test "a partial-shape map (missing required keys) is dropped without crashing the sweep" do
@@ -184,7 +184,7 @@ defmodule Mob.PostMortem.IOSTest do
         |> then(fn {caps, log} -> {caps, log} end)
 
       # Two well-formed payloads through, two malformed dropped.
-      assert length(capsules) == 2
+      assert Enum.count(capsules) == 2
       assert Enum.all?(capsules, &(&1.kind in [:native_crash, :anr]))
 
       # The drop path logs at :warning so an operator sees the bad

@@ -110,7 +110,7 @@ defmodule Mob.Nav.ScreenNavTest do
       {:ok, pid} = Mob.Screen.start_link(HomeScreen, %{})
       assert Mob.Screen.get_nav_history(pid) == []
       Mob.Screen.dispatch(pid, "go_profile", %{})
-      assert length(Mob.Screen.get_nav_history(pid)) == 1
+      assert Enum.count(Mob.Screen.get_nav_history(pid)) == 1
       GenServer.stop(pid)
     end
 

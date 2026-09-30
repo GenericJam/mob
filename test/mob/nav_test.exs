@@ -267,7 +267,7 @@ defmodule Mob.NavTest do
       nav = Nav.put_history(nav, settings_history)
 
       {:switched, nav, _} = Nav.switch(nav, :home, entry(SettingsScreen))
-      assert length(Nav.history(nav)) == 1
+      assert Enum.count(Nav.history(nav)) == 1
 
       {:switched, nav, _} = Nav.switch(nav, :settings, entry(HomeScreen))
       assert Nav.history(nav) == settings_history

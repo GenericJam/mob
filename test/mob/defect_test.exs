@@ -143,7 +143,7 @@ defmodule Mob.DefectTest do
       # Second run must return a confirmed violation, which calls record/1
       # which emits the capsule.
       confirmed = Invariant.run(:periodic)
-      assert length(confirmed) == 1
+      assert Enum.count(confirmed) == 1
 
       assert_receive {:mob_defect, capsule}, 500
       assert capsule.kind == :invariant

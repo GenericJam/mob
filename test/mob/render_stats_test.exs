@@ -53,7 +53,7 @@ defmodule Mob.RenderStatsTest do
     test "records one frame per finish" do
       frame()
       frame()
-      assert length(RenderStats.frames()) == 2
+      assert Enum.count(RenderStats.frames()) == 2
     end
 
     test "carries the screen and transition" do
@@ -388,7 +388,7 @@ defmodule Mob.RenderStatsTest do
       end
 
       frames = RenderStats.frames()
-      assert length(frames) <= 500
+      assert Enum.count(frames) <= 500
       assert hd(frames).screen == :s520, "newest must survive"
     end
   end

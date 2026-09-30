@@ -101,7 +101,7 @@ defmodule Mob.Screen.IsolationTest do
       Mob.Screen.dispatch(owner, "push", %{})
       capture_log(fn -> Mob.Screen.dispatch(owner, "boom", %{}) end)
 
-      assert length(Mob.Screen.get_nav_history(owner)) == 1
+      assert Enum.count(Mob.Screen.get_nav_history(owner)) == 1
     end
 
     test "a sibling screen survives a crash", %{owner: owner} do

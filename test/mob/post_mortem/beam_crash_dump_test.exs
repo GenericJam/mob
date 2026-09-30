@@ -141,7 +141,7 @@ defmodule Mob.PostMortem.BeamCrashDumpTest do
 
     test "deduplicates identical paths passed twice", %{tmp: tmp} do
       write_dump(tmp, "erl_crash.dump", @sample_dump)
-      assert length(BeamCrashDump.scan([tmp, tmp])) == 1
+      assert Enum.count(BeamCrashDump.scan([tmp, tmp])) == 1
     end
 
     test "computes a distinct sha256 for two different dumps", %{tmp: tmp} do
@@ -190,7 +190,7 @@ defmodule Mob.PostMortem.BeamCrashDumpTest do
       first = BeamCrashDump.emit(findings)
       second = BeamCrashDump.emit(findings)
 
-      assert length(first) == 1
+      assert Enum.count(first) == 1
       assert second == []
     end
 

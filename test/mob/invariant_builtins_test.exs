@@ -161,7 +161,7 @@ defmodule Mob.Invariant.BuiltinsTest do
       end
 
       assert {:violations, reported} = Builtins.orphaned_component(%{})
-      assert length(reported) == 8
+      assert Enum.count(reported) == 8
     end
   end
 
@@ -225,7 +225,7 @@ defmodule Mob.Invariant.BuiltinsTest do
 
       entries = Mob.Router.entries(router)
 
-      assert length(entries) == 2,
+      assert Enum.count(entries) == 2,
              "entries/1 must report history, not only the current screen: #{inspect(entries)}"
 
       assert Enum.sort(Enum.map(entries, fn {m, _} -> m end)) == [DetailScreen, NavScreen]
@@ -307,8 +307,8 @@ defmodule Mob.Invariant.BuiltinsTest do
       Builtins.install()
       Builtins.install()
 
-      assert length(Invariant.registered(:on_screen_stop)) == 1
-      assert length(Invariant.registered(:periodic)) == 1
+      assert Enum.count(Invariant.registered(:on_screen_stop)) == 1
+      assert Enum.count(Invariant.registered(:periodic)) == 1
     end
 
     test "every unimplemented entry names a check and says what it needs" do
@@ -316,7 +316,7 @@ defmodule Mob.Invariant.BuiltinsTest do
       # enough to act on, not decay into a TODO.
       entries = Builtins.unimplemented()
 
-      assert length(entries) == 8
+      assert Enum.count(entries) == 8
 
       for {name, why} <- entries do
         assert name == :"#{name}", "#{inspect(name)} should be an atom naming the check"

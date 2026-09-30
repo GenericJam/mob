@@ -40,7 +40,7 @@ defmodule Mob.AlertTest do
 
       json = Mob.Alert.encode_buttons(buttons)
       decoded = :json.decode(json)
-      assert length(decoded) == 2
+      assert Enum.count(decoded) == 2
       assert Enum.at(decoded, 0)["label"] == "Delete"
       assert Enum.at(decoded, 1)["label"] == "Cancel"
     end

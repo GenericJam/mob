@@ -64,7 +64,7 @@ defmodule Mob.ListTest do
       expanded = List.expand(node, %{}, pid)
 
       assert expanded.type == :lazy_list
-      assert length(expanded.children) == 2
+      assert Enum.count(expanded.children) == 2
     end
 
     test "each row is a :box wrapping the rendered item" do

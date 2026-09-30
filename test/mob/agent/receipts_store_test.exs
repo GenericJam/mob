@@ -111,7 +111,7 @@ defmodule Mob.Agent.ReceiptsStoreTest do
       |> Stream.run()
 
       assert Receipts.count() == 200
-      assert length(Enum.uniq_by(Receipts.recent(200), & &1.action_id)) == 200
+      assert Enum.count(Enum.uniq_by(Receipts.recent(200), & &1.action_id)) == 200
     end
   end
 

@@ -173,7 +173,7 @@ defmodule Mob.Screen.MigrationTest do
       before = for m <- modules, into: %{}, do: {m, Renders.count(m)}
 
       screens = live_screen_pids(router)
-      assert length(screens) == 3
+      assert Enum.count(screens) == 3
 
       state = :sys.get_state(router)
       assert state.current.module == DetailScreen

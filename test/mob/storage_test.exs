@@ -87,7 +87,7 @@ defmodule Mob.StorageTest do
       Storage.write(Path.join(dir, "a.txt"), "a")
       Storage.write(Path.join(dir, "b.txt"), "b")
       assert {:ok, paths} = Storage.list(dir)
-      assert length(paths) == 2
+      assert Enum.count(paths) == 2
       assert Enum.all?(paths, &String.starts_with?(&1, dir))
     end
 

@@ -208,16 +208,22 @@ defmodule Mob.Files do
   defp enforceable?(%{"kind" => kind}), do: kind in ["extension", "mime", "semantic"]
 
   defp spec_matches?(%{"kind" => "extension", "value" => ext}, item) do
+    # picker results arrive atom-keyed (NIF) or string-keyed (JSON)
+    # credo:disable-for-next-line ExSlop.Check.Warning.DualKeyAccess
     name = item[:name] || item["name"]
     is_binary(name) and String.downcase(Path.extname(name)) == "." <> String.downcase(ext)
   end
 
   defp spec_matches?(%{"kind" => "mime", "value" => pattern}, item) do
+    # picker results arrive atom-keyed (NIF) or string-keyed (JSON)
+    # credo:disable-for-next-line ExSlop.Check.Warning.DualKeyAccess
     mime = item[:mime] || item["mime"]
     is_binary(mime) and mime_match?(pattern, mime)
   end
 
   defp spec_matches?(%{"kind" => "semantic", "value" => group}, item) do
+    # picker results arrive atom-keyed (NIF) or string-keyed (JSON)
+    # credo:disable-for-next-line ExSlop.Check.Warning.DualKeyAccess
     mime = item[:mime] || item["mime"]
     is_binary(mime) and mime_match?(semantic_mime(group), mime)
   end

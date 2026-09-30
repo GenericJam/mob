@@ -48,7 +48,7 @@ defmodule Mob.Defect.Sinks.DevTest do
 
     # Two [error] lines, one for each of :fatal and :critical
     error_lines = log |> String.split("\n") |> Enum.filter(&String.contains?(&1, "[error]"))
-    assert length(error_lines) == 2
+    assert Enum.count(error_lines) == 2
   end
 
   test "logs at :warning for warning severity" do

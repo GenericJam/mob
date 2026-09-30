@@ -173,7 +173,7 @@ defmodule Mob.TestTest do
       labels = Enum.map(matches, fn {_p, n} -> n.label end)
       assert "Roll Dice" in labels
       assert "Roll again" in labels
-      assert length(matches) == 2
+      assert Enum.count(matches) == 2
     end
 
     test "matches against value as well as label" do
@@ -207,7 +207,7 @@ defmodule Mob.TestTest do
             String.contains?(to_string(n[:value] || ""), "Roll")
         end)
 
-      assert length(matches) == 1
+      assert Enum.count(matches) == 1
     end
   end
 

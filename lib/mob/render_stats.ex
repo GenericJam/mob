@@ -462,6 +462,8 @@ defmodule Mob.RenderStats do
   # calls. `taps` is therefore directly comparable to `register_tap_us_n`, and
   # the two disagreeing means one of them has a bug.
   defp count_nodes(node, acc) when is_map(node) do
+    # trees are measured both atom-keyed and JSON-decoded; normalizing would cost more than the meter
+    # credo:disable-for-next-line ExSlop.Check.Warning.DualKeyAccess
     children = Map.get(node, "children") || Map.get(node, :children) || []
     Enum.reduce(children, acc + 1, &count_nodes/2)
   end
@@ -469,6 +471,8 @@ defmodule Mob.RenderStats do
   defp count_nodes(_other, acc), do: acc
 
   defp count_handles(node, acc) when is_map(node) do
+    # trees are measured both atom-keyed and JSON-decoded; normalizing would cost more than the meter
+    # credo:disable-for-next-line ExSlop.Check.Warning.DualKeyAccess
     children = Map.get(node, "children") || Map.get(node, :children) || []
     Enum.reduce(children, acc + handle_count(node), &count_handles/2)
   end
@@ -490,6 +494,8 @@ defmodule Mob.RenderStats do
   # set lookups. On a 780-node tree that is the difference between the meter
   # costing more than the render and costing a fraction of it.
   defp handle_count(node) do
+    # trees are measured both atom-keyed and JSON-decoded; normalizing would cost more than the meter
+    # credo:disable-for-next-line ExSlop.Check.Warning.DualKeyAccess
     props = Map.get(node, "props") || Map.get(node, :props) || %{}
 
     Enum.count(props, fn {key, value} ->

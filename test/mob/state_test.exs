@@ -99,7 +99,7 @@ defmodule Mob.StateTest do
 
       results = Mob.State.match({:peer_profile, :_})
 
-      assert length(results) == 2
+      assert Enum.count(results) == 2
 
       pubkeys =
         results

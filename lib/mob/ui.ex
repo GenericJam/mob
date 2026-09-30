@@ -377,8 +377,8 @@ defmodule Mob.UI do
 
   def normalize_sheet_detents!([{:content, options}] = detents) when is_list(options) do
     if Keyword.keyword?(options) do
-      case Keyword.fetch(options, :max_height) do
-        {:ok, maximum} when is_number(maximum) and maximum > 0 and length(options) == 1 ->
+      case options do
+        [max_height: maximum] when is_number(maximum) and maximum > 0 ->
           [%{type: :content, max_height: maximum}]
 
         _other ->

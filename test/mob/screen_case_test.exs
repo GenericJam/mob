@@ -129,7 +129,7 @@ defmodule Mob.ScreenCaseTest do
     end
 
     test "find_all/3 returns every match", %{view: view} do
-      assert length(find_all(view, :text)) == 1
+      assert Enum.count(find_all(view, :text)) == 1
     end
 
     test "flatten/1 walks the whole tree depth-first", %{view: view} do

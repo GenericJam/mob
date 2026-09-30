@@ -107,7 +107,7 @@ defmodule Mob.NativeEventHandleTest do
   test "all active event-table lookups share generation validation" do
     assert @android_source =~ "fn resolveActiveTapLocked(handle: c_int) ?*TapHandle"
 
-    assert length(Regex.scan(~r/resolveActiveTapLocked\(handle\)/, @android_source)) >= 3
+    assert Enum.count(Regex.scan(~r/resolveActiveTapLocked\(handle\)/, @android_source)) >= 3
 
     refute @android_source =~ "handle >= tap_active_count"
     refute @android_source =~ "tap_tables[tap_active][@intCast(handle)]"
@@ -124,7 +124,7 @@ defmodule Mob.NativeEventHandleTest do
     assert lock < copy and copy < unlock
     assert @android_source =~ "erts.enif_make_copy(env, tap.tag)"
     assert snap =~ "resolveActiveTapLocked(handle) orelse {"
-    assert length(:binary.matches(snap, "erts.enif_mutex_unlock(tap_mutex)")) == 2
+    assert Enum.count(:binary.matches(snap, "erts.enif_mutex_unlock(tap_mutex)")) == 2
   end
 
   test "every tag snapshot owns and frees its delivery environment" do
@@ -136,7 +136,7 @@ defmodule Mob.NativeEventHandleTest do
         @android_source
       )
 
-    assert length(snapshots) == 8
+    assert Enum.count(snapshots) == 8
     assert length(allocated_snapshots) == length(snapshots)
 
     assert @android_source =~

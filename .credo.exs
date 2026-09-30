@@ -23,7 +23,7 @@
           {Jump.CredoChecks.TopLevelAliasImportRequire, []},
           {Jump.CredoChecks.WeakAssertion, []},
           {Jump.CredoChecks.VacuousTest, []},
-        ],
+        ] ++ Enum.map(ExSlop.recommended_checks(), &{&1, []}),
         disabled: [
           # Pipes with single function calls are fine in this codebase
           {Credo.Check.Readability.SinglePipe, []},

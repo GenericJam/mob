@@ -139,7 +139,7 @@ defmodule Mob.RendererTest do
       Renderer.render(tree, :android, MockNIF)
       {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
       decoded = :json.decode(json)
-      assert length(decoded["children"]) == 2
+      assert Enum.count(decoded["children"]) == 2
       assert Enum.at(decoded["children"], 0)["props"]["text"] == "A"
       assert Enum.at(decoded["children"], 1)["props"]["text"] == "B"
     end
@@ -220,7 +220,7 @@ defmodule Mob.RendererTest do
 
       Renderer.render(tree, :android, MockNIF)
       tap_calls = Enum.filter(MockNIF.calls(), fn {f, _} -> f == :register_tap end)
-      assert length(tap_calls) == 2
+      assert Enum.count(tap_calls) == 2
     end
 
     test "on_tap {pid, tag} is replaced by integer handle" do
@@ -390,7 +390,7 @@ defmodule Mob.RendererTest do
 
       Renderer.render(tree, :android, MockNIF)
       tap_calls = Enum.filter(MockNIF.calls(), fn {f, _} -> f == :register_tap end)
-      assert length(tap_calls) == 4
+      assert Enum.count(tap_calls) == 4
     end
 
     test "gesture tags must be {pid, tag} — bare pid is rejected at serialisation" do
@@ -1361,7 +1361,7 @@ defmodule Mob.RendererTest do
       Renderer.render(sheet_tree(%{}, children), :android, MockNIF)
       decoded_children = set_root_json()["children"]
 
-      assert length(decoded_children) == 2
+      assert Enum.count(decoded_children) == 2
       assert Enum.at(decoded_children, 0)["props"]["text"] == "a"
       assert Enum.at(decoded_children, 1)["props"]["text"] == "b"
     end

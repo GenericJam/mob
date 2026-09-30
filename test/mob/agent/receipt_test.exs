@@ -101,7 +101,7 @@ defmodule Mob.Agent.ReceiptTest do
   describe "new_action_id/0" do
     test "is unique across calls" do
       ids = for _ <- 1..1_000, do: Receipt.new_action_id()
-      assert length(Enum.uniq(ids)) == 1_000
+      assert Enum.count(Enum.uniq(ids)) == 1_000
     end
   end
 

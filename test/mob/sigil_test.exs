@@ -124,7 +124,7 @@ defmodule Mob.SigilTest do
 
       assert node.type == :column
       assert node.props.padding == 16
-      assert length(node.children) == 1
+      assert Enum.count(node.children) == 1
       assert hd(node.children).type == :text
       assert hd(node.children).props.text == "hello"
     end
@@ -138,7 +138,7 @@ defmodule Mob.SigilTest do
       </Column>
       """
 
-      assert length(node.children) == 3
+      assert Enum.count(node.children) == 3
       assert Enum.map(node.children, & &1.props.text) == ["one", "two", "three"]
     end
 
@@ -155,7 +155,7 @@ defmodule Mob.SigilTest do
       assert node.type == :column
       [row] = node.children
       assert row.type == :row
-      assert length(row.children) == 2
+      assert Enum.count(row.children) == 2
     end
 
     test "wrap container preserves spacing props and children" do
@@ -182,11 +182,11 @@ defmodule Mob.SigilTest do
       </Column>
       """
 
-      assert length(node.children) == 2
+      assert Enum.count(node.children) == 2
       [text, row] = node.children
       assert text.type == :text
       assert row.type == :row
-      assert length(row.children) == 2
+      assert Enum.count(row.children) == 2
     end
   end
 
@@ -202,7 +202,7 @@ defmodule Mob.SigilTest do
       </Column>
       """
 
-      assert length(node.children) == 1
+      assert Enum.count(node.children) == 1
       assert hd(node.children).props.text == "dynamic"
     end
 
@@ -215,7 +215,7 @@ defmodule Mob.SigilTest do
       </Column>
       """
 
-      assert length(node.children) == 3
+      assert Enum.count(node.children) == 3
       assert Enum.map(node.children, & &1.props.text) == ["a", "b", "c"]
     end
 
@@ -229,7 +229,7 @@ defmodule Mob.SigilTest do
       </Column>
       """
 
-      assert length(node.children) == 2
+      assert Enum.count(node.children) == 2
       assert hd(node.children).type == :text
       assert List.last(node.children).type == :divider
     end
@@ -423,7 +423,7 @@ defmodule Mob.SigilTest do
       <Text text={label} :for={label <- ["1", "2", "3"]} />
       """
 
-      assert length(nodes) == 3
+      assert Enum.count(nodes) == 3
       assert Enum.map(nodes, & &1.props.text) == ["1", "2", "3"]
     end
 
@@ -463,7 +463,7 @@ defmodule Mob.SigilTest do
       </Column>
       """
 
-      assert length(node.children) == 2
+      assert Enum.count(node.children) == 2
       assert Enum.all?(node.children, &(&1.type == :row))
       assert Enum.map(node.children, &hd(&1.children).props.text) == ["a", "b"]
     end

@@ -87,7 +87,7 @@ defmodule Mob.PostMortem.AndroidTest do
       ])
 
       capsules = Android.sweep_with(FakeNIF)
-      assert length(capsules) == 10
+      assert Enum.count(capsules) == 10
 
       # Each reason maps to the right (kind, severity) pair per the
       # Mob.Defect.emit_appexit_reason/1 mapping table.
@@ -183,7 +183,7 @@ defmodule Mob.PostMortem.AndroidTest do
       first = Android.sweep_with(FakeNIF)
       second = Android.sweep_with(FakeNIF)
 
-      assert length(first) == 1
+      assert Enum.count(first) == 1
       assert second == []
     end
   end
@@ -192,7 +192,7 @@ defmodule Mob.PostMortem.AndroidTest do
     test "a non-map entry is silently skipped" do
       Process.put(:test_entries, [:garbage, entry(), nil])
       capsules = Android.sweep_with(FakeNIF)
-      assert length(capsules) == 1
+      assert Enum.count(capsules) == 1
     end
 
     test "a partial-shape map is dropped without crashing the sweep" do
@@ -206,7 +206,7 @@ defmodule Mob.PostMortem.AndroidTest do
       log = capture_log(fn -> Process.put(:__caps__, Android.sweep_with(FakeNIF)) end)
       capsules = Process.get(:__caps__)
 
-      assert length(capsules) == 2
+      assert Enum.count(capsules) == 2
 
       assert Enum.map(capsules, & &1.kind) == [:anr, :native_crash]
       assert log =~ "[warning]"

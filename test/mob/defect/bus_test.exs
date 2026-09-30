@@ -99,7 +99,7 @@ defmodule Mob.Defect.BusTest do
       Bus.emit(b)
 
       recent = Bus.recent()
-      assert length(recent) == 2
+      assert Enum.count(recent) == 2
       assert Enum.map(recent, & &1.id) == [b.id, a.id]
     end
 
@@ -107,7 +107,7 @@ defmodule Mob.Defect.BusTest do
       for i <- 1..80, do: Bus.emit(invariant_capsule(:"leaked_#{i}"))
 
       recent = Bus.recent(200)
-      assert length(recent) == 64
+      assert Enum.count(recent) == 64
     end
   end
 

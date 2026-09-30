@@ -60,6 +60,8 @@ defmodule Mob.App do
         try do
           Mix.Project.config()[:app]
         rescue
+          # Mix may be absent at expansion; nil falls back to runtime otp_app lookup
+          # credo:disable-for-next-line ExSlop.Check.Warning.BlanketRescue
           _ -> nil
         end
 

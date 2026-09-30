@@ -289,7 +289,7 @@ defmodule Mob.Defect.CapsuleTest do
 
       assert [_ | _] = kept = c.evidence.items
       # Kept 64 items plus a truncation tag
-      assert length(kept) == 65
+      assert Enum.count(kept) == 65
       assert List.last(kept) == {:truncated, :list, 200 - 64}
     end
 

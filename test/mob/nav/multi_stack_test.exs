@@ -221,7 +221,7 @@ defmodule Mob.Nav.MultiStackTest do
   describe "independent histories" do
     test "each stack pushes onto its own history", %{screen: screen} do
       Mob.Screen.dispatch(screen, "push_detail", %{})
-      assert length(Mob.Screen.get_nav_history(screen)) == 1
+      assert Enum.count(Mob.Screen.get_nav_history(screen)) == 1
 
       # The settings stack has never been visited — its history starts empty
       # rather than inheriting home's.
@@ -263,7 +263,7 @@ defmodule Mob.Nav.MultiStackTest do
 
       Mob.Screen.dispatch(screen, "to_settings", %{})
       assert Mob.Screen.get_current_module(screen) == SettingsDetailScreen
-      assert length(Mob.Screen.get_nav_history(screen)) == 1
+      assert Enum.count(Mob.Screen.get_nav_history(screen)) == 1
     end
 
     test "back at a secondary stack's root returns to the first stack", %{screen: screen} do

@@ -22,7 +22,7 @@ defmodule Mob.NifStubTest do
   end
 
   test "the -nifs declaration is non-empty (sanity)", %{nifs: nifs} do
-    assert length(nifs) > 0
+    assert nifs != []
   end
 
   test "every -nifs entry has a matching -export entry", %{

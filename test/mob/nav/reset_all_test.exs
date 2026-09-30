@@ -174,7 +174,7 @@ defmodule Mob.Nav.ResetAllTest do
 
     before_reset = :sys.get_state(router)
     old_pids = Map.keys(before_reset.screens)
-    assert length(old_pids) == 5
+    assert Enum.count(old_pids) == 5
 
     Mob.Screen.dispatch(router, "logout", %{})
 
