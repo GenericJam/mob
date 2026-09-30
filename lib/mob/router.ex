@@ -107,18 +107,19 @@ defmodule Mob.Router do
 
   ## When no screen is left
 
-  If the current screen crashes, can't be restarted, and there is no other
-  live screen to fall back to, the app would sit on a blank screen for good:
-  the process stays alive, so relaunching from the launcher brings the same
-  blank process back. On a device (the real `:mob_nif`), the router logs the
-  reason, flushes the logger and ends the process with `System.halt(1)`, so
-  the next launch boots fresh. That also lets a plugin that watches for a
-  launch that never becomes stable (mob_deliver's probation) see this one die.
+  If the root screen fails to start (its `mount/3` returns an error or
+  raises) while no other router is live, or the current screen crashes,
+  can't be restarted and there is no other live screen to fall back to, the
+  app would sit on a blank screen for good: the process stays alive, so
+  relaunching from the launcher brings the same blank process back. On a
+  device (the real `:mob_nif`), the router logs the reason, flushes the
+  logger and ends the process with `System.halt(1)`, so the next launch boots
+  fresh. That also lets a plugin that watches for a launch that never
+  becomes stable (mob_deliver's probation) see this one die.
 
   `:on_no_live_screen` replaces that behaviour with a 1-arity function called
-  with the module of the screen that couldn't be restarted. Anything injected
-  as `:nif` (host tests) gets no action by default, so a test VM is never
-  halted.
+  with the module of the screen that failed. Anything injected as `:nif`
+  (host tests) gets no action by default, so a test VM is never halted.
   """
   @spec start_root(module(), map(), keyword()) :: GenServer.on_start()
   def start_root(screen_module, params \\ %{}, opts \\ []) do
@@ -139,6 +140,17 @@ defmodule Mob.Router do
           "[mob] root screen #{inspect(screen_module)} failed to start; the app has no screen: " <>
             format_start_error(reason)
         )
+
+        # Nothing else registered as the router means no screen will ever
+        # show; the same blank process a relaunch would bring back as the
+        # render-crash give-up path.
+        if on_no_live_screen && is_nil(Process.whereis(:mob_screen)) do
+          end_app(
+            on_no_live_screen,
+            screen_module,
+            "root screen #{inspect(screen_module)} failed to start"
+          )
+        end
 
         error
 
@@ -663,16 +675,16 @@ defmodule Mob.Router do
         state
 
       action ->
-        # Staying up would leave a blank process that a relaunch from the
-        # launcher only brings back to the front.
-        Logger.error(
-          "[mob] ending the app process so the next launch starts fresh " <>
-            "(no live screen after #{inspect(module)} could not be restarted)"
-        )
-
-        action.(module)
+        end_app(action, module, "no live screen after #{inspect(module)} could not be restarted")
         state
     end
+  end
+
+  # Staying up would leave a blank process that a relaunch from the launcher
+  # only brings back to the front.
+  defp end_app(action, module, why) do
+    Logger.error("[mob] ending the app process so the next launch starts fresh (#{why})")
+    action.(module)
   end
 
   defp drop_entry(state, dead_pid) do

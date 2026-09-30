@@ -146,5 +146,44 @@ defmodule Mob.Router.StartRootFailureTest do
       refute_receive {:no_live_screen, _}, 300
       assert Mob.Router.get_current_module(router) == RaisingRenderScreen
     end
+
+    # A root that fails in mount never had a screen at all: the same blank
+    # process a launcher relaunch would bring back.
+    test "a root screen whose mount fails ends the app, after saying why", %{
+      on_no_live_screen: action
+    } do
+      log =
+        capture_log(fn ->
+          assert {:error, _} =
+                   Mob.Screen.start_root(RaisingMountScreen, %{},
+                     nif: StubNif,
+                     on_no_live_screen: action
+                   )
+        end)
+
+      assert_received {:no_live_screen, RaisingMountScreen}
+
+      assert log =~
+               "[mob] ending the app process so the next launch starts fresh " <>
+                 "(root screen Mob.Router.StartRootFailureTest.RaisingMountScreen failed to start)"
+    end
+
+    @tag :capture_log
+    test "a failed start doesn't end the app while another root screen is live", %{
+      on_no_live_screen: action
+    } do
+      :persistent_term.put({RaisingRenderScreen, :failures_left}, 0)
+      {:ok, live} = Mob.Screen.start_root(RaisingRenderScreen, %{}, nif: StubNif)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(live) end)
+
+      assert {:error, _} =
+               Mob.Screen.start_root(RefusingMountScreen, %{},
+                 nif: StubNif,
+                 on_no_live_screen: action
+               )
+
+      refute_received {:no_live_screen, _}
+      assert Process.alive?(live)
+    end
   end
 end

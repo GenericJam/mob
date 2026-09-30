@@ -128,24 +128,27 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `Mob.App.configure_ios_inet_db/0` seeds only a hosts entry, which the
   hosts-file re-read doesn't touch.
 - **An app left with no live screen ends its process instead of staying
-  blank.** When the current screen crashed past the restart limit and there
-  was no other live screen, the router logged `The app has no live screen.`
-  and kept the BEAM running. The window stayed black, a relaunch from the
-  launcher brought the same process back, and a plugin waiting for that
-  launch to die (mob_deliver's probation rollback) never saw it. On a device
-  the router now also logs `[mob] ending the app process so the next launch
-  starts fresh (no live screen after <Module> could not be restarted)`,
-  flushes the logger and calls `System.halt(1)`, so the next launch is a
-  cold boot (Android logs `Process <app> (pid N) has died` and
-  `exited cleanly (1)`). Routers started with an injected `:nif` (host
-  tests) don't halt; `Mob.Router.start_root/3` takes `on_no_live_screen:`
-  (a 1-arity function called with the screen module) to replace the
-  default.
+  blank.** When the current screen crashed past the restart limit with no
+  other live screen (the router logged `The app has no live screen.`), or
+  the root screen failed to start because its `mount/3` returned an error
+  or raised (`[mob] root screen <Module> failed to start; …`), the BEAM kept
+  running. The window stayed black, a relaunch from the launcher brought the
+  same process back, and a plugin waiting for that launch to die
+  (mob_deliver's probation rollback) never saw it. On a device the router
+  now also logs `[mob] ending the app process so the next launch starts
+  fresh (no live screen after <Module> could not be restarted)` or
+  `… (root screen <Module> failed to start)`, flushes the logger and calls
+  `System.halt(1)`, so the next launch is a cold boot (Android logs
+  `Process <app> (pid N) has died` and `exited cleanly (1)`). A failed start
+  doesn't halt while another router is live. Routers started with an
+  injected `:nif` (host tests) don't halt; `Mob.Router.start_root/3` takes
+  `on_no_live_screen:` (a 1-arity function called with the screen module)
+  to replace the default.
 
-  **Upgrade note:** a root screen that can never render now makes the app
-  exit about a second after every launch instead of showing a black
-  screen. The logcat/NSLog lines above say which screen. If you relied on
-  attaching over dist to a blank app to debug a broken root screen, read
+  **Upgrade note:** a root screen that can never mount or render now makes
+  the app exit within about a second of every launch instead of showing a
+  black screen. The logcat/NSLog lines above say which screen. If you relied
+  on attaching over dist to a blank app to debug a broken root screen, read
   the logged reason instead, or pass `on_no_live_screen: fn _ -> :ok end`
   to `Mob.Screen.start_root/3` while you debug.
 
