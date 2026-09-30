@@ -8,7 +8,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.9.5] - 2026-09-30
 
 ### Added
 - **`Mob.Router.Hooks`** — runtime-registered plugin hooks on the router:
