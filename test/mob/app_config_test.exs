@@ -3,6 +3,7 @@ defmodule Mob.AppConfigTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
+  require Logger
 
   @app :mob_app_config_test_app
 
@@ -21,6 +22,14 @@ defmodule Mob.AppConfigTest do
 
   defmodule Malformed do
     def config, do: :not_a_keyword_list
+  end
+
+  defmodule QuietLogger do
+    def config, do: [{:logger, [level: :error]}]
+  end
+
+  defmodule BadLoggerLevel do
+    def config, do: [{:logger, [level: :chatty]}, {:mob_app_config_test_app, [channel: "beta"]}]
   end
 
   setup do
@@ -46,6 +55,41 @@ defmodule Mob.AppConfigTest do
        applications: [:kernel, :stdlib],
        env: env
      ]}
+  end
+
+  describe ":logger" do
+    setup do
+      level = Logger.level()
+      env = Application.fetch_env(:logger, :level)
+
+      on_exit(fn ->
+        Logger.configure(level: level)
+
+        case env do
+          {:ok, value} -> Application.put_env(:logger, :level, value, persistent: true)
+          :error -> Application.delete_env(:logger, :level, persistent: true)
+        end
+      end)
+    end
+
+    # :logger is already running when the config arrives, so putting the env
+    # alone leaves the running Logger at its old level.
+    test "a configured level takes effect in the running Logger" do
+      Logger.configure(level: :debug)
+      capture_log(fn -> assert :ok = Mob.AppConfig.load(QuietLogger) end)
+
+      assert Logger.level() == :error
+      assert capture_log(fn -> Logger.warning("dropped") end) == ""
+    end
+
+    test "an invalid level is logged and the rest of the config still applies" do
+      Logger.configure(level: :debug)
+      log = capture_log(fn -> assert :ok = Mob.AppConfig.load(BadLoggerLevel) end)
+
+      assert log =~ "[mob] app config: ignoring invalid :logger level :chatty"
+      assert Logger.level() == :debug
+      assert Application.get_env(@app, :channel) == "beta"
+    end
   end
 
   test "applied values win over the app's own defaults, even when the app is loaded afterwards" do

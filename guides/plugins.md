@@ -162,7 +162,9 @@ does the work a release would. In order:
    supervision tree and its deps (Req, Finch, …) are up. A failure, a crash,
    or a start that takes longer than 5 s is logged
    (`[mob] plugin :my_plugin: OTP application failed to start, continuing
-   boot: …`) and boot continues.
+   boot: …`) and boot continues. A start that timed out is abandoned
+   without undoing anything: dependencies it already started stay running
+   for the plugins after it, even if its own start later fails.
 4. **Plugin `lifecycle.on_start`**, then the plugins' `supervised` children.
 5. **The app's own `on_start/0`**, which starts the root screen.
 

@@ -21,6 +21,10 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   an application is loaded later (starting a plugin's application loads
   it). A missing module (older mob_dev, host tests) is a no-op; one that
   can't be applied is logged and boot continues. New `Mob.AppConfig.load/1`.
+  Logger is already running by then, so `config :logger, level: …` is
+  applied with `Logger.configure/1` (an invalid level is logged and
+  skipped); settings Logger reads only at startup (`:default_handler`,
+  `:default_formatter`, `:translators`, …) don't take effect.
   Logs `[mob] app config: loaded :mob_app_config (<app>: <n> keys, …)` or
   `[mob] app config: :mob_app_config could not be applied, continuing
   without it: …`. See `guides/getting_started.md` → "App configuration on
@@ -36,8 +40,10 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   older mob_dev didn't write it. A start that fails, crashes or takes more
   than 5 s is logged (`[mob] plugin :<name>: OTP application failed to
   start, continuing boot: …` / `… did not start within 5000ms, continuing
-  boot`) and boot continues. See `guides/plugins.md` → "Boot order and
-  configuration on device".
+  boot`) and boot continues. A timed-out start is killed before boot moves
+  on, so when its app later fails it can't roll back (stop) a dependency
+  it had started that a later plugin now uses. See `guides/plugins.md` →
+  "Boot order and configuration on device".
 - **`{:reset, module}` verdict for `:before_navigate` hooks.** Replaces all
   navigation with `module` (every stack discarded, persisted screen state
   cleared, empty params, `:reset` transition), whatever the original
@@ -67,6 +73,14 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   and generated apps ignored the result. It now logs
   `[mob] root screen <Module> failed to start; the app has no screen: <reason
   or formatted exception>` at error level.
+- **exqlite's NIF loads when more than one `exqlite-*` is on the device.**
+  The Android launcher symlinked `sqlite3_nif.so` into the first
+  `exqlite-*` directory `readdir` returned, while the code server loads the
+  highest version. After an OTP push left an older exqlite next to the
+  app's (or a newer one next to it), the NIF failed with `dlopen failed:
+  library ".../exqlite-<v>/priv/sqlite3_nif.so" not found` and anything
+  using SQLite crashed at startup. Every `exqlite-*` directory now gets the
+  symlink.
 
 ## [0.9.5] - 2026-09-30
 

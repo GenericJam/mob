@@ -597,7 +597,13 @@ export fn mob_start_beam(app_module: [*:0]const u8) callconv(.c) void {
         var nif_target_buf: [560]u8 = undefined;
         const nif_target = formatZ(&nif_target_buf, "{s}/libsqlite3_nif.so", .{jni.asCStr(&s_native_lib_dir)});
 
-        // Scan $OTP_ROOT/lib/ for exqlite-* and symlink the NIF in its priv/.
+        // Scan $OTP_ROOT/lib/ for exqlite-* and symlink the NIF into EVERY
+        // one's priv/. The code server loads the highest version present, and
+        // an OTP push can leave an older exqlite-* next to the app's own; the
+        // loop used to stop at the first readdir entry, which is unordered, so
+        // the symlink could land in a directory nothing loads and the NIF
+        // failed with `dlopen ... sqlite3_nif.so not found`. Every directory
+        // gets it, so no version comparison is needed.
         var lib_path_buf: [600]u8 = undefined;
         const lib_path = formatZ(&lib_path_buf, "{s}/lib", .{otp_root});
         var found = false;
@@ -615,22 +621,21 @@ export fn mob_start_beam(app_module: [*:0]const u8) callconv(.c) void {
                         // nativeLibDir has the NIF (adb install) — use symlink
                         _ = jni.unlink(nif_link);
                         if (jni.symlink(nif_target, nif_link) == 0) {
-                            logi("mob_start_beam: symlink exqlite NIF -> {s}", .{nif_target});
+                            logi("mob_start_beam: symlink exqlite NIF in {s} -> {s}", .{ d_name_c, nif_target });
                             found = true;
                         } else {
-                            loge("mob_start_beam: symlink exqlite NIF failed: {s}", .{lastErrno()});
+                            loge("mob_start_beam: symlink exqlite NIF in {s} failed: {s}", .{ d_name_c, lastErrno() });
                         }
                     } else {
                         // nativeLibDir empty — MobBridge extracted NIF directly to nif_link
                         var st_nif_file: jni.Stat = undefined;
                         if (jni.stat(nif_link, &st_nif_file) == 0) {
-                            logi("mob_start_beam: exqlite NIF extracted from split APK", .{});
+                            logi("mob_start_beam: exqlite NIF in {s} extracted from split APK", .{d_name_c});
                             found = true;
                         } else {
-                            loge("mob_start_beam: exqlite NIF missing from both nativeLibDir and priv/", .{});
+                            loge("mob_start_beam: exqlite NIF in {s} missing from both nativeLibDir and priv/", .{d_name_c});
                         }
                     }
-                    break;
                 }
             }
             _ = jni.closedir(d);

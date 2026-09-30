@@ -13,6 +13,24 @@ defmodule Mob.AppConfig do
   The values are put with `persistent: true`, so a later `Application.load/1`
   of the same app (starting a plugin's OTP application loads it) does not
   replace them with the defaults in its `.app` file.
+
+  ## `:logger`
+
+  The `:logger` application is already running when the config arrives (the
+  device entry starts it before `Mob.App.start/0`), so its settings that
+  are read once at startup can't take effect. Applied:
+
+    * `:level`, through `Logger.configure/1`, so the running Logger's primary
+      level changes. An invalid level is logged and skipped.
+    * `:translator_inspect_opts`, which Logger reads from the environment
+      each time it's used.
+
+  Not applied, because Logger reads them only when it starts:
+  `:default_handler`, `:default_formatter`, `:handle_otp_reports`,
+  `:handle_sasl_reports`, `:translators`, `:backends`, and `:truncate` /
+  `:utc_log` for the default handler's formatter. The `:compile_time_*` keys
+  are compile-time only. Logger output on device goes through
+  `Mob.NativeLogger` anyway.
   """
 
   require Logger
@@ -38,6 +56,7 @@ defmodule Mob.AppConfig do
   defp apply_config(module) do
     config = module.config()
     Application.put_all_env(config, persistent: true)
+    apply_logger_level(config)
     Logger.info("[mob] app config: loaded #{inspect(module)} (#{summary(config)})")
     :ok
   catch
@@ -48,6 +67,19 @@ defmodule Mob.AppConfig do
       )
 
       {:error, {kind, reason}}
+  end
+
+  # put_env doesn't reach the running Logger: its level is the :logger primary
+  # config, which Logger.configure/1 sets.
+  defp apply_logger_level(config) do
+    with {:logger, entries} <- List.keyfind(config, :logger, 0),
+         {:ok, level} <- Keyword.fetch(entries, :level) do
+      if level in [:all, :none | Logger.levels()] do
+        Logger.configure(level: level)
+      else
+        Logger.warning("[mob] app config: ignoring invalid :logger level #{inspect(level)}")
+      end
+    end
   end
 
   # Names and key counts only: values can be secrets, and this goes to logcat.

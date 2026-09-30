@@ -502,13 +502,18 @@ and ships the result with the app. `Mob.App.start/0` puts it into the
 application environment before anything else runs. The `:mob_dev` key stays
 on your machine.
 
-Two consequences worth knowing:
+Three consequences worth knowing:
 
 - `runtime.exs` sees your build machine's environment variables, not the
   phone's. Don't put secrets there that you wouldn't ship inside the app.
 - The values are read once, at app start. After changing config, run
   `mix mob.deploy` (which restarts the app); `mix mob.push` alone doesn't
   reapply it.
+- Logger is already running when the config arrives. `config :logger,
+  level: …` and `:translator_inspect_opts` take effect; settings Logger reads
+  only when it starts (`:default_handler`, `:default_formatter`,
+  `:handle_otp_reports`, `:handle_sasl_reports`, `:translators`,
+  `:backends`) don't. See `Mob.AppConfig`.
 
 The device log shows what was applied, names and key counts only:
 `[mob] app config: loaded :mob_app_config (my_app: 2 keys, mob_deliver: 4 keys)`.

@@ -280,7 +280,9 @@ defmodule Mob.PluginsTier4Test do
       :ok
     end
 
-    defp load_plugin_app(app, behaviour) do
+    defp load_plugin_app(app, behaviour, deps \\ []) do
+      mod = if behaviour, do: [mod: {PluginApp, behaviour}], else: []
+
       :ok =
         :application.load(
           {:application, app,
@@ -289,9 +291,8 @@ defmodule Mob.PluginsTier4Test do
              vsn: ~c"0.0.0",
              modules: [PluginApp],
              registered: [],
-             applications: [:kernel, :stdlib],
-             mod: {PluginApp, behaviour}
-           ]}
+             applications: [:kernel, :stdlib | deps]
+           ] ++ mod}
         )
 
       on_exit(fn ->
@@ -353,6 +354,37 @@ defmodule Mob.PluginsTier4Test do
                  "continuing boot"
 
       assert_received {:running_at_on_start, :mob_test_plugin_hang, false}
+    end
+
+    # ensure_all_started undoes what it started when the app it was asked for
+    # fails. An attempt abandoned at the timeout used to keep running, so when
+    # the hanging app finally failed it stopped the shared dependency out from
+    # under the plugin that started after it.
+    @tag :capture_log
+    test "an abandoned start can't later stop a dependency another plugin uses" do
+      load_plugin_app(:mob_test_shared_dep, nil)
+      load_plugin_app(:mob_test_plugin_slow, :hang, [:mob_test_shared_dep])
+      load_plugin_app(:mob_test_plugin_user, :ok, [:mob_test_shared_dep])
+      Mob.Plugins.install(%{plugins: [:mob_test_plugin_slow, :mob_test_plugin_user]})
+
+      assert :ok = Mob.Plugins.start(50)
+      assert PluginApp.app_running?(:mob_test_plugin_user)
+      assert PluginApp.app_running?(:mob_test_shared_dep)
+
+      hanging = Process.whereis(:mob_hanging_plugin_app)
+      ref = Process.monitor(hanging)
+      send(hanging, :release)
+      assert_receive {:DOWN, ^ref, :process, ^hanging, _}
+
+      refute stops_within?(:mob_test_shared_dep, 300)
+    end
+
+    defp stops_within?(app, ms) do
+      cond do
+        not PluginApp.app_running?(app) -> true
+        ms <= 0 -> false
+        true -> Process.sleep(10) == :ok and stops_within?(app, ms - 10)
+      end
     end
   end
 

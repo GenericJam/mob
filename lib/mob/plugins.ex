@@ -151,8 +151,10 @@ defmodule Mob.Plugins do
 
   An application that fails to start, crashes, or hasn't finished starting
   after `timeout` ms is logged at error level and boot continues: the plugin's
-  `on_start` still runs and must cope. One that is still starting keeps
-  starting in the background.
+  `on_start` still runs and must cope. For one that timed out, the
+  dependencies already started stay running and its own start callback keeps
+  going in the background; if that callback fails later, nothing else is
+  stopped.
   """
   @spec start(timeout()) :: :ok
   def start(timeout \\ @app_start_timeout_ms) do
@@ -186,30 +188,45 @@ defmodule Mob.Plugins do
   end
 
   # In its own process so a start callback that blocks can't hold up boot. The
-  # result travels as the exit reason, so nothing is left in this mailbox when
-  # the wait gives up.
+  # result travels as the exit reason, so nothing is left in this mailbox.
+  #
+  # On timeout the attempt is killed, and boot waits for it to be gone before
+  # moving on. ensure_all_started stops everything it started when the app it
+  # was asked for fails, and that rollback runs in the calling process. Left
+  # alive, an abandoned attempt would stop a dependency it started (Finch,
+  # say) whenever its hanging app finally failed, by which time a later plugin
+  # may be using it. Dead, it can't roll anything back: what it already started
+  # stays up, and the app still starting finishes or fails in
+  # application_controller as a :temporary app, which stops nothing else.
+  # Waiting for the DOWN also means a rollback already under way completes
+  # before the next plugin starts, so that plugin starts the dependency itself.
   defp start_application(app, timeout) do
     {pid, ref} = spawn_monitor(fn -> exit({:started, Application.ensure_all_started(app)}) end)
 
     receive do
-      {:DOWN, ^ref, :process, ^pid, {:started, {:ok, _apps}}} ->
-        Logger.info("[mob] plugin #{inspect(app)}: OTP application started")
-
-      {:DOWN, ^ref, :process, ^pid, {:started, {:error, reason}}} ->
-        log_start_failure(app, reason)
-
-      {:DOWN, ^ref, :process, ^pid, reason} ->
-        log_start_failure(app, reason)
+      {:DOWN, ^ref, :process, ^pid, reason} -> log_start_result(app, reason)
     after
       timeout ->
-        Process.demonitor(ref, [:flush])
+        Process.exit(pid, :kill)
 
-        Logger.error(
-          "[mob] plugin #{inspect(app)}: OTP application did not start within #{timeout}ms, " <>
-            "continuing boot"
-        )
+        receive do
+          {:DOWN, ^ref, :process, ^pid, :killed} ->
+            Logger.error(
+              "[mob] plugin #{inspect(app)}: OTP application did not start within " <>
+                "#{timeout}ms, continuing boot"
+            )
+
+          {:DOWN, ^ref, :process, ^pid, reason} ->
+            log_start_result(app, reason)
+        end
     end
   end
+
+  defp log_start_result(app, {:started, {:ok, _apps}}),
+    do: Logger.info("[mob] plugin #{inspect(app)}: OTP application started")
+
+  defp log_start_result(app, {:started, {:error, reason}}), do: log_start_failure(app, reason)
+  defp log_start_result(app, reason), do: log_start_failure(app, reason)
 
   defp log_start_failure(app, reason) do
     Logger.error(
