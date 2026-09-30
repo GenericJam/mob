@@ -8,6 +8,17 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **`Mob.Router.Hooks`** — runtime-registered plugin hooks on the router:
+  `:before_navigate` (called before a push/reset mounts a screen; may
+  `:ok`, `{:redirect, module}`, or `{:error, reason}` to refuse) and
+  `:after_first_render` (once per VM, after the root screen's first
+  paint). A crashing or malformed hook counts as a refusal. Used by
+  `mob_deliver` for just-in-time screens, its update gate, and ending an
+  update's probation. See `guides/plugins.md` → "Router hooks".
+
 ## [0.9.4] - 2026-09-30
 
 ### Fixed

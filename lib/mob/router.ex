@@ -213,6 +213,7 @@ defmodule Mob.Router do
           end
 
           paint(entry, :none, state)
+          Mob.Router.Hooks.after_first_render()
         end
 
         {:ok, state}
@@ -708,7 +709,7 @@ defmodule Mob.Router do
   defp apply_nav_action(nil, state, _mode), do: state
 
   defp apply_nav_action({:push, dest, params}, state, mode) do
-    with {:ok, new_module, route_params} <- safe_resolve(dest, state) do
+    with {:ok, new_module, route_params} <- mounting_resolve(dest, state) do
       push_resolved(new_module, Map.merge(route_params, params), state, mode)
     end
   end
@@ -770,14 +771,14 @@ defmodule Mob.Router do
   end
 
   defp apply_nav_action({:reset, dest, params, transition}, state, mode) do
-    with {:ok, new_module, route_params} <- safe_resolve(dest, state) do
+    with {:ok, new_module, route_params} <- mounting_resolve(dest, state) do
       reset_resolved(new_module, Map.merge(route_params, params), transition, state, mode)
     end
   end
 
   defp apply_nav_action({:reset, dest, params, transition, :all}, state, mode) do
     if reset_all_supported?() do
-      with {:ok, new_module, route_params} <- safe_resolve(dest, state) do
+      with {:ok, new_module, route_params} <- mounting_resolve(dest, state) do
         reset_all_resolved(new_module, Map.merge(route_params, params), transition, state, mode)
       end
     else
@@ -965,6 +966,26 @@ defmodule Mob.Router do
   defp repaint_current(state, mode) do
     do_paint(state.current, :none, state, mode)
     state
+  end
+
+  # Destinations that mount a new screen go past the plugins' navigation
+  # hooks first (Mob.Router.Hooks): they may redirect or refuse. A refusal
+  # behaves like a bad destination — navigation untouched, repaint.
+  defp mounting_resolve(dest, state) do
+    case Mob.Router.Hooks.before_navigate(dest) do
+      :ok ->
+        safe_resolve(dest, state)
+
+      {:redirect, target} ->
+        safe_resolve(target, state)
+
+      {:error, reason} ->
+        Logger.warning(
+          "[mob] navigation to #{inspect(dest)} refused by a navigation hook: #{inspect(reason)}"
+        )
+
+        repaint_current(state, :async)
+    end
   end
 
   # `push_screen/2` and friends take any atom, and an unregistered one raises.

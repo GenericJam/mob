@@ -143,6 +143,31 @@ bundling, migration copying, and a regeneration of the runtime plugin manifest
 (`priv/generated/mob_plugins.exs`) so the device's tier-3/4 wiring always matches
 what the plugins declare.
 
+## Router hooks
+
+A plugin that needs to act around navigation registers a hook at runtime —
+from its `lifecycle.on_start`, which runs before the app starts its root
+screen — with `Mob.Router.Hooks.register/2`. No app configuration.
+
+- `:before_navigate` — called with the destination before a push or reset
+  mounts a screen. Return `:ok`, `{:redirect, module}` to mount another
+  screen instead, or `{:error, reason}` to refuse (navigation stays put, as
+  for an unknown destination). Runs in the router process: keep it fast
+  when there's nothing to do.
+- `:after_first_render` — called once per VM, in its own process, after the
+  root screen's first paint.
+
+```elixir
+def on_start do
+  Mob.Router.Hooks.register(:before_navigate, {MyPlugin, :before_navigate, []})
+  Mob.Router.Hooks.register(:after_first_render, {MyPlugin, :first_render, []})
+end
+```
+
+`mob_deliver` uses both: `:before_navigate` fetches a just-in-time screen
+(or redirects to its "please update" screen), `:after_first_render` ends a
+freshly installed update's probation.
+
 ## Multiple plugins and conflicts
 
 A host can activate any combination of plugins, so mob_dev checks at build time
