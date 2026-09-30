@@ -68,13 +68,16 @@ defmodule Mob.Agent.ReceiptsStoreTest do
       # receipt is destroyed microseconds later by the same crash.
       # The spawned process must be the first writer, which is the real
       # situation: whichever screen dispatches the first event of the app's
-      # life. Tear down what `setup` built — owner, heir and state — so the
-      # store is created from nothing on that first write.
+      # life. Tear down what `setup` built — table, owner, heir and state — so
+      # the store is created from nothing on that first write. The table goes
+      # first: an owner stopped while it holds the table hands it to the heir,
+      # which starts another owner.
+      if :ets.whereis(:mob_agent_receipts) != :undefined, do: :ets.delete(:mob_agent_receipts)
+
       for name <- [Mob.Diag.Store.owner_name(Receipts), Mob.Diag.Heir] do
         Mob.Test.ProcessHelpers.stop_if_running(name)
       end
 
-      if :ets.whereis(:mob_agent_receipts) != :undefined, do: :ets.delete(:mob_agent_receipts)
       :persistent_term.erase({Mob.Diag.Store, Receipts})
 
       parent = self()

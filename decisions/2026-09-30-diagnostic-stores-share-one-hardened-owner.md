@@ -1,7 +1,8 @@
 # Diagnostic stores share one hardened owner
 
 - Date: 2026-09-30
-- Status: accepted
+- Status: accepted; amended by MOB-302 on 2026-09-30 (the heir starts the next
+  owner)
 
 ## Context
 
@@ -77,6 +78,11 @@ not the old `<Store>.Owner` name: an app that hot-pushes this over an older
   next owner takes them back. The owner monitors the heir and re-points its
   tables if the heir restarts. If both die, the tables are recreated and counted
   as a `reset`.
+  *(Corrected 2026-09-30, MOB-302: nothing started that next owner.
+  `ensure/1` checks only the flag table, and the heir held it, so the tables
+  stayed with the heir until it died too and took every row with it. The heir
+  now starts the replacement itself. See
+  `2026-09-30-heir-restarts-diagnostic-store-owners.md`.)*
 - **Guarded writes.** `guard/3` wraps every write path:
   - Any failure is counted as `lost`, logged once, and preceded by a repair.
   - The repair (a sync with the owner) happens only if a table or the state is

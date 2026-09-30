@@ -237,8 +237,10 @@ defmodule Mob.Diag do
   Per store (`Mob.Agent.Receipts`, `Mob.Defect.Bus`, `Mob.Invariant`,
   `Mob.PostMortem.Registry`, `Mob.RenderStats`):
 
-    * `owner` — the owning pid, or `nil` while down (tables are then held by
-      `Mob.Diag.Heir` and still written to)
+    * `owner` — the owning pid, or `nil` while down. The tables are then held
+      by `Mob.Diag.Heir`, still written to, until the owner the heir restarts
+      takes them back. An owner that stays `nil` with its tables at the heir
+      failed to restart, and the reason was logged.
     * `tables` — each table's size and whether the `:owner`, the `:heir`,
       another process (`:other`) holds it, or it is `:missing`
     * `lost` — writes that failed and were dropped. Non-zero means the store's
