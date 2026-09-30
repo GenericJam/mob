@@ -108,10 +108,24 @@ defmodule Mob.Invariant do
   def state_vsn, do: 1
 
   # `seq` is carried over so a reload does not number new violations below the
-  # ones already held.
+  # ones already held. A new state continues from the table's highest sequence:
+  # violations are keyed by it, so restarting at 1 under rows left by an older
+  # `mob` (after a hot push) would overwrite them.
   @impl Store
-  def new_state(previous),
-    do: %{seq: (previous && previous[:seq]) || :atomics.new(1, signed: false)}
+  def new_state(previous) do
+    case previous && previous[:seq] do
+      nil ->
+        seq = :atomics.new(1, signed: false)
+
+        if :ets.whereis(@violations) != :undefined,
+          do: :atomics.put(seq, 1, :ets.foldl(fn {s, _}, acc -> max(s, acc) end, 0, @violations))
+
+        %{seq: seq}
+
+      seq ->
+        %{seq: seq}
+    end
+  end
 
   # The framework's own checks are installed with the tables, so they exist
   # whenever the registry does and an app that never registers a check still
@@ -121,6 +135,10 @@ defmodule Mob.Invariant do
 
   @impl Store
   def health(%{seq: seq}), do: %{confirmed: :atomics.get(seq, 1)}
+
+  @doc false
+  @spec start() :: :ok
+  def start, do: Store.ensure(__MODULE__)
 
   @doc """
   Register a check.

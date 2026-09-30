@@ -103,7 +103,18 @@ is retried by the next sweep. MetricKit and ApplicationExitInfo drains are
 destructive, so for them the counted loss is the best available.
 
 **`Defect.Bus` classes are capped at 256.** Past the cap, the least recently
-seen class is evicted and counted (`class_evictions`).
+seen class is evicted by compare-and-delete, and only an actual removal is
+counted (`class_evictions`). Concurrent writers never leave the table above
+the cap, but can leave it slightly under.
+
+**A hot push onto an older `mob` keeps what that `mob` recorded.** Its rows stay
+in its tables, which its still-running owner holds (`:other`) and new writes
+land in. A new state continues each sequence from the highest one in the table,
+so new rows never sort under old ones or overwrite them. Receipts adopt the old
+eviction count, and `Mob.Diag.Subscribers` adopts the old Bus subscriber list
+and Trace table when it first starts. The first `list/1` in a VM starts it for
+that purpose. `health/1` reports state it cannot read yet as `store: :stale`
+instead of raising.
 
 Alternatives rejected:
 
@@ -124,13 +135,13 @@ Alternatives rejected:
 - A diagnostic answer can now be checked for completeness: `Mob.Diag.health/0`
   says whether a store has lost writes or been reset.
 - The per-store `Owner` modules are gone. Tests that called
-  `Mob.Agent.Receipts.Owner.reload/0` use `Mob.Diag.Store.reload/1`. The
-  `@doc false` `start/0` functions on the stores are removed; every public entry
-  point ensures readiness itself.
+  `Mob.Agent.Receipts.Owner.reload/0` use `Mob.Diag.Store.reload/1`. The stores'
+  `@doc false` `start/0` stays, as `Mob.Diag.Store.ensure/1`: every public entry
+  point already ensures readiness, but `mob_dev`'s tests (in about twenty
+  in-flight branches) call `Mob.Defect.Bus.start/0`.
 - Persistent-term keys changed (`{Mob.Diag.Store, store}` and
-  `{Mob.Diag.Subscribers, topic}`). State from before this change is not carried
-  over when an app hot-pushes onto it: counters start again once. The old owner
-  processes keep running until the app restarts.
+  `{Mob.Diag.Subscribers, topic}`). The old owner processes keep running, and
+  keep their tables, until the app restarts.
 - A new diagnostic table must use `Mob.Diag.Store` rather than a hand-written
   owner (AGENTS.md pre-empt rule 17).
 - Verified on the host:
@@ -143,3 +154,14 @@ Alternatives rejected:
     forgetting a failed id, and `subscribe/2` ignoring its pid.
   - Removing the heir from `:ets.new` alone is equivalent: the setup that
     `ensure/1` runs next sets it with `setopts`.
+- Pre-commit review (a fresh-context reviewer) found:
+  - the class cap overshooting and over-counting under concurrent new classes
+    (265 held, 16 counted against 7 removed);
+  - `health/0` raising on stale-shaped state;
+  - a hot push onto an older `mob` restarting sequences under old rows,
+    dropping its subscribers, and removing `Bus.start/0` that `mob_dev` calls;
+  - a readiness test that could not detect its own regression;
+  - a loss before first setup going uncounted;
+  - Trace filters that throw or exit escaping.
+
+  All are fixed, each with a test that fails without its fix.

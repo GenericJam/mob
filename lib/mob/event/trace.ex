@@ -104,11 +104,12 @@ defmodule Mob.Event.Trace do
 
   defp matches?(nil, _addr), do: true
 
+  # A filter that raises, throws or exits is a non-match, never a crash of the
+  # screen that is dispatching.
   defp matches?(filter, addr) when is_function(filter, 1) do
-    try do
-      !!filter.(addr)
-    rescue
-      _ -> false
-    end
+    !!filter.(addr)
+  catch
+    # credo:disable-for-next-line ExSlop.Check.Warning.BlanketRescue
+    _kind, _reason -> false
   end
 end

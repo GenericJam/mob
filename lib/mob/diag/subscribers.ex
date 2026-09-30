@@ -38,9 +38,25 @@ defmodule Mob.Diag.Subscribers do
   @spec clear(atom()) :: :ok
   def clear(topic) when is_atom(topic), do: call({:clear, topic})
 
-  @doc "The subscribers of `topic` as `{pid, meta}` pairs. No process involved."
+  @doc """
+  The subscribers of `topic` as `{pid, meta}` pairs, read from
+  `:persistent_term` with no process involved.
+
+  The first read in a VM that has never started this registry starts it once,
+  so subscribers an older `mob` left behind (after a hot push) are adopted
+  rather than silently dropped. Every later read is a lookup.
+  """
   @spec list(atom()) :: [{pid(), term()}]
-  def list(topic), do: :persistent_term.get(key(topic), [])
+  def list(topic) do
+    case :persistent_term.get(key(topic), nil) do
+      nil ->
+        if :persistent_term.get(@index, nil) == nil, do: call(:sync)
+        published(topic)
+
+      subscribers ->
+        subscribers
+    end
+  end
 
   @doc false
   @spec health() :: map()
@@ -49,9 +65,11 @@ defmodule Mob.Diag.Subscribers do
 
     %{
       process: Process.whereis(__MODULE__),
-      topics: Map.new(topics, &{&1, length(list(&1))})
+      topics: Map.new(topics, &{&1, length(published(&1))})
     }
   end
+
+  defp published(topic), do: :persistent_term.get(key(topic), [])
 
   defp call(request) do
     pid =
@@ -68,10 +86,13 @@ defmodule Mob.Diag.Subscribers do
   @impl GenServer
   def init(_opts) do
     # Rebuild from what an earlier instance published, so a restart keeps
-    # pruning the subscribers it did not see arrive.
+    # pruning the subscribers it did not see arrive. The first instance in a VM
+    # adopts what an older `mob` kept instead, so a hot push onto this version
+    # keeps delivering to subscribers registered before it.
     subscribers =
-      for topic <- :persistent_term.get(@index, []), into: %{} do
-        {topic, Map.new(list(topic))}
+      case :persistent_term.get(@index, nil) do
+        nil -> legacy_subscribers()
+        topics -> for topic <- topics, into: %{}, do: {topic, Map.new(published(topic))}
       end
 
     monitors =
@@ -79,10 +100,41 @@ defmodule Mob.Diag.Subscribers do
         {pid, Process.monitor(pid)}
       end
 
-    {:ok, %{subscribers: subscribers, monitors: monitors}}
+    state = %{subscribers: subscribers, monitors: monitors}
+    for topic <- Map.keys(subscribers), do: publish(state, topic)
+
+    if :persistent_term.get(@index, nil) == nil,
+      do: :persistent_term.put(@index, Map.keys(subscribers))
+
+    {:ok, state}
+  end
+
+  # Where `mob` 0.9.4 and earlier kept them: the defect bus's cached pid list,
+  # and `Mob.Event.Trace`'s `{pid, filter}` table.
+  defp legacy_subscribers do
+    bus =
+      for pid <- :persistent_term.get(:mob_defect_subscribers, []),
+          is_pid(pid),
+          into: %{},
+          do: {pid, nil}
+
+    trace =
+      if :ets.whereis(:mob_event_trace) == :undefined,
+        do: %{},
+        else:
+          for(
+            {pid, filter} <- :ets.tab2list(:mob_event_trace),
+            is_pid(pid),
+            into: %{},
+            do: {pid, filter}
+          )
+
+    %{defect_bus: bus, event_trace: trace}
   end
 
   @impl GenServer
+  def handle_call(:sync, _from, state), do: {:reply, :ok, state}
+
   def handle_call({:subscribe, topic, pid, meta}, _from, state) do
     {ref, state} = monitor(state, pid)
     state = put_in(state, [:subscribers, Access.key(topic, %{}), pid], meta)

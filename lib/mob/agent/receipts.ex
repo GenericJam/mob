@@ -52,17 +52,42 @@ defmodule Mob.Agent.Receipts do
 
   # `seq` is carried over: replacing it under existing rows would restart
   # sequence numbers below the ones already held, so `recent/1` would sort new
-  # receipts under old ones and eviction would stop at the wrong row.
+  # receipts under old ones and eviction would stop at the wrong row. A new
+  # state continues from the table's highest sequence for the same reason: the
+  # rows can predate the state (a hot push onto an older `mob`, whose owner
+  # still holds them), and so can the eviction count, left by that `mob`
+  # under `:mob_agent_receipts_state`.
   @impl Store
   def new_state(previous) do
-    %{
-      seq: (previous && previous[:seq]) || :atomics.new(2, signed: false),
-      telemetry?: telemetry_available?()
-    }
+    seq =
+      case previous && previous[:seq] do
+        nil -> seeded_seq()
+        seq -> seq
+      end
+
+    %{seq: seq, telemetry?: telemetry_available?()}
+  end
+
+  defp seeded_seq do
+    seq = :atomics.new(2, signed: false)
+
+    if :ets.whereis(@table) != :undefined,
+      do: :atomics.put(seq, 1, :ets.foldl(fn {_id, s, _r}, acc -> max(s, acc) end, 0, @table))
+
+    case :persistent_term.get(:mob_agent_receipts_state, nil) do
+      %{seq: old} -> :atomics.put(seq, 2, :atomics.get(old, 2))
+      _ -> :ok
+    end
+
+    seq
   end
 
   @impl Store
   def health(%{seq: seq}), do: %{recorded: :atomics.get(seq, 1), evicted: :atomics.get(seq, 2)}
+
+  @doc false
+  @spec start() :: :ok
+  def start, do: Store.ensure(__MODULE__)
 
   @doc """
   Record `receipt`, evicting the oldest when the table is full.

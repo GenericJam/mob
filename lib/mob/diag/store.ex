@@ -100,8 +100,8 @@ defmodule Mob.Diag.Store do
   end
 
   @doc """
-  Run a write path. Any failure is counted as lost, logged the first time, and
-  followed by a repair of missing tables; `fallback` is returned instead.
+  Run a write path. Any failure is followed by a repair of missing tables,
+  counted as lost and logged the first time; `fallback` is returned instead.
   """
   @spec guard(module(), term(), (-> term())) :: term()
   def guard(store, fallback, fun) do
@@ -112,8 +112,10 @@ defmodule Mob.Diag.Store do
     # counted and reported by `health/1` rather than swallowed.
     # credo:disable-for-next-line ExSlop.Check.Warning.BlanketRescue
     kind, reason ->
-      note_lost(store, kind, reason)
+      # Repair first: a failure before the store's first setup has no counters
+      # to count it in until setup has run.
       repair(store)
+      note_lost(store, kind, reason)
       fallback
   end
 
@@ -145,26 +147,31 @@ defmodule Mob.Diag.Store do
 
   @doc """
   Value-free health of `store`. Read-only: never starts an owner or creates a
-  table, so it reports a broken store instead of repairing it.
+  table, so it reports a broken store instead of repairing it. Never raises:
+  state left in an older shape by a hot push, which the store's `health/1`
+  cannot read, is reported as `store: :stale` until the next write updates it.
   """
   @spec health(module()) :: map()
   def health(store) do
     entry = :persistent_term.get(key(store), nil)
     owner = Process.whereis(owner_name(store))
     heir = Process.whereis(Mob.Diag.Heir)
+    expected = store.state_vsn()
 
     base = %{
       owner: owner,
-      state_vsn: %{current: entry && entry.vsn, expected: store.state_vsn()},
+      state_vsn: %{current: entry && entry.vsn, expected: expected},
       lost: counter(entry, @lost),
       resets: counter(entry, @resets),
       owner_starts: counter(entry, @owner_starts),
       tables: Enum.map(store.tables(), fn {name, _} -> table_health(name, owner, heir) end)
     }
 
-    if entry && function_exported?(store, :health, 1),
-      do: Map.put(base, :store, store.health(entry.data)),
-      else: base
+    cond do
+      entry == nil or not function_exported?(store, :health, 1) -> base
+      entry.vsn == expected -> Map.put(base, :store, store.health(entry.data))
+      true -> Map.put(base, :store, :stale)
+    end
   end
 
   defp counter(nil, _i), do: 0

@@ -264,6 +264,27 @@ defmodule Mob.Defect.BusTest do
 
       assert Mob.Diag.Store.health(Bus).store.class_evictions == 0
     end
+
+    test "concurrent new classes past the limit never leave the table above it, and count each removal once" do
+      # Several writers crossing the bound together used to pick the same
+      # oldest row: one deleted it, all counted it, and the table ratcheted
+      # above the bound (265 held with 16 counted against 7 removed). Racing
+      # writers may evict slightly more than needed, so the table can settle a
+      # little under the bound, but never above it, and the count must equal
+      # the rows actually removed.
+      limit = Mob.Diag.Store.health(Bus).store.class_limit
+      racing = 16
+      for n <- 1..limit, do: Bus.emit(invariant_capsule(:"base_#{n}"))
+
+      1..racing
+      |> Task.async_stream(&Bus.emit(invariant_capsule(:"racing_#{&1}")), max_concurrency: racing)
+      |> Stream.run()
+
+      held = Bus.class_count()
+      assert held <= limit
+      assert held > limit - racing
+      assert Mob.Diag.Store.health(Bus).store.class_evictions == limit + racing - held
+    end
   end
 
   describe "subscriber registry restarts" do

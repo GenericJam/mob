@@ -37,6 +37,10 @@ defmodule Mob.PostMortem.Registry do
   @impl Store
   def new_state(_previous), do: %{}
 
+  @doc false
+  @spec start() :: :ok
+  def start, do: Store.ensure(__MODULE__)
+
   @doc """
   Run `emit` for `id` unless it was already recorded, and return its result in
   a list (empty when skipped or failed).

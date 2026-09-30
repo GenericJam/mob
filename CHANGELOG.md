@@ -95,8 +95,9 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `subscribe/0,1,2` is enough. `stop/0` now unsubscribes every tracer.
 - **The per-store `Owner` modules are replaced by `Mob.Diag.Store`.** Code
   or tests that called `Mob.Agent.Receipts.Owner.reload/0` should call
-  `Mob.Diag.Store.reload(Mob.Agent.Receipts)`. The stores' undocumented
-  `start/0` functions are gone; every entry point ensures readiness itself.
+  `Mob.Diag.Store.reload(Mob.Agent.Receipts)`. A hot push onto this version
+  keeps what the older `mob` recorded (its rows, sequence numbers, eviction
+  count and subscribers) until the app restarts.
   See `decisions/2026-09-30-diagnostic-stores-share-one-hardened-owner.md`.
 
 ## [0.9.4] - 2026-09-30

@@ -3,6 +3,7 @@ defmodule Mob.Diag.StoreTest do
   # the subscriber registry, which every other diagnostic test uses too.
   use ExUnit.Case, async: false
 
+  alias Mob.Defect.{Bus, Capsule}
   alias Mob.Diag.Store
   alias Mob.Test.ProcessHelpers
 
@@ -77,6 +78,9 @@ defmodule Mob.Diag.StoreTest do
         ] do
       test "concurrent first calls to #{inspect(store)} all see a ready store" do
         store = unquote(store)
+        # Write paths are guarded, so a write to a missing table returns its
+        # fallback rather than raising; only `lost` can show it happened.
+        lost_before = Store.health(store).lost
 
         failures =
           for _trial <- 1..30, reduce: [] do
@@ -119,6 +123,7 @@ defmodule Mob.Diag.StoreTest do
           end
 
         assert failures == []
+        assert Store.health(store).lost == lost_before
       end
     end
 
@@ -230,11 +235,119 @@ defmodule Mob.Diag.StoreTest do
     end
   end
 
+  describe "hot push onto an older mob" do
+    # An older `mob` left its rows in tables this code adopts, its counters
+    # under its own keys, and its subscribers where it kept them. None of that
+    # may be lost, numbered over, or crash the readback.
+
+    test "a new state continues from the highest sequence already in each table" do
+      for store <- [Mob.Agent.Receipts, Bus, Mob.Invariant], do: Store.ensure(store)
+
+      receipt = %Mob.Agent.Receipt{
+        action_id: "old",
+        screen: X,
+        handler: {X, :h, 3},
+        event: "old",
+        stages: []
+      }
+
+      capsule =
+        Capsule.new(kind: :invariant, owner: :mob, severity: :warning, fingerprint_key: %{old: 1})
+
+      :ets.insert(:mob_agent_receipts, {"old", 700, receipt})
+      :ets.insert(:mob_defect_recent, {900, capsule})
+      :ets.insert(:mob_invariant_violations, {500, :old_violation})
+
+      on_exit(fn ->
+        Mob.Agent.Receipts.reset()
+        Bus.reset()
+        Mob.Invariant.reset()
+      end)
+
+      for store <- [Mob.Agent.Receipts, Bus, Mob.Invariant] do
+        :persistent_term.erase({Store, store})
+        Store.reload(store)
+      end
+
+      assert Store.health(Mob.Agent.Receipts).store.recorded == 700
+      assert Store.health(Bus).store.emitted == 900
+      assert Store.health(Mob.Invariant).store.confirmed == 500
+    end
+
+    test "receipts adopt the eviction count an older mob kept" do
+      old = :atomics.new(2, signed: false)
+      :atomics.put(old, 2, 44)
+      :persistent_term.put(:mob_agent_receipts_state, %{seq: old})
+
+      on_exit(fn ->
+        :persistent_term.erase(:mob_agent_receipts_state)
+        Mob.Agent.Receipts.reset()
+      end)
+
+      :persistent_term.erase({Store, Mob.Agent.Receipts})
+      Store.reload(Mob.Agent.Receipts)
+
+      assert Mob.Agent.Receipts.dropped() == 44
+    end
+
+    test "subscribers an older mob registered keep receiving" do
+      stop_subscribers = fn ->
+        ProcessHelpers.stop_if_running(Mob.Diag.Subscribers)
+
+        for k <- [:topics, :defect_bus, :event_trace],
+            do: :persistent_term.erase({Mob.Diag.Subscribers, k})
+      end
+
+      stop_subscribers.()
+      :persistent_term.put(:mob_defect_subscribers, [self()])
+      trace = :ets.new(:mob_event_trace, [:named_table, :public])
+      :ets.insert(trace, {self(), nil})
+
+      on_exit(fn ->
+        :persistent_term.erase(:mob_defect_subscribers)
+        stop_subscribers.()
+      end)
+
+      capsule =
+        Mob.Defect.Capsule.new(
+          kind: :invariant,
+          owner: :mob,
+          severity: :warning,
+          fingerprint_key: %{legacy: 1}
+        )
+
+      Mob.Defect.Bus.emit(capsule)
+      assert_receive {:mob_defect, ^capsule}
+
+      address = Mob.Event.Address.new(screen: X, widget: :button, id: :legacy)
+      Mob.Event.Trace.broadcast(address, :tap, nil)
+      assert_receive {:mob_trace, ^address, :tap, nil}
+
+      :ets.delete(trace)
+    end
+
+    test "health reports state an older shape cannot be read as stale rather than raising" do
+      :ok = TestStore.write(:a)
+      entry = :persistent_term.get({Store, TestStore})
+      :persistent_term.put({Store, TestStore}, %{entry | vsn: 1, data: %{old_shape: true}})
+
+      assert Store.health(TestStore).store == :stale
+      assert %{stores: _} = Mob.Diag.health()
+    end
+  end
+
   describe "health/1" do
     test "is read-only: it does not start an owner or create tables" do
       assert Store.health(TestStore).owner == nil
       assert held_by(TestStore) == [:missing, :missing]
       assert owner(TestStore) == nil
+    end
+
+    test "a loss before the store's first setup is still counted" do
+      assert Store.guard(TestStore, :fallback, fn -> :ets.insert(:diag_test_rows, {:x}) end) ==
+               :fallback
+
+      assert Store.health(TestStore).lost == 1
     end
   end
 end

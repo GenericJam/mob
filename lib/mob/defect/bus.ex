@@ -85,9 +85,27 @@ defmodule Mob.Defect.Bus do
   @impl Store
   def state_vsn, do: 1
 
+  # A new state (first setup, or after a hot push onto an older `mob` whose
+  # owner still holds the ring) continues from the highest sequence already in
+  # it, so new capsules never sort under old ones.
   @impl Store
-  def new_state(previous),
-    do: %{seq: (previous && previous[:seq]) || :atomics.new(2, signed: false)}
+  def new_state(previous) do
+    case previous && previous[:seq] do
+      nil ->
+        seq = :atomics.new(2, signed: false)
+        :atomics.put(seq, @recent_seq, highest_recent_seq())
+        %{seq: seq}
+
+      seq ->
+        %{seq: seq}
+    end
+  end
+
+  defp highest_recent_seq do
+    if :ets.whereis(@recent) == :undefined,
+      do: 0,
+      else: :ets.foldl(fn {seq, _}, acc -> max(seq, acc) end, 0, @recent)
+  end
 
   @impl Store
   def health(%{seq: seq}) do
@@ -97,6 +115,10 @@ defmodule Mob.Defect.Bus do
       class_limit: @keep_classes
     }
   end
+
+  @doc false
+  @spec start() :: :ok
+  def start, do: Store.ensure(__MODULE__)
 
   # ---------------------------------------------------------------------------
   # Public API
@@ -229,33 +251,40 @@ defmodule Mob.Defect.Bus do
 
     # Only a new class can take the table past the bound, so the scan for the
     # oldest runs once per new class beyond it, never per occurrence.
-    if occurrences == 1 and :ets.info(@classes, :size) > @keep_classes do
-      evict_oldest_class(state, c.fingerprint)
-    end
+    if occurrences == 1, do: enforce_class_limit(state, c.fingerprint)
 
     :ok
   end
 
-  # The class just inserted is the newest, so it is never the one evicted.
-  # Concurrent new classes may each evict one, which leaves the table at or
-  # just under the bound rather than over it.
-  defp evict_oldest_class(state, keep_fingerprint) do
-    oldest =
-      :ets.foldl(
-        fn
-          {^keep_fingerprint, _, _, _}, acc -> acc
-          {fp, _, _, seen}, nil -> {seen, fp}
-          {fp, _, _, seen}, {oldest_seen, _} when seen < oldest_seen -> {seen, fp}
-          _row, acc -> acc
-        end,
-        nil,
-        @classes
-      )
-
-    with {_seen, fingerprint} <- oldest,
-         true <- :ets.delete(@classes, fingerprint) do
-      :atomics.add(state.seq, @class_evictions, 1)
+  # Concurrent new classes can each see the table over the bound and pick the
+  # same oldest row. Evicting by compare-and-delete on the exact
+  # `{fingerprint, last_seen}` means only one of them removes it and only a
+  # removal is counted; the others go round again. A writer stops only once it
+  # sees the table at or under the bound, so once writers settle it is never
+  # above it. It can end a little under: two writers that each saw the table
+  # one over can pick different oldest rows and both remove one. A class that
+  # was seen again in the meantime no longer matches and is not evicted, and
+  # the class just inserted is the newest, so it is never the one chosen.
+  defp enforce_class_limit(state, keep_fingerprint) do
+    with true <- :ets.info(@classes, :size) > @keep_classes,
+         {seen, fingerprint} <- oldest_class(keep_fingerprint) do
+      removed = :ets.select_delete(@classes, [{{fingerprint, :_, :_, seen}, [], [true]}])
+      if removed == 1, do: :atomics.add(state.seq, @class_evictions, 1)
+      enforce_class_limit(state, keep_fingerprint)
     end
+  end
+
+  defp oldest_class(keep_fingerprint) do
+    :ets.foldl(
+      fn
+        {^keep_fingerprint, _, _, _}, acc -> acc
+        {fp, _, _, seen}, nil -> {seen, fp}
+        {fp, _, _, seen}, {oldest_seen, _} when seen < oldest_seen -> {seen, fp}
+        _row, acc -> acc
+      end,
+      nil,
+      @classes
+    )
   end
 
   # base_row's `occurrences` and `last_seen_ms` fields are placeholders — the

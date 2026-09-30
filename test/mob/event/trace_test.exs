@@ -64,6 +64,16 @@ defmodule Mob.Event.TraceTest do
 
       refute_receive {:mob_trace, _, _, _}, 50
     end
+
+    test "a filter that throws or exits is a non-match, not a crash of the dispatcher" do
+      :ok = Trace.subscribe(fn _ -> throw(:nope) end)
+      :ok = Event.dispatch(self(), addr(), :tap, nil)
+
+      :ok = Trace.subscribe(fn _ -> exit(:nope) end)
+      :ok = Event.dispatch(self(), addr(), :tap, nil)
+
+      refute_receive {:mob_trace, _, _, _}, 50
+    end
   end
 
   describe "unsubscribe/0" do
