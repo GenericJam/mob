@@ -249,20 +249,27 @@ crashed while nobody was looking", "does the other platform agree", and "how
 long did that take". All of it is read over the same distribution link, and
 none of it needs a screenshot.
 
-**Receipts: which layer is answerable.** Every dispatched event gets an
-`action_id`, and the screen records the stages the action reached —
-dispatched, handled (or unhandled), assigns changed, navigation requested,
-frame changed, committed. The first stage it fails to reach names the layer
-to look at, so "the tap did nothing" becomes "the handler ran and changed
-`:count`, and the tree did not change", which points at a `render/1` that
-never reads `:count`.
+**Receipts: which layer is answerable.** Every action gets an `action_id`,
+and the screen records the stages the action reached — dispatched, handled
+(or unhandled), assigns changed, navigation requested, frame changed,
+committed. The first stage it fails to reach names the layer to look at, so
+"the tap did nothing" becomes "the handler ran and changed `:count`, and the
+tree did not change", which points at a `render/1` that never reads `:count`.
+
+An action is a `Mob.Screen.dispatch/3` (`handle_event/3`) **or a discrete
+native input** — a real tap, a text change, a submit, a list-row select —
+which reaches the screen's `handle_info/2`. `Mob.Test.tap/2` and
+`Mob.Test.select/3` send exactly what the finger would, so they get the same
+receipt:
 
 ```elixir
 Mob.Test.tap(node, :increment)
 Mob.Test.settle(node)
 
 :rpc.call(node, Mob.Agent.Receipts, :recent, [1])
-#=> [%Mob.Agent.Receipt{event: "increment", screen: MyApp.CounterScreen,
+#=> [%Mob.Agent.Receipt{event: {:tap, #Mob.Event.Address<MyApp.CounterScreen→button#increment@1>},
+#=>                     screen: MyApp.CounterScreen,
+#=>                     handler: {MyApp.CounterScreen, :handle_info, 2},
 #=>                     stages: [:dispatched, :handled, :assigns_changed],
 #=>                     error: nil, elapsed_us: 412, ...}]
 
@@ -273,14 +280,28 @@ Mob.Agent.Receipt.owner(receipt)   #=> :render_function
 The receipt records *which* stages were reached, not which keys changed:
 `:assigns_changed` means the assigns map differed. `Mob.Agent.Receipt.owner/1`
 turns the stage list into the layer answerable, and `effect/1` into a
-one-word verdict.
+one-word verdict. A `handle_info/2` has no "no clause matched" — screens keep
+a catch-all — so a tap the screen ignores reads `:inert`, not `:unhandled`.
+
+A tap on a screen that has **died** — its handler crashed, `Mob.Router`
+restarted it under a new pid, and native is still showing the old tree —
+reaches no handler. It is not redirected to the replacement; its receipt has
+the single stage `:undeliverable` (`effect/1` → `:undeliverable`, `owner/1` →
+`:event_routing`, `screen: nil`), and
+`Mob.Diag.health().listener.undeliverable` counts every such event.
+
+Display-rate streams — scroll, drag, pinch, a slider drag — get no receipt:
+the store keeps 256, and one scroll would evict the tap you are about to ask
+about. `Mob.Event.Trace` shows them (see `guides/events.md`).
 
 `recent/1` lists the newest, `fetch/1` retrieves one by id, and `count/0` /
 `dropped/0` tell a missing receipt apart from an id that never existed (the
 store is bounded at 256). The stages are observed by the screen's own
 before/after comparison, so a handler cannot claim an effect it did not have.
-Receipts carry the event tag and a reduced crash, never the assigns. See
-`Mob.Agent.Receipt`.
+Receipts carry the input's address (for a dispatch, the event name) and a
+reduced crash — never the assigns, and never an input's payload, so what the
+user typed into a field stays out. See `Mob.Agent.Receipt` and
+`Mob.Event.NativeInput`.
 
 **Invariants: the framework checking itself.** `Mob.Invariant` runs checks an
 application cannot make — a live component under a dead owning screen, a dead
@@ -487,11 +508,12 @@ Mob.Test.settle(node)
 assert Mob.Test.assigns(node).count == before + 1
 ```
 
-If the state didn't change, the tap didn't reach a handler — wrong tag, a
-`handle_info/2` clause that doesn't match, or a stale handle. That is a
-first-class diagnostic signal, not a flake to retry — and the receipt for the
-action (`Mob.Agent.Receipts.recent/1`) says which stage it stopped at, so the
-next question is never a guess.
+If the state didn't change, the tap didn't reach a handler that acted on it —
+wrong tag, a `handle_info/2` clause that doesn't match, or a stale handle. That
+is a first-class diagnostic signal, not a flake to retry — and the receipt for
+the action (`Mob.Agent.Receipts.recent/1`) says which stage it stopped at, so
+the next question is never a guess: `:inert` for a tag no clause acted on,
+`:undeliverable` for a real tap on a screen that had died and been replaced.
 
 Coordinate driving is held to the same contract by the framework itself:
 `Mob.Test.tap_xy/3` (and `tap_id/2`, which inherits its contract) returns

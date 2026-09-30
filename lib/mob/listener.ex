@@ -40,6 +40,22 @@ defmodule Mob.Listener do
   is logged rather than silently discarded, because an unmodelled shape is
   invisible otherwise: the widget simply stops working.
 
+  ## A dead screen's input is recorded, not delivered
+
+  A handle can outlive its screen. After a handler crash `Mob.Router` restarts
+  the screen under a new pid, and until native commits the replacement's tree
+  every tap on the old one is addressed to a dead process. `send/2` to a dead
+  pid is a silent no-op, so those taps used to vanish with no trace at all
+  (MOB-306).
+
+  They are still not redirected to the replacement — it may be showing
+  something else, which is the misrouting MOB-107 reported. Instead a dead
+  *local* target is detected before forwarding: every such event is counted
+  (`Mob.Diag.health/0`, `listener: %{undeliverable: n}`), a discrete one (see
+  `Mob.Event.NativeInput`) gets a receipt whose only stage is
+  `:undeliverable`, and the first event for each dead screen is logged. A
+  remote pid cannot be checked from here and is forwarded as before.
+
   ## Why a hop at all
 
   Today there is one screen process, so carrying its pid through the envelope
@@ -66,6 +82,8 @@ defmodule Mob.Listener do
 
   require Logger
 
+  @undeliverable {__MODULE__, :undeliverable}
+
   @doc "Start the listener. Named, so there is exactly one."
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -91,6 +109,21 @@ defmodule Mob.Listener do
         {:error, {:already_started, _pid}} -> :ok
       end
     end
+  end
+
+  @doc """
+  Value-free health for `Mob.Diag.health/0`: the listener's pid (or `nil`) and
+  how many events have arrived for a dead screen. Read-only; never calls in.
+  """
+  @spec health() :: %{process: pid() | nil, undeliverable: non_neg_integer()}
+  def health do
+    undeliverable =
+      case :persistent_term.get(@undeliverable, nil) do
+        nil -> 0
+        counter -> :counters.get(counter, 1)
+      end
+
+    %{process: Process.whereis(__MODULE__), undeliverable: undeliverable}
   end
 
   @doc """
@@ -130,17 +163,11 @@ defmodule Mob.Listener do
 
   @impl GenServer
   def handle_info({event, {:mob_route, pid, tag}}, state) when is_atom(event) do
-    # Sending to a dead pid is a no-op in the BEAM, which is the behaviour we
-    # want: a handle registered by a screen that has since been popped and
-    # stopped drops its event rather than delivering it to whatever screen
-    # happens to be current. That is the misrouting MOB-107 reported.
-    send(pid, {event, tag})
-    {:noreply, state}
+    deliver(pid, {event, tag}, state)
   end
 
   def handle_info({event, {:mob_route, pid, tag}, payload}, state) when is_atom(event) do
-    send(pid, {event, tag, payload})
-    {:noreply, state}
+    deliver(pid, {event, tag, payload}, state)
   end
 
   def handle_info(message, state) do
@@ -160,4 +187,69 @@ defmodule Mob.Listener do
   end
 
   defp routed?(_message), do: false
+
+  defp deliver(pid, message, state) do
+    if node(pid) == node() and not Process.alive?(pid) do
+      {:noreply, undeliverable(pid, message, state)}
+    else
+      send(pid, message)
+      {:noreply, state}
+    end
+  end
+
+  # Nothing here may raise: this process carries every screen's input, and a
+  # crash would lose far more than the one event it was recording. The name
+  # is the payload-free one a receipt carries, because a change event's
+  # payload is what the user typed and a log line is a sink too.
+  defp undeliverable(pid, message, state) do
+    :counters.add(undeliverable_counter(), 1, 1)
+    {event, name} = input = Mob.Event.NativeInput.receipt_event(message, nil)
+
+    if Mob.Event.NativeInput.kind(message) == :discrete do
+      Mob.Agent.Receipts.record(%Mob.Agent.Receipt{
+        action_id: Mob.Agent.Receipt.new_action_id(),
+        event: input,
+        stages: [:undeliverable],
+        monotonic_us: System.monotonic_time(:microsecond)
+      })
+    end
+
+    # Once per dead screen, not per event: a user tapping a frozen screen, or a
+    # drag across it, would otherwise log at the rate they touch it. Only the
+    # latest pid is held — a set of every screen that ever died would grow for
+    # the life of the app.
+    #
+    # `Map.get/2`: a listener started by an older `mob` and hot-pushed onto
+    # this code has a state without the key.
+    if Map.get(state, :last_undeliverable) == pid do
+      state
+    else
+      Logger.warning(
+        "[mob] Mob.Listener: #{inspect(event)} for #{describe(name)} addressed to " <>
+          "#{inspect(pid)}, which is dead — native is still showing a screen that " <>
+          "has been replaced. Dropped, not redirected; further events for it are " <>
+          "counted in Mob.Diag.health/0 without logging."
+      )
+
+      Map.put(state, :last_undeliverable, pid)
+    end
+  end
+
+  defp describe(:opaque), do: "an opaque tag"
+  defp describe(addr), do: Mob.Event.Address.to_string(addr)
+
+  # Kept in `:persistent_term` so the count survives a listener restart and
+  # `health/0` reads it without a call into this process. Only the listener
+  # creates it, and there is one listener, so it is never created twice.
+  defp undeliverable_counter do
+    case :persistent_term.get(@undeliverable, nil) do
+      nil ->
+        counter = :counters.new(1, [])
+        :persistent_term.put(@undeliverable, counter)
+        counter
+
+      counter ->
+        counter
+    end
+  end
 end

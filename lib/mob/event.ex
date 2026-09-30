@@ -13,10 +13,13 @@ defmodule Mob.Event do
   2. **Match** — small helpers (`is_event?/1`, `match_address?/2`) for handler
      code that wants to filter incoming events by address fields.
 
-  This module is the **single doorway** between native event sources and
-  user-level handler code. Every emitter (taps, gestures, lifecycle, custom
-  components) eventually calls `Mob.Event.emit/4` (or `dispatch/4`, for
-  pre-resolved pids).
+  Events built here — custom components, `send_test/7`, anything that already
+  has an address — go through `emit/5` or `dispatch/4`, which is where they are
+  traced. Native input does **not**: the NIF delivers legacy tuples
+  (`{:tap, tag}`, `{:change, tag, value}`, ...) through `Mob.Listener`
+  straight to the screen. `Mob.Screen.Server` names those by canonical address
+  when they arrive, traces them, and records a receipt for the discrete ones —
+  see `Mob.Event.NativeInput`. Neither path is traced twice.
   """
 
   alias Mob.Event.{Address, Target}

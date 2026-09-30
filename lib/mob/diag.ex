@@ -252,16 +252,20 @@ defmodule Mob.Diag do
       a hot push)
     * `store` — store-specific counts, e.g. evictions
 
-  Plus the heir and the subscriber lists of `Mob.Defect.Bus` and
-  `Mob.Event.Trace`. Counts and pids only, never recorded content. Read-only:
-  it starts nothing and repairs nothing.
+  Plus the heir, the subscriber lists of `Mob.Defect.Bus` and
+  `Mob.Event.Trace`, and `listener` — `Mob.Listener`'s pid and
+  `undeliverable`, the native events that arrived for a screen that had died
+  (each discrete one also has an `:undeliverable` receipt). Counts and pids
+  only, never recorded content. Read-only: it starts nothing and repairs
+  nothing.
   """
   @spec health() :: map()
   def health do
     %{
       stores: Map.new(@stores, &{&1, Mob.Diag.Store.health(&1)}),
       heir: Process.whereis(Mob.Diag.Heir),
-      subscribers: Mob.Diag.Subscribers.health()
+      subscribers: Mob.Diag.Subscribers.health(),
+      listener: Mob.Listener.health()
     }
   end
 end

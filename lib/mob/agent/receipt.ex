@@ -13,6 +13,21 @@ defmodule Mob.Agent.Receipt do
   A receipt replaces the window with a correlation id. One action, one id,
   followed from dispatch through to the committed frame.
 
+  ## Which actions get one
+
+  Every `Mob.Screen.dispatch/3` (`handle_event/3`), and every discrete native
+  input a screen receives through `handle_info/2` — a real tap, a text change,
+  a submit, a list-row select, and `Mob.Test.tap/2`, which sends the same
+  message. `event` is the event name for a dispatch, and `{event_atom,
+  %Mob.Event.Address{}}` for native input — never the input's payload, since a
+  text field's value is user data; a tag that is not a valid address id is
+  `{event_atom, :opaque}`. Display-rate streams (scroll, drag, a slider drag)
+  get none: see `Mob.Event.NativeInput`.
+
+  A discrete input for a screen that has died never reaches a handler.
+  `Mob.Listener` records it as a receipt with the single stage
+  `:undeliverable` and `screen: nil`.
+
   ## The stages
 
   An action passes through the stages below, and the *first* one it fails to
@@ -22,8 +37,9 @@ defmodule Mob.Agent.Receipt do
   | Stage | Reached when | If it stops here |
   |---|---|---|
   | `:dispatched` | the screen received the event | — |
+  | `:undeliverable` | the target screen was dead; nothing received it | event routing — native is still showing a screen that has been replaced |
   | `:unhandled` | *no* clause matched the event | event routing — a stale tag, a renamed event |
-  | `:handled` | `handle_event/3` returned | — it raised; see `:unhandled` below |
+  | `:handled` | the handler — `handle_event/3`, or `handle_info/2` for native input — returned | — it raised; see `:unhandled` below |
   | `:assigns_changed` | the socket's assigns differ | application code — the handler ran and decided nothing |
   | `:frame_changed` | `render/1` produced a different frame | the render function — it ignores the assigns that changed |
   | `:committed` | the frame was handed to the sender | the renderer or the bridge |
@@ -57,6 +73,7 @@ defmodule Mob.Agent.Receipt do
 
   @type stage ::
           :dispatched
+          | :undeliverable
           | :unobservable
           | :unhandled
           | :handled
@@ -212,6 +229,7 @@ defmodule Mob.Agent.Receipt do
 
   def owner(%__MODULE__{stages: stages}) do
     cond do
+      :undeliverable in stages -> :event_routing
       :unobservable in stages -> :unknown
       # The one stage this screen cannot verify: it records that the handler
       # ASKED to navigate, and the router decides whether the ask does anything.
@@ -241,8 +259,10 @@ defmodule Mob.Agent.Receipt do
     asked; confirming what happened needs the router, which is not wired yet.
   * `:no_visible_change` — the handler ran and the frame came out identical.
   * `:not_committed` — a new frame was built and never handed to the sender.
-  * `:inert` — the handler ran and changed nothing.
   * `:unhandled` — no clause matched the event.
+  * `:undeliverable` — the input was addressed to a screen that had died, so no
+    handler ran. Not forwarded to its replacement, which may be showing
+    something else.
   * `:unobservable` — the screen is in `:no_render` mode, so no frame stage can
     be reached and no conclusion about the view is available.
   * `:error` — the handler raised.
@@ -259,6 +279,7 @@ defmodule Mob.Agent.Receipt do
           | :not_committed
           | :inert
           | :unhandled
+          | :undeliverable
           | :unobservable
           | :error
   def effect(%__MODULE__{error: error, stages: stages}) when not is_nil(error) do
@@ -267,6 +288,7 @@ defmodule Mob.Agent.Receipt do
 
   def effect(%__MODULE__{stages: stages}) do
     cond do
+      :undeliverable in stages -> :undeliverable
       # No paint happens in :no_render mode, so no frame stage can ever be
       # reached. Falling through to :no_visible_change would blame a render
       # function that is not running.

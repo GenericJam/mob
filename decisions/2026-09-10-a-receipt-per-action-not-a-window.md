@@ -34,6 +34,16 @@ action reached: `:dispatched`, `:handled` (or `:unhandled`), `:assigns_changed`,
 `:navigation_requested`, `:frame_changed`, `:committed`, and `:unobservable`
 for a screen that does not render.
 
+> **2026-09-30 (MOB-305, MOB-306):** "Every dispatched event" covered only
+> `Mob.Screen.dispatch/3`. Native input never goes through it — a real tap
+> reaches `handle_info/2` as `{:tap, tag}` — so on a device no tap produced a
+> receipt, and the guide's agent loop (`Mob.Test.tap/2`, then
+> `Receipts.recent/1`) read nothing. Discrete native input is now receipted
+> around `handle_info/2` with the same stages, named by canonical address and
+> never carrying its payload; display-rate streams are not. A new stage,
+> `:undeliverable` (owner `:event_routing`), records a tap addressed to a
+> screen that had died. See `2026-09-30-native-input-is-an-action.md`.
+
 **The stages are observed, not reported.** Only `:handled` is proved by the
 callback itself; every later stage is a comparison the screen makes for itself —
 an assigns digest before and after, a tree fingerprint before and after. A
