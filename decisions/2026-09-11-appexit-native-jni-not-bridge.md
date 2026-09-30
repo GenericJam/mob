@@ -64,6 +64,13 @@ Any I/O failure is silent: the worst outcome is a re-emit of
 already-emitted entries on next boot, which the Registry then dedups
 within the current BEAM session.
 
+> **Note 2026-09-30 (MOB-303):** the marker advances when the NIF returns an
+> exit, not when anyone has seen its capsule, so the drain is destructive. A
+> boot killed before anyone looked (`mix mob.connect` restarts the app) lost
+> the exit for good. Drained exits are now kept in `Mob.PostMortem.Journal`
+> and re-emitted every sweep until observed on the bus. See
+> `2026-09-30-destructive-post-mortem-drains-are-journaled-until-observed.md`.
+
 **Trace inclusion deferred.** `ApplicationExitInfo.getTraceInputStream()`
 returns the raw trace file for an ANR — potentially KB of stack text
 with app strings mixed in. That needs the same

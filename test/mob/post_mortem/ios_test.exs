@@ -6,9 +6,12 @@ defmodule Mob.PostMortem.IOSTest do
 
   alias Mob.Defect.Bus
   alias Mob.PostMortem.IOS
+  alias Mob.PostMortem.Journal
   alias Mob.PostMortem.Registry
 
-  # Fake NIF module used with sweep_with/1. Real callers use :mob_nif,
+  @moduletag :tmp_dir
+
+  # Fake NIF module used with sweep_with/2. Real callers use :mob_nif,
   # but on host we mock the native calls so the Elixir side can be
   # exercised without an iPhone.
   #
@@ -21,15 +24,27 @@ defmodule Mob.PostMortem.IOSTest do
     def post_mortem_ios_drain, do: Process.get(:test_payloads, [])
   end
 
-  setup do
+  setup %{tmp_dir: tmp_dir} do
     Bus.reset()
     Registry.reset()
+    Journal.reset()
+    on_exit(&Journal.reset/0)
     Bus.unsubscribe()
     {:ok, _ref} = Bus.subscribe()
 
+    Process.put(:journal, Path.join(tmp_dir, "journal.etf"))
     Process.put(:test_platform, :ios)
     Process.put(:test_payloads, [])
     :ok
+  end
+
+  defp journal, do: Process.get(:journal)
+
+  defp reboot do
+    Bus.reset()
+    Registry.reset()
+    Journal.reset()
+    Process.put(:test_payloads, [])
   end
 
   defp crash_payload(opts \\ []) do
@@ -48,13 +63,13 @@ defmodule Mob.PostMortem.IOSTest do
     test "returns [] on Android" do
       Process.put(:test_platform, :android)
       Process.put(:test_payloads, [crash_payload()])
-      assert IOS.sweep_with(FakeNIF) == []
+      assert IOS.sweep_with(FakeNIF, journal()) == []
     end
 
     test "returns [] on host" do
       Process.put(:test_platform, :host)
       Process.put(:test_payloads, [crash_payload()])
-      assert IOS.sweep_with(FakeNIF) == []
+      assert IOS.sweep_with(FakeNIF, journal()) == []
     end
 
     test "returns [] on iOS when the NIF is not loaded (default sweep/0)" do
@@ -73,7 +88,7 @@ defmodule Mob.PostMortem.IOSTest do
         %{crash_payload() | kind: :perf_regression, top_frame: %{binary: "MyApp", offset: 42}}
       ])
 
-      capsules = IOS.sweep_with(FakeNIF)
+      capsules = IOS.sweep_with(FakeNIF, journal())
       assert Enum.count(capsules) == 3
 
       kinds = Enum.map(capsules, & &1.kind)
@@ -97,7 +112,7 @@ defmodule Mob.PostMortem.IOSTest do
         crash_payload(timestamp_ms: 2_000)
       ])
 
-      [a, b] = IOS.sweep_with(FakeNIF)
+      [a, b] = IOS.sweep_with(FakeNIF, journal())
       assert a.fingerprint == b.fingerprint
     end
 
@@ -108,7 +123,7 @@ defmodule Mob.PostMortem.IOSTest do
         crash_payload(binary: "OtherLib", offset: 1)
       ])
 
-      [a, b, c] = IOS.sweep_with(FakeNIF)
+      [a, b, c] = IOS.sweep_with(FakeNIF, journal())
 
       refute a.fingerprint == b.fingerprint
       refute a.fingerprint == c.fingerprint
@@ -124,14 +139,14 @@ defmodule Mob.PostMortem.IOSTest do
         %{crash_payload() | kind: :anr}
       ])
 
-      [a, b] = IOS.sweep_with(FakeNIF)
+      [a, b] = IOS.sweep_with(FakeNIF, journal())
       refute a.fingerprint == b.fingerprint
     end
 
     test "raw_json rides on evidence" do
       Process.put(:test_payloads, [crash_payload(raw_json: ~s({"stuff":123}))])
 
-      [capsule] = IOS.sweep_with(FakeNIF)
+      [capsule] = IOS.sweep_with(FakeNIF, journal())
       assert capsule.evidence.raw_json == ~s({"stuff":123})
     end
 
@@ -143,9 +158,9 @@ defmodule Mob.PostMortem.IOSTest do
       payloads = [crash_payload()]
       Process.put(:test_payloads, payloads)
 
-      first = IOS.sweep_with(FakeNIF)
+      first = IOS.sweep_with(FakeNIF, journal())
       # sweep again with the same payloads still in the fake's return
-      second = IOS.sweep_with(FakeNIF)
+      second = IOS.sweep_with(FakeNIF, journal())
 
       assert Enum.count(first) == 1
       assert second == []
@@ -159,7 +174,7 @@ defmodule Mob.PostMortem.IOSTest do
       # keeps running.
       Process.put(:test_payloads, [:garbage, crash_payload(), nil])
 
-      capsules = IOS.sweep_with(FakeNIF)
+      capsules = IOS.sweep_with(FakeNIF, journal())
       assert Enum.count(capsules) == 1
     end
 
@@ -178,7 +193,7 @@ defmodule Mob.PostMortem.IOSTest do
       ])
 
       {capsules, log} =
-        with_log(fn -> IOS.sweep_with(FakeNIF) end)
+        with_log(fn -> IOS.sweep_with(FakeNIF, journal()) end)
         |> then(fn {caps, log} -> {caps, log} end)
 
       # Two well-formed payloads through, two malformed dropped.
@@ -189,6 +204,22 @@ defmodule Mob.PostMortem.IOSTest do
       # shape rather than getting silent data loss.
       assert log =~ "[warning]"
       assert log =~ "malformed MetricKit payload"
+    end
+  end
+
+  describe "until observed (MOB-303)" do
+    test "a payload nobody observed is emitted again after a reboot, until observed" do
+      Bus.unsubscribe()
+      Process.put(:test_payloads, [crash_payload()])
+      [first] = IOS.sweep_with(FakeNIF, journal())
+
+      reboot()
+      [again] = IOS.sweep_with(FakeNIF, journal())
+      assert again.evidence == first.evidence
+
+      Bus.recent()
+      reboot()
+      assert IOS.sweep_with(FakeNIF, journal()) == []
     end
   end
 end

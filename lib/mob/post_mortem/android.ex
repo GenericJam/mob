@@ -5,9 +5,9 @@ defmodule Mob.PostMortem.Android do
   Pulls the OS-held history of process exits via
   `ActivityManager.getHistoricalProcessExitReasons` (available on
   Android 11 / API 30 and later), filters against a persistent marker
-  so each exit is emitted exactly once across boots, and hands each new
-  entry to `Mob.Defect.emit_appexit_reason/1` as a capsule on
-  `Mob.Defect.Bus`.
+  so the drain returns each exit once across boots, keeps each one in
+  `Mob.PostMortem.Journal` until it has been observed, and hands it to
+  `Mob.Defect.emit_appexit_reason/1` as a capsule on `Mob.Defect.Bus`.
 
   ## What the OS gives us
 
@@ -26,7 +26,18 @@ defmodule Mob.PostMortem.Android do
   `<filesDir>/mob_post_mortem_appexit_marker.txt` and filters the OS
   list to entries strictly newer. First sweep on a fresh install still
   emits the current history (that is the point of a first sweep);
-  every subsequent sweep emits only what accumulated since.
+  every subsequent drain returns only what accumulated since.
+
+  ## Until observed, not once
+
+  The marker advances when the NIF returns an exit, so the drain is
+  destructive: the capsule on this boot's bus is the only copy, and a
+  boot that dies before anyone looks — `mix mob.connect` restarts the
+  app, for one — would take the exit with it. So each drained exit is
+  written to `Mob.PostMortem.Journal` before it is emitted, and every
+  sweep, in this boot or a later one, emits it again until a
+  subscriber has received it or a reader has asked the bus. Within one
+  boot a re-sweep emits nothing it already emitted.
 
   ## Platform gating
 
@@ -53,49 +64,48 @@ defmodule Mob.PostMortem.Android do
 
   alias Mob.Defect
   alias Mob.Defect.Capsule
-  alias Mob.PostMortem.Registry
+  alias Mob.PostMortem.Journal
 
   @doc """
   Sweep any ApplicationExitInfo entries the OS has recorded since the
-  persisted marker was last written.
+  persisted marker was last written, and every earlier one not yet
+  observed.
 
-  Returns the list of capsules emitted, in the order the NIF returned
-  them (typically OS-chronological). Empty on iOS, on Android < 11, on
-  a host test with the NIF not loaded, or any time the marker filters
-  everything out.
+  Returns the list of capsules emitted: unobserved journaled entries
+  first, then new ones in the order the NIF returned them (typically
+  OS-chronological). Empty on iOS, on Android < 11, on a host test with
+  the NIF not loaded, and when nothing is new or waiting to be observed.
   """
   @spec sweep() :: [Capsule.t()]
-  def sweep do
-    with :android <- safe_platform(),
-         entries when is_list(entries) <- safe_drain() do
-      Enum.flat_map(entries, &emit_if_new/1)
-    else
-      _ -> []
-    end
-  end
+  def sweep, do: run(:mob_nif, &Journal.default_path/0)
 
   @doc false
-  @spec sweep_with(module()) :: [Capsule.t()]
-  def sweep_with(nif) when is_atom(nif) do
-    with :android <- safe_platform_via(nif),
-         entries when is_list(entries) <- safe_drain_via(nif) do
-      Enum.flat_map(entries, &emit_if_new/1)
-    else
-      _ -> []
+  @spec sweep_with(module(), Path.t()) :: [Capsule.t()]
+  def sweep_with(nif, journal) when is_atom(nif) and is_binary(journal),
+    do: run(nif, fn -> journal end)
+
+  defp run(nif, journal) do
+    case safe_platform(nif) do
+      :android ->
+        fresh = nif |> safe_drain() |> Enum.flat_map(&identify/1)
+        Journal.sweep(journal, :android, fresh, &Defect.emit_appexit_reason/1)
+
+      _ ->
+        []
     end
   end
 
   # ---------------------------------------------------------------------------
-  # Emit + dedup
+  # Shape + id
   # ---------------------------------------------------------------------------
 
-  # Same shape as Mob.PostMortem.IOS.emit_if_new/1: shape validation
-  # first, then Registry dedup, then Defect emit. A malformed entry
-  # logs at :warning and is skipped — one bad row from the NIF must
-  # not take out the whole sweep.
-  defp emit_if_new(entry) when is_map(entry) do
+  # Same shape as Mob.PostMortem.IOS.identify/1: shape validation first,
+  # then the artifact id the journal and the Registry dedup on. A
+  # malformed entry logs at :warning and is skipped — one bad row from
+  # the NIF must not take out the whole sweep.
+  defp identify(entry) when is_map(entry) do
     if valid_shape?(entry) do
-      Registry.emit_once(artifact_id(entry), fn -> Defect.emit_appexit_reason(entry) end)
+      [{artifact_id(entry), entry}]
     else
       Logger.warning(
         "[Mob.PostMortem.Android] dropping malformed ApplicationExitInfo entry " <>
@@ -106,7 +116,7 @@ defmodule Mob.PostMortem.Android do
     end
   end
 
-  defp emit_if_new(_), do: []
+  defp identify(_), do: []
 
   defp valid_shape?(%{
          reason_code: _,
@@ -120,9 +130,9 @@ defmodule Mob.PostMortem.Android do
   defp valid_shape?(_), do: false
 
   # sha256 over (reason_code + pid + timestamp_ms + process_name +
-  # description). The persistent NIF-side marker filters most re-emits
-  # between boots; the Registry here catches re-drains within a single
-  # BEAM session (a re-sweep in the same lifetime should be a no-op).
+  # description). The NIF-side marker keeps the OS from handing an exit
+  # over twice; the journal keeps it until observed; the Registry keeps
+  # a re-sweep within one BEAM session from emitting it twice.
   #
   # `description` is included in the artifact id (not the fingerprint
   # key) to distinguish two OS entries with matching (reason_code,
@@ -141,46 +151,26 @@ defmodule Mob.PostMortem.Android do
   end
 
   # ---------------------------------------------------------------------------
-  # Safe NIF wrappers
+  # Safe NIF wrappers (`nif` is `:mob_nif`, or a test's stand-in)
   # ---------------------------------------------------------------------------
 
-  defp safe_platform do
-    try do
-      :mob_nif.platform()
-    rescue
-      _ -> :host
-    catch
-      _, _ -> :host
-    end
+  defp safe_platform(nif) do
+    nif.platform()
+  catch
+    # Not loaded (host) or not registered: not Android.
+    # credo:disable-for-next-line ExSlop.Check.Warning.BlanketRescue
+    _, _ -> :host
   end
 
-  defp safe_platform_via(nif) do
-    try do
-      nif.platform()
-    rescue
-      _ -> :host
-    catch
-      _, _ -> :host
-    end
-  end
-
-  defp safe_drain do
-    try do
-      :mob_nif.post_mortem_android_drain()
-    rescue
+  # A drain that fails or returns garbage drained nothing: the journal's
+  # pending entries are still re-emitted.
+  defp safe_drain(nif) do
+    case nif.post_mortem_android_drain() do
+      entries when is_list(entries) -> entries
       _ -> []
-    catch
-      _, _ -> []
     end
-  end
-
-  defp safe_drain_via(nif) do
-    try do
-      nif.post_mortem_android_drain()
-    rescue
-      _ -> []
-    catch
-      _, _ -> []
-    end
+  catch
+    # credo:disable-for-next-line ExSlop.Check.Warning.BlanketRescue
+    _, _ -> []
   end
 end

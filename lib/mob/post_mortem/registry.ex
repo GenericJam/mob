@@ -20,6 +20,10 @@ defmodule Mob.PostMortem.Registry do
   the seen-set would silence the exact restart-and-look-again pattern
   that recovers a defect an earlier BEAM's bus never got to observe.
 
+  What does persist is `Mob.PostMortem.Journal`: entries the OS hands over only
+  once (MetricKit, `ApplicationExitInfo`) are kept there until observed, and a
+  fresh BEAM re-emits them through this registry like a dump still on disk.
+
   The table is owned by a `Mob.Diag.Store` owner, and the write path never
   goes through a GenServer mailbox.
   """

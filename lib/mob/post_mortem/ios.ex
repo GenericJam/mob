@@ -42,6 +42,17 @@ defmodule Mob.PostMortem.IOS do
   auto-runs — that is the framework-wide discipline: mob owns the format
   and the bus but never becomes the collector.
 
+  ## Until observed, not once
+
+  The native queue is cleared as it is drained, and MetricKit does not
+  deliver a payload twice, so the capsule on this boot's bus is the
+  only copy; a boot that dies before anyone looks would take the
+  diagnostic with it. So each drained payload is written to
+  `Mob.PostMortem.Journal` before it is emitted, and every sweep, in
+  this boot or a later one, emits it again until a subscriber has
+  received it or a reader has asked the bus. Within one boot a
+  re-sweep emits nothing it already emitted.
+
   ## Redaction
 
   MetricKit's `MXCallStackTree` carries binary UUIDs, image names and
@@ -65,42 +76,42 @@ defmodule Mob.PostMortem.IOS do
 
   alias Mob.Defect
   alias Mob.Defect.Capsule
-  alias Mob.PostMortem.Registry
+  alias Mob.PostMortem.Journal
 
   @doc """
-  Sweep the MetricKit queue and emit a capsule for each new payload.
+  Sweep the MetricKit queue and emit a capsule for each new payload,
+  and for every earlier one not yet observed.
 
-  Returns the list of capsules emitted, in the order they were
-  delivered by the OS. Empty on Android, on iOS < 14 (no MetricKit
-  delivery API), and any time the queue was already empty since the
-  last drain.
+  Returns the list of capsules emitted: unobserved journaled payloads
+  first, then new ones in the order the OS delivered them. Empty on
+  Android, on iOS < 14 (no MetricKit delivery API), and when nothing
+  is new or waiting to be observed.
   """
   @spec sweep() :: [Capsule.t()]
-  def sweep do
-    with :ios <- safe_platform(),
-         payloads when is_list(payloads) <- safe_drain() do
-      Enum.flat_map(payloads, &emit_if_new/1)
-    else
-      _ -> []
-    end
-  end
+  def sweep, do: run(:mob_nif, &Journal.default_path/0)
 
   # Called by tests to inject a fake NIF that returns hand-shaped
-  # payloads. Real callers should never pass this — the default reaches
-  # `:mob_nif.post_mortem_ios_drain/0` directly.
+  # payloads, and a journal path. Real callers should never pass this —
+  # the default reaches `:mob_nif.post_mortem_ios_drain/0` and
+  # `Journal.default_path/0`.
   @doc false
-  @spec sweep_with(module()) :: [Capsule.t()]
-  def sweep_with(nif) when is_atom(nif) do
-    with :ios <- safe_platform_via(nif),
-         payloads when is_list(payloads) <- safe_drain_via(nif) do
-      Enum.flat_map(payloads, &emit_if_new/1)
-    else
-      _ -> []
+  @spec sweep_with(module(), Path.t()) :: [Capsule.t()]
+  def sweep_with(nif, journal) when is_atom(nif) and is_binary(journal),
+    do: run(nif, fn -> journal end)
+
+  defp run(nif, journal) do
+    case safe_platform(nif) do
+      :ios ->
+        fresh = nif |> safe_drain() |> Enum.flat_map(&identify/1)
+        Journal.sweep(journal, :ios, fresh, &Defect.emit_metrickit_payload/1)
+
+      _ ->
+        []
     end
   end
 
   # ---------------------------------------------------------------------------
-  # Emit + dedup
+  # Shape + id
   # ---------------------------------------------------------------------------
 
   # Emit gate. Two shape checks, in this order:
@@ -112,15 +123,14 @@ defmodule Mob.PostMortem.IOS do
   #    strict pattern match. A partial payload from a future NIF
   #    version that grew a field the current Elixir side does not
   #    know about is not this shape; a partial payload that dropped
-  #    a field this side needs would be, and would take out the
-  #    whole sweep — losing every later well-formed payload in the
-  #    same drain — if we did not gate.
+  #    a field this side needs would be, and would be journaled and
+  #    fail to emit on every sweep — if we did not gate.
   #
-  # Well-formed payloads emit and mark seen; malformed ones log at
+  # Well-formed payloads get their artifact id; malformed ones log at
   # :warning and are skipped. Neither raises out of the sweep.
-  defp emit_if_new(payload) when is_map(payload) do
+  defp identify(payload) when is_map(payload) do
     if valid_shape?(payload) do
-      Registry.emit_once(artifact_id(payload), fn -> Defect.emit_metrickit_payload(payload) end)
+      [{artifact_id(payload), payload}]
     else
       Logger.warning(
         "[Mob.PostMortem.IOS] dropping malformed MetricKit payload " <>
@@ -131,7 +141,7 @@ defmodule Mob.PostMortem.IOS do
     end
   end
 
-  defp emit_if_new(_), do: []
+  defp identify(_), do: []
 
   defp valid_shape?(%{
          kind: _,
@@ -145,9 +155,9 @@ defmodule Mob.PostMortem.IOS do
   # A MetricKit payload does not carry a stable id of its own — MetricKit
   # deduplicates by day on its side, and we deduplicate by content on
   # ours. sha256 of (kind + top_binary + top_offset + timestamp_ms) is
-  # unique per delivered diagnostic; the Registry then filters out
-  # re-emits within the same BEAM lifetime (a re-sweep produces no new
-  # capsules for the same drained payloads).
+  # unique per delivered diagnostic; the journal keys on it across
+  # boots and the Registry filters out re-emits within the same BEAM
+  # lifetime (a re-sweep produces no new capsules for the same payloads).
   #
   # No fallback clause: `valid_shape?/1` in the caller gates on exactly
   # this pattern, so a malformed payload cannot reach here. A second
@@ -164,46 +174,26 @@ defmodule Mob.PostMortem.IOS do
   end
 
   # ---------------------------------------------------------------------------
-  # Safe NIF wrappers
+  # Safe NIF wrappers (`nif` is `:mob_nif`, or a test's stand-in)
   # ---------------------------------------------------------------------------
 
-  defp safe_platform do
-    try do
-      :mob_nif.platform()
-    rescue
-      _ -> :host
-    catch
-      _, _ -> :host
-    end
+  defp safe_platform(nif) do
+    nif.platform()
+  catch
+    # Not loaded (host) or not registered: not iOS.
+    # credo:disable-for-next-line ExSlop.Check.Warning.BlanketRescue
+    _, _ -> :host
   end
 
-  defp safe_platform_via(nif) do
-    try do
-      nif.platform()
-    rescue
-      _ -> :host
-    catch
-      _, _ -> :host
-    end
-  end
-
-  defp safe_drain do
-    try do
-      :mob_nif.post_mortem_ios_drain()
-    rescue
+  # A drain that fails or returns garbage drained nothing: the journal's
+  # pending payloads are still re-emitted.
+  defp safe_drain(nif) do
+    case nif.post_mortem_ios_drain() do
+      payloads when is_list(payloads) -> payloads
       _ -> []
-    catch
-      _, _ -> []
     end
-  end
-
-  defp safe_drain_via(nif) do
-    try do
-      nif.post_mortem_ios_drain()
-    rescue
-      _ -> []
-    catch
-      _, _ -> []
-    end
+  catch
+    # credo:disable-for-next-line ExSlop.Check.Warning.BlanketRescue
+    _, _ -> []
   end
 end

@@ -110,6 +110,12 @@ the emit raises, counting it as lost. An artifact still on disk (a crash dump)
 is retried by the next sweep. MetricKit and ApplicationExitInfo drains are
 destructive, so for them the counted loss is the best available.
 
+> **Corrected 2026-09-30 (MOB-303):** no longer true. Destructive drains now
+> write each entry to `Mob.PostMortem.Journal` before emitting it, so an entry
+> whose emit fails stays journaled and is retried by the next sweep, like a
+> crash dump. See
+> `2026-09-30-destructive-post-mortem-drains-are-journaled-until-observed.md`.
+
 **`Defect.Bus` classes are capped at 256.** Past the cap, the least recently
 seen classes are evicted by compare-and-delete, and only an actual removal is
 counted (`class_evictions`). One pass reads `{last_seen, fingerprint}` pairs

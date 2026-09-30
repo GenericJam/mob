@@ -46,6 +46,12 @@ choice (the process that called `sweep/0`) rather than a
 long-standing registration, which matches how `Mob.Defect.Bus`
 already works.
 
+> **Note 2026-09-30 (MOB-303):** a drained payload's only copy was the capsule
+> on the draining boot's bus, and that boot can die before anyone looks.
+> Drained payloads are now kept in `Mob.PostMortem.Journal` and re-emitted
+> every sweep until observed. See
+> `2026-09-30-destructive-post-mortem-drains-are-journaled-until-observed.md`.
+
 **Bounded queue at 32:** a burst of diagnostics on a bad morning
 after a bad night. MetricKit itself delivers roughly one payload per
 diagnostic class per day, so 32 is generous. On overflow we drop the
