@@ -2,18 +2,22 @@ defmodule Mob.Event.Trace do
   @moduledoc """
   Live tracing of Mob events for IEx debugging.
 
-  Subscribe a process to receive every event that flows through `Mob.Event`.
-  Tracing is opt-in and costs one `:persistent_term` read per dispatch when no
-  tracers are registered.
+  Subscribe a process to receive every event that reaches a handler: events
+  delivered through `Mob.Event.dispatch/4`, and native input — taps, changes,
+  gestures, scroll — which arrives at a screen as a legacy tuple and is traced
+  by `Mob.Screen.Server` when the screen receives it (see
+  `Mob.Event.NativeInput`). Tracing is opt-in and costs one `:persistent_term`
+  read per event when no tracers are registered.
 
   ## Usage
 
       # In IEx connected to the running app:
       Mob.Event.Trace.subscribe()
 
-      # Now every event delivered via Mob.Event.dispatch/4 also lands in your
-      # mailbox tagged {:mob_trace, addr, event, payload}. Pattern-match it,
-      # log it, whatever.
+      # Now every event lands in your mailbox too, tagged
+      # {:mob_trace, addr, event, payload}. A native tap on `on_tap: {self(),
+      # :save}` arrives as {:mob_trace, %Address{widget: :button, id: :save},
+      # :tap, nil}. Pattern-match it, log it, whatever.
 
       flush()  # see what's in the mailbox
 
@@ -31,12 +35,21 @@ defmodule Mob.Event.Trace do
   Tracers are monitored by `Mob.Diag.Subscribers`, so one that exits (or whose
   node disconnects) stops being traced to without an `unsubscribe/1`.
 
+  ## What is not traced
+
+  Native input the screen never receives: an event for a screen that has
+  died is dropped by `Mob.Listener` and recorded as an `:undeliverable`
+  receipt instead. Arbitrary `handle_info/2` messages — timers, PubSub — are
+  not events and are not traced. A native tag that is not a valid address id
+  has no canonical address and is not traced either.
+
   ## Performance
 
-  When no tracers are registered (the default), `Mob.Event.dispatch/4` reads an
-  empty list from `:persistent_term` and returns. When tracers are registered,
-  each one is `send`ed a copy of the envelope. Tracer filter functions run in the
-  dispatch path, so keep them cheap.
+  When no tracers are registered (the default), each event reads an empty list
+  from `:persistent_term` and returns; native input is not even given an
+  address. When tracers are registered, each one is `send`ed a copy of the
+  envelope, payload included. Tracer filter functions run in the dispatching
+  process, so keep them cheap.
   """
 
   alias Mob.Diag.Subscribers
@@ -86,7 +99,32 @@ defmodule Mob.Event.Trace do
   """
   @spec broadcast(Address.t(), atom(), term()) :: :ok
   def broadcast(%Address{} = addr, event, payload) when is_atom(event) do
-    for {pid, filter} <- Subscribers.list(@topic), matches?(filter, addr) do
+    deliver_all(Subscribers.list(@topic), addr, event, payload)
+  end
+
+  @doc """
+  Called by `Mob.Screen.Server` for a native input message it received.
+  Internal API.
+
+  The address is built only when someone is listening, so with no tracers
+  this is the same empty-list read as `broadcast/3`. Never raises.
+  """
+  @spec broadcast_input(tuple(), module()) :: :ok
+  def broadcast_input(message, screen) do
+    case Subscribers.list(@topic) do
+      [] ->
+        :ok
+
+      tracers ->
+        case Mob.Event.NativeInput.canonical(message, screen) do
+          {%Address{} = addr, event, payload} -> deliver_all(tracers, addr, event, payload)
+          {:opaque, _event, _payload} -> :ok
+        end
+    end
+  end
+
+  defp deliver_all(tracers, addr, event, payload) do
+    for {pid, filter} <- tracers, matches?(filter, addr) do
       deliver(pid, {:mob_trace, addr, event, payload})
     end
 

@@ -2,11 +2,12 @@ defmodule Mob.Agent.Receipts do
   @moduledoc """
   A bounded record of recent action receipts, and the telemetry bridge.
 
-  Receipts are written on the path of every dispatched event, so this is
-  deliberately cheap: one ETS insert into a `:set`, one `:atomics.add_get/3`,
-  and an eviction check. **No process is involved on the write path** — a
-  GenServer in front of the table would serialise every event in the app
-  through one mailbox, which is the opposite of what a diagnostic should cost.
+  Receipts are written on the path of every action — each dispatched event and
+  each discrete native input — so this is deliberately cheap: one ETS insert
+  into a `:set`, one `:atomics.add_get/3`, and an eviction check. **No process
+  is involved on the write path** — a GenServer in front of the table would
+  serialise every event in the app through one mailbox, which is the opposite
+  of what a diagnostic should cost.
   The table is owned by a `Mob.Diag.Store` owner so it outlives the screens that
   write to it; nothing routes through it.
 

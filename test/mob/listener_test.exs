@@ -17,6 +17,13 @@ defmodule Mob.ListenerTest do
     pid
   end
 
+  defp dead_pid do
+    pid = spawn(fn -> :ok end)
+    ref = Process.monitor(pid)
+    assert_receive {:DOWN, ^ref, :process, ^pid, _}
+    pid
+  end
+
   describe "handler/1 without a listener" do
     test "returns a tagged target unchanged" do
       target = {self(), :save}
@@ -87,6 +94,7 @@ defmodule Mob.ListenerTest do
       refute_receive {:tap, :belongs_to_other}
     end
 
+    @tag :capture_log
     test "an event for a dead screen is dropped, not redirected" do
       listener = start_listener()
       dead = spawn(fn -> :ok end)
@@ -99,6 +107,55 @@ defmodule Mob.ListenerTest do
       send(listener, {:tap, {:mob_route, self(), :mine}})
       assert_receive {:tap, :mine}
       assert Process.alive?(listener)
+    end
+
+    test "a tap for a dead screen is recorded as undeliverable, not lost" do
+      # MOB-306. After a handler crash the screen restarts under a new pid, and
+      # taps on the tree native is still showing go to the old one. send/2 to a
+      # dead pid is a silent no-op: on a Moto G the tap left no receipt, no
+      # log and no count.
+      listener = start_listener()
+      dead = dead_pid()
+      Mob.Agent.Receipts.reset()
+      before = Mob.Diag.health().listener.undeliverable
+
+      capture_log(fn ->
+        send(listener, {:tap, {:mob_route, dead, :increment}})
+        :sys.get_state(listener)
+      end)
+
+      assert [receipt] = Mob.Agent.Receipts.recent(1)
+      assert receipt.stages == [:undeliverable]
+      assert receipt.screen == nil
+      assert {:tap, %Mob.Event.Address{widget: :button, id: :increment}} = receipt.event
+      assert Mob.Agent.Receipt.effect(receipt) == :undeliverable
+      assert Mob.Agent.Receipt.owner(receipt) == :event_routing
+      assert Mob.Diag.health().listener.undeliverable == before + 1
+    end
+
+    test "a dead screen logs once, never with the payload, and counts every event" do
+      listener = start_listener()
+      dead = dead_pid()
+      Mob.Agent.Receipts.reset()
+      before = Mob.Diag.health().listener.undeliverable
+
+      log =
+        capture_log(fn ->
+          send(listener, {:change, {:mob_route, dead, :password}, "hunter2-secret"})
+          send(listener, {:change, {:mob_route, dead, :password}, "hunter2-secret!"})
+          # A stream is counted but not receipted: a drag across a dead screen
+          # would otherwise evict every receipt worth reading.
+          send(listener, {:drag, {:mob_route, dead, :card}, %{x: 1.0, y: 2.0}})
+          :sys.get_state(listener)
+        end)
+
+      assert [_exactly_one] = :binary.matches(log, "which is dead")
+      refute log =~ "secret"
+
+      assert [first, second] = Mob.Agent.Receipts.recent(10)
+      assert {:change, %Mob.Event.Address{id: :password}} = first.event
+      refute inspect([first, second], limit: :infinity) =~ "secret"
+      assert Mob.Diag.health().listener.undeliverable == before + 3
     end
 
     test "an unmodelled routed shape is logged, not silently dropped" do

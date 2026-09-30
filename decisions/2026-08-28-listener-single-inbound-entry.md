@@ -62,6 +62,15 @@ by a screen that has since been stopped delivers to a dead pid, which the BEAM
 drops. That is precisely the MOB-107 fix — the event is dropped rather than
 delivered into whatever screen happens to be current with that screen's socket.
 
+> **2026-09-30 (MOB-306):** "which the BEAM drops" turned out to mean *drops
+> silently*. Once screens restart under a new pid, taps on the tree native is
+> still showing go to the dead one and vanish with no receipt, log or count.
+> The listener now checks a local target is alive before forwarding; a dead
+> one is still not redirected, but every such event is counted
+> (`Mob.Diag.health().listener.undeliverable`), a discrete one gets an
+> `:undeliverable` receipt, and the first per dead pid is logged. See
+> `2026-09-30-native-input-is-an-action.md`.
+
 A ref becomes worth its cost when a screen can be *restarted* and keep its
 identity across a new pid, which is MOB-112. The change is confined to
 `handler/1` and `handle_info/2`.

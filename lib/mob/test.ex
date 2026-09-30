@@ -306,6 +306,11 @@ defmodule Mob.Test do
   Fire-and-forget — does not wait for the screen to finish processing. Follow
   with `settle/2` before reading the native side.
 
+  Sends the `{:tap, tag}` a real tap delivers, so the screen observes it the
+  same way: `Mob.Agent.Receipts.recent/1` then holds a receipt with `event:
+  {:tap, %Mob.Event.Address{id: tag}}`, and `Mob.Event.Trace` subscribers see
+  it.
+
       Mob.Test.tap(node, :save)
       Mob.Test.tap(node, :open_detail)
   """
@@ -599,13 +604,17 @@ defmodule Mob.Test do
   `list_id` must match the `:id` prop on the `type: :list` node. `index` is
   zero-based. Delivers `{:select, list_id, index}` to `handle_info/2`.
 
+  Sends the `{:tap, {:list, list_id, :select, index}}` a real row tap delivers,
+  so the screen records a receipt for it (`event: {:select, %Address{widget:
+  :list, id: list_id, instance: index}}`) and traces it, as it would a finger.
+
   Fire-and-forget.
 
       Mob.Test.select(node, :my_list, 0)   # first row
   """
   @spec select(node(), atom(), non_neg_integer()) :: :ok
   def select(node, list_id, index) when is_atom(list_id) and is_integer(index) do
-    :rpc.call(node, Process, :send, [:mob_screen, {:select, list_id, index}, []])
+    :rpc.call(node, Process, :send, [:mob_screen, {:tap, {:list, list_id, :select, index}}, []])
     :ok
   end
 

@@ -201,6 +201,7 @@ defmodule Mob.Screen.Server do
     receipt = %Mob.Agent.Receipt{
       action_id: Mob.Agent.Receipt.new_action_id(),
       screen: state.module,
+      handler: {state.module, :handle_event, 3},
       event: event,
       stages: [:dispatched],
       before_frame_fingerprint: before_tree,
@@ -306,6 +307,18 @@ defmodule Mob.Screen.Server do
     observable? = state.render_mode == :render
     after_assigns = Keyword.get(opts, :after_assigns, state.socket.assigns)
     after_frame = Map.get(state.socket.__mob__, :last_frame)
+    # A frame is only observable in :render mode — `do_paint/5`'s :no_render
+    # clause never touches :last_frame, so comparing it there would report
+    # "the render function ignored your assigns" for every action.
+    frame_changed? = observable? and after_frame != before_tree
+
+    # An event paint runs with skippable: false, so a paint that happened always
+    # handed a frame over, and `navigated?` is exactly the case where none
+    # happened. A forwarded message repaints through `repaint_if_changed/1`,
+    # which hands a frame over exactly when it differs from the last one.
+    committed? =
+      observable? and not navigated? and
+        (Keyword.get(opts, :paint, :forced) == :forced or frame_changed?)
 
     unmatched? = Mob.Agent.Receipt.unmatched_event?(error, state.module)
 
@@ -316,19 +329,13 @@ defmodule Mob.Screen.Server do
       |> add_if(is_nil(error), :handled)
       |> add_if(is_nil(error) and after_assigns !== before_assigns, :assigns_changed)
       |> add_if(is_nil(error) and navigated?, :navigation_requested)
-      # A frame is only observable in :render mode — `do_paint/5`'s :no_render
-      # clause never touches :last_frame, so comparing it there would report
-      # "the render function ignored your assigns" for every action.
-      |> add_if(is_nil(error) and observable? and after_frame != before_tree, :frame_changed)
-      # Every event paint runs with skippable: false, so a paint that happened
-      # always handed a frame over. `navigated?` is exactly the case where no
-      # paint happened.
-      |> add_if(is_nil(error) and observable? and not navigated?, :committed)
+      |> add_if(is_nil(error) and frame_changed?, :frame_changed)
+      |> add_if(is_nil(error) and committed?, :committed)
 
     %{
       receipt
       | stages: stages,
-        handler: if(unmatched?, do: nil, else: {state.module, :handle_event, 3}),
+        handler: if(unmatched?, do: nil, else: receipt.handler),
         after_frame_fingerprint: after_frame,
         error: summarize(error, Keyword.get(opts, :stacktrace, [])),
         elapsed_us: System.monotonic_time(:microsecond) - started
@@ -359,8 +366,8 @@ defmodule Mob.Screen.Server do
   @impl GenServer
   # A list row selection arrives as a tap with a structured tag; the user sees
   # the simpler {:select, id, index}.
-  def handle_info({:tap, {:list, id, :select, index}}, state) do
-    forward({:select, id, index}, state)
+  def handle_info({:tap, {:list, id, :select, index}} = input, state) do
+    forward_input(input, {:select, id, index}, state)
   end
 
   # A component's state changed — repaint so the native view gets fresh props.
@@ -430,7 +437,19 @@ defmodule Mob.Screen.Server do
     forward(message, state)
   end
 
-  def handle_info(message, state), do: forward(message, state)
+  def handle_info(message, state) do
+    case Mob.Event.NativeInput.kind(message) do
+      :discrete ->
+        forward_input(message, message, state)
+
+      :stream ->
+        Mob.Event.Trace.broadcast_input(message, state.module)
+        forward(message, state)
+
+      :none ->
+        forward(message, state)
+    end
+  end
 
   @impl GenServer
   def terminate(reason, state) do
@@ -458,7 +477,64 @@ defmodule Mob.Screen.Server do
 
   defp forward(message, state) do
     {:noreply, socket} = state.module.handle_info(message, state.socket)
+    after_forward(socket, state)
+  end
 
+  # MOB-305. Native input reaches a screen as a legacy message through
+  # handle_info/2, never through dispatch/3, so this is where a real tap
+  # becomes an observed action: traced like `Mob.Event.dispatch/4`, and
+  # receipted with the same observed stages as the `{:event, ...}` path.
+  #
+  # `input` is what native sent and names the action; `message` is what the
+  # screen's handle_info/2 is given, which differs for a list-row select.
+  # handle_info/2 has no "no clause matched" signal: `use Mob.Screen` injects a
+  # catch-all and apps write their own, so an input the screen ignores is
+  # `:inert`. Only a raise is an error, as on the event path.
+  defp forward_input(input, message, state) do
+    Mob.Event.Trace.broadcast_input(input, state.module)
+
+    started = System.monotonic_time(:microsecond)
+    before_assigns = state.socket.assigns
+    before_tree = Map.get(state.socket.__mob__, :last_frame)
+
+    receipt = %Mob.Agent.Receipt{
+      action_id: Mob.Agent.Receipt.new_action_id(),
+      screen: state.module,
+      handler: {state.module, :handle_info, 2},
+      event: Mob.Event.NativeInput.receipt_event(input, state.module),
+      stages: [:dispatched],
+      before_frame_fingerprint: before_tree,
+      monotonic_us: started
+    }
+
+    try do
+      state.module.handle_info(message, state.socket)
+    catch
+      kind, reason ->
+        record_receipt(receipt, state, before_assigns, before_tree, started,
+          error: {kind, Exception.normalize(kind, reason, __STACKTRACE__)},
+          stacktrace: __STACKTRACE__
+        )
+
+        :erlang.raise(kind, reason, __STACKTRACE__)
+    else
+      {:noreply, socket} ->
+        # Read before `after_forward/2` clears it, for the reason
+        # `finish_event/6` gives.
+        navigated? = not is_nil(socket.__mob__.nav_action)
+        {:noreply, new_state} = after_forward(socket, state)
+
+        record_receipt(receipt, new_state, before_assigns, before_tree, started,
+          navigated: navigated?,
+          after_assigns: socket.assigns,
+          paint: :skippable
+        )
+
+        {:noreply, new_state}
+    end
+  end
+
+  defp after_forward(socket, state) do
     case take_nav_action(socket) do
       {nil, socket} ->
         state = %{state | socket: socket}

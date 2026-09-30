@@ -339,7 +339,9 @@ how many widgets the component contains internally.
 
 ## Debugging — `Mob.Event.Trace`
 
-Live-watch every event in IEx:
+Live-watch every event in IEx — native input (taps, changes, gestures,
+scroll) as the screen receives it, and anything delivered through
+`Mob.Event.dispatch/4`:
 
 ```elixir
 Mob.Event.Trace.subscribe()             # all events
@@ -351,6 +353,7 @@ Mob.Event.Trace.subscribe(fn addr -> addr.widget == :scroll end)
 
 # Now in your IEx session:
 flush()
+# {:mob_trace, %Address{widget: :button, id: :save}, :tap, nil}
 # {:mob_trace, %Address{widget: :scroll, id: :feed},
 #               :scroll, %{y: 240.0, dy: 8.0, phase: :dragging, seq: 12}}
 # ...
@@ -358,9 +361,26 @@ flush()
 Mob.Event.Trace.unsubscribe()   # or Mob.Event.Trace.stop() for every tracer
 ```
 
+Native input arrives at a screen as the legacy tuples above, not through
+`Mob.Event`, so `Mob.Screen.Server` names each one by its canonical address
+(`Mob.Event.NativeInput`) and traces it when it arrives — payload included.
+An event delivered through `dispatch/4` is traced there and not again. Not
+traced: input for a screen that has died (it never arrives; see the
+`:undeliverable` receipt in `guides/agentic_coding.md`), a tag that is not a
+valid address id, and ordinary `handle_info/2` messages such as timers.
+
 Tracers are monitored, so one that exits stops being traced to on its own.
-When no tracers are registered, `Mob.Event.dispatch/4` reads an empty list
-from `:persistent_term` and returns. Zero impact on production performance.
+When no tracers are registered, each event reads an empty list from
+`:persistent_term` and returns — native input is not even given an address.
+Zero impact on production performance.
+
+Tracing shows every event; a **receipt** (`Mob.Agent.Receipts`) says what one
+action did. Discrete native input — taps, text and toggle changes, focus,
+blur, submit, dismiss, list-row selects, single-fire gestures — gets a receipt;
+display-rate streams (scroll, drag, pinch, rotate, pointer move, IME
+composition, a slider drag) do not, so they cannot evict the actions an agent
+asks about. A receipt names the input by address and never carries its
+payload.
 
 ## Performance notes
 
