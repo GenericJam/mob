@@ -7,8 +7,8 @@ defmodule Mob.Agent.Receipts do
   and an eviction check. **No process is involved on the write path** — a
   GenServer in front of the table would serialise every event in the app
   through one mailbox, which is the opposite of what a diagnostic should cost.
-  `Mob.Agent.Receipts.Owner` exists only to own the table so it outlives the
-  screens that write to it; nothing routes through it.
+  The table is owned by a `Mob.Diag.Store` owner so it outlives the screens that
+  write to it; nothing routes through it.
 
   ## Bounded, and honest about it
 
@@ -17,7 +17,8 @@ defmodule Mob.Agent.Receipts do
   one that drives ten thousand actions and then goes looking for the first will
   not. `count/0` reports how many are held and `dropped/0` how many were evicted,
   so "no receipt for that id" can be distinguished from "that id never existed" —
-  a diagnostic that silently forgets is a diagnostic that lies.
+  a diagnostic that silently forgets is a diagnostic that lies. A receipt that
+  could not be recorded at all is counted as `lost` in `Mob.Diag.health/0`.
 
   ## Telemetry without a dependency
 
@@ -29,23 +30,39 @@ defmodule Mob.Agent.Receipts do
       [:mob, :action, :stop]
 
   with measurements `%{duration_us: ..., }` and metadata carrying the receipt.
-  The check runs once, in `Mob.Agent.Receipts.Owner`, and the result is read
-  from `:persistent_term` thereafter. Doing it per action would be far worse
-  than it looks: a *negative* `Code.ensure_loaded?/1` is not cached, so every
-  event in every app would make a `gen_server` call into `:code_server` and scan
-  the code path.
+  The check runs once per store setup and the result is read from the store's
+  state thereafter (`Mob.Diag.Store.reload/1` re-runs it). Doing it per action
+  would be far worse than it looks: a *negative* `Code.ensure_loaded?/1` is not
+  cached, so every event in every app would make a `gen_server` call into
+  `:code_server` and scan the code path.
   """
 
+  @behaviour Mob.Diag.Store
+
+  alias Mob.Diag.Store
+
   @table :mob_agent_receipts
-  @state :mob_agent_receipts_state
   @keep 256
 
-  @doc false
-  @spec start() :: :ok
-  def start do
-    if :ets.whereis(@table) == :undefined, do: Mob.Agent.Receipts.Owner.start()
-    :ok
+  @impl Store
+  def tables, do: [{@table, [:set, :public, {:write_concurrency, true}]}]
+
+  @impl Store
+  def state_vsn, do: 1
+
+  # `seq` is carried over: replacing it under existing rows would restart
+  # sequence numbers below the ones already held, so `recent/1` would sort new
+  # receipts under old ones and eviction would stop at the wrong row.
+  @impl Store
+  def new_state(previous) do
+    %{
+      seq: (previous && previous[:seq]) || :atomics.new(2, signed: false),
+      telemetry?: telemetry_available?()
+    }
   end
+
+  @impl Store
+  def health(%{seq: seq}), do: %{recorded: :atomics.get(seq, 1), evicted: :atomics.get(seq, 2)}
 
   @doc """
   Record `receipt`, evicting the oldest when the table is full.
@@ -54,23 +71,25 @@ defmodule Mob.Agent.Receipts do
   """
   @spec record(Mob.Agent.Receipt.t()) :: Mob.Agent.Receipt.t()
   def record(%Mob.Agent.Receipt{} = receipt) do
-    start()
-    state = state()
-    # `:atomics.add_get/3` in one step. `:counters.get` followed by
-    # `:counters.add` is not atomic, so two screens dispatching concurrently
-    # could be issued the same sequence number — which breaks `recent/1`'s
-    # ordering and lets eviction delete the wrong row.
-    seq = :atomics.add_get(state.seq, 1, 1)
-    :ets.insert(@table, {receipt.action_id, seq, receipt})
-    evict_beyond_keep(state, seq)
-    emit(state, receipt)
-    receipt
+    Store.guard(__MODULE__, receipt, fn ->
+      Store.ensure(__MODULE__)
+      state = Store.state(__MODULE__)
+      # `:atomics.add_get/3` in one step. `:counters.get` followed by
+      # `:counters.add` is not atomic, so two screens dispatching concurrently
+      # could be issued the same sequence number — which breaks `recent/1`'s
+      # ordering and lets eviction delete the wrong row.
+      seq = :atomics.add_get(state.seq, 1, 1)
+      :ets.insert(@table, {receipt.action_id, seq, receipt})
+      evict_beyond_keep(state, seq)
+      emit(state, receipt)
+      receipt
+    end)
   end
 
   @doc "The receipt for `action_id`, or `:error` if it is not held."
   @spec fetch(String.t()) :: {:ok, Mob.Agent.Receipt.t()} | :error
   def fetch(action_id) do
-    start()
+    Store.ensure(__MODULE__)
 
     case :ets.lookup(@table, action_id) do
       [{^action_id, _seq, receipt}] -> {:ok, receipt}
@@ -81,7 +100,7 @@ defmodule Mob.Agent.Receipts do
   @doc "The most recent receipts, newest first."
   @spec recent(pos_integer()) :: [Mob.Agent.Receipt.t()]
   def recent(limit \\ 20) do
-    start()
+    Store.ensure(__MODULE__)
 
     @table
     |> :ets.tab2list()
@@ -93,7 +112,7 @@ defmodule Mob.Agent.Receipts do
   @doc "How many receipts are currently held."
   @spec count() :: non_neg_integer()
   def count do
-    start()
+    Store.ensure(__MODULE__)
     :ets.info(@table, :size)
   end
 
@@ -104,22 +123,20 @@ defmodule Mob.Agent.Receipts do
   """
   @spec dropped() :: non_neg_integer()
   def dropped do
-    start()
-    :atomics.get(state().seq, 2)
+    Store.ensure(__MODULE__)
+    :atomics.get(Store.state(__MODULE__).seq, 2)
   end
 
   @doc false
   @spec reset() :: :ok
   def reset do
-    Mob.Agent.Receipts.Owner.reload()
+    Store.reload(__MODULE__)
     :ets.delete_all_objects(@table)
-    state = state()
+    state = Store.state(__MODULE__)
     :atomics.put(state.seq, 1, 0)
     :atomics.put(state.seq, 2, 0)
     :ok
   end
-
-  defp state, do: :persistent_term.get(@state)
 
   defp evict_beyond_keep(state, seq) do
     if :ets.info(@table, :size) > @keep do
@@ -133,12 +150,12 @@ defmodule Mob.Agent.Receipts do
 
   # `:telemetry` is not a dependency of mob — see the moduledoc. Emitting only
   # when the host app has it keeps mob's runtime dependency count at one.
-  # Resolved at startup, not per call — see `telemetry_available?/0`.
+  # Resolved at setup, not per call — see `telemetry_available?/0`.
   defp emit(%{telemetry?: false}, _receipt), do: :ok
 
   defp emit(%{telemetry?: true}, receipt) do
-    # Same lookup the owner used to resolve `telemetry?`, so a test that swaps
-    # the module and restarts the owner gets a consistent pair.
+    # Same lookup `telemetry_available?/0` used, so a test that swaps the module
+    # and reloads the store gets a consistent pair.
     emitter = Application.get_env(:mob, :telemetry_module, :telemetry)
 
     emitter.execute(
@@ -156,5 +173,14 @@ defmodule Mob.Agent.Receipts do
     )
 
     :ok
+  end
+
+  # Resolved at setup, never per action. `Code.ensure_loaded?/1` for an ABSENT
+  # module is not cached: it is a `gen_server` call into `:code_server` plus a
+  # scan of the code path, measured at ~6-12us against ~0.03us for a loaded one.
+  # `mob` has no `:telemetry` dependency, so absent is the default case.
+  defp telemetry_available? do
+    mod = Application.get_env(:mob, :telemetry_module, :telemetry)
+    Code.ensure_loaded?(mod) and function_exported?(mod, :execute, 3)
   end
 end

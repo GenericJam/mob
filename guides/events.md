@@ -342,10 +342,12 @@ how many widgets the component contains internally.
 Live-watch every event in IEx:
 
 ```elixir
-Mob.Event.Trace.start()
 Mob.Event.Trace.subscribe()             # all events
 # or with a filter:
 Mob.Event.Trace.subscribe(fn addr -> addr.widget == :scroll end)
+
+# From a shell on another node, name the pid to deliver to:
+:rpc.call(node, Mob.Event.Trace, :subscribe, [self(), nil])
 
 # Now in your IEx session:
 flush()
@@ -353,11 +355,12 @@ flush()
 #               :scroll, %{y: 240.0, dy: 8.0, phase: :dragging, seq: 12}}
 # ...
 
-Mob.Event.Trace.unsubscribe()
+Mob.Event.Trace.unsubscribe()   # or Mob.Event.Trace.stop() for every tracer
 ```
 
-When no tracers are registered, `Mob.Event.dispatch/4` does one ETS lookup
-(~50 ns) and returns. Zero impact on production performance.
+Tracers are monitored, so one that exits stops being traced to on its own.
+When no tracers are registered, `Mob.Event.dispatch/4` reads an empty list
+from `:persistent_term` and returns. Zero impact on production performance.
 
 ## Performance notes
 

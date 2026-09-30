@@ -300,13 +300,27 @@ cross-platform divergences and post-mortems become `Mob.Defect.Capsule`s on
 releases), deduplicated, with bounded, redaction-tagged evidence.
 
 ```elixir
-:rpc.call(node, Mob.Defect.Bus, :classes, [])   # every class held, with counts
-:rpc.call(node, Mob.Defect.Bus, :recent, [])    # the newest capsules
-:rpc.call(node, Mob.Defect.Bus, :subscribe, []) # push each new capsule to self()
+:rpc.call(node, Mob.Defect.Bus, :classes, [])          # every class held, with counts
+:rpc.call(node, Mob.Defect.Bus, :recent, [])           # the newest capsules
+:rpc.call(node, Mob.Defect.Bus, :subscribe, [self()])  # push each new capsule to this shell
 ```
+
+Pass `self()` when subscribing over `:rpc`: the call runs in a short-lived
+process on the device, and subscribing that process delivers to nobody.
 
 `Mob.Defect.Sinks.Dev` logs every capsule at a severity-driven level if you
 start it; mob owns the format and the bus, never the destination.
+
+**Are the diagnostics themselves working?** An empty answer from any of the
+above is only evidence if the store behind it is healthy. `Mob.Diag.health/0`
+says, per store, who holds its tables, how many writes were `lost`, and how
+often it was `reset` (everything recorded before a reset is gone):
+
+```elixir
+:rpc.call(node, Mob.Diag, :health, [])
+```
+
+A non-zero `lost` or `resets` means the store's answers are incomplete.
 
 **Post-mortems: what died while nobody was looking.** `Mob.PostMortem.sweep/0`
 picks up the evidence the OS and the BEAM leave behind and puts it on the bus:

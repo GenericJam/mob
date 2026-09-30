@@ -287,17 +287,17 @@ defmodule Mob.Screen.Server do
   # is the only one the callback itself proves; every later stage is a
   # comparison the screen makes for itself.
   #
-  # Wrapped: this runs after a successful event, and a diagnostic that can crash
+  # Guarded: this runs after a successful event, and a diagnostic that can crash
   # the screen it is observing is worse than no diagnostic. In the `catch`
   # clause it would be worse still — it would replace the handler's exception
   # with its own and destroy the report the feature exists to produce.
+  # `Receipts.record/1` never raises; the guard covers building the receipt,
+  # and counts a failure there as lost rather than dropping it unseen.
   defp record_receipt(receipt, state, before_assigns, before_tree, started, opts) do
-    build_receipt(receipt, state, before_assigns, before_tree, started, opts)
-    |> Mob.Agent.Receipts.record()
-  rescue
-    _ -> receipt
-  catch
-    _, _ -> receipt
+    Mob.Diag.Store.guard(Mob.Agent.Receipts, receipt, fn ->
+      build_receipt(receipt, state, before_assigns, before_tree, started, opts)
+      |> Mob.Agent.Receipts.record()
+    end)
   end
 
   defp build_receipt(receipt, state, before_assigns, before_tree, started, opts) do
@@ -442,20 +442,14 @@ defmodule Mob.Screen.Server do
 
     # MOB-156. A screen stopping is when a leaked component becomes visible —
     # its owner is gone and nothing else is going to notice. Run after the
-    # user's terminate/2 so their cleanup has happened first, and wrapped
-    # because a diagnostic must never be the reason a teardown fails.
+    # user's terminate/2 so their cleanup has happened first. `run/2` never
+    # raises, because a diagnostic must never be the reason a teardown fails.
     #
     # This screen is still alive here — it is running its own terminate/2 — so a
     # check never sees this screen's own components. What it sees is what an
     # earlier screen left behind. Confirmation across samples is what keeps that
     # from reporting components merely mid-reap.
-    try do
-      Mob.Invariant.run(:on_screen_stop, %{screen: self(), screen_module: state.module})
-    rescue
-      _ -> :ok
-    catch
-      _, _ -> :ok
-    end
+    Mob.Invariant.run(:on_screen_stop, %{screen: self(), screen_module: state.module})
 
     result
   end

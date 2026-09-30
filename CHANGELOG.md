@@ -23,6 +23,16 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   on Android), or `nil` when unavailable. Lets update gates such as
   `mob_deliver`'s read the shipped version instead of a config value that
   can drift from it.
+- **`Mob.Diag.health/0`** — whether the framework's own diagnostics are
+  working. Per store (receipts, defect bus, invariants, post-mortem
+  registry, render stats): the owner, who holds each table, writes `lost`,
+  times the tables were `reset` after being lost, and store-specific counts.
+  Plus the heir and the bus/trace subscriber lists. Counts and pids only;
+  read-only. An empty `Receipts.recent/1` or `Bus.classes/1` now means
+  something only once this says the store is healthy.
+- **`Mob.Event.Trace.subscribe/2`** — subscribe a given pid, including one
+  on another node. `:rpc.call(node, Mob.Event.Trace, :subscribe, [self(),
+  nil])` traces to the calling shell.
 
 ### Fixed
 - **`Mob.ScreenCase` no longer races over `Mob.State` in async tests.**
@@ -37,6 +47,57 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `MOB_DATA_DIR` restored) when the last one finishes, so later tests,
   including `async: false` ones that start `Mob.State` themselves, never
   see it. See `decisions/2026-09-30-screen-case-shares-mob-state-through-an-owner.md`.
+- **Diagnostic stores are ready when their API returns.** Receipts, the
+  defect bus, invariants, the post-mortem registry and render stats each
+  started a table owner on first use and returned as soon as the owner's
+  name was registered, before its tables existed. Concurrent first calls
+  raised `ArgumentError` (`Receipts.recent/1`, `Bus.classes/1`: 1,400 of
+  1,600; `Registry.mark_seen/1`: 42) or returned `:undefined` from
+  `Invariant.violation_count/0` (823 of 1,600), and `RenderStats` dropped
+  frames silently. All five now share one owner, `Mob.Diag.Store`, which
+  waits for its tables.
+- **Recorded evidence survives its owner.** A store owner that died used to
+  take every row with it, and the next call recreated the tables empty
+  without a trace. Tables now pass to a heir and back, stay writable
+  meanwhile, and a loss of both is counted as a `reset`.
+- **Diagnostic writes never raise and never disappear unseen.**
+  `Receipts.record/1`, `Bus.emit/1`, `Invariant.run/2`,
+  `Registry.mark_seen/1` and the render-stats frame store count a failure
+  as `lost` (`Mob.Diag.health/0`), repair a missing table, and return
+  normally. A receipt that failed to build in a screen used to be dropped
+  silently.
+- **Reloading a store kept its rows but reset its counters.** New receipts
+  were numbered below old ones, so `recent/1` stopped reporting the newest,
+  the 256 bound failed and `dropped/0` went back to 0. Counters now carry
+  over.
+- **Post-mortem sweeps no longer mark an artifact seen when its emit
+  fails.** It is forgotten again and counted, so a crash dump still on disk
+  is reported by the next sweep.
+- **`Mob.Event.Trace` survives the process that started it.** Its table
+  belonged to whoever called `start/0`, so tracing started over `:rpc`, or
+  from an IEx session that later raised, silently stopped. Tracers are now
+  kept in a monitored registry, and there is no table to lose.
+- **Subscribing to the defect bus over `:rpc`.** The agentic guide's
+  `:rpc.call(node, Mob.Defect.Bus, :subscribe, [])` subscribed the
+  short-lived process `:rpc` runs in, which received nothing. The guide
+  now passes `self()`.
+
+### Changed
+- **`Mob.Defect.Bus` holds at most 256 defect classes.** Fingerprints
+  are as stable as the `fingerprint_key` a caller supplies, so a key
+  carrying per-occurrence data used to add a class per emit for the life
+  of the app. The least recently seen class is evicted and counted
+  (`class_evictions` in `Mob.Diag.health/0`).
+- **Bus and trace subscribers are kept by `Mob.Diag.Subscribers`**, apart
+  from any table owner, and survive its restart. Subscribers on other
+  nodes are monitored too.
+- **`Mob.Event.Trace.start/0` is deprecated.** Tracing needs no setup;
+  `subscribe/0,1,2` is enough. `stop/0` now unsubscribes every tracer.
+- **The per-store `Owner` modules are replaced by `Mob.Diag.Store`.** Code
+  or tests that called `Mob.Agent.Receipts.Owner.reload/0` should call
+  `Mob.Diag.Store.reload(Mob.Agent.Receipts)`. The stores' undocumented
+  `start/0` functions are gone; every entry point ensures readiness itself.
+  See `decisions/2026-09-30-diagnostic-stores-share-one-hardened-owner.md`.
 
 ## [0.9.4] - 2026-09-30
 

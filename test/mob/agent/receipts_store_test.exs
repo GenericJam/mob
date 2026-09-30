@@ -66,12 +66,16 @@ defmodule Mob.Agent.ReceiptsStoreTest do
       # at 256, with `dropped/0` still reporting 0. Worst case is the headline
       # case: the screen whose handler raises owns the table, and the crash
       # receipt is destroyed microseconds later by the same crash.
-      # The spawned process must be the table's *creator*, which is the real
+      # The spawned process must be the first writer, which is the real
       # situation: whichever screen dispatches the first event of the app's
-      # life. Tear down what `setup` built so it is.
-      if pid = Process.whereis(Mob.Agent.Receipts.Owner), do: GenServer.stop(pid)
+      # life. Tear down what `setup` built — owner, heir and state — so the
+      # store is created from nothing on that first write.
+      for name <- [Mob.Diag.Store.owner_name(Receipts), Mob.Diag.Heir] do
+        Mob.Test.ProcessHelpers.stop_if_running(name)
+      end
+
       if :ets.whereis(:mob_agent_receipts) != :undefined, do: :ets.delete(:mob_agent_receipts)
-      :persistent_term.erase(:mob_agent_receipts_state)
+      :persistent_term.erase({Mob.Diag.Store, Receipts})
 
       parent = self()
 
@@ -113,14 +117,30 @@ defmodule Mob.Agent.ReceiptsStoreTest do
       assert Receipts.count() == 200
       assert Enum.count(Enum.uniq_by(Receipts.recent(200), & &1.action_id)) == 200
     end
+
+    test "a reload keeps order, the bound and the eviction count" do
+      # `reload` used to replace the sequence counter under existing rows, so
+      # new receipts were numbered below old ones: the newest stopped being
+      # reported as newest, eviction stopped at the wrong row, and `dropped`
+      # went back to zero.
+      for n <- 1..300, do: Receipts.record(receipt(n))
+      dropped = Receipts.dropped()
+
+      Mob.Diag.Store.reload(Receipts)
+      for n <- 301..400, do: Receipts.record(receipt(n))
+
+      assert hd(Receipts.recent(1)).event == "tap-400"
+      assert Receipts.count() == 256
+      assert Receipts.dropped() == dropped + 100
+    end
   end
 
   describe "telemetry" do
     test "emits the advertised event, measurements and metadata" do
       Application.put_env(:mob, :telemetry_module, StubTelemetry)
-      # The flag is resolved once by the owner, so ask it to re-resolve rather
+      # The flag is resolved at setup, so ask the store to re-resolve rather
       # than deleting the table out from under it.
-      Mob.Agent.Receipts.Owner.reload()
+      Mob.Diag.Store.reload(Receipts)
 
       Receipts.record(%{receipt(7) | stages: [:dispatched, :handled]})
 
@@ -134,7 +154,7 @@ defmodule Mob.Agent.ReceiptsStoreTest do
 
     test "does not emit when no telemetry module is available" do
       Application.put_env(:mob, :telemetry_module, NotALoadedModule)
-      Mob.Agent.Receipts.Owner.reload()
+      Mob.Diag.Store.reload(Receipts)
 
       Receipts.record(receipt(1))
 

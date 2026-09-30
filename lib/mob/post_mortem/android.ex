@@ -68,8 +68,6 @@ defmodule Mob.PostMortem.Android do
   def sweep do
     with :android <- safe_platform(),
          entries when is_list(entries) <- safe_drain() do
-      Registry.start()
-
       Enum.flat_map(entries, &emit_if_new/1)
     else
       _ -> []
@@ -81,7 +79,6 @@ defmodule Mob.PostMortem.Android do
   def sweep_with(nif) when is_atom(nif) do
     with :android <- safe_platform_via(nif),
          entries when is_list(entries) <- safe_drain_via(nif) do
-      Registry.start()
       Enum.flat_map(entries, &emit_if_new/1)
     else
       _ -> []
@@ -98,13 +95,7 @@ defmodule Mob.PostMortem.Android do
   # not take out the whole sweep.
   defp emit_if_new(entry) when is_map(entry) do
     if valid_shape?(entry) do
-      id = artifact_id(entry)
-
-      if Registry.mark_seen(id) do
-        [Defect.emit_appexit_reason(entry)]
-      else
-        []
-      end
+      Registry.emit_once(artifact_id(entry), fn -> Defect.emit_appexit_reason(entry) end)
     else
       Logger.warning(
         "[Mob.PostMortem.Android] dropping malformed ApplicationExitInfo entry " <>

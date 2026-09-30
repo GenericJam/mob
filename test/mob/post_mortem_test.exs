@@ -16,9 +16,7 @@ defmodule Mob.PostMortemTest do
   """
 
   setup do
-    Bus.start()
     Bus.reset()
-    Registry.start()
     Registry.reset()
     {:ok, _} = Bus.subscribe()
     :ok

@@ -23,15 +23,20 @@ defmodule Mob.Defect.Bus do
   memory in a production app, and defect-report storage that grows without
   limit is worse than a bug it might have described.
 
+  Classes are bounded too, at 256. A fingerprint is only as stable as the
+  `fingerprint_key` its caller supplied, and app code supplies some, so a key
+  that carries per-occurrence data would otherwise add a class per emit for
+  the life of the app. Past the bound the least recently seen class is evicted
+  and counted (`Mob.Diag.health/0`, `class_evictions`).
+
   ## Fanout without a mailbox on the hot path
 
   Same reasoning as `Mob.Agent.Receipts`: an `emit/1` is on the path of every
   detected defect, and putting a GenServer in front of that path serialises
-  every writer through one mailbox. The bus's owner GenServer holds the
-  subscriber registry and monitors, and it publishes the *cached* subscriber
-  pid list to `:persistent_term` — the write path reads that once and sends to
-  each pid directly. A subscriber lifecycle change is a rare event; a defect
-  emit is not.
+  every writer through one mailbox. Subscribers are kept by
+  `Mob.Diag.Subscribers`, which monitors them and publishes the list to
+  `:persistent_term`; the write path reads that once and sends to each pid
+  directly. A subscriber lifecycle change is a rare event; a defect emit is not.
 
   ## No default sink
 
@@ -44,31 +49,53 @@ defmodule Mob.Defect.Bus do
 
   A subscriber pid is a `send/2` target on the emit path. `send/2` never
   blocks and never raises on a dead pid, so a dead subscriber does not take
-  down the emitter — the monitor in the owner catches the DOWN and prunes the
-  pid from the cached list. But the *contents* of what a subscriber does with
-  the message must not affect the emitter, which is the standard contract of
-  message passing and not enforced here.
+  down the emitter — its monitor prunes the pid from the cached list. But the
+  *contents* of what a subscriber does with the message must not affect the
+  emitter, which is the standard contract of message passing and not enforced
+  here.
+
+  `emit/1` itself never raises: a failure to record is counted as `lost` in
+  `Mob.Diag.health/0`, because a defect reporter that crashes on the defect it
+  is reporting destroys the report.
   """
+
+  @behaviour Mob.Diag.Store
 
   require Logger
 
   alias Mob.Defect.Capsule
+  alias Mob.Diag.{Store, Subscribers}
 
   @classes :mob_defect_classes
   @recent :mob_defect_recent
-  @subscribers_key :mob_defect_subscribers
-  @state :mob_defect_state
   @keep_recent 64
+  @keep_classes 256
 
-  # ---------------------------------------------------------------------------
-  # Startup
-  # ---------------------------------------------------------------------------
+  # Indices into the state's `:atomics` array.
+  @recent_seq 1
+  @class_evictions 2
 
-  @doc false
-  @spec start() :: :ok
-  def start do
-    if :ets.whereis(@classes) == :undefined, do: Mob.Defect.Bus.Owner.start()
-    :ok
+  @impl Store
+  def tables do
+    opts = [:set, :public, {:write_concurrency, true}]
+    # `@classes` last: it is the flag `Mob.Diag.Store.ensure/1` checks.
+    [{@recent, opts}, {@classes, opts}]
+  end
+
+  @impl Store
+  def state_vsn, do: 1
+
+  @impl Store
+  def new_state(previous),
+    do: %{seq: (previous && previous[:seq]) || :atomics.new(2, signed: false)}
+
+  @impl Store
+  def health(%{seq: seq}) do
+    %{
+      emitted: :atomics.get(seq, @recent_seq),
+      class_evictions: :atomics.get(seq, @class_evictions),
+      class_limit: @keep_classes
+    }
   end
 
   # ---------------------------------------------------------------------------
@@ -85,13 +112,16 @@ defmodule Mob.Defect.Bus do
   """
   @spec emit(Capsule.t()) :: Capsule.t()
   def emit(%Capsule{} = capsule) do
-    start()
+    Store.guard(__MODULE__, capsule, fn ->
+      Store.ensure(__MODULE__)
+      state = Store.state(__MODULE__)
 
-    record_class(capsule)
-    record_recent(capsule)
-    fanout(capsule)
+      record_class(state, capsule)
+      record_recent(state, capsule)
+      fanout(capsule)
 
-    capsule
+      capsule
+    end)
   end
 
   @doc """
@@ -104,7 +134,7 @@ defmodule Mob.Defect.Bus do
   """
   @spec classes(pos_integer()) :: [map()]
   def classes(limit \\ 20) do
-    start()
+    Store.ensure(__MODULE__)
 
     @classes
     |> :ets.tab2list()
@@ -125,14 +155,14 @@ defmodule Mob.Defect.Bus do
   @doc "How many distinct defect classes are held."
   @spec class_count() :: non_neg_integer()
   def class_count do
-    start()
+    Store.ensure(__MODULE__)
     :ets.info(@classes, :size)
   end
 
   @doc "The most recent capsules (raw occurrences), newest first."
   @spec recent(pos_integer()) :: [Capsule.t()]
   def recent(limit \\ 20) do
-    start()
+    Store.ensure(__MODULE__)
 
     @recent
     |> :ets.tab2list()
@@ -142,45 +172,40 @@ defmodule Mob.Defect.Bus do
   end
 
   @doc """
-  Subscribe the calling process to defect emits.
+  Subscribe `pid` (defaults to the caller) to defect emits.
 
   Returns `{:ok, ref}` — the caller can keep the ref for its own bookkeeping,
   but does not need it to unsubscribe (unsubscription is by pid).
   Idempotent: subscribing an already-subscribed pid is a no-op.
 
-  The subscriber's process is monitored; a subscriber exit prunes it from
-  the cached list.
+  The subscriber is monitored; its exit, or its node disconnecting, prunes it.
+  From a connected node, pass the pid to receive on — `:rpc.call(node,
+  Mob.Defect.Bus, :subscribe, [self()])`. Without it, `:rpc` subscribes the
+  short-lived process it runs the call in, which receives nothing.
   """
   @spec subscribe() :: {:ok, reference()}
   @spec subscribe(pid()) :: {:ok, reference()}
-  def subscribe(pid \\ self()) do
-    start()
-    Mob.Defect.Bus.Owner.subscribe(pid)
-  end
+  def subscribe(pid \\ self()), do: Subscribers.subscribe(:defect_bus, pid, nil)
 
   @doc "Unsubscribe `pid` (defaults to `self()`)."
   @spec unsubscribe() :: :ok
   @spec unsubscribe(pid()) :: :ok
-  def unsubscribe(pid \\ self()) do
-    start()
-    Mob.Defect.Bus.Owner.unsubscribe(pid)
-  end
+  def unsubscribe(pid \\ self()), do: Subscribers.unsubscribe(:defect_bus, pid)
 
   @doc "The subscribers the write path will fan out to right now."
   @spec subscribers() :: [pid()]
-  def subscribers do
-    start()
-    :persistent_term.get(@subscribers_key, [])
-  end
+  def subscribers, do: for({pid, _meta} <- Subscribers.list(:defect_bus), do: pid)
 
   @doc false
   @spec reset() :: :ok
   def reset do
-    for t <- [@classes, @recent] do
+    for {t, _opts} <- tables() do
       if :ets.whereis(t) != :undefined, do: :ets.delete_all_objects(t)
     end
 
-    if state = safe_state(), do: :atomics.put(state.seq, 1, 0)
+    state = Store.state(__MODULE__)
+    :atomics.put(state.seq, @recent_seq, 0)
+    :atomics.put(state.seq, @class_evictions, 0)
     :ok
   end
 
@@ -188,7 +213,7 @@ defmodule Mob.Defect.Bus do
   # Write path
   # ---------------------------------------------------------------------------
 
-  defp record_class(%Capsule{} = c) do
+  defp record_class(state, %Capsule{} = c) do
     now_ms = System.system_time(:millisecond)
 
     # Tuple layout: {fingerprint, base_row, occurrences, last_seen_ms}. The
@@ -199,9 +224,38 @@ defmodule Mob.Defect.Bus do
     # read — no read-modify-write on the write path, so concurrent writers
     # cannot clobber each other into a stale derived cache.
     default = {c.fingerprint, first_seen_row(c, now_ms), 0, now_ms}
-    _new_occurrences = :ets.update_counter(@classes, c.fingerprint, {3, 1}, default)
+    occurrences = :ets.update_counter(@classes, c.fingerprint, {3, 1}, default)
     :ets.update_element(@classes, c.fingerprint, {4, now_ms})
+
+    # Only a new class can take the table past the bound, so the scan for the
+    # oldest runs once per new class beyond it, never per occurrence.
+    if occurrences == 1 and :ets.info(@classes, :size) > @keep_classes do
+      evict_oldest_class(state, c.fingerprint)
+    end
+
     :ok
+  end
+
+  # The class just inserted is the newest, so it is never the one evicted.
+  # Concurrent new classes may each evict one, which leaves the table at or
+  # just under the bound rather than over it.
+  defp evict_oldest_class(state, keep_fingerprint) do
+    oldest =
+      :ets.foldl(
+        fn
+          {^keep_fingerprint, _, _, _}, acc -> acc
+          {fp, _, _, seen}, nil -> {seen, fp}
+          {fp, _, _, seen}, {oldest_seen, _} when seen < oldest_seen -> {seen, fp}
+          _row, acc -> acc
+        end,
+        nil,
+        @classes
+      )
+
+    with {_seen, fingerprint} <- oldest,
+         true <- :ets.delete(@classes, fingerprint) do
+      :atomics.add(state.seq, @class_evictions, 1)
+    end
   end
 
   # base_row's `occurrences` and `last_seen_ms` fields are placeholders — the
@@ -221,9 +275,8 @@ defmodule Mob.Defect.Bus do
     }
   end
 
-  defp record_recent(%Capsule{} = c) do
-    state = state()
-    seq = :atomics.add_get(state.seq, 1, 1)
+  defp record_recent(state, %Capsule{} = c) do
+    seq = :atomics.add_get(state.seq, @recent_seq, 1)
     :ets.insert(@recent, {seq, c})
 
     if :ets.info(@recent, :size) > @keep_recent do
@@ -233,11 +286,11 @@ defmodule Mob.Defect.Bus do
   end
 
   defp fanout(%Capsule{} = c) do
-    for pid <- :persistent_term.get(@subscribers_key, []) do
+    for {pid, _meta} <- Subscribers.list(:defect_bus) do
       # send/2 does not raise on a dead pid, so a subscriber that exited
       # between publish-of-the-cached-list and this line does not affect
-      # this or any other subscriber. The owner's DOWN monitor prunes the
-      # dead pid from the cached list on its own schedule.
+      # this or any other subscriber. Its monitor prunes the dead pid from
+      # the cached list on its own schedule.
       #
       # A **remote** subscriber pid is a different matter: dist encoding of
       # the term happens in *this* process's context, and if a caller ever
@@ -264,11 +317,5 @@ defmodule Mob.Defect.Bus do
     end
 
     :ok
-  end
-
-  defp state, do: :persistent_term.get(@state)
-
-  defp safe_state do
-    :persistent_term.get(@state, nil)
   end
 end

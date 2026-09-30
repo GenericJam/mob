@@ -9,7 +9,6 @@ defmodule Mob.Defect.Sinks.DevTest do
   alias Mob.Defect.Sinks.Dev
 
   setup do
-    Bus.start()
     Bus.reset()
     :ok
   end

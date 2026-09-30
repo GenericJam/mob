@@ -5,7 +5,6 @@ defmodule Mob.Event.TraceTest do
   alias Mob.Event.{Address, Trace}
 
   setup do
-    Trace.start()
     on_exit(fn -> Trace.stop() end)
     :ok
   end
@@ -78,12 +77,11 @@ defmodule Mob.Event.TraceTest do
     end
   end
 
-  describe "no-op when stopped" do
-    test "broadcast is a no-op if Trace is stopped" do
+  describe "stop/0" do
+    test "unsubscribes every tracer, so dispatch sends no trace" do
+      :ok = Trace.subscribe()
       Trace.stop()
 
-      # Should not raise.
-      :ok = Trace.broadcast(addr(), :tap, nil)
       :ok = Event.dispatch(self(), addr(), :tap, nil)
 
       # Direct event still arrives:
@@ -94,24 +92,46 @@ defmodule Mob.Event.TraceTest do
   end
 
   describe "dead subscriber cleanup" do
-    test "broadcast removes dead pids from the table" do
+    test "a tracer that exits is pruned without unsubscribing" do
+      parent = self()
+
       pid =
         spawn(fn ->
           Trace.subscribe()
-          # Exit immediately
+          send(parent, :subscribed)
         end)
 
+      assert_receive :subscribed
       Mob.Test.ProcessHelpers.await_exit(pid)
-      refute Process.alive?(pid)
 
-      # Now dispatch — broadcast should silently skip the dead pid and clean up.
-      # `broadcast/3` folds over the table in the *calling* process, so the
-      # delete has already happened by the time dispatch returns :ok. There is
-      # nothing to wait for.
+      Mob.Test.ProcessHelpers.eventually(fn ->
+        not List.keymember?(Mob.Diag.Subscribers.list(:event_trace), pid, 0)
+      end)
+
+      :ok = Event.dispatch(self(), addr(), :tap, nil)
+    end
+
+    test "the table-free registry survives the process that first subscribed" do
+      # The old table was created by whichever process called `start/0`; over
+      # `:rpc` that process exits at once and took tracing with it.
+      Task.await(Task.async(fn -> Trace.subscribe(self(), nil) end))
+
+      :ok = Trace.subscribe()
       :ok = Event.dispatch(self(), addr(), :tap, nil)
 
-      # Verify the dead pid was removed.
-      assert :ets.lookup(:mob_event_trace, pid) == []
+      assert_receive {:mob_trace, %Address{id: :save}, :tap, nil}
+    end
+  end
+
+  describe "subscribe/2" do
+    test "delivers to the given pid rather than the caller" do
+      parent = self()
+
+      # The call runs in a short-lived process, as `:rpc.call/4` would.
+      Task.await(Task.async(fn -> Trace.subscribe(parent, nil) end))
+
+      :ok = Event.dispatch(self(), addr(), :tap, nil)
+      assert_receive {:mob_trace, %Address{id: :save}, :tap, nil}
     end
   end
 end

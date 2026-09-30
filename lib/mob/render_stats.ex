@@ -89,36 +89,41 @@ defmodule Mob.RenderStats do
   because each is timed in isolation.
   """
 
+  @behaviour Mob.Diag.Store
+
+  alias Mob.Diag.Store
+
   @table __MODULE__
   @flag {__MODULE__, :enabled}
   @verify {__MODULE__, :verify_taps}
   @frame {__MODULE__, :frame}
   @max_frames 500
 
+  # The table is owned by a `Mob.Diag.Store` owner. Without one it would belong
+  # to whoever called `enable/0` first — over `:rpc.call/4` that is a transient
+  # process, so the table would die the instant enabling returned and every
+  # later write would go nowhere.
+  @impl Store
+  def tables, do: [{@table, [:public, :ordered_set, write_concurrency: true]}]
+
+  @impl Store
+  def state_vsn, do: 1
+
+  @impl Store
+  def new_state(_previous), do: %{}
+
+  @impl Store
+  def health(_state), do: %{enabled: enabled?(), frame_limit: @max_frames}
+
   @doc """
-  Start recording. Idempotent.
-
-  Starts a process to own the ETS table. Without one the table belongs to
-  whoever called `enable/0` first — over `:rpc.call/4` that is a transient
-  process, so the table dies the instant enabling returns and every later write
-  goes nowhere.
+  Start recording. Idempotent. Returns once the table exists, so the first
+  frame after it is recorded.
   """
-  @spec enable() :: :ok | {:error, term()}
+  @spec enable() :: :ok
   def enable do
-    case GenServer.start(__MODULE__, [], name: __MODULE__) do
-      {:ok, _pid} ->
-        :persistent_term.put(@flag, true)
-        :ok
-
-      {:error, {:already_started, _pid}} ->
-        :persistent_term.put(@flag, true)
-        :ok
-
-      {:error, reason} ->
-        # Leave the flag off rather than recording into a table that does not
-        # exist: `store/1` would silently succeed and every frame would vanish.
-        {:error, reason}
-    end
+    Store.ensure(__MODULE__)
+    :persistent_term.put(@flag, true)
+    :ok
   end
 
   @doc """
@@ -432,15 +437,13 @@ defmodule Mob.RenderStats do
 
   defp now, do: System.monotonic_time(:microsecond)
 
-  defp store(record) do
-    if :ets.whereis(@table) == :undefined do
-      :ok
-    else
-      do_store(record)
-    end
-  end
+  # Recording is on, so a missing table means it was lost (its owner and the
+  # heir both died): recreate it and keep recording, and count the frame if
+  # that fails, rather than dropping frames silently for the rest of the run.
+  defp store(record), do: Store.guard(__MODULE__, :ok, fn -> do_store(record) end)
 
   defp do_store(record) do
+    Store.ensure(__MODULE__)
     :ets.insert(@table, {System.unique_integer([:monotonic]), record})
 
     # Ring rather than unbounded: this runs on a memory-constrained device and a
@@ -531,16 +534,6 @@ defmodule Mob.RenderStats do
   end
 
   defp clamp(value, low, high), do: value |> max(low) |> min(high)
-
-  # ── Table owner ───────────────────────────────────────────────────────────
-
-  use GenServer
-
-  @impl GenServer
-  def init(_opts) do
-    :ets.new(@table, [:named_table, :public, :ordered_set, write_concurrency: true])
-    {:ok, %{}}
-  end
 
   # ── Native frame timing ───────────────────────────────────────────────────
   #

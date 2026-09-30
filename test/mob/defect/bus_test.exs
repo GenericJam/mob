@@ -1,6 +1,6 @@
 defmodule Mob.Defect.BusTest do
-  # Not async — the bus is process-global (ETS + persistent_term + a named
-  # GenServer), so tests running concurrently would step on each other's
+  # Not async — the bus is process-global (ETS + persistent_term + named
+  # processes), so tests running concurrently would step on each other's
   # subscribers and recent-buffer entries. That is a property of the bus
   # under test, not a bug in it, so isolating with `async: false` is the
   # right knob.
@@ -8,9 +8,13 @@ defmodule Mob.Defect.BusTest do
 
   alias Mob.Defect.Bus
   alias Mob.Defect.Capsule
+  alias Mob.Test.ProcessHelpers
+
+  # Where `Mob.Diag.Subscribers` publishes the bus's subscriber list; written
+  # directly to plant entries the registry's monitors never saw.
+  @subscribers {Mob.Diag.Subscribers, :defect_bus}
 
   setup do
-    Bus.start()
     Bus.reset()
     Bus.unsubscribe()
     :ok
@@ -158,9 +162,7 @@ defmodule Mob.Defect.BusTest do
       send(sub, :die)
       assert_receive {:DOWN, _, :process, ^sub, _}
 
-      # Give the owner a moment to process the DOWN and republish.
-      Process.sleep(20)
-      refute sub in Bus.subscribers()
+      ProcessHelpers.eventually(fn -> sub not in Bus.subscribers() end)
     end
 
     test "a dead subscriber never seen by fanout does not raise" do
@@ -173,15 +175,15 @@ defmodule Mob.Defect.BusTest do
       Process.monitor(dead)
       assert_receive {:DOWN, _, :process, ^dead, _}
 
-      # Register the dead pid directly, bypassing the owner's DOWN monitor,
+      # Register the dead pid directly, bypassing the registry's DOWN monitor,
       # so we can observe fanout's behaviour under a stale entry.
-      :persistent_term.put(:mob_defect_subscribers, [dead])
+      :persistent_term.put(@subscribers, [{dead, nil}])
 
       # The emit must not crash.
       Bus.emit(invariant_capsule(:with_dead_sub))
 
       # Cleanup — remove the manually-injected pid.
-      :persistent_term.put(:mob_defect_subscribers, [])
+      :persistent_term.put(@subscribers, [])
     end
 
     test "a subscriber slot that would raise on send/2 does not crash the emit" do
@@ -192,7 +194,7 @@ defmodule Mob.Defect.BusTest do
       # the others and from the emitter.
       good_sub = self()
 
-      :persistent_term.put(:mob_defect_subscribers, [:not_a_pid, good_sub])
+      :persistent_term.put(@subscribers, [{:not_a_pid, nil}, {good_sub, nil}])
 
       capture_log_fn = fn ->
         Bus.emit(invariant_capsule(:with_bad_sub))
@@ -208,7 +210,7 @@ defmodule Mob.Defect.BusTest do
       assert log =~ "[error]"
       assert log =~ "Mob.Defect.Bus"
 
-      :persistent_term.put(:mob_defect_subscribers, [])
+      :persistent_term.put(@subscribers, [])
     end
   end
 
@@ -240,6 +242,63 @@ defmodule Mob.Defect.BusTest do
 
       [row] = Bus.classes()
       assert row.occurrences == workers * per_worker
+    end
+  end
+
+  describe "bounds" do
+    test "classes stop at the limit; the least recently seen are evicted and counted" do
+      limit = Mob.Diag.Store.health(Bus).store.class_limit
+      for n <- 1..(limit + 10), do: Bus.emit(invariant_capsule(:"distinct_#{n}"))
+
+      assert Bus.class_count() == limit
+      assert Mob.Diag.Store.health(Bus).store.class_evictions == 10
+
+      newest = invariant_capsule(:"distinct_#{limit + 10}")
+      assert Enum.any?(Bus.classes(limit), &(&1.fingerprint == newest.fingerprint))
+    end
+
+    test "repeat occurrences of held classes never evict anything" do
+      limit = Mob.Diag.Store.health(Bus).store.class_limit
+      for n <- 1..limit, do: Bus.emit(invariant_capsule(:"held_#{n}"))
+      for _ <- 1..50, do: Bus.emit(invariant_capsule(:held_1))
+
+      assert Mob.Diag.Store.health(Bus).store.class_evictions == 0
+    end
+  end
+
+  describe "subscriber registry restarts" do
+    test "delivery continues and exits are still pruned after the registry dies" do
+      parent = self()
+
+      sub =
+        spawn(fn ->
+          {:ok, _} = Bus.subscribe()
+          send(parent, :subscribed)
+
+          receive do
+            {:mob_defect, _} -> send(parent, :delivered)
+          end
+
+          receive do
+            :die -> :ok
+          end
+        end)
+
+      assert_receive :subscribed
+      registry = Process.whereis(Mob.Diag.Subscribers)
+      Process.exit(registry, :kill)
+      ProcessHelpers.await_exit(registry)
+
+      Bus.emit(invariant_capsule(:after_registry_death))
+      assert_receive :delivered
+
+      # A new registry must carry over the subscribers it inherited — a later
+      # subscribe must not publish a list without them — and monitor them.
+      {:ok, _} = Bus.subscribe()
+      assert sub in Bus.subscribers()
+
+      send(sub, :die)
+      ProcessHelpers.eventually(fn -> sub not in Bus.subscribers() end)
     end
   end
 end

@@ -69,8 +69,8 @@ defmodule Mob.Defect.Sinks.Dev do
 
   @impl GenServer
   def terminate(_reason, _state) do
-    # `Bus.unsubscribe/1` calls `Bus.Owner.start/0` transparently before its
-    # `GenServer.call`, so a dead owner is usually restarted rather than
+    # `Bus.unsubscribe/1` starts `Mob.Diag.Subscribers` transparently before
+    # its `GenServer.call`, so a dead subscriber registry is usually restarted rather than
     # observed. The try/catch here is a narrow guard for the corner where
     # even that restart fails — a supervised BEAM shutdown that has
     # unregistered `:proc_lib`, a spawn refused because the process cap has

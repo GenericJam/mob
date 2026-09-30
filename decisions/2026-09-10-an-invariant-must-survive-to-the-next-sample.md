@@ -157,7 +157,12 @@ sampler can remove a given row, and the clock only ever moves forward.
   unlinked GenServer, for the reason MOB-155 discovered: an ETS table created
   from a screen callback dies with that screen, so an ordinary navigation pop
   would take the registry with it.
-- Built-ins install from the owner's `init/1`, because `mob` has no supervision
+  *(Corrected 2026-09-30: that owner is now the shared `Mob.Diag.Store` owner,
+  registered as `Mob.Diag.Owner.Mob.Invariant`, and built-ins install from the
+  store's `after_setup/0` rather than the owner's `init/1`. The owner this
+  record described returned from `start/0` before its tables existed; see
+  `decisions/2026-09-30-diagnostic-stores-share-one-hardened-owner.md`.)*
+- Built-ins install when the store is set up, because `mob` has no supervision
   tree of its own. Note this is **not** opt-in: `Mob.Screen.Server.terminate/2`
   samples unconditionally, so every mob app starts the owner and installs the
   built-ins on its first screen teardown. An earlier draft of this record

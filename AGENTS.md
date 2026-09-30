@@ -343,6 +343,17 @@ These are the things we've burned ourselves on. Following them isn't optional.
     Both alert NIFs previously relied on the pointer remaining valid; short
     action names often masked the problem.
 
+17. **A diagnostic table goes through `Mob.Diag.Store`, never a hand-written
+    owner.** Five hand-rolled owners all returned from `start/0` on
+    `{:already_started, pid}`, before `init/1` had created the tables, and
+    concurrent first callers wrote to nothing (1,400 of 1,600 calls in a
+    probe). Implement the behaviour instead: readiness, heir-backed tables,
+    versioned state, `guard/3` on write paths and `Mob.Diag.health/0` come
+    with it. The same trap applies to any lazily started named process whose
+    callers use something `init/1` creates. `GenServer.start/3` returning
+    `already_started` means the name exists, not that `init/1` finished. See
+    `decisions/2026-09-30-diagnostic-stores-share-one-hardened-owner.md`.
+
 ## Where to look
 
 | Question | File |

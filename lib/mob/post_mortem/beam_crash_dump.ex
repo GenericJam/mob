@@ -98,11 +98,9 @@ defmodule Mob.PostMortem.BeamCrashDump do
   """
   @spec emit([finding()]) :: [Capsule.t()]
   def emit(findings) when is_list(findings) do
-    Registry.start()
-
-    for finding <- findings, Registry.mark_seen(finding.sha256) do
-      Defect.emit_beam_crash(finding)
-    end
+    Enum.flat_map(findings, fn finding ->
+      Registry.emit_once(finding.sha256, fn -> Defect.emit_beam_crash(finding) end)
+    end)
   end
 
   @doc """

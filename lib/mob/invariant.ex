@@ -73,6 +73,9 @@ defmodule Mob.Invariant do
   does, the fingerprint changes with it, and nothing ever confirms.
   """
 
+  @behaviour Mob.Diag.Store
+
+  alias Mob.Diag.Store
   alias Mob.Invariant.Violation
 
   @type point :: :after_committed_frame | :on_screen_stop | :periodic
@@ -94,12 +97,30 @@ defmodule Mob.Invariant do
   # about one confirmed violation in sixty.
   @default_min_candidate_age_us 50_000
 
-  @doc false
-  @spec start() :: :ok
-  def start do
-    if :ets.whereis(@table) == :undefined, do: Mob.Invariant.Owner.start()
-    :ok
+  @impl Store
+  def tables do
+    opts = [:set, :public, {:write_concurrency, true}]
+    # `@table` last: it is the flag `Mob.Diag.Store.ensure/1` checks.
+    [{@violations, opts}, {@candidates, opts}, {@table, opts}]
   end
+
+  @impl Store
+  def state_vsn, do: 1
+
+  # `seq` is carried over so a reload does not number new violations below the
+  # ones already held.
+  @impl Store
+  def new_state(previous),
+    do: %{seq: (previous && previous[:seq]) || :atomics.new(1, signed: false)}
+
+  # The framework's own checks are installed with the tables, so they exist
+  # whenever the registry does and an app that never registers a check still
+  # gets them.
+  @impl Store
+  def after_setup, do: Mob.Invariant.Builtins.install()
+
+  @impl Store
+  def health(%{seq: seq}), do: %{confirmed: :atomics.get(seq, 1)}
 
   @doc """
   Register a check.
@@ -109,7 +130,7 @@ defmodule Mob.Invariant do
   """
   @spec register(atom(), keyword()) :: :ok
   def register(name, opts) when is_atom(name) do
-    start()
+    Store.ensure(__MODULE__)
 
     :ets.insert(
       @table,
@@ -128,7 +149,7 @@ defmodule Mob.Invariant do
   @doc "Forget a check."
   @spec unregister(atom()) :: :ok
   def unregister(name) do
-    start()
+    Store.ensure(__MODULE__)
     :ets.delete(@table, name)
     # Its candidates too — nothing will ever sample this name again, so they
     # would sit in the table for the life of the owner.
@@ -139,7 +160,7 @@ defmodule Mob.Invariant do
   @doc "Every check registered for `point`."
   @spec registered(point()) :: [map()]
   def registered(point) do
-    start()
+    Store.ensure(__MODULE__)
 
     @table
     |> :ets.tab2list()
@@ -157,14 +178,17 @@ defmodule Mob.Invariant do
   nothing. Never
   raises: a check that blows up is itself reported as a violation of
   `:invariant_check_failed` rather than being allowed to take down the process
-  that was kind enough to sample.
+  that was kind enough to sample, and a failure of the bookkeeping itself is
+  counted as `lost` in `Mob.Diag.health/0`.
   """
   @spec run(point(), context()) :: [Violation.t()]
   def run(point, context \\ %{}) do
-    point
-    |> registered()
-    |> Enum.flat_map(&evaluate(&1, context))
-    |> Enum.map(&record/1)
+    Store.guard(__MODULE__, [], fn ->
+      point
+      |> registered()
+      |> Enum.flat_map(&evaluate(&1, context))
+      |> Enum.map(&record/1)
+    end)
   end
 
   @doc """
@@ -172,7 +196,7 @@ defmodule Mob.Invariant do
   """
   @spec violations(pos_integer()) :: [Violation.t()]
   def violations(limit \\ 20) do
-    start()
+    Store.ensure(__MODULE__)
 
     @violations
     |> :ets.tab2list()
@@ -184,7 +208,7 @@ defmodule Mob.Invariant do
   @doc "How many violations are held."
   @spec violation_count() :: non_neg_integer()
   def violation_count do
-    start()
+    Store.ensure(__MODULE__)
     :ets.info(@violations, :size)
   end
 
@@ -209,13 +233,13 @@ defmodule Mob.Invariant do
   @spec reset() :: :ok
   def reset do
     # Objects first, THEN reload — the reverse order wiped the built-ins that
-    # `Owner.setup/0` had just installed, leaving the framework's shipped
-    # diagnostics permanently off for the life of the owner.
+    # setup had just installed, leaving the framework's shipped diagnostics
+    # permanently off.
     for t <- [@table, @violations, @candidates] do
       if :ets.whereis(t) != :undefined, do: :ets.delete_all_objects(t)
     end
 
-    Mob.Invariant.Owner.reload()
+    Store.reload(__MODULE__)
     :atomics.put(seq(), 1, 0)
     :ok
   end
@@ -327,7 +351,7 @@ defmodule Mob.Invariant do
   end
 
   defp record(%Violation{} = violation) do
-    start()
+    Store.ensure(__MODULE__)
     seq = :atomics.add_get(seq(), 1, 1)
     :ets.insert(@violations, {seq, violation})
 
@@ -344,7 +368,7 @@ defmodule Mob.Invariant do
     violation
   end
 
-  defp seq, do: :persistent_term.get(:mob_invariant_state).seq
+  defp seq, do: Store.state(__MODULE__).seq
 
   # Configurable so a test can sample twice without waiting, and so an app on a
   # slow device can raise it if teardown there outlasts the default.

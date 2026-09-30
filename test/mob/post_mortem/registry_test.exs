@@ -5,7 +5,6 @@ defmodule Mob.PostMortem.RegistryTest do
   alias Mob.PostMortem.Registry
 
   setup do
-    Registry.start()
     Registry.reset()
     :ok
   end
@@ -43,5 +42,22 @@ defmodule Mob.PostMortem.RegistryTest do
     # produce two trues and the caller would emit twice for one artifact.
     assert Enum.count(results, & &1) == 1
     assert Enum.count(results, &(&1 == false)) == workers - 1
+  end
+
+  describe "emit_once/2" do
+    test "runs the emit once per id" do
+      assert Registry.emit_once("sha256:once", fn -> :emitted end) == [:emitted]
+      assert Registry.emit_once("sha256:once", fn -> :emitted end) == []
+    end
+
+    test "a failed emit is counted and forgotten, so the next sweep retries it" do
+      lost = Mob.Diag.Store.health(Registry).lost
+
+      assert Registry.emit_once("sha256:retry", fn -> raise "capsule build failed" end) == []
+      refute Registry.seen?("sha256:retry")
+      assert Mob.Diag.Store.health(Registry).lost == lost + 1
+
+      assert Registry.emit_once("sha256:retry", fn -> :emitted end) == [:emitted]
+    end
   end
 end

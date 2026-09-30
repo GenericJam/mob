@@ -219,4 +219,47 @@ defmodule Mob.Diag do
       captured_at: DateTime.utc_now()
     }
   end
+
+  @stores [
+    Mob.Agent.Receipts,
+    Mob.Defect.Bus,
+    Mob.Invariant,
+    Mob.PostMortem.Registry,
+    Mob.RenderStats
+  ]
+
+  @doc """
+  Whether the framework's own diagnostics are working, so an empty answer from
+  one of them can be told apart from a broken one.
+
+      :rpc.call(node, Mob.Diag, :health, [])
+
+  Per store (`Mob.Agent.Receipts`, `Mob.Defect.Bus`, `Mob.Invariant`,
+  `Mob.PostMortem.Registry`, `Mob.RenderStats`):
+
+    * `owner` — the owning pid, or `nil` while down (tables are then held by
+      `Mob.Diag.Heir` and still written to)
+    * `tables` — each table's size and whether the `:owner`, the `:heir`,
+      another process (`:other`) holds it, or it is `:missing`
+    * `lost` — writes that failed and were dropped. Non-zero means the store's
+      answers are incomplete.
+    * `resets` — times the tables had to be recreated after being lost (the
+      owner and heir both died). Everything recorded before was lost with them.
+    * `owner_starts` — owner processes started so far
+    * `state_vsn` — current and expected state versions (differ briefly after
+      a hot push)
+    * `store` — store-specific counts, e.g. evictions
+
+  Plus the heir and the subscriber lists of `Mob.Defect.Bus` and
+  `Mob.Event.Trace`. Counts and pids only, never recorded content. Read-only:
+  it starts nothing and repairs nothing.
+  """
+  @spec health() :: map()
+  def health do
+    %{
+      stores: Map.new(@stores, &{&1, Mob.Diag.Store.health(&1)}),
+      heir: Process.whereis(Mob.Diag.Heir),
+      subscribers: Mob.Diag.Subscribers.health()
+    }
+  end
 end

@@ -79,8 +79,6 @@ defmodule Mob.PostMortem.IOS do
   def sweep do
     with :ios <- safe_platform(),
          payloads when is_list(payloads) <- safe_drain() do
-      Registry.start()
-
       Enum.flat_map(payloads, &emit_if_new/1)
     else
       _ -> []
@@ -95,7 +93,6 @@ defmodule Mob.PostMortem.IOS do
   def sweep_with(nif) when is_atom(nif) do
     with :ios <- safe_platform_via(nif),
          payloads when is_list(payloads) <- safe_drain_via(nif) do
-      Registry.start()
       Enum.flat_map(payloads, &emit_if_new/1)
     else
       _ -> []
@@ -123,13 +120,7 @@ defmodule Mob.PostMortem.IOS do
   # :warning and are skipped. Neither raises out of the sweep.
   defp emit_if_new(payload) when is_map(payload) do
     if valid_shape?(payload) do
-      id = artifact_id(payload)
-
-      if Registry.mark_seen(id) do
-        [Defect.emit_metrickit_payload(payload)]
-      else
-        []
-      end
+      Registry.emit_once(artifact_id(payload), fn -> Defect.emit_metrickit_payload(payload) end)
     else
       Logger.warning(
         "[Mob.PostMortem.IOS] dropping malformed MetricKit payload " <>

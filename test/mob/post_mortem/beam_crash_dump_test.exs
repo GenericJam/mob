@@ -23,9 +23,7 @@ defmodule Mob.PostMortem.BeamCrashDumpTest do
   """
 
   setup do
-    Bus.start()
     Bus.reset()
-    Registry.start()
     Registry.reset()
     :ok
   end

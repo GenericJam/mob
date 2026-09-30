@@ -7,9 +7,7 @@ defmodule Mob.DefectTest do
   alias Mob.Invariant
 
   setup do
-    Bus.start()
     Bus.reset()
-    Invariant.start()
     Invariant.reset()
     Bus.unsubscribe()
     :ok

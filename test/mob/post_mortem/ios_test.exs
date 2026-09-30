@@ -22,9 +22,7 @@ defmodule Mob.PostMortem.IOSTest do
   end
 
   setup do
-    Bus.start()
     Bus.reset()
-    Registry.start()
     Registry.reset()
     Bus.unsubscribe()
     {:ok, _ref} = Bus.subscribe()
