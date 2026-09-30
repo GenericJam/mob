@@ -8,6 +8,38 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [0.9.4] - 2026-09-30
+
+### Fixed
+- **`Mob.DNS.resolve/1` now refreshes a host after a network change.**
+  It seeded `:inet_db` with a bare `:inet_db.add_host(ip, [host])`, which
+  *appends* the new address to the host's list. `:inet.getaddr/2`
+  (and so Req / Finch / Mint) kept returning the first, stale address.
+  For example, after moving from a Wi-Fi network whose DNS sinkholed
+  a host to mobile data, requests kept going to the sinkhole until
+  the app restarted. Re-resolving now replaces the host's previous
+  address.
+- **Hosts that resolve to the same address no longer evict each
+  other.** `:inet_db` keys runtime entries by address, so seeding
+  `b` onto an address already holding `a` silently unseeded `a`, even
+  though `resolve/1` had returned `{:ok, _}` for it. This happened
+  with shared CDN addresses and every name a sinkhole answers with
+  `0.0.0.0`. Concurrent `resolve/1` calls are serialised so they
+  can't drop each other's names either.
+
+If you worked around the stale address with `:inet_db.del_host(ip)`,
+remove the workaround. `del_host` drops the address for *every*
+hostname seeded under it. Upgrading and calling `resolve/1` again is
+enough. See `decisions/2026-09-30-dns-resolve-replaces-host-entries.md`.
+
+### Changed
+- **`guides/dns_on_ios.md`, `Mob.DNS` / `Mob.App` docs, README** — whether physical
+  Android can use BEAM's built-in DNS path depends on the device (a
+  Moto G Power 2021 on Android 11 resolves, a Moto G Power 5G 2024 on
+  Android 14 doesn't), and the iOS simulator needs the same setup as
+  the device. The guide used to say both were unaffected. `resolve/1`
+  remains the recommendation on Android.
+
 ## [0.9.3] - 2026-09-19
 
 Docs-only refresh — no code changes vs 0.9.1. (0.9.2 was cut and
