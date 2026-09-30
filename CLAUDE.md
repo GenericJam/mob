@@ -553,8 +553,9 @@ mix mob.devices          # list connected devices and their status
 ```
 
 Node names are platform-specific:
-- iOS simulator:    `mob_demo_ios@127.0.0.1`
-- Android emulator: `mob_demo_android@127.0.0.1`
+- iOS simulator: `mob_demo_ios@127.0.0.1`
+- Android:       `mob_demo_android_<serial-suffix>@127.0.0.1` (suffix from `ro.serialno`,
+  e.g. `emulator_5554`)
 
 ### EPMD tunneling
 
@@ -564,22 +565,24 @@ the Mac's EPMD on port 4369. No forwarding needed.
 Android is a separate network namespace. `mob_dev` sets up adb tunnels automatically:
 
 ```
-adb reverse tcp:4369 tcp:4369   # EPMD: device → Mac (Android BEAM registers in Mac EPMD)
-adb forward tcp:9100 tcp:9100   # dist:  Mac → device
+adb reverse tcp:4369 tcp:4369       # EPMD: device → Mac (Android BEAM registers in Mac EPMD)
+adb forward tcp:<port> tcp:<port>   # dist:  Mac → device, same port both ends
 ```
 
 ### Port assignment (handled by mob_dev)
 
-Devices are assigned dist ports by index to avoid conflicts:
-- Device 0 (Android): port 9100
-- Device 1 (iOS sim): port 9101
+Each device's dist port is derived from its Android serial or iOS UDID
+(`MobDev.Tunnel.serial_base_port/1`, a crc32 hash into `9100..9899`), not a per-run
+index. A given device gets the same port across runs and projects, and
+`Tunnel.assign_dist_port/2` bumps past any port a live node or forward already holds.
+The device-side BEAM listens on that same port, so the forward is 1:1 and the port
+EPMD advertises matches it.
 
 iOS dist port is passed via `SIMCTL_CHILD_MOB_DIST_PORT` env var; `mob_beam.m` reads
 `MOB_DIST_PORT` at startup. Android dist port is passed as the `mob_dist_port` intent
 extra (set by `MobDev.Discovery.Android.restart_app/4`); the generated app's
 `MainActivity.kt` reads it (`intent.extras.getInt("mob_dist_port")`) and exports it as
-the `MOB_DIST_PORT` env var, which `mob_beam` consumes at startup — so each Android
-device honors its per-device port and multi-Android no longer collides. Override with
+the `MOB_DIST_PORT` env var, which `mob_beam` consumes at startup. Override with
 `mix mob.deploy --dist-port <N>` (e.g. to dodge a port another app is squatting in the
 shared Mac EPMD); pair it with `adb forward tcp:<N> tcp:<N>`.
 
@@ -816,7 +819,7 @@ User alias "Nova" = macOS + Nix-managed toolchain throughout.
 - `lib/mob/dist.ex` — platform-aware distribution startup
 - `src/mob_nif.erl` — Erlang NIF stub (declares all NIF functions)
 - `ios/mob_nif.m` — iOS NIF implementation (SwiftUI bridge + test harness)
-- `android/jni/mob_nif.c` — Android NIF implementation (JNI bridge)
+- `android/jni/mob_nif.zig` — Android NIF implementation (JNI bridge)
 - `ios/mob_beam.m` — iOS BEAM launcher
 - `android/jni/mob_beam.zig` — Android BEAM launcher (Phase 6b iter 2 — was `.c`)
 - `android/jni/mob_zig.zig` — Hand-declared JNI / libc / Android FFI bindings used by mob_beam.zig
@@ -906,24 +909,19 @@ the device node uses a numeric host like `@10.0.0.120`.
 get distinct suffixes (`emulator_5554` / `emulator_5556`) and no longer
 collide in EPMD. See `mob_dev/decisions/2026-05-28-android-node-name-by-serial.md`.
 
-### Fixing adb-forward port mismatch
+### Dist ports are serial-derived (mob_dev 0.6.7+)
 
-`mob_dev` assigns dist ports by index (`9100` for the first device,
-`9101` for the second, …) but EPMD broadcasts the *device-side*
-port (always `9100`). When EPMD says "node X is at port 9100",
-your IEx connects to `localhost:9100` — which may be an `adb
-forward` to a different device, or to nothing. Symptom:
-
-```elixir
-Node.connect(:"your_app_android_<suffix>@127.0.0.1")
-#=> false
-```
-
-Repoint `localhost:9100` at the device whose BEAM you want:
+Ports are no longer assigned by per-run index, which made every project's
+first device claim 9100 and collide in the shared Mac EPMD. Each device
+gets a stable port from its serial / UDID and listens on it device-side,
+so `adb forward` is 1:1 and matches what EPMD advertises. If
+`mix mob.connect` fails it reports why (app not running, dist not
+registered, port mismatch, no forward, cookie mismatch). To inspect by
+hand:
 
 ```bash
-adb forward --list                           # see what's there
-adb -s <serial> forward tcp:9100 tcp:9100    # 9100 host → 9100 device
+epmd -names           # registered nodes + their ports
+adb forward --list    # host→device forwards (should be 1:1, no dupes)
 ```
 
 For physical-device-on-Wi-Fi targets (iPhone, real Android), the

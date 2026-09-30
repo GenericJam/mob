@@ -326,7 +326,7 @@ These are the things we've burned ourselves on. Following them isn't optional.
     rather than duplicating them. See
     `mob_dev/decisions/2026-06-19-mob-adopt-lives-in-mob_dev.md`.
 
-14. **Don't drive iOS by coordinate — use `Mob.Test.tap/2`.** `tap_xy/3` works
+15. **Don't drive iOS by coordinate — use `Mob.Test.tap/2`.** `tap_xy/3` works
     on the simulator only for elements SwiftUI gives an accessibility action
     (`Button`, text fields); a `Box` with `on_tap:` has none. On a physical
     device the injected IOHID touch is accepted and never delivered, so every
@@ -337,7 +337,7 @@ These are the things we've burned ourselves on. Following them isn't optional.
     *the platform API didn't complain*. See
     `decisions/2026-08-09-tap-xy-reports-observed-effect.md`.
 
-15. **Never capture `[nsstring UTF8String]` in a block that can outlive the
+16. **Never capture `[nsstring UTF8String]` in a block that can outlive the
     scope.** The pointer belongs to the NSString and may become invalid before
     a delayed callback runs. Capture the object and convert inside the block.
     Both alert NIFs previously relied on the pointer remaining valid; short
@@ -354,7 +354,7 @@ These are the things we've burned ourselves on. Following them isn't optional.
 | Open known issues with diagnoses + fixes | `issues.md` |
 | Speculative ideas, longer-term plans | `future_developments.md`, `wire_tap.md`, `PLAN.md` |
 | Per-feature deep dives (events, navigation, theming, ...) | `guides/*.md` |
-| Architecture decisions (one ADR per cross-cutting decision) | `docs/decisions/` |
+| Architecture decisions (one ADR per cross-cutting decision) | `decisions/` |
 | iOS device deployment (provisioning, build chain, gotchas) | `guides/ios_physical_device.md` |
 | Generator templates (mob_new) | `mob_new/priv/templates/mob.new/` |
 | Build / release tooling | `mob_dev/scripts/release/`, `mob_dev/build_release.md` |
