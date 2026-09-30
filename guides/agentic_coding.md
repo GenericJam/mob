@@ -326,8 +326,12 @@ A non-zero `lost` or `resets` means the store's answers are incomplete.
 picks up the evidence the OS and the BEAM leave behind and puts it on the bus:
 `erl_crash.dump` files (`:beam_crash`, with the normalised slogan as the
 fingerprint), iOS MetricKit crash, hang and CPU/disk diagnostics, and
-Android's `ApplicationExitInfo` history (crashes, ANRs, OOM kills, each exit
-emitted exactly once across boots). Nothing runs automatically; call it from
+Android's `ApplicationExitInfo` history (crashes, ANRs, OOM kills). The OS
+hands a MetricKit payload or an exit over once, so mob journals it and every
+sweep, across boots, emits it again until it has been observed: delivered to a
+`Mob.Defect.Bus` subscriber, or read with `recent/1`, `classes/1` or
+`subscribe/1`. An app restart before you attached (`mix mob.connect` does one)
+no longer loses it. Nothing runs automatically; call it from
 `on_start/0` or from your session after a launch you did not watch.
 
 ```elixir

@@ -38,6 +38,17 @@ defmodule Mob.Defect.Bus do
   `:persistent_term`; the write path reads that once and sends to each pid
   directly. A subscriber lifecycle change is a rare event; a defect emit is not.
 
+  ## Observation
+
+  The bus keeps a watermark: the highest emit sequence someone has observed.
+  Delivering a capsule to at least one subscriber observes it; `recent/1`,
+  `classes/1` and `subscribe/1` observe everything emitted before them. The
+  watermark is passed to `Mob.PostMortem.Journal.observed/1`, which clears
+  post-mortem entries that a destructive OS drain handed over only once — the
+  one thing on the bus that must outlive the boot until someone has seen it.
+  An emit that reaches no subscriber does no extra work, and one that does
+  pays a compare-and-swap and a `:persistent_term` read.
+
   ## No default sink
 
   A subscriber is a pid, and no pid is subscribed until an app registers one.
@@ -83,22 +94,27 @@ defmodule Mob.Defect.Bus do
   end
 
   @impl Store
-  def state_vsn, do: 1
+  def state_vsn, do: 2
 
   # A new state (first setup, or after a hot push onto an older `mob` whose
   # owner still holds the ring) continues from the highest sequence already in
-  # it, so new capsules never sort under old ones.
+  # it, so new capsules never sort under old ones. Version 1 had no `observed`
+  # watermark; it starts at 0, which only means nothing was observed yet.
   @impl Store
   def new_state(previous) do
-    case previous && previous[:seq] do
-      nil ->
-        seq = :atomics.new(2, signed: false)
-        :atomics.put(seq, @recent_seq, highest_recent_seq())
-        %{seq: seq}
+    seq =
+      case previous && previous[:seq] do
+        nil ->
+          seq = :atomics.new(2, signed: false)
+          :atomics.put(seq, @recent_seq, highest_recent_seq())
+          seq
 
-      seq ->
-        %{seq: seq}
-    end
+        seq ->
+          seq
+      end
+
+    observed = (previous && previous[:observed]) || :atomics.new(1, signed: false)
+    %{seq: seq, observed: observed}
   end
 
   defp highest_recent_seq do
@@ -139,8 +155,8 @@ defmodule Mob.Defect.Bus do
       state = Store.state(__MODULE__)
 
       record_class(state, capsule)
-      record_recent(state, capsule)
-      fanout(capsule)
+      seq = record_recent(state, capsule)
+      fanout(state, seq, capsule)
 
       capsule
     end)
@@ -157,6 +173,7 @@ defmodule Mob.Defect.Bus do
   @spec classes(pos_integer()) :: [map()]
   def classes(limit \\ 20) do
     Store.ensure(__MODULE__)
+    observe_all()
 
     @classes
     |> :ets.tab2list()
@@ -185,6 +202,7 @@ defmodule Mob.Defect.Bus do
   @spec recent(pos_integer()) :: [Capsule.t()]
   def recent(limit \\ 20) do
     Store.ensure(__MODULE__)
+    observe_all()
 
     @recent
     |> :ets.tab2list()
@@ -204,10 +222,17 @@ defmodule Mob.Defect.Bus do
   From a connected node, pass the pid to receive on — `:rpc.call(node,
   Mob.Defect.Bus, :subscribe, [self()])`. Without it, `:rpc` subscribes the
   short-lived process it runs the call in, which receives nothing.
+
+  A subscribe counts as observing every capsule emitted before it (see
+  "Observation" above).
   """
   @spec subscribe() :: {:ok, reference()}
   @spec subscribe(pid()) :: {:ok, reference()}
-  def subscribe(pid \\ self()), do: Subscribers.subscribe(:defect_bus, pid, nil)
+  def subscribe(pid \\ self()) do
+    {:ok, ref} = Subscribers.subscribe(:defect_bus, pid, nil)
+    observe_all()
+    {:ok, ref}
+  end
 
   @doc "Unsubscribe `pid` (defaults to `self()`)."
   @spec unsubscribe() :: :ok
@@ -219,6 +244,14 @@ defmodule Mob.Defect.Bus do
   def subscribers, do: for({pid, _meta} <- Subscribers.list(:defect_bus), do: pid)
 
   @doc false
+  @spec emitted_seq() :: non_neg_integer()
+  def emitted_seq, do: :atomics.get(Store.state(__MODULE__).seq, @recent_seq)
+
+  @doc false
+  @spec observed_seq() :: non_neg_integer()
+  def observed_seq, do: :atomics.get(Store.state(__MODULE__).observed, 1)
+
+  @doc false
   @spec reset() :: :ok
   def reset do
     for {t, _opts} <- tables() do
@@ -228,7 +261,32 @@ defmodule Mob.Defect.Bus do
     state = Store.state(__MODULE__)
     :atomics.put(state.seq, @recent_seq, 0)
     :atomics.put(state.seq, @class_evictions, 0)
+    :atomics.put(state.observed, 1, 0)
     :ok
+  end
+
+  # ---------------------------------------------------------------------------
+  # Observation
+  # ---------------------------------------------------------------------------
+
+  defp observe_all do
+    state = Store.state(__MODULE__)
+    observe(state, :atomics.get(state.seq, @recent_seq))
+  end
+
+  # The watermark only rises, and the journal is told where it stands.
+  defp observe(state, through) do
+    Mob.PostMortem.Journal.observed(raise_watermark(state.observed, through))
+  end
+
+  defp raise_watermark(observed, through) do
+    current = :atomics.get(observed, 1)
+
+    cond do
+      through <= current -> current
+      :atomics.compare_exchange(observed, 1, current, through) == :ok -> through
+      true -> raise_watermark(observed, through)
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -330,39 +388,46 @@ defmodule Mob.Defect.Bus do
       cutoff = seq - @keep_recent + 1
       :ets.select_delete(@recent, [{{:"$1", :_}, [{:<, :"$1", cutoff}], [true]}])
     end
+
+    seq
   end
 
-  defp fanout(%Capsule{} = c) do
-    for {pid, _meta} <- Subscribers.list(:defect_bus) do
-      # send/2 does not raise on a dead pid, so a subscriber that exited
-      # between publish-of-the-cached-list and this line does not affect
-      # this or any other subscriber. Its monitor prunes the dead pid from
-      # the cached list on its own schedule.
-      #
-      # A **remote** subscriber pid is a different matter: dist encoding of
-      # the term happens in *this* process's context, and if a caller ever
-      # plumbs a resource that cannot be encoded (a NIF resource, a closure
-      # over one) into the capsule, `send/2` raises here and takes down the
-      # emitter. That would be a defect reporter that crashes on the defect
-      # it is reporting — the exact anti-pattern the framework promises to
-      # avoid, per `capsule.ex`'s "bounded shapes" section.
-      #
-      # Isolate each pid so one bad recipient does not stop delivery to the
-      # rest, and log at :error so a broken payload surfaces rather than
-      # disappearing silently. The framework's own emit paths ship shapes
-      # that encode; a defect here means an app-owned caller passed
-      # something it should not have.
-      try do
-        send(pid, {:mob_defect, c})
-      catch
-        kind, reason ->
-          Logger.error(
-            "[Mob.Defect.Bus] fanout to #{inspect(pid)} raised: " <>
-              "#{inspect(kind)} #{inspect(reason)}. Capsule dropped for this subscriber."
-          )
-      end
-    end
-
+  # A capsule delivered to at least one subscriber has been observed; one that
+  # reached nobody costs nothing extra here.
+  defp fanout(state, seq, %Capsule{} = c) do
+    delivered = Enum.count(Subscribers.list(:defect_bus), fn {pid, _meta} -> deliver(pid, c) end)
+    if delivered > 0, do: observe(state, seq)
     :ok
+  end
+
+  defp deliver(pid, %Capsule{} = c) do
+    # send/2 does not raise on a dead pid, so a subscriber that exited
+    # between publish-of-the-cached-list and this line does not affect
+    # this or any other subscriber. Its monitor prunes the dead pid from
+    # the cached list on its own schedule.
+    #
+    # A **remote** subscriber pid is a different matter: dist encoding of
+    # the term happens in *this* process's context, and if a caller ever
+    # plumbs a resource that cannot be encoded (a NIF resource, a closure
+    # over one) into the capsule, `send/2` raises here and takes down the
+    # emitter. That would be a defect reporter that crashes on the defect
+    # it is reporting — the exact anti-pattern the framework promises to
+    # avoid, per `capsule.ex`'s "bounded shapes" section.
+    #
+    # Isolate each pid so one bad recipient does not stop delivery to the
+    # rest, and log at :error so a broken payload surfaces rather than
+    # disappearing silently. The framework's own emit paths ship shapes
+    # that encode; a defect here means an app-owned caller passed
+    # something it should not have.
+    send(pid, {:mob_defect, c})
+    true
+  catch
+    kind, reason ->
+      Logger.error(
+        "[Mob.Defect.Bus] fanout to #{inspect(pid)} raised: " <>
+          "#{inspect(kind)} #{inspect(reason)}. Capsule dropped for this subscriber."
+      )
+
+      false
   end
 end

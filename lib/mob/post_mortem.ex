@@ -15,9 +15,13 @@ defmodule Mob.PostMortem do
     capsules on drain.
   * `Mob.PostMortem.Android` — `ApplicationExitInfo` history (ANR,
     crash, OOM, user kill). Pulls the OS-held exit-reason list on
-    demand (API 30+), filters against a persistent marker so each
-    exit emits exactly once across boots, emits `:native_crash` /
-    `:anr` / `:oom` / `:user_kill` capsules.
+    demand (API 30+), filters against a persistent marker so the OS
+    hands each exit over once, emits `:native_crash` / `:anr` /
+    `:oom` / `:user_kill` capsules.
+
+  Both native drains are destructive, so `Mob.PostMortem.Journal`
+  keeps what they returned and every sweep emits it again, across
+  boots, until it has been observed on the bus.
 
   Nothing here runs automatically. An app opts in by calling
   `Mob.PostMortem.sweep/0` from its `on_start`, and a developer or CI
@@ -34,7 +38,8 @@ defmodule Mob.PostMortem do
   The dump stays on disk — nothing here deletes or moves a file — so
   offline inspection still works. See the registry's moduledoc for why
   the seen-set does not persist across BEAM restarts (a fresh BEAM
-  sweeps back into a fresh bus, on purpose).
+  sweeps back into a fresh bus, on purpose), and the journal's for
+  why native entries are re-emitted until observed.
 
   ## Return value
 
