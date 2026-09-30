@@ -22,6 +22,8 @@ defmodule Mob.Diag.Subscribers do
 
   use GenServer
 
+  require Logger
+
   @index {__MODULE__, :topics}
 
   @doc false
@@ -44,18 +46,28 @@ defmodule Mob.Diag.Subscribers do
 
   The first read in a VM that has never started this registry starts it once,
   so subscribers an older `mob` left behind (after a hot push) are adopted
-  rather than silently dropped. Every later read is a lookup.
+  rather than silently dropped. Every later read is a lookup. This never
+  raises: it sits under every `Mob.Event.dispatch/4`, so if the registry cannot
+  be started the read answers from what is published.
   """
   @spec list(atom()) :: [{pid(), term()}]
   def list(topic) do
     case :persistent_term.get(key(topic), nil) do
       nil ->
-        if :persistent_term.get(@index, nil) == nil, do: call(:sync)
+        if :persistent_term.get(@index, nil) == nil, do: adopt_legacy()
         published(topic)
 
       subscribers ->
         subscribers
     end
+  end
+
+  defp adopt_legacy do
+    call(:sync)
+  catch
+    # credo:disable-for-next-line ExSlop.Check.Warning.BlanketRescue
+    kind, reason ->
+      Logger.warning("[Mob.Diag.Subscribers] could not start: #{Exception.format(kind, reason)}")
   end
 
   @doc false
@@ -110,26 +122,28 @@ defmodule Mob.Diag.Subscribers do
   end
 
   # Where `mob` 0.9.4 and earlier kept them: the defect bus's cached pid list,
-  # and `Mob.Event.Trace`'s `{pid, filter}` table.
-  defp legacy_subscribers do
-    bus =
-      for pid <- :persistent_term.get(:mob_defect_subscribers, []),
-          is_pid(pid),
-          into: %{},
-          do: {pid, nil}
+  # and `Mob.Event.Trace`'s `{pid, filter}` table. Anything unexpected there is
+  # skipped: this runs in `init/1`, and a registry that cannot start would take
+  # every later subscribe with it.
+  defp legacy_subscribers,
+    do: %{defect_bus: legacy_bus(), event_trace: legacy_tracers()}
 
-    trace =
-      if :ets.whereis(:mob_event_trace) == :undefined,
-        do: %{},
-        else:
-          for(
-            {pid, filter} <- :ets.tab2list(:mob_event_trace),
-            is_pid(pid),
-            into: %{},
-            do: {pid, filter}
-          )
+  defp legacy_bus do
+    case :persistent_term.get(:mob_defect_subscribers, []) do
+      pids when is_list(pids) -> for pid <- pids, is_pid(pid), into: %{}, do: {pid, nil}
+      _other -> %{}
+    end
+  end
 
-    %{defect_bus: bus, event_trace: trace}
+  # The table belonged to whichever process called the old `Trace.start/0`, so
+  # it can vanish between any two reads.
+  defp legacy_tracers do
+    for {pid, filter} <- :ets.tab2list(:mob_event_trace),
+        is_pid(pid) and (is_nil(filter) or is_function(filter, 1)),
+        into: %{},
+        do: {pid, filter}
+  rescue
+    ArgumentError -> %{}
   end
 
   @impl GenServer

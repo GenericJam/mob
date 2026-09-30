@@ -78,9 +78,11 @@ not the old `<Store>.Owner` name: an app that hot-pushes this over an older
   tables if the heir restarts. If both die, the tables are recreated and counted
   as a `reset`.
 - **Guarded writes.** `guard/3` wraps every write path:
-  - Any failure is counted as `lost`, logged once, and followed by a repair.
-  - The repair (a sync with the owner) happens only if a table is actually
-    missing, so an unrelated failure never turns writes into owner calls.
+  - Any failure is counted as `lost`, logged once, and preceded by a repair.
+  - The repair (a sync with the owner) happens only if a table or the state is
+    actually missing, so an unrelated failure never turns writes into owner
+    calls. Repairing first means a loss before first setup, or onto tables an
+    older `mob` still holds, has counters to be counted in.
   - The caller gets a fallback instead of an exception.
   - `Receipts.record/1`, `Bus.emit/1`, `Invariant.run/2`,
     `Registry.mark_seen/1` and `RenderStats`' frame store never raise.
@@ -103,18 +105,23 @@ is retried by the next sweep. MetricKit and ApplicationExitInfo drains are
 destructive, so for them the counted loss is the best available.
 
 **`Defect.Bus` classes are capped at 256.** Past the cap, the least recently
-seen class is evicted by compare-and-delete, and only an actual removal is
-counted (`class_evictions`). Concurrent writers never leave the table above
-the cap, but can leave it slightly under.
+seen classes are evicted by compare-and-delete, and only an actual removal is
+counted (`class_evictions`). One pass reads `{last_seen, fingerprint}` pairs
+and walks the oldest of them, because after a hot push onto an unbounded
+0.9.4 table the excess can be thousands. The size is re-read before every
+delete, so concurrent writers never leave the table above the cap and remove
+at most one extra row each.
 
 **A hot push onto an older `mob` keeps what that `mob` recorded.** Its rows stay
 in its tables, which its still-running owner holds (`:other`) and new writes
 land in. A new state continues each sequence from the highest one in the table,
 so new rows never sort under old ones or overwrite them. Receipts adopt the old
 eviction count, and `Mob.Diag.Subscribers` adopts the old Bus subscriber list
-and Trace table when it first starts. The first `list/1` in a VM starts it for
-that purpose. `health/1` reports state it cannot read yet as `store: :stale`
-instead of raising.
+and Trace table when it first starts, skipping anything it cannot read. The
+first `list/1` in a VM starts it for that purpose. If it cannot start, `list/1`
+answers from what is published, because it runs inside every
+`Mob.Event.dispatch/4`. `health/1` reports state it cannot read yet as
+`store: :stale` instead of raising.
 
 Alternatives rejected:
 
@@ -165,3 +172,19 @@ Alternatives rejected:
   - Trace filters that throw or exit escaping.
 
   All are fixed, each with a test that fails without its fix.
+- A second review of those fixes found:
+  - the cap loop made the first emit after a hot push onto an unbounded table
+    quadratic (6.4 s for 6,000 classes);
+  - a failed first registry start raising into every dispatch (a garbage legacy
+    bus key reproduced it, and it also broke every later subscribe);
+  - losses onto tables an older `mob` holds going uncounted;
+  - a seeding test depending on file order.
+
+  All are fixed. A third review found that the first fix, which deleted a
+  precomputed excess, let 16 writers racing onto such a table cut it to one
+  class. Re-reading the size before each delete fixed it, and a racing test
+  covers it. The `list/1` catch is the one guard without a failing-first test:
+  once the legacy import tolerates bad input, no test can make the registry's
+  `init/1` fail.
+- On the Moto G (Android 11, OTP 29), the first emit onto 6,000 legacy classes
+  took 31 ms and the next 0.7 ms.

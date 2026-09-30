@@ -242,6 +242,10 @@ defmodule Mob.Diag.StoreTest do
 
     test "a new state continues from the highest sequence already in each table" do
       for store <- [Mob.Agent.Receipts, Bus, Mob.Invariant], do: Store.ensure(store)
+      # The seed is the table's maximum, so rows other files left must not count.
+      Mob.Agent.Receipts.reset()
+      Bus.reset()
+      Mob.Invariant.reset()
 
       receipt = %Mob.Agent.Receipt{
         action_id: "old",
@@ -291,21 +295,14 @@ defmodule Mob.Diag.StoreTest do
     end
 
     test "subscribers an older mob registered keep receiving" do
-      stop_subscribers = fn ->
-        ProcessHelpers.stop_if_running(Mob.Diag.Subscribers)
-
-        for k <- [:topics, :defect_bus, :event_trace],
-            do: :persistent_term.erase({Mob.Diag.Subscribers, k})
-      end
-
-      stop_subscribers.()
+      stop_subscribers()
       :persistent_term.put(:mob_defect_subscribers, [self()])
       trace = :ets.new(:mob_event_trace, [:named_table, :public])
       :ets.insert(trace, {self(), nil})
 
       on_exit(fn ->
         :persistent_term.erase(:mob_defect_subscribers)
-        stop_subscribers.()
+        stop_subscribers()
       end)
 
       capsule =
@@ -324,6 +321,42 @@ defmodule Mob.Diag.StoreTest do
       assert_receive {:mob_trace, ^address, :tap, nil}
 
       :ets.delete(trace)
+    end
+
+    test "legacy state the registry cannot read never breaks dispatch or tracing" do
+      # The old trace table belonged to whoever called `Trace.start/0` and can
+      # be gone or unreadable; the bus key can hold anything an older build
+      # put there. Trace.broadcast runs inside every Mob.Event.dispatch/4.
+      for legacy <- [:private_trace_table, :garbage_bus_key] do
+        stop_subscribers()
+        parent = self()
+
+        holder =
+          spawn(fn ->
+            if legacy == :private_trace_table,
+              do: :ets.new(:mob_event_trace, [:named_table, :private])
+
+            send(parent, :held)
+            Process.sleep(:infinity)
+          end)
+
+        assert_receive :held
+        if legacy == :garbage_bus_key, do: :persistent_term.put(:mob_defect_subscribers, :garbage)
+
+        address = Mob.Event.Address.new(screen: X, widget: :button, id: legacy)
+        assert :ok = Mob.Event.dispatch(self(), address, :tap, nil)
+        assert :ok = Mob.Event.dispatch(self(), address, :tap, nil)
+
+        :ok = Mob.Event.Trace.subscribe(self(), nil)
+        assert :ok = Mob.Event.dispatch(self(), address, :tap, nil)
+        assert_receive {:mob_trace, ^address, :tap, nil}
+
+        Process.exit(holder, :kill)
+        ProcessHelpers.await_exit(holder)
+        :persistent_term.erase(:mob_defect_subscribers)
+      end
+
+      stop_subscribers()
     end
 
     test "health reports state an older shape cannot be read as stale rather than raising" do
@@ -349,5 +382,30 @@ defmodule Mob.Diag.StoreTest do
 
       assert Store.health(TestStore).lost == 1
     end
+
+    test "a loss onto tables an older mob still holds, before any state exists, is counted" do
+      parent = self()
+
+      holder =
+        spawn(fn ->
+          for {t, opts} <- TestStore.tables(), do: :ets.new(t, [:named_table | opts])
+          send(parent, :held)
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive :held
+
+      on_exit(fn -> Process.exit(holder, :kill) end)
+
+      assert Store.guard(TestStore, :fallback, fn -> raise "boom" end) == :fallback
+      assert Store.health(TestStore).lost == 1
+    end
+  end
+
+  defp stop_subscribers do
+    ProcessHelpers.stop_if_running(Mob.Diag.Subscribers)
+
+    for k <- [:topics, :defect_bus, :event_trace],
+        do: :persistent_term.erase({Mob.Diag.Subscribers, k})
   end
 end

@@ -257,34 +257,52 @@ defmodule Mob.Defect.Bus do
   end
 
   # Concurrent new classes can each see the table over the bound and pick the
-  # same oldest row. Evicting by compare-and-delete on the exact
-  # `{fingerprint, last_seen}` means only one of them removes it and only a
-  # removal is counted; the others go round again. A writer stops only once it
-  # sees the table at or under the bound, so once writers settle it is never
-  # above it. It can end a little under: two writers that each saw the table
-  # one over can pick different oldest rows and both remove one. A class that
-  # was seen again in the meantime no longer matches and is not evicted, and
-  # the class just inserted is the newest, so it is never the one chosen.
+  # same oldest rows. Evicting by compare-and-delete on the exact
+  # `{fingerprint, last_seen}` means only one of them removes each row and only
+  # a removal is counted. Each writer re-reads the size before every delete and
+  # stops once the table is at the bound, so the table is never left above it
+  # and at most one extra row per racing writer goes: two writers that both saw
+  # it one over can each remove a row. A class that was seen again in the
+  # meantime no longer matches and is not evicted, and the class just inserted
+  # is the newest, so it is never chosen.
+  #
+  # One pass reads only `{last_seen, fingerprint}` pairs (not the rows and
+  # their capsules) and walks the oldest `excess` of them. The excess is
+  # normally one, but after a hot push onto a `mob` that had no bound it can be
+  # thousands, and picking one victim per full scan made that first emit
+  # quadratic: 6.4 s for 6,000 classes on a laptop, inside a screen process.
+  # Deleting a precomputed `excess` without the size re-check was no better:
+  # 16 writers racing onto such a table cut it to as few as one class.
   defp enforce_class_limit(state, keep_fingerprint) do
-    with true <- :ets.info(@classes, :size) > @keep_classes,
-         {seen, fingerprint} <- oldest_class(keep_fingerprint) do
-      removed = :ets.select_delete(@classes, [{{fingerprint, :_, :_, seen}, [], [true]}])
-      if removed == 1, do: :atomics.add(state.seq, @class_evictions, 1)
+    excess = :ets.info(@classes, :size) - @keep_classes
+
+    if excess > 0 do
+      keep_fingerprint
+      |> oldest_classes(excess)
+      |> Enum.reduce_while(:ok, fn {seen, fingerprint}, :ok ->
+        if :ets.info(@classes, :size) > @keep_classes do
+          if :ets.select_delete(@classes, [{{fingerprint, :_, :_, seen}, [], [true]}]) == 1,
+            do: :atomics.add(state.seq, @class_evictions, 1)
+
+          {:cont, :ok}
+        else
+          {:halt, :ok}
+        end
+      end)
+
+      # Rows another writer removed, or that were seen again, were skipped;
+      # if that left the table over the bound, pick again.
       enforce_class_limit(state, keep_fingerprint)
     end
   end
 
-  defp oldest_class(keep_fingerprint) do
-    :ets.foldl(
-      fn
-        {^keep_fingerprint, _, _, _}, acc -> acc
-        {fp, _, _, seen}, nil -> {seen, fp}
-        {fp, _, _, seen}, {oldest_seen, _} when seen < oldest_seen -> {seen, fp}
-        _row, acc -> acc
-      end,
-      nil,
-      @classes
-    )
+  defp oldest_classes(keep_fingerprint, count) do
+    @classes
+    |> :ets.select([
+      {{:"$1", :_, :_, :"$2"}, [{:"=/=", :"$1", keep_fingerprint}], [{{:"$2", :"$1"}}]}
+    ])
+    |> Enum.sort()
+    |> Enum.take(count)
   end
 
   # base_row's `occurrences` and `last_seen_ms` fields are placeholders — the

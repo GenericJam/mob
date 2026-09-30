@@ -112,16 +112,19 @@ defmodule Mob.Diag.Store do
     # counted and reported by `health/1` rather than swallowed.
     # credo:disable-for-next-line ExSlop.Check.Warning.BlanketRescue
     kind, reason ->
-      # Repair first: a failure before the store's first setup has no counters
-      # to count it in until setup has run.
-      repair(store)
       note_lost(store, kind, reason)
       fallback
   end
 
-  @doc "Count one write lost by `store`, outside `guard/3`."
+  @doc """
+  Count one write lost by `store`, outside `guard/3`. Missing tables or a
+  missing state are set up first, so a loss before the store's first setup,
+  or after a hot push onto tables an older `mob` still holds, is counted too.
+  """
   @spec note_lost(module(), atom(), term()) :: :ok
   def note_lost(store, kind, reason) do
+    repair(store)
+
     case :persistent_term.get(key(store), nil) do
       %{counters: counters} ->
         if :atomics.add_get(counters, @lost, 1) == 1 do
@@ -217,9 +220,12 @@ defmodule Mob.Diag.Store do
 
   # Repair only when something is actually missing: a write path that fails
   # for another reason must not turn every later write into an owner call.
+  # The state is missing before first setup, and after a hot push onto tables
+  # an older `mob`'s owner still holds.
   defp repair(store) do
-    if Enum.any?(store.tables(), fn {name, _} -> :ets.whereis(name) == :undefined end),
-      do: sync(store)
+    if :persistent_term.get(key(store), nil) == nil or
+         Enum.any?(store.tables(), fn {name, _} -> :ets.whereis(name) == :undefined end),
+       do: sync(store)
 
     :ok
   catch

@@ -285,6 +285,55 @@ defmodule Mob.Defect.BusTest do
       assert held > limit - racing
       assert Mob.Diag.Store.health(Bus).store.class_evictions == limit + racing - held
     end
+
+    test "an unbounded class table left by an older mob is cut to the limit by one cheap emit" do
+      # 0.9.4 had no class bound and its owner keeps the table after a hot
+      # push. Evicting one victim per full scan took 6.4 s for 6,000 classes
+      # inside the first emit; the whole excess must go in one pass.
+      limit = Mob.Diag.Store.health(Bus).store.class_limit
+      Bus.emit(invariant_capsule(:template))
+      [{_fp, base, _n, _seen}] = :ets.tab2list(:mob_defect_classes)
+      :ets.delete_all_objects(:mob_defect_classes)
+      old = 6_000
+      :ets.insert(:mob_defect_classes, for(n <- 1..old, do: {"sha256:old#{n}", base, 1, n}))
+
+      newest = invariant_capsule(:after_push)
+      {micros, _capsule} = :timer.tc(fn -> Bus.emit(newest) end)
+
+      assert Bus.class_count() == limit
+      assert Mob.Diag.Store.health(Bus).store.class_evictions == old + 1 - limit
+      assert :ets.member(:mob_defect_classes, newest.fingerprint)
+      assert :ets.member(:mob_defect_classes, "sha256:old#{old}")
+      refute :ets.member(:mob_defect_classes, "sha256:old#{old - limit + 1}")
+      assert micros < 1_000_000
+    end
+
+    test "writers racing onto an unbounded legacy table keep it near the limit and keep every new class" do
+      # Deleting a precomputed excess without re-reading the size let 16
+      # writers cut a 6,000-class table to as few as one class, taking each
+      # other's brand-new classes with it.
+      limit = Mob.Diag.Store.health(Bus).store.class_limit
+      racing = 16
+      Bus.emit(invariant_capsule(:template))
+      [{_fp, base, _n, _seen}] = :ets.tab2list(:mob_defect_classes)
+
+      for trial <- 1..3 do
+        :ets.delete_all_objects(:mob_defect_classes)
+        :ets.insert(:mob_defect_classes, for(n <- 1..6_000, do: {"sha256:old#{n}", base, 1, n}))
+
+        fresh =
+          1..racing
+          |> Task.async_stream(fn n -> Bus.emit(invariant_capsule(:"race_#{trial}_#{n}")) end,
+            max_concurrency: racing
+          )
+          |> Enum.map(fn {:ok, capsule} -> capsule.fingerprint end)
+
+        held = Bus.class_count()
+        assert held <= limit
+        assert held > limit - racing
+        assert Enum.all?(fresh, &:ets.member(:mob_defect_classes, &1))
+      end
+    end
   end
 
   describe "subscriber registry restarts" do
