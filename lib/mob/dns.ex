@@ -11,15 +11,16 @@ defmodule Mob.DNS do
 
   - **iOS** — the app sandbox forbids `execve` of any binary the app
     didn't get a special pass for. `inet_gethost` never runs.
-  - **Physical Android** — `inet_gethost` *does* run (mob ships it as
-    `libinet_gethost.so`, allowed to `execve` by the `apk_data_file`
-    SELinux label), but Bionic's getaddrinfo from the execve'd child
-    process returns `:nxdomain` for hostnames the same app's in-process
-    HTTPS stack resolves fine. The Android emulator happens not to hit
-    this (its DNS proxy at `10.0.2.3` is reachable to anything), so
-    the fault doesn't show in the simulator. Confirmed on a Moto G
-    Power 5G 2024 (Android 14): app-uid TCP-by-IP succeeds, but BEAM's
-    `:inet.getaddr/2` fails with `:nxdomain`.
+  - **Physical Android (some devices)** — `inet_gethost` *does* run
+    (mob ships it as `libinet_gethost.so`, allowed to `execve` by the
+    `apk_data_file` SELinux label), but on some devices Bionic's
+    getaddrinfo from the execve'd child process returns `:nxdomain`
+    for hostnames the same app's in-process HTTPS stack resolves fine.
+    Confirmed on a Moto G Power 5G 2024 (Android 14): app-uid
+    TCP-by-IP succeeds, but BEAM's `:inet.getaddr/2` fails with
+    `:nxdomain`. A Moto G Power 2021 (Android 11) resolves fine through
+    the same path, as does the Android emulator (its DNS proxy at
+    `10.0.2.3` is reachable to anything) — so don't rely on it.
 
   In either case `:inet.getaddr/2` (and therefore Req, Finch, Mint,
   ReqLLM, and basically every Elixir HTTP library) fails the moment
@@ -89,9 +90,14 @@ defmodule Mob.DNS do
     automatic. If your endpoint cycles IPs frequently you may need
     to re-resolve.
   - **No automatic refresh.** Mappings stay in `:inet_db` until
-    the BEAM exits. If a backend's IP changes mid-session, the
-    cached entry will be stale — call `resolve/1` again to
-    refresh.
+    the BEAM exits or the host is resolved again. Call `resolve/1`
+    after a network change (or when a backend's IP may have moved):
+    the fresh answer replaces the host's previous address, and other
+    hosts seeded through `resolve/1` on a shared address keep theirs.
+  - **Don't hand-edit seeded hosts with `:inet_db.del_host(ip)`.** It
+    removes the address for *every* hostname seeded under it — with
+    a DNS sinkhole answering `0.0.0.0` for many names, that unseeds
+    all of them. Re-resolve instead.
   - **Doesn't help raw NIF networking.** If a third-party NIF calls
     libc `getaddrinfo` itself, it never goes through BEAM's DNS
     layer and doesn't need (or benefit from) this fix — it already
@@ -134,17 +140,29 @@ defmodule Mob.DNS do
   Resolve `host` to an IPv4 address and seed `:inet_db` so subsequent
   `:inet.getaddr/2` lookups (and thus Req / Finch / Mint) find it.
 
-  Idempotent — calling for the same host twice is harmless.
+  The fresh answer **replaces** whatever IPv4 address `host` was seeded
+  with before, so calling it again after a network change (Wi-Fi →
+  cellular, a DNS sinkhole → a real resolver) refreshes the mapping.
+  Other hosts seeded through `resolve/1` that share the old or new
+  address keep theirs; concurrent `resolve/1` calls are serialised.
+  Writes your own code makes with `:inet_db.add_host(ip, names)` at the same
+  moment are not coordinated with it. On `{:error, _}` the existing
+  mapping, if any, is left in place.
 
   See module doc for usage, scope, and error shapes.
   """
   @spec resolve(host()) :: {:ok, :inet.ip4_address()} | {:error, error_reason()}
-  def resolve(host) when is_binary(host), do: resolve(String.to_charlist(host))
+  def resolve(host), do: resolve_with(:mob_nif, host)
 
-  def resolve(host) when is_list(host) do
-    case safe_nif_call(host) do
+  @doc false
+  @spec resolve_with(module(), host()) :: {:ok, :inet.ip4_address()} | {:error, error_reason()}
+  def resolve_with(nif, host) when is_binary(host),
+    do: resolve_with(nif, String.to_charlist(host))
+
+  def resolve_with(nif, host) when is_list(host) do
+    case safe_nif_call(nif, host) do
       {:ok, {_, _, _, _} = ip} ->
-        :inet_db.add_host(ip, [host])
+        :ok = Mob.DNS.Seeder.replace(host, ip)
         ensure_file_lookup_first()
         {:ok, ip}
 
@@ -276,8 +294,8 @@ defmodule Mob.DNS do
   # outside the device (host tests, IEx on the Mac before any deploy).
   # Without this rescue, callers get an UndefinedFunctionError that's
   # hard to interpret.
-  defp safe_nif_call(host) do
-    :mob_nif.resolve_ipv4(host)
+  defp safe_nif_call(nif, host) do
+    nif.resolve_ipv4(host)
   rescue
     UndefinedFunctionError -> {:error, :nif_not_loaded}
     ErlangError -> {:error, :nif_not_loaded}

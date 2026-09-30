@@ -6,6 +6,29 @@ defmodule Mob.DNSTest do
 
   alias Mob.DNS
 
+  defmodule FakeNif do
+    @moduledoc false
+    # Stands in for `:mob_nif` so tests drive the real resolve path;
+    # answers are scripted per host via `answer/2`.
+    def resolve_ipv4(host), do: :persistent_term.get({__MODULE__, host}, {:error, :nxdomain})
+  end
+
+  defp answer(host, result), do: :persistent_term.put({FakeNif, String.to_charlist(host)}, result)
+
+  defp user_hosts, do: for({:host, ip, names} <- :inet_db.get_rc(), do: {ip, names})
+
+  defp getaddr(host), do: :inet.getaddr(String.to_charlist(host), :inet)
+
+  defp test_host?(name),
+    do: name |> List.to_string() |> String.downcase() |> String.ends_with?(".test")
+
+  defp addresses(host) do
+    case :inet.gethostbyname(String.to_charlist(host), :inet) do
+      {:ok, {:hostent, _, _, :inet, 4, addrs}} -> addrs
+      {:error, _} = err -> err
+    end
+  end
+
   setup do
     original_lookup = :inet_db.res_option(:lookup)
     original_ns = :inet_db.res_option(:nameservers)
@@ -25,13 +48,18 @@ defmodule Mob.DNSTest do
         :inet_db.add_ns(ip, port)
       end
 
-      # Best-effort host-table cleanup for the names we used.
-      for host <-
-            ~c"a.test a.test.local b.test missing.test bogus.test"
-            |> List.to_string()
-            |> String.split() do
-        :inet_db.del_host(String.to_charlist(host))
+      # Every host these tests seed is under `.test`; strip just those so
+      # entries that existed before keep their by-name address order
+      # (clearing and re-adding the table would reorder them).
+      for {ip, names} <- user_hosts() do
+        case Enum.reject(names, &test_host?/1) do
+          ^names -> :ok
+          [] -> :inet_db.del_host(ip)
+          kept -> :inet_db.add_host(ip, kept)
+        end
       end
+
+      for {{FakeNif, _} = key, _} <- :persistent_term.get(), do: :persistent_term.erase(key)
     end)
 
     :ok
@@ -55,13 +83,124 @@ defmodule Mob.DNSTest do
     end
   end
 
-  # ── resolve/1 — happy path simulated by directly seeding inet_db ────────
+  # ── resolve/1 — seeding semantics, driven through a scripted NIF ────────
   #
-  # We can't easily intercept the NIF call without a runtime DI seam, but
-  # we can pin the post-condition: when an IP IS in inet_db (regardless
-  # of who put it there), `resolved?/1` reports true and BEAM's lookup
-  # finds it. Combined with the NIF-error tests above, the wrapper logic
-  # is fully covered modulo the trivial `enif_make_*` mapping in C.
+  # `:inet_db.add_host/2` appends per host and is keyed by address, so a
+  # bare call leaves a stale address first after a network change and
+  # evicts other hosts sharing an address (a DNS sinkhole answers
+  # `0.0.0.0` for every blocked name). See
+  # decisions/2026-09-30-dns-resolve-replaces-host-entries.md.
+
+  describe "resolve_with/2 seeding" do
+    setup do
+      :inet_db.set_lookup([:file])
+      :ok
+    end
+
+    test "re-resolving after the answer changes makes the fresh address the only one" do
+      answer("api.test", {:ok, {0, 0, 0, 0}})
+      assert {:ok, {0, 0, 0, 0}} = DNS.resolve_with(FakeNif, "api.test")
+
+      answer("api.test", {:ok, {203, 0, 113, 10}})
+      assert {:ok, {203, 0, 113, 10}} = DNS.resolve_with(FakeNif, "api.test")
+
+      assert getaddr("api.test") == {:ok, {203, 0, 113, 10}}
+      assert addresses("api.test") == [{203, 0, 113, 10}]
+    end
+
+    test "concurrent resolves onto one address don't drop each other" do
+      hosts = for i <- 1..40, do: "h#{i}.concurrent.test"
+      for host <- hosts, do: answer(host, {:ok, {0, 0, 0, 0}})
+
+      results =
+        hosts
+        |> Task.async_stream(&DNS.resolve_with(FakeNif, &1), max_concurrency: length(hosts))
+        |> Enum.to_list()
+
+      assert Enum.uniq(results) == [{:ok, {:ok, {0, 0, 0, 0}}}]
+      assert Enum.reject(hosts, &match?({:ok, _}, getaddr(&1))) == []
+    end
+
+    test "a seeder that died is replaced on the next resolve" do
+      answer("api.test", {:ok, {203, 0, 113, 10}})
+      assert {:ok, _} = DNS.resolve_with(FakeNif, "api.test")
+
+      seeder = Process.whereis(Mob.DNS.Seeder)
+      ref = Process.monitor(seeder)
+      Process.exit(seeder, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^seeder, :killed}
+
+      answer("api.test", {:ok, {203, 0, 113, 11}})
+      assert {:ok, {203, 0, 113, 11}} = DNS.resolve_with(FakeNif, "api.test")
+      assert addresses("api.test") == [{203, 0, 113, 11}]
+    end
+
+    test "hosts resolving to the same address all stay resolvable" do
+      answer("ads.test", {:ok, {0, 0, 0, 0}})
+      answer("tracker.test", {:ok, {0, 0, 0, 0}})
+
+      DNS.resolve_with(FakeNif, "ads.test")
+      DNS.resolve_with(FakeNif, "tracker.test")
+
+      assert getaddr("ads.test") == {:ok, {0, 0, 0, 0}}
+      assert getaddr("tracker.test") == {:ok, {0, 0, 0, 0}}
+    end
+
+    test "moving one host off a shared address leaves the other host on it" do
+      answer("ads.test", {:ok, {0, 0, 0, 0}})
+      answer("tracker.test", {:ok, {0, 0, 0, 0}})
+      DNS.resolve_with(FakeNif, "ads.test")
+      DNS.resolve_with(FakeNif, "tracker.test")
+
+      answer("ads.test", {:ok, {198, 51, 100, 4}})
+      DNS.resolve_with(FakeNif, "ads.test")
+
+      assert addresses("ads.test") == [{198, 51, 100, 4}]
+      assert addresses("tracker.test") == [{0, 0, 0, 0}]
+    end
+
+    test "an address no host points at any more is dropped from the table" do
+      answer("api.test", {:ok, {0, 0, 0, 0}})
+      DNS.resolve_with(FakeNif, "api.test")
+      answer("api.test", {:ok, {203, 0, 113, 10}})
+      DNS.resolve_with(FakeNif, "api.test")
+
+      refute List.keymember?(user_hosts(), {0, 0, 0, 0}, 0)
+    end
+
+    test "a differently-cased name replaces the same host's entry" do
+      answer("api.test", {:ok, {203, 0, 113, 10}})
+      DNS.resolve_with(FakeNif, "api.test")
+      answer("API.Test", {:ok, {203, 0, 113, 11}})
+      DNS.resolve_with(FakeNif, "API.Test")
+
+      assert addresses("api.test") == [{203, 0, 113, 11}]
+    end
+
+    test "a failed re-resolve keeps the previous mapping" do
+      answer("api.test", {:ok, {203, 0, 113, 10}})
+      DNS.resolve_with(FakeNif, "api.test")
+
+      answer("api.test", {:error, :timeout})
+      assert {:error, :timeout} = DNS.resolve_with(FakeNif, "api.test")
+
+      assert getaddr("api.test") == {:ok, {203, 0, 113, 10}}
+    end
+
+    test "IPv6 entries an app added for the host are left alone" do
+      :inet_db.add_host({0x2001, 0xDB8, 0, 0, 0, 0, 0, 1}, [~c"api.test"])
+      answer("api.test", {:ok, {203, 0, 113, 10}})
+      DNS.resolve_with(FakeNif, "api.test")
+
+      assert :inet.getaddr(~c"api.test", :inet6) == {:ok, {0x2001, 0xDB8, 0, 0, 0, 0, 0, 1}}
+    end
+  end
+
+  # ── resolved?/1 — seeded directly into inet_db ─────────────────────────
+  #
+  # `resolved?/1` only reads the table, so these seed it by hand and pin
+  # the post-condition: when an IP IS in inet_db (regardless of who put it
+  # there), `resolved?/1` reports true and BEAM's lookup finds it.
 
   describe "resolved?/1" do
     test "false for a host that's not in inet_db" do

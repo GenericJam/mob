@@ -1006,6 +1006,11 @@ BEAM can't resolve hostnames:
 hit this — it works there — which is why this didn't show in early
 testing. Verified on Moto G Power 5G 2024 (Android 14).
 
+> **Correction (2026-09-30):** this is not every physical device. A Moto
+> G Power 2021 (Android 11) resolves normally through `inet_gethost`.
+> The symptom above was real on the 2024 device, so treat physical
+> Android as device-dependent and still resolve via `Mob.DNS.resolve/1`.
+
 **Root cause** — BEAM's default DNS path forks `inet_gethost` (a port
 program) and reads what its `getaddrinfo` returns. On a physical
 Android device, Bionic's `getaddrinfo` *in the execve'd child* of the

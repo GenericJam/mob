@@ -208,8 +208,9 @@ defmodule Mob.App do
   chain to `[:file, :dns]` and seeds fallback nameservers, while the
   file-table entries we add here keep winning.
 
-  Other platforms (`:android`, `:host`) are unaffected — BEAM's native
-  resolver works there. Safe to call on host BEAM where the NIF isn't
+  Does nothing on `:android` and `:host`, where `inet_gethost` runs.
+  Whether it then resolves correctly on physical Android depends on the
+  device — see `Mob.DNS`. Safe to call on host BEAM where the NIF isn't
   loaded; rescues the `UndefinedFunctionError` / `ErlangError` and
   returns `:ok`.
   """

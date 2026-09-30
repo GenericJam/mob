@@ -2,9 +2,11 @@
 
 If you're running a mob app on iOS and you call out to an HTTPS endpoint
 by hostname — `Req.get!("https://api.example.com/...")` — the request
-fails. The same code works on macOS, Linux, the iOS simulator, Android,
-and physical Android. **Only the iOS device sees the failure**, and the
-error is usually some flavour of "nxdomain" or "lookup failed."
+fails unless you configure BEAM's DNS path as below. The same code works
+on macOS, Linux and the Android emulator. **iOS — device and simulator —
+always needs it** (`inet_gethost` can't run on either), and so do some
+physical Android devices. The error is usually some flavour of
+"nxdomain" or "lookup failed."
 
 This document explains why that happens and how to fix it.
 
@@ -63,14 +65,19 @@ out-of-process is historical (the BEAM didn't always trust libc to be
 non-blocking, and `getaddrinfo` can block for seconds on slow
 networks).
 
-On macOS, Linux, Windows, and Android this works fine.
+On macOS, Linux, Windows and the Android emulator this works fine; on
+physical Android it depends on the device (see "Android — mostly works"
+below).
 
-**On iOS it doesn't.** iOS sandboxes apps and forbids `execve` of any
-binary the app didn't get a special pass for. There is no equivalent of
-Android's "ship the helper as a `lib*.so` in `jniLibs/` and the SELinux
-policy will let you `execve` it" escape hatch. When BEAM tries to spawn
-`inet_gethost`, the kernel refuses. From the app's perspective, every
-hostname lookup fails immediately.
+**On iOS it doesn't.** On a device, iOS sandboxes apps and forbids
+`execve` of any binary the app didn't get a special pass for. There is
+no equivalent of Android's "ship the helper as a `lib*.so` in `jniLibs/`
+and the SELinux policy will let you `execve` it" escape hatch, so when
+BEAM tries to spawn `inet_gethost`, the kernel refuses. The simulator
+fails for a different reason: `inet_gethost` isn't at the path BEAM
+expects under mob's simulator OTP layout (see
+`Mob.App.configure_ios_inet_db/0`). Either way, every hostname lookup
+through the built-in path fails immediately.
 
 Everything that resolves hostnames through `:inet` is affected:
 
@@ -126,7 +133,9 @@ What it does:
    in-process libc calls — only `execve` of foreign binaries is
    blocked).
 2. Walks the result for the first IPv4 address.
-3. Seeds it into `:inet_db`'s file table via `:inet_db.add_host/2`.
+3. Seeds it into `:inet_db`'s file table, replacing any address the
+   host was seeded with before. Other hosts sharing an address keep
+   their entries.
 4. Ensures `:file` is first in the lookup chain so the seeded entry
    wins over whatever comes after.
 
@@ -171,7 +180,7 @@ doesn't.
 
 ---
 
-## Android is unaffected — here's why
+## Android — mostly works, but not on every device
 
 The exact same `inet_gethost` mechanism *would* be blocked on Android
 by default — SELinux policy refuses `execute_no_trans` on binaries in
@@ -184,9 +193,14 @@ binaries packaged as `lib<name>.so` inside `jniLibs/<abi>/` get the
 `jniLibs/arm64-v8a/`, then symlinks `BINDIR/<name>` →
 `<nativeLibraryDir>/lib<name>.so` before calling `erl_start`. From
 BEAM's perspective, the helpers live exactly where it expects them and
-are executable. DNS works normally.
+are executable.
 
-iOS has no comparable mechanism. The `Mob.DNS` NIF is the workaround.
+That is enough on the emulator and on some phones (a Moto G Power 2021
+on Android 11 resolves normally). On others, `getaddrinfo` from the
+exec'd helper returns `:nxdomain` for names the app's own HTTPS stack
+resolves fine — confirmed on a Moto G Power 5G 2024 (Android 14). Use
+`Mob.DNS.resolve/1` on Android too; it calls Bionic's `getaddrinfo`
+in-process and works either way.
 
 ---
 
@@ -264,8 +278,9 @@ end
 unless Mob.DNS.resolved?(host), do: Mob.DNS.resolve(host)
 ```
 
-…but `resolve/1` is already cheap on the happy path (one libc call,
-one map insertion), so the explicit guard is rarely worth it.
+…but `resolve/1` is already cheap on the happy path (one libc call and
+a few in-process `:inet_db` updates), so the explicit guard is rarely
+worth it.
 
 ---
 
@@ -279,14 +294,21 @@ one map insertion), so the explicit guard is rarely worth it.
   unreachable mid-session, requests will fail until you call
   `resolve/1` again.
 - **No automatic refresh.** Seeded entries stay in `:inet_db` until
-  the BEAM exits. If your backend's IP changes (DNS round-robin, blue/
-  green deploy), the cached entry will be stale until you re-resolve.
+  the BEAM exits or you re-resolve. If your backend's IP changes (DNS
+  round-robin, blue/green deploy) or the device switches networks,
+  call `resolve/1` again: the fresh answer replaces the old address.
   For most apps this is fine; if it isn't, set up a periodic
-  re-resolve task.
-- **iOS only effectively.** On Android and host (Mac dev, Linux, the
-  iOS simulator) the NIF works but is unnecessary; BEAM's built-in
-  DNS path is fine. Calling `Mob.DNS.resolve/1` on those platforms is
-  harmless but redundant.
+  re-resolve task or re-resolve on a connectivity change.
+- **Don't `:inet_db.del_host(ip)` a seeded address by hand.** It removes
+  the address for every hostname seeded under it — a DNS sinkhole
+  answers `0.0.0.0` for many names, so that unseeds all of them.
+  Re-resolve instead.
+- **Needed on iOS and on some physical Android devices.** iOS (device
+  and simulator) can't run `inet_gethost` at all; on some physical
+  Android devices it returns `:nxdomain` for names the app itself
+  resolves (see "Android — mostly works" above). On host (Mac dev,
+  Linux) and the Android emulator the built-in path works; calling
+  `Mob.DNS.resolve/1` there is harmless but redundant.
 - **Doesn't help raw NIF networking.** See "What this does NOT
   affect" above.
 
@@ -417,11 +439,13 @@ Req.get(url, connect_options: [transport_opts: [verify: :verify_none]])
 
 ### 3. Stale `:inet_db` if the IP rotates
 
-`Mob.DNS.resolve/1` seeds `:inet_db` once per BEAM lifetime. If the
-backend's IP changes mid-session (DNS round-robin, blue/green
-deploy), subsequent requests will keep hitting the cached IP until
-you call `resolve/1` again. For long-running apps that talk to
-volatile endpoints, schedule a periodic re-resolve.
+`Mob.DNS.resolve/1` seeds `:inet_db` when you call it; nothing
+refreshes the entry on its own. If the backend's IP changes
+mid-session (DNS round-robin, blue/green deploy) or the device moves
+to a network whose resolver answers differently, requests keep hitting
+the seeded IP until you call `resolve/1` again, which replaces it.
+For long-running apps that talk to volatile endpoints, schedule a
+periodic re-resolve.
 
 ### 4. Hot-push doesn't re-run `on_start/0`
 
