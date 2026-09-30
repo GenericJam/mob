@@ -24,6 +24,20 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `mob_deliver`'s read the shipped version instead of a config value that
   can drift from it.
 
+### Fixed
+- **`Mob.ScreenCase` no longer races over `Mob.State` in async tests.**
+  Each test's setup checked whether the globally named `Mob.State` was
+  running and started it if not. Two `async: true` screen-test modules
+  could both see it missing, and the second start failed the test with
+  `{:already_started, pid}` (intermittently, under full-suite load). A
+  store one test had started was also stopped when that test ended,
+  even if another test was still using it. Setup now checks out a store
+  from `Mob.ScreenCase.StateOwner`: overlapping tests share one
+  `Mob.State` on a throwaway data dir, and it is stopped (and
+  `MOB_DATA_DIR` restored) when the last one finishes, so later tests,
+  including `async: false` ones that start `Mob.State` themselves, never
+  see it. See `decisions/2026-09-30-screen-case-shares-mob-state-through-an-owner.md`.
+
 ## [0.9.4] - 2026-09-30
 
 ### Fixed

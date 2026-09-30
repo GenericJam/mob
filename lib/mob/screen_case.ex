@@ -55,18 +55,13 @@ defmodule Mob.ScreenCase do
 
   # Many screens read or write `Mob.State` in `mount/3` (the home screen reads
   # the theme, for one), and it is DETS-backed, so without it open every such
-  # screen crashes in `mix test` with a `:dets` argument error. Start it per
-  # test against a throwaway data dir, the same way ConnCase starts the Ecto
-  # sandbox, so screen tests just work and never touch the app's real dev state.
+  # screen crashes in `mix test` with a `:dets` argument error. It is one
+  # globally named store, so concurrently running screen tests share it
+  # through `Mob.ScreenCase.StateOwner` against a throwaway data dir; it is
+  # stopped once no screen test holds it, so later tests never see it.
   setup do
-    if Process.whereis(Mob.State) == nil do
-      tmp = Path.join(System.tmp_dir!(), "mob_screen_case_#{System.unique_integer([:positive])}")
-      File.mkdir_p!(tmp)
-      System.put_env("MOB_DATA_DIR", tmp)
-      ExUnit.Callbacks.start_supervised!(Mob.State)
-      ExUnit.Callbacks.on_exit(fn -> File.rm_rf(tmp) end)
-    end
-
+    {:ok, ref} = Mob.ScreenCase.StateOwner.checkout()
+    ExUnit.Callbacks.on_exit(fn -> Mob.ScreenCase.StateOwner.checkin(ref) end)
     :ok
   end
 
