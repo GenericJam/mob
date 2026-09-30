@@ -3,10 +3,10 @@ defmodule Mob.Device do
   Cross-platform device events and queries.
 
   `Mob.Device` is the single subscription point for OS-level events that exist
-  on both iOS and Android. The native side (iOS `NotificationCenter`,
-  Android `ProcessLifecycleObserver`) registers observers once at startup and
-  emits each event as a tagged tuple to a registered dispatcher pid; this
-  GenServer fans the events out to subscribers by category.
+  on both iOS and Android. The native side (iOS `NotificationCenter`, Android
+  the generated `MainActivity`) emits each event as a tagged tuple to a
+  registered dispatcher pid; this GenServer fans the events out to
+  subscribers by category.
 
   ## Subscribe
 
@@ -21,6 +21,16 @@ defmodule Mob.Device do
 
   - `:app` — `:will_resign_active`, `:did_become_active`, `:did_enter_background`,
     `:will_enter_foreground`, `:will_terminate`
+
+    On Android these come from the app's `MainActivity`: `onResume` →
+    `:did_become_active`, `onPause` → `:will_resign_active`, `onStop` →
+    `:did_enter_background`, `onStart` after a stop → `:will_enter_foreground`,
+    `onDestroy` while finishing → `:will_terminate`. A configuration change
+    (rotation) sends nothing. `:will_terminate` is best effort on both
+    platforms: an app killed in the background gets no callback. Events
+    before the BEAM has started (the first launch's `onResume`) aren't
+    delivered. An app whose `MainActivity` predates mob 0.9.6 sends none; see
+    the CHANGELOG for the lines to add.
   - `:display` — `:screen_off`, `:screen_on`,
     `{:orientation_changed, :portrait | :portrait_upside_down | :landscape_left | :landscape_right}`
   - `:audio` — `:audio_interrupted`, `:audio_resumed`, `:audio_route_changed`
@@ -212,7 +222,12 @@ defmodule Mob.Device do
   @spec low_power_mode?() :: boolean()
   def low_power_mode?, do: :mob_nif.device_low_power_mode() == true
 
-  @doc "True if the app is currently in the foreground."
+  @doc """
+  True if the app is currently in the foreground and active: iOS
+  `applicationState == .active`; on Android, from `:did_become_active` until
+  `:will_resign_active`. On Android it stays `true` in an app whose
+  `MainActivity` doesn't send lifecycle events (generated before mob 0.9.6).
+  """
   @spec foreground?() :: boolean()
   def foreground?, do: :mob_nif.device_foreground() == true
 

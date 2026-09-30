@@ -153,6 +153,16 @@ void mob_send_component_event(int handle, const char *event, const char *payload
 // `scheme` must be "light" or "dark".
 void mob_send_color_scheme_changed(const char *scheme);
 
+// Deliver {:mob_device, event} and {:mob_device_android, event} (the Mob.Device
+// :app category, same atoms as iOS) to the dispatcher pid registered via
+// Mob.Device. Called from beam_jni.c's nativeNotifyAppLifecycle, driven by
+// MainActivity's onStart/onResume/onPause/onStop/onDestroy. `event` is one of
+// "will_resign_active" | "did_become_active" | "did_enter_background" |
+// "will_enter_foreground" | "will_terminate"; anything else is ignored.
+// Also drives Mob.Device.foreground?/0 (true from did_become_active until
+// will_resign_active).
+void mob_send_app_lifecycle(const char *event);
+
 // Deliver {:mob_device, :connectivity_changed,
 //          %{online, transport, expensive, validated, constrained}}
 // to the dispatcher pid registered via Mob.Device. Called from beam_jni.c's

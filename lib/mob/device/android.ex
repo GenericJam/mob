@@ -13,11 +13,13 @@ defmodule Mob.Device.Android do
 
   ## Status
 
-  Android event surfacing is **pending implementation**. The Elixir API is
-  stable; subscribing succeeds but no events fire until
-  `ProcessLifecycleObserver` and `ComponentCallbacks2` are wired up in the
-  generated app's Java/Kotlin side. Tracked in `PLAN.md` under "Native event
-  surface — Batch 1".
+  The `:app` lifecycle events (`:will_resign_active`, `:did_become_active`,
+  `:did_enter_background`, `:will_enter_foreground`, `:will_terminate`) are
+  re-emitted here as `{:mob_device_android, event}`, as `Mob.Device.IOS` gets
+  them on iOS; see `Mob.Device` for when each fires. Nothing Android-specific
+  fires yet: the events below need `ComponentCallbacks2` and broadcast
+  receivers in the generated app's Kotlin side. Tracked in `PLAN.md` under
+  "Native event surface — Batch 1".
 
   ## Planned events
 
@@ -26,7 +28,7 @@ defmodule Mob.Device.Android do
   - `:trim_memory` with level — `ComponentCallbacks2.onTrimMemory(level)`
   - `:airplane_mode_changed` — `ACTION_AIRPLANE_MODE_CHANGED`
   - `:user_present` — `ACTION_USER_PRESENT` (device unlocked)
-  - all cross-platform `Mob.Device` events re-emitted under this tag too
+  - the remaining cross-platform `Mob.Device` events re-emitted under this tag
   """
 
   use GenServer
