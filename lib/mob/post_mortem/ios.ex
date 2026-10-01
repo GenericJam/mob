@@ -49,9 +49,10 @@ defmodule Mob.PostMortem.IOS do
   only copy; a boot that dies before anyone looks would take the
   diagnostic with it. So each drained payload is written to
   `Mob.PostMortem.Journal` before it is emitted, and every sweep, in
-  this boot or a later one, emits it again until a subscriber has
-  received it or a reader has asked the bus. Within one boot a
-  re-sweep emits nothing it already emitted.
+  this boot or a later one, emits it again until its capsule was
+  handed to a subscriber when emitted or returned by
+  `Mob.Defect.Bus.recent/1`. Within one boot a re-sweep emits nothing
+  it already emitted.
 
   ## Redaction
 
@@ -103,7 +104,7 @@ defmodule Mob.PostMortem.IOS do
     case safe_platform(nif) do
       :ios ->
         fresh = nif |> safe_drain() |> Enum.flat_map(&identify/1)
-        Journal.sweep(journal, :ios, fresh, &Defect.emit_metrickit_payload/1)
+        Journal.sweep(journal, :ios, fresh, &Defect.metrickit_capsule/1)
 
       _ ->
         []

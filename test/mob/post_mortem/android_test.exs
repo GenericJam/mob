@@ -3,6 +3,7 @@ defmodule Mob.PostMortem.AndroidTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
+  import Mob.Test.ProcessHelpers, only: [eventually: 1]
 
   alias Mob.Defect.Bus
   alias Mob.PostMortem.Android
@@ -249,45 +250,66 @@ defmodule Mob.PostMortem.AndroidTest do
       assert Android.sweep_with(FakeNIF, journal()) == []
     end
 
-    test "an exit delivered to a subscriber when emitted is not emitted again" do
+    test "an exit delivered to a subscriber when emitted is cleared at once" do
       {:ok, _ref} = Bus.subscribe()
       Process.put(:test_entries, [entry()])
       [capsule] = Android.sweep_with(FakeNIF, journal())
       assert_receive {:mob_defect, ^capsule}
+      assert Journal.read(journal()).entries == []
 
       reboot()
       assert Android.sweep_with(FakeNIF, journal()) == []
-      assert Journal.read(journal()).entries == []
     end
 
-    for {reader, call} <- [
-          recent: quote(do: Bus.recent()),
-          classes: quote(do: Bus.classes()),
-          subscribe: quote(do: {:ok, _} = Bus.subscribe())
-        ] do
-      test "an exit a reader asked the bus for (#{reader}) is not emitted again" do
-        Process.put(:test_entries, [entry()])
-        [_] = Android.sweep_with(FakeNIF, journal())
+    # A subscriber that was away when the exit was emitted (not yet subscribed,
+    # or parked while its node was disconnected) and comes back has seen
+    # nothing emitted before, whatever it receives next. Neither has a class
+    # listing.
+    test "a later subscriber, later deliveries and a class listing do not observe the exit" do
+      Process.put(:test_entries, [entry(pid: 1, timestamp_ms: 1)])
+      [_] = Android.sweep_with(FakeNIF, journal())
 
-        unquote(call)
+      Bus.classes()
+      {:ok, _ref} = Bus.subscribe()
+      unrelated = Mob.Defect.emit_appexit_reason(entry(pid: 999))
+      assert_receive {:mob_defect, ^unrelated}
+      Process.put(:test_entries, [entry(pid: 2, timestamp_ms: 2)])
+      [later] = Android.sweep_with(FakeNIF, journal())
+      assert_receive {:mob_defect, ^later}
+
+      assert journaled_pids() == [1]
+
+      reboot()
+      Bus.unsubscribe()
+      assert [again] = Android.sweep_with(FakeNIF, journal())
+      assert again.evidence.timestamp_ms == 1
+    end
+
+    for {where, unrelated} <- [evicted_from_the_ring: 70, past_the_limit: 10] do
+      test "a recent/1 that does not return the exit does not observe it (#{where})" do
+        Process.put(:test_entries, [entry()])
+        [capsule] = Android.sweep_with(FakeNIF, journal())
+        for pid <- 1..unquote(unrelated), do: Mob.Defect.emit_appexit_reason(entry(pid: pid))
+
+        refute capsule in Bus.recent(5)
 
         reboot()
-        Bus.unsubscribe()
-        assert Android.sweep_with(FakeNIF, journal()) == []
+        assert [_] = Android.sweep_with(FakeNIF, journal())
       end
     end
 
-    test "a read before the exit was emitted does not count as observing it" do
-      Process.put(:test_entries, [entry(pid: 1, timestamp_ms: 1)])
-      [_] = Android.sweep_with(FakeNIF, journal())
-      Bus.recent()
+    test "a recent/1 that returns the exit clears it" do
+      Process.put(:test_entries, [entry(pid: 1, timestamp_ms: 1), entry(pid: 2, timestamp_ms: 2)])
+      [first, second] = Android.sweep_with(FakeNIF, journal())
 
-      Process.put(:test_entries, [entry(pid: 2, timestamp_ms: 2)])
-      [_] = Android.sweep_with(FakeNIF, journal())
+      assert [^second] = Bus.recent(1)
+      assert journaled_pids() == [1]
+
+      assert first in Bus.recent()
+      assert journaled_pids() == []
 
       reboot()
-      [again] = Android.sweep_with(FakeNIF, journal())
-      assert again.evidence.timestamp_ms == 2
+      assert Android.sweep_with(FakeNIF, journal()) == []
     end
 
     for {what, contents} <- [
@@ -338,20 +360,66 @@ defmodule Mob.PostMortem.AndroidTest do
       assert Enum.count(Android.sweep_with(FakeNIF, journal())) == 32
     end
 
-    test "concurrent sweeps keep every entry they drained" do
+    test "concurrent sweeps keep every entry they drained, without waiting on each other" do
       path = journal()
 
-      1..16
-      |> Enum.map(fn pid ->
-        Task.async(fn ->
-          Process.put(:test_platform, :android)
-          Process.put(:test_entries, [entry(pid: pid, timestamp_ms: pid)])
-          Android.sweep_with(FakeNIF, path)
-        end)
-      end)
-      |> Task.await_many()
+      # `Capsule.new/1` probes the NIF, and on the host every probe is a failed
+      # load that would swamp the time measured here. Build each capsule from
+      # one made up front instead.
+      template = Mob.Defect.appexit_capsule(entry())
+      build = fn e -> %{template | id: "c#{e.pid}", fingerprint: "fp#{e.pid}"} end
 
+      tasks =
+        for pid <- 1..16 do
+          Task.async(fn ->
+            receive do: (:go -> :ok)
+            fresh = [{"id#{pid}", entry(pid: pid, timestamp_ms: pid)}]
+            Journal.sweep(fn -> path end, :android, fresh, build)
+          end)
+        end
+
+      # 16 serialised writes, each fsynced: 0.1–0.4 s on a laptop whose disk
+      # other test runs share. A lock that backs off by sleeping (`:global`'s
+      # retries sleep a random 125 ms or more) took 2.3–6 s here.
+      {micros, emitted} =
+        :timer.tc(fn ->
+          for t <- tasks, do: send(t.pid, :go)
+          Task.await_many(tasks, 2_000)
+        end)
+
+      assert Enum.all?(emitted, &match?([_], &1))
+      assert micros < 1_000_000
       assert Enum.sort(journaled_pids()) == Enum.to_list(1..16)
+    end
+
+    test "an owner that dies mid-call fails neither its caller nor the next one" do
+      Process.put(:test_entries, [entry(pid: 1, timestamp_ms: 1)])
+      [_] = Android.sweep_with(FakeNIF, journal())
+      owner = Process.whereis(Journal)
+      path = journal()
+
+      capture_log(fn ->
+        :sys.suspend(owner)
+
+        task =
+          Task.async(fn ->
+            Process.put(:test_platform, :android)
+            Process.put(:test_entries, [entry(pid: 2, timestamp_ms: 2)])
+            Android.sweep_with(FakeNIF, path)
+          end)
+
+        eventually(fn -> Process.info(owner, :message_queue_len) == {:message_queue_len, 1} end)
+        Process.exit(owner, :kill)
+
+        assert [capsule] = Task.await(task, 1_000)
+        assert capsule.evidence.timestamp_ms == 2
+      end)
+
+      Process.put(:test_entries, [entry(pid: 3, timestamp_ms: 3)])
+      {micros, [_]} = :timer.tc(fn -> Android.sweep_with(FakeNIF, path) end)
+
+      assert micros < 1_000_000
+      assert 3 in journaled_pids()
     end
   end
 end

@@ -3,6 +3,7 @@ defmodule Mob.PostMortem.Journal do
   @file_name "mob_post_mortem_journal.etf"
   @keep 32
   @pending {__MODULE__, :pending}
+  @call_timeout 5_000
 
   @moduledoc """
   Keeps what a destructive post-mortem drain returned until someone has
@@ -17,15 +18,22 @@ defmodule Mob.PostMortem.Journal do
 
   So each sweep writes what it drained to `#{@file_name}` in `Mob.data_dir/0`
   **before** emitting it, and re-emits every entry still in the journal on
-  every sweep, including the first sweep of the next boot. An entry leaves the
-  journal once it has been observed on the bus: its capsule was delivered to a
-  subscriber, or a reader asked the bus (`Mob.Defect.Bus.recent/1`,
-  `classes/1` or `subscribe/1`) after it was emitted. Within one boot,
+  every sweep, including the first sweep of the next boot. Within one boot,
   `Mob.PostMortem.Registry.emit_once/2` keeps a re-sweep from emitting an entry
   twice.
 
-  BEAM crash dumps are not journaled: the dump itself stays on disk and is
-  swept again every boot.
+  ## Observed
+
+  An entry leaves the journal once its own capsule has been seen:
+
+    * the emit handed it to at least one `Mob.Defect.Bus` subscriber, or
+    * `Mob.Defect.Bus.recent/1` returned it.
+
+  Nothing else counts. `classes/1` shows a class row, not the occurrence, and
+  subscribing, or a later capsule reaching a subscriber, says nothing about a
+  capsule emitted before. A `recent/1` that runs between a sweep's emit and its
+  bookkeeping is missed, and the entry is emitted again by the next boot: the
+  journal errs toward a duplicate, never toward a loss.
 
   ## Bounded and never fatal
 
@@ -34,8 +42,22 @@ defmodule Mob.PostMortem.Journal do
   emits everything it drained. A journal that cannot be decoded is treated as
   empty, logged, and overwritten by the same sweep, so the warning appears
   once. Writes go to a temporary file that is synced and renamed over the
-  journal. Nothing here raises into a sweep or a bus reader.
+  journal.
+
+  Every read-modify-write of the file runs in one node-local process,
+  registered as `#{inspect(__MODULE__)}`, started on first use and unlinked.
+  It also holds which of this boot's capsules are still waiting to be
+  observed; a `:persistent_term` flag, set only while that set is non-empty,
+  is all `Mob.Defect.Bus.recent/1` reads before deciding to call it. It is
+  called only by sweeps, and by `recent/1` while entries are waiting; never by
+  an emit. The file is the record, so the process dying loses no evidence: a
+  caller it was serving logs and carries on (a sweep still emits), the next
+  caller starts a new one, and entries whose observation it can no longer
+  match are emitted again by the next boot. Nothing here raises into a sweep
+  or a bus reader.
   """
+
+  use GenServer
 
   require Logger
 
@@ -56,54 +78,49 @@ defmodule Mob.PostMortem.Journal do
   @doc """
   Journal `fresh` (`{id, entry}` pairs drained from `source`), then emit every
   entry of `source` still in the journal followed by the fresh ones, each
-  through `Registry.emit_once/2` and `emit`.
+  through `Registry.emit_once/2` as the capsule `build` makes of it.
 
-  `path` is resolved lazily, so a data directory that cannot be resolved costs
-  the journal, not the sweep. Returns the capsules emitted.
+  An emitted capsule that reached a subscriber is cleared at once; the rest
+  wait for `observed/1`. `path` is resolved lazily, so a data directory that
+  cannot be resolved costs the journal, not the sweep. Returns the capsules
+  emitted.
   """
   @spec sweep((-> Path.t()), atom(), [{String.t(), map()}], (map() -> Capsule.t())) ::
           [Capsule.t()]
-  def sweep(path, source, fresh, emit)
+  def sweep(path, source, fresh, build)
       when is_function(path, 0) and is_atom(source) and is_list(fresh) and
-             is_function(emit, 1) do
+             is_function(build, 1) do
     case resolve(path) do
       {:ok, path} ->
-        to_emit = locked(fn -> journal(path, source, fresh) end)
-        {capsules, emitted} = emit_all(to_emit, emit)
-        track(path, emitted)
-        capsules
+        emitted = call({:record, path, source, fresh}, fresh) |> emit_all(build)
+        {seen, unseen} = Enum.split_with(emitted, fn {_id, _c, delivered} -> delivered > 0 end)
+        seen = for {id, _c, _delivered} <- seen, do: id
+        waiting = for {id, c, _delivered} <- unseen, do: {c.id, id}
+        if seen != [] or waiting != [], do: call({:settle, path, seen, waiting}, :ok)
+        for {_id, c, _delivered} <- emitted, do: c
 
       :error ->
-        fresh |> emit_all(emit) |> elem(0)
+        for {_id, c, _delivered} <- emit_all(fresh, build), do: c
     end
   end
 
   @doc """
-  Clear every journaled entry emitted at or before bus sequence `through`.
+  Clear the journaled entries whose capsules are among `capsules`.
 
-  `Mob.Defect.Bus` calls this when it has been observed through `through`.
-  Unless this boot emitted journaled entries that are still unobserved, it is
-  one `:persistent_term` read. Never raises.
+  `Mob.Defect.Bus.recent/1` calls this with what it returns. Unless this boot
+  emitted journaled entries nobody has observed yet, it is one
+  `:persistent_term` read. Never raises.
   """
-  @spec observed(non_neg_integer()) :: :ok
-  def observed(through) when is_integer(through) do
-    case :persistent_term.get(@pending, nil) do
-      nil -> :ok
-      pending -> if any_observed?(pending, through), do: locked(fn -> clear(through) end)
+  @spec observed([Capsule.t()]) :: :ok
+  def observed(capsules) when is_list(capsules) do
+    if :persistent_term.get(@pending, false) do
+      case for %Capsule{id: id} <- capsules, do: id do
+        [] -> :ok
+        ids -> call({:observed, ids}, :ok)
+      end
     end
 
     :ok
-  catch
-    # Called from the bus's emit fanout and readers: a journal failure must not
-    # become theirs.
-    # credo:disable-for-next-line ExSlop.Check.Warning.BlanketRescue
-    kind, reason ->
-      Logger.warning(
-        "[Mob.PostMortem.Journal] clearing observed entries failed: " <>
-          "#{inspect(kind)} #{inspect(reason, limit: 8)}"
-      )
-
-      :ok
   end
 
   @doc """
@@ -120,12 +137,9 @@ defmodule Mob.PostMortem.Journal do
 
   @doc false
   @spec reset() :: :ok
-  def reset do
-    :persistent_term.erase(@pending)
-    :ok
-  end
+  def reset, do: call(:reset, :ok)
 
-  # ── Sweep ────────────────────────────────────────────────────────────────
+  # ── Caller side ──────────────────────────────────────────────────────────
 
   defp resolve(path) do
     {:ok, path.()}
@@ -140,19 +154,83 @@ defmodule Mob.PostMortem.Journal do
       :error
   end
 
-  defp journal(path, source, fresh) do
-    record(path, source, fresh)
+  defp emit_all(to_emit, build) do
+    for {id, entry} <- to_emit,
+        {capsule, delivered} <-
+          Registry.emit_once(id, fn -> entry |> build.() |> Bus.emit_delivered() end),
+        do: {id, capsule, delivered}
+  end
+
+  defp call(msg, fallback) do
+    GenServer.call(server(), msg, @call_timeout)
   catch
-    # The journal is a second copy; failing to keep it must not cost the
-    # sweep the first.
+    # The owner died mid-call, timed out, or would not start. The journal is a
+    # second copy; losing it for one call must not cost the caller the first.
     # credo:disable-for-next-line ExSlop.Check.Warning.BlanketRescue
     kind, reason ->
       Logger.warning(
-        "[Mob.PostMortem.Journal] journaling failed (#{inspect(kind)} " <>
-          "#{inspect(reason, limit: 8)}); drained entries are emitted but not kept"
+        "[Mob.PostMortem.Journal] #{elem(msg, 0)} failed (#{inspect(kind)} " <>
+          "#{inspect(reason, limit: 8)}); the journal was not updated"
       )
 
-      fresh
+      fallback
+  end
+
+  defp server do
+    with nil <- Process.whereis(__MODULE__) do
+      case GenServer.start(__MODULE__, nil, name: __MODULE__) do
+        {:ok, pid} -> pid
+        {:error, {:already_started, pid}} -> pid
+      end
+    end
+  end
+
+  # ── Owner ────────────────────────────────────────────────────────────────
+
+  # State: this boot's emitted, unobserved capsules, `capsule_id => {path, id}`.
+  @impl GenServer
+  def init(nil) do
+    flag(%{})
+    {:ok, %{}}
+  end
+
+  @impl GenServer
+  def handle_call({:record, path, source, fresh}, _from, waiting),
+    do: {:reply, record(path, source, fresh), waiting}
+
+  def handle_call({:settle, path, seen, unseen}, _from, waiting) do
+    if seen != [], do: forget(path, MapSet.new(seen))
+    waiting = Enum.into(unseen, waiting, fn {capsule_id, id} -> {capsule_id, {path, id}} end)
+    flag(waiting)
+    {:reply, :ok, waiting}
+  end
+
+  def handle_call({:observed, capsule_ids}, _from, waiting) do
+    {done, left} = Map.split(waiting, capsule_ids)
+
+    done
+    |> Enum.group_by(fn {_cid, {path, _id}} -> path end, fn {_cid, {_path, id}} -> id end)
+    |> Enum.each(fn {path, ids} -> forget(path, MapSet.new(ids)) end)
+
+    flag(left)
+    {:reply, :ok, left}
+  end
+
+  def handle_call(:reset, _from, _waiting) do
+    flag(%{})
+    {:reply, :ok, %{}}
+  end
+
+  # Updating a `:persistent_term` costs a scan of every process, so the flag
+  # changes only when the waiting set turns empty or non-empty, not per sweep.
+  defp flag(waiting) do
+    pending = waiting != %{}
+
+    case {pending, :persistent_term.get(@pending, false)} do
+      {same, same} -> :ok
+      {true, false} -> :persistent_term.put(@pending, true)
+      {false, true} -> :persistent_term.erase(@pending)
+    end
   end
 
   # Everything `source` has journaled, then the fresh entries it has not. The
@@ -183,68 +261,13 @@ defmodule Mob.PostMortem.Journal do
     for {^source, id, entry} <- all, do: {id, entry}
   end
 
-  # The bus sequence is read after each emit, so it is at or past the
-  # capsule's own: an observation that covers it covers the capsule.
-  defp emit_all(to_emit, emit) do
-    emitted =
-      for {id, entry} <- to_emit, capsule <- Registry.emit_once(id, fn -> emit.(entry) end) do
-        {capsule, {id, Bus.emitted_seq()}}
-      end
-
-    Enum.unzip(emitted)
-  end
-
-  # Register the emitted ids as pending, then check the bus once: a capsule
-  # delivered to a subscriber during its own emit was observed before it was
-  # pending here, and the bus's watermark is the only record of that.
-  defp track(_path, []), do: :ok
-
-  defp track(path, emitted) do
-    locked(fn ->
-      pending = :persistent_term.get(@pending, %{})
-      ids = Map.merge(Map.get(pending, path, %{}), Map.new(emitted))
-      :persistent_term.put(@pending, Map.put(pending, path, ids))
-    end)
-
-    observed(Bus.observed_seq())
-  end
-
-  # ── Clearing ─────────────────────────────────────────────────────────────
-
-  defp any_observed?(pending, through) do
-    Enum.any?(pending, fn {_path, ids} -> Enum.any?(ids, fn {_id, seq} -> seq <= through end) end)
-  end
-
-  defp clear(through) do
-    pending = :persistent_term.get(@pending, %{})
-
-    remaining =
-      for {path, ids} <- pending, reduce: %{} do
-        acc ->
-          {done, left} = Map.split_with(ids, fn {_id, seq} -> seq <= through end)
-          if done != %{}, do: forget(path, done)
-          if left == %{}, do: acc, else: Map.put(acc, path, left)
-      end
-
-    cond do
-      remaining == pending -> :ok
-      remaining == %{} -> :persistent_term.erase(@pending)
-      true -> :persistent_term.put(@pending, remaining)
-    end
-  end
-
-  defp forget(path, done) do
+  defp forget(path, ids) do
     {entries, dropped, status} = load(path)
-    kept = Enum.reject(entries, fn {_source, id, _entry} -> Map.has_key?(done, id) end)
+    kept = Enum.reject(entries, fn {_source, id, _entry} -> MapSet.member?(ids, id) end)
     if kept != entries or status == :corrupt, do: store(path, kept, dropped)
   end
 
   # ── File ─────────────────────────────────────────────────────────────────
-
-  # Every read-modify-write of the file and the pending map runs under one
-  # node-local lock: two sweeps, or a sweep and a bus reader, would otherwise
-  # each write back what they read and lose the other's entries.
-  defp locked(fun), do: :global.trans({__MODULE__, self()}, fun, [node()])
 
   defp load(path) do
     case File.read(path) do
