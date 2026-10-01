@@ -69,7 +69,15 @@ static void test_env_wins(void) {
     mob_dist_cookie_source src = mob_resolve_dist_cookie("from_env", dir, out, sizeof(out));
     CHECK(src == MOB_DIST_COOKIE_FROM_ENV && strcmp(out, "from_env") == 0,
           "env must win over the file, got %d %s", src, out);
+
+    // The public pre-MOB-49 cookie never wins, as on Android.
+    src = mob_resolve_dist_cookie("mob_secret", dir, out, sizeof(out));
+    CHECK(src == MOB_DIST_COOKIE_FROM_FILE && strcmp(out, MANAGED) == 0,
+          "mob_secret in env must be ignored, got %d %s", src, out);
     remove_cookie_file();
+    src = mob_resolve_dist_cookie("mob_secret", dir, out, sizeof(out));
+    CHECK(src == MOB_DIST_COOKIE_RANDOM && strcmp(out, "mob_secret") != 0,
+          "mob_secret without a file gives a random cookie, got %d", src);
 }
 
 static void expect_rejected(const char *content, const char *why) {

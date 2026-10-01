@@ -7,6 +7,8 @@
 // Resolution, mirroring Android's Mob.Dist:
 //   1. MOB_DIST_COOKIE in the launch environment (1..255 bytes). mob_dev passes
 //      it when it launches the app (SIMCTL_CHILD_ / DEVICECTL_CHILD_ prefix).
+//      The public pre-MOB-49 cookie `mob_secret` is ignored, as Android's
+//      Mob.Dist ignores it.
 //   2. `<beams_dir>/mob_dist_cookie`, the project's private cookie that
 //      `mix mob.deploy` writes next to the BEAMs: the simulator runtime dir on
 //      the Mac, or Documents/otp/<app> on a physical iPhone. Only mob_dev's
@@ -24,6 +26,7 @@
 
 #define MOB_DIST_COOKIE_FILE "mob_dist_cookie"
 #define MOB_DIST_COOKIE_HEX_LEN 64
+#define MOB_DIST_COOKIE_LEGACY "mob_secret"
 
 typedef enum {
     MOB_DIST_COOKIE_FROM_ENV,
@@ -63,7 +66,7 @@ static inline int mob_dist_cookie_read_file(const char *path, char *out) {
 // `beams_dir` is where the app's BEAMs load from (may be NULL).
 static inline mob_dist_cookie_source
 mob_resolve_dist_cookie(const char *env_cookie, const char *beams_dir, char *out, size_t out_len) {
-    if (env_cookie) {
+    if (env_cookie && strcmp(env_cookie, MOB_DIST_COOKIE_LEGACY) != 0) {
         size_t len = strlen(env_cookie);
         if (len > 0 && len < out_len && len <= 255) {
             memcpy(out, env_cookie, len + 1);

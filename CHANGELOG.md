@@ -69,7 +69,9 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   could connect with. Like Android, `mob_beam.m` now falls back to
   `$MOB_BEAMS_DIR/mob_dist_cookie`, which `mix mob.deploy` writes (needs the
   matching mob_dev), before the random cookie. The system log says which one
-  it used (`[MobBeam] dist cookie: …`), never the value. See
+  it used (`[MobBeam] dist cookie: …`), never the value. Like Android, iOS now
+  ignores the public `mob_secret` even in `MOB_DIST_COOKIE`, so
+  `mix mob.connect --cookie mob_secret` no longer reaches it. See
   `decisions/2026-10-01-ios-dist-cookie-file.md`.
 - **iOS simulator: a second mob app launched outside mob_dev no longer dies
   on a dist port collision** (MOB-139). Without `MOB_DIST_PORT` (tapping the

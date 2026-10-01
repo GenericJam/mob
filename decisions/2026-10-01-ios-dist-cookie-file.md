@@ -19,20 +19,29 @@ got a random cookie: the node registered in EPMD but nothing could connect.
 - **Same order as Android: env, then the file, then random.**
   `ios/mob_dist_cookie.h` (header-only C, used by `mob_beam.m`) takes
   `MOB_DIST_COOKIE` first, then `<beams_dir>/mob_dist_cookie`, then an unlogged
-  random cookie for this launch. No shared public cookie is ever used.
+  random cookie for this launch. `MOB_DIST_COOKIE=mob_secret`, the public
+  pre-MOB-49 cookie, is ignored, as Android's `Mob.Dist` ignores it, so no
+  shared public cookie is ever used.
 - **Only mob_dev's format is accepted from the file:** 64 lowercase hex
   characters, optionally followed by whitespace. Anything else (an empty file,
   `mob_secret`, a truncated write) falls through to the random cookie, as
   Android's `valid_cookie?/1` does.
-- **mob_dev writes the file on every iOS deploy** (`MobDev.DistCookie.write_app_file!/2`):
-  - Simulator: into the runtime beams dir on the Mac
-    (`~/.mob/runtime/ios-sim/<app>/`), which is the `beams_dir` `mob_beam.m`
-    resolves. Written after the BEAM sync, since a `--native` build's runtime
-    rsync (`--delete`) removes it.
+- **mob_dev writes the file on every filesystem deploy to iOS**
+  (`MobDev.DistCookie.write_app_file!/2`), the same deploys that put BEAMs on
+  disk:
+  - Simulator: every deploy, into the runtime beams dir on the Mac. Written
+    after the BEAM sync, since a `--native` build's runtime rsync (`--delete`)
+    removes it.
   - Physical iPhone: into the staging dir copied to `Documents/otp/<app>/`,
-    which `mob_beam.m` prefers over the bundle once it exists.
-  The file is created `0600` before the cookie is written, then renamed into
-  place.
+    which `mob_beam.m` prefers over the bundle once it exists. That is
+    `--native` and any deploy to a device that isn't connected over dist; a
+    connected device is only hot-loaded (mob_dev's `persistable?/1`: a
+    devicectl replace has no undo) and gets no file. Since reading the file
+    needs this `mob_beam.m`, which only a `--native` build installs, every
+    device that can read it has been given it, unless it was built some other
+    way (Xcode).
+  The cookie is written inside a fresh `0700` directory, made `0600`, then
+  renamed into place, so no other user can open it at any point.
 - **`mob_beam.m` logs the source, never the value:** `[MobBeam] dist cookie:
   MOB_DIST_COOKIE`, `… <path>`, or `… random for this launch …; mob_dev can't
   connect — run mix mob.deploy`. The last line is what makes an unreachable
@@ -40,8 +49,12 @@ got a random cookie: the node registered in EPMD but nothing could connect.
 
 ## Consequences
 
-- An iOS app deployed by mob_dev stays reachable however it is relaunched,
-  with the same cookie `mix mob.connect` uses.
+- An iOS app deployed by mob_dev stays reachable when relaunched outside it,
+  with the same cookie `mix mob.connect` uses, as long as the launch finds the
+  BEAMs it was deployed with. A simulator launch without `MOB_SIM_RUNTIME_DIR`
+  only looks in `~/.mob/runtime/ios-sim` (then `/tmp/otp-ios-sim`), so a
+  project deployed to a custom `MOB_SIM_RUNTIME_DIR` can't be relaunched that
+  way at all, cookie or not; that was already true and is unchanged here.
 - An app built against this mob but deployed by an older mob_dev has no file
   and keeps today's behaviour (random unless launched by mob_dev).
 - On the simulator the cookie sits in a second file under `~/.mob/`, readable
@@ -50,5 +63,6 @@ got a random cookie: the node registered in EPMD but nothing could connect.
   as Android's copy is in the app's private storage. Development builds only:
   `MOB_RELEASE` builds start no distribution and read no cookie.
 - The cookie's lookup, precedence and validation are covered on the host
-  (`test/native/dist_cookie_test.c`); the deploy writing the file and the node
-  accepting it were verified on a simulator.
+  (`test/native/dist_cookie_test.c`). The deploy writing the file and a
+  relaunch without `MOB_DIST_COOKIE` connecting were verified on a simulator
+  and on a physical iPhone SE.
