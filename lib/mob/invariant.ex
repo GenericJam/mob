@@ -202,6 +202,10 @@ defmodule Mob.Invariant do
   @spec run(point(), context()) :: [Violation.t()]
   def run(point, context \\ %{}) do
     Store.guard(__MODULE__, [], fn ->
+      # For its version check: a sample that confirms nothing never reads the
+      # state otherwise. See "State is versioned" in `Mob.Diag.Store`.
+      Store.state(__MODULE__)
+
       point
       |> registered()
       |> Enum.flat_map(&evaluate(&1, context))

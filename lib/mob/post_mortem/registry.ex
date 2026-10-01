@@ -83,6 +83,8 @@ defmodule Mob.PostMortem.Registry do
   def mark_seen(id) when is_binary(id) do
     Store.guard(__MODULE__, true, fn ->
       Store.ensure(__MODULE__)
+      # For its version check alone: see "State is versioned" in `Mob.Diag.Store`.
+      Store.state(__MODULE__)
       :ets.insert_new(@table, {id, System.system_time(:millisecond)})
     end)
   end
@@ -92,6 +94,7 @@ defmodule Mob.PostMortem.Registry do
   def forget(id) when is_binary(id) do
     Store.guard(__MODULE__, :ok, fn ->
       Store.ensure(__MODULE__)
+      Store.state(__MODULE__)
       :ets.delete(@table, id)
       :ok
     end)

@@ -89,6 +89,21 @@ defmodule Mob.Diag.StoreTest do
   defp held_by(store),
     do: store |> Store.health() |> Map.fetch!(:tables) |> Enum.map(& &1.held_by)
 
+  # What an heir running 0.9.5's code left behind: the tables with it, no
+  # owner, and no restart coming. Handing them over under heir data that names
+  # no store gets there without a restart racing the test.
+  defp orphan(store) do
+    owner = owner(store)
+    heir = Process.whereis(Mob.Diag.Heir)
+
+    :sys.replace_state(owner, fn state ->
+      for {t, _} <- store.tables(), do: :ets.give_away(t, heir, :orphaned)
+      state
+    end)
+
+    kill(owner)
+  end
+
   setup do
     tear_down(TestStore)
     :persistent_term.erase({Store, TestStore})
@@ -377,6 +392,93 @@ defmodule Mob.Diag.StoreTest do
       assert :ets.lookup(:diag_former_rows, :former) == [{:former}]
       assert owner(former) == nil
       assert :ets.lookup(:diag_test_rows, :kept) == [{:kept}]
+    end
+  end
+
+  describe "a mob upgrade" do
+    # MOB-302 on a Moto G: an owner that died while the heir still ran 0.9.5's
+    # code stayed down after the new code loaded, and so did one an older
+    # build had already orphaned. No new transfer reaches the heir, so the
+    # first write must notice it runs newer store code and set the store up.
+
+    test "the first write sets the store up again and an orphaned owner comes back, once" do
+      :ok = TestStore.write(:kept)
+
+      for {from, downgrade} <- [
+            {"0.9.5", &Map.delete(&1, :framework_vsn)},
+            {"an older Mob.Diag.Store", &%{&1 | framework_vsn: &1.framework_vsn - 1}}
+          ] do
+        before = Store.health(TestStore)
+        orphan(TestStore)
+        assert owner(TestStore) == nil
+        assert held_by(TestStore) == [:heir, :heir]
+
+        entry = :persistent_term.get({Store, TestStore})
+        :persistent_term.put({Store, TestStore}, downgrade.(entry))
+
+        assert TestStore.write(from) == :ok
+
+        health = Store.health(TestStore)
+        assert is_pid(health.owner), "no owner after the first write over #{from}"
+        assert held_by(TestStore) == [:owner, :owner]
+        assert :ets.lookup(:diag_test_rows, :kept) == [{:kept}]
+        assert health.owner_starts == before.owner_starts + 1
+        assert health.resets == 0
+        assert health.store.written == before.store.written + 1
+        # What the hot path compares: later writes do not set it up again.
+        assert health.framework_vsn.current == health.framework_vsn.expected
+      end
+    end
+
+    test "every store's first write does it, including those that keep no state" do
+      id = "mob-302-#{System.unique_integer([:positive])}"
+      Mob.RenderStats.enable()
+
+      on_exit(fn ->
+        Mob.RenderStats.disable()
+        Mob.RenderStats.reset()
+        Mob.PostMortem.Registry.forget(id)
+        Mob.Agent.Receipts.reset()
+        Bus.reset()
+      end)
+
+      stores = Map.keys(Mob.Diag.health().stores)
+      for store <- stores, do: Store.ensure(store)
+      before = Mob.Diag.health().stores
+
+      for store <- stores do
+        orphan(store)
+        entry = :persistent_term.get({Store, store})
+        :persistent_term.put({Store, store}, Map.delete(entry, :framework_vsn))
+      end
+
+      Mob.Agent.Receipts.record(%Mob.Agent.Receipt{
+        action_id: id,
+        screen: X,
+        handler: {X, :h, 3},
+        event: "upgrade",
+        stages: []
+      })
+
+      Bus.emit(
+        Capsule.new(kind: :invariant, owner: :mob, severity: :warning, fingerprint_key: %{id: id})
+      )
+
+      Mob.Invariant.run(:periodic)
+      Mob.PostMortem.Registry.mark_seen(id)
+      Mob.RenderStats.start_frame(X, :none)
+      Mob.RenderStats.finish(%{}, 0)
+
+      now = Mob.Diag.health().stores
+
+      for store <- stores do
+        assert is_pid(now[store].owner), "#{inspect(store)} has no owner after its first write"
+        assert Enum.all?(now[store].tables, &(&1.held_by == :owner)), inspect(store)
+        assert now[store].owner_starts == before[store].owner_starts + 1, inspect(store)
+
+        for {was, is} <- Enum.zip(before[store].tables, now[store].tables),
+            do: assert(is.size >= was.size, "#{inspect(store)} lost rows from #{was.name}")
+      end
     end
   end
 

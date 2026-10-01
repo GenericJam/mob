@@ -240,7 +240,8 @@ defmodule Mob.Diag do
     * `owner` — the owning pid, or `nil` while down. The tables are then held
       by `Mob.Diag.Heir`, still written to, until the owner the heir restarts
       takes them back. An owner that stays `nil` with its tables at the heir
-      failed to restart, and the reason was logged.
+      failed to restart, and the reason was logged. The store's next write
+      after a `mob` upgrade starts one too.
     * `tables` — each table's size and whether the `:owner`, the `:heir`,
       another process (`:other`) holds it, or it is `:missing`
     * `lost` — writes that failed and were dropped. Non-zero means the store's
@@ -250,7 +251,11 @@ defmodule Mob.Diag do
     * `owner_starts` — owner processes started so far
     * `state_vsn` — current and expected state versions (differ briefly after
       a hot push)
-    * `store` — store-specific counts, e.g. evictions
+    * `framework_vsn` — the `Mob.Diag.Store` version the store was set up
+      under (`nil` for 0.9.5) and the running one. They differ after a `mob`
+      upgrade until the store's next write sets it up again.
+    * `store` — store-specific counts, e.g. evictions (`:stale` while the
+      state is in a shape this code cannot read)
 
   Plus the heir; the subscriber lists of `Mob.Defect.Bus` and
   `Mob.Event.Trace`: per topic, how many receive (`topics`) and how many are

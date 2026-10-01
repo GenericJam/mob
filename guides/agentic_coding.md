@@ -351,8 +351,12 @@ often it was `reset` (everything recorded before a reset is gone):
 
 A non-zero `lost` or `resets` means the store's answers are incomplete. An
 `owner` that stays `nil` while its tables are `held_by: :heir` means the owner
-died and its restart failed (the log says why). Its rows are kept for now, but
-they are lost if the heir dies too.
+died and was not restarted. Either the restart failed (the log says why), or,
+when `framework_vsn` shows a `current` that differs from `expected`, the owner
+died under an older `mob` and nothing has written to the store since. In that
+second case the store's next write brings the owner back. Either way, until an
+owner holds the tables again its rows are kept, but they are lost if the heir
+dies too.
 
 **Post-mortems: what died while nobody was looking.** `Mob.PostMortem.sweep/0`
 picks up the evidence the OS and the BEAM leave behind and puts it on the bus:
