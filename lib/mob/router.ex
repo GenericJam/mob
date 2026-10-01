@@ -65,7 +65,12 @@ defmodule Mob.Router do
   @spec start_link(module(), map(), keyword()) :: GenServer.on_start()
   def start_link(screen_module, params, opts \\ []) do
     {nif, opts} = Keyword.pop(opts, :nif, :mob_nif)
-    GenServer.start_link(__MODULE__, {screen_module, params, :no_render, :android, nif}, opts)
+
+    GenServer.start_link(
+      __MODULE__,
+      {screen_module, params, :no_render, :android, nif, nil},
+      opts
+    )
   end
 
   @doc """
@@ -99,13 +104,34 @@ defmodule Mob.Router do
 
   This is the main entry point for production use. `start_link/2` is for tests
   (no NIF calls).
+
+  ## When no screen is left
+
+  If the root screen fails to start (its `mount/3` returns an error or
+  raises) while no other router is live, or the current screen crashes,
+  can't be restarted and there is no other live screen to fall back to, the
+  app would sit on a blank screen for good: the process stays alive, so
+  relaunching from the launcher brings the same blank process back. On a
+  device (the real `:mob_nif`), the router logs the reason, flushes the
+  logger and ends the process with `System.halt(1)`, so the next launch boots
+  fresh. That also lets a plugin that watches for a launch that never
+  becomes stable (mob_deliver's probation) see this one die.
+
+  `:on_no_live_screen` replaces that behaviour with a 1-arity function called
+  with the module of the screen that failed. Anything injected as `:nif`
+  (host tests) gets no action by default, so a test VM is never halted.
   """
   @spec start_root(module(), map(), keyword()) :: GenServer.on_start()
   def start_root(screen_module, params \\ %{}, opts \\ []) do
     {nif, opts} = Keyword.pop(opts, :nif, :mob_nif)
-    platform = nif.platform()
 
-    case GenServer.start_link(__MODULE__, {screen_module, params, :render, platform, nif}, opts) do
+    {on_no_live_screen, opts} =
+      Keyword.pop(opts, :on_no_live_screen, default_on_no_live_screen(nif))
+
+    platform = nif.platform()
+    init_arg = {screen_module, params, :render, platform, nif, on_no_live_screen}
+
+    case GenServer.start_link(__MODULE__, init_arg, opts) do
       {:error, reason} = error ->
         # A failed init leaves no crash log of its own, and the caller is
         # usually an on_start that ignores the result: without this the app
@@ -114,6 +140,17 @@ defmodule Mob.Router do
           "[mob] root screen #{inspect(screen_module)} failed to start; the app has no screen: " <>
             format_start_error(reason)
         )
+
+        # Nothing else registered as the router means no screen will ever
+        # show; the same blank process a relaunch would bring back as the
+        # render-crash give-up path.
+        if on_no_live_screen && is_nil(Process.whereis(:mob_screen)) do
+          end_app(
+            on_no_live_screen,
+            screen_module,
+            "root screen #{inspect(screen_module)} failed to start"
+          )
+        end
 
         error
 
@@ -127,6 +164,19 @@ defmodule Mob.Router do
        do: Exception.format(:error, exception, stacktrace)
 
   defp format_start_error(reason), do: inspect(reason)
+
+  defp default_on_no_live_screen(:mob_nif), do: &halt_app/1
+  defp default_on_no_live_screen(_injected_nif), do: nil
+
+  @doc false
+  # Public so the default can be named as a capture; not API.
+  @spec halt_app(module()) :: no_return()
+  def halt_app(_screen_module) do
+    # The native logger handler writes synchronously, but a queued message in
+    # Logger's own pipeline would be lost with the VM.
+    Logger.flush()
+    System.halt(1)
+  end
 
   @doc """
   Dispatch a UI event to the screen process. Returns `:ok` synchronously once
@@ -188,7 +238,7 @@ defmodule Mob.Router do
   # ── GenServer callbacks ───────────────────────────────────────────────────
 
   @impl GenServer
-  def init({screen_module, params, render_mode, platform, nif}) do
+  def init({screen_module, params, render_mode, platform, nif, on_no_live_screen}) do
     # Linked *and* trapping. Linking alone makes the owner die with any screen
     # it stops or that crashes; trapping alone orphans every screen when the
     # owner dies — and an orphaned persisted screen keeps dumping to
@@ -217,7 +267,8 @@ defmodule Mob.Router do
       platform: platform,
       nif: nif,
       screens: %{},
-      restarts: %{}
+      restarts: %{},
+      on_no_live_screen: on_no_live_screen
     }
 
     case start_screen(screen_module, params, state) do
@@ -438,6 +489,11 @@ defmodule Mob.Router do
   # The single place `current` changes. The sender is told here and nowhere
   # else, so only the screen the user is looking at can commit a frame.
   defp make_current(state, entry, transition) do
+    # Before activating, from this process, so the sender has it when this
+    # screen's first frame commits (:after_first_render names the screen).
+    if function_exported?(Mob.Sender, :note_active_screen, 2),
+      do: Mob.Sender.note_active_screen(entry.ref, entry.module)
+
     activation_token =
       if activation_frame_supported?() do
         Mob.Sender.activate_frame(entry.ref, transition)
@@ -607,8 +663,28 @@ defmodule Mob.Router do
             "screen to fall back to. The app has no live screen."
         )
 
+        no_live_screen(entry.module, state)
+    end
+  end
+
+  # Map.get: a router started before this key existed (hot code push) has no
+  # action to take.
+  defp no_live_screen(module, state) do
+    case Map.get(state, :on_no_live_screen) do
+      nil ->
+        state
+
+      action ->
+        end_app(action, module, "no live screen after #{inspect(module)} could not be restarted")
         state
     end
+  end
+
+  # Staying up would leave a blank process that a relaunch from the launcher
+  # only brings back to the front.
+  defp end_app(action, module, why) do
+    Logger.error("[mob] ending the app process so the next launch starts fresh (#{why})")
+    action.(module)
   end
 
   defp drop_entry(state, dead_pid) do

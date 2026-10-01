@@ -347,5 +347,45 @@ defmodule Mob.DNSTest do
       DNS.configure_pure_beam(nameservers: [])
       assert DNS.resolved?("compose.test")
     end
+
+    # Android (and an iOS device) has no /etc/resolv.conf. inet_db still
+    # watches it and, every 5 s on the next lookup, "reloads" the missing file
+    # as an empty nameserver list, wiping what configure_pure_beam seeded:
+    # every lookup after that is :nxdomain.
+    @tag timeout: 20_000
+    test "a missing resolv.conf doesn't wipe the seeded nameservers later" do
+      original = :inet_db.res_option(:resolv_conf)
+      on_exit(fn -> :inet_db.set_resolv_conf(original) end)
+
+      missing =
+        Path.join(System.tmp_dir!(), "mob_no_resolv_#{System.unique_integer([:positive])}")
+
+      :ok = :inet_db.set_resolv_conf(String.to_charlist(missing))
+
+      DNS.configure_pure_beam(nameservers: [{9, 9, 9, 9}])
+      Process.sleep(5_100)
+      :inet_db.res_update_conf()
+
+      ips = :inet_db.res_option(:nameservers) |> Enum.map(fn {ip, _port} -> ip end)
+      assert {9, 9, 9, 9} in ips
+    end
+
+    # iOS simulator and host BEAMs read the OS resolver config from a real
+    # resolv.conf; that watch has to survive.
+    test "a resolv.conf that exists is still watched" do
+      original = :inet_db.res_option(:resolv_conf)
+      file = Path.join(System.tmp_dir!(), "mob_resolv_#{System.unique_integer([:positive])}")
+      File.write!(file, "nameserver 9.9.9.9\n")
+
+      on_exit(fn ->
+        :inet_db.set_resolv_conf(original)
+        File.rm(file)
+      end)
+
+      :ok = :inet_db.set_resolv_conf(String.to_charlist(file))
+      DNS.configure_pure_beam(nameservers: [{8, 8, 8, 8}])
+
+      assert :inet_db.res_option(:resolv_conf) == String.to_charlist(file)
+    end
   end
 end

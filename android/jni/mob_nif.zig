@@ -3548,12 +3548,12 @@ export fn nif_webview_go_back(
 }
 
 // ── Mob.Device — lifecycle events + queries ──────────────────────────────
-// Android implementation is partial — only `:appearance` (color scheme
-// changes from MainActivity.onConfigurationChanged) is wired today. The
-// rest (battery, thermal, lifecycle) is queued behind ProcessLifecycleOwner
-// + ComponentCallbacks2 plumbing. Until then the dispatcher pid is stored
-// so what IS wired (color scheme) can deliver, and the query NIFs return
-// reasonable defaults.
+// Android implementation is partial. Wired: `:app` lifecycle (the template's
+// MainActivity onStart/onResume/onPause/onStop/onDestroy →
+// mob_send_app_lifecycle), `:appearance` (color scheme) and orientation from
+// MainActivity.onConfigurationChanged, and connectivity. Battery, thermal and
+// memory are queued behind ComponentCallbacks2 plumbing; their query NIFs
+// return reasonable defaults.
 
 var g_device_dispatcher_pid: erts.ErlNifPid = .{ .pid = 0 };
 var g_device_dispatcher_set: bool = false;
@@ -3577,6 +3577,49 @@ fn deviceSendAtomPayload(comptime tag: [:0]const u8, atom_name: [*:0]const u8, p
 pub export fn mob_send_color_scheme_changed(scheme: ?[*:0]const u8) callconv(.c) void {
     const s = scheme orelse return;
     deviceSendAtomPayload("mob_device", "color_scheme_changed", s);
+}
+
+// The `:app` lifecycle atoms, identical to iOS's. The event name crosses JNI
+// as a string, so it is matched against this list and the atom is made from
+// the static literal: an app-owned MainActivity can't mint arbitrary atoms.
+const app_lifecycle_events = [_][:0]const u8{
+    "will_resign_active",
+    "did_become_active",
+    "did_enter_background",
+    "will_enter_foreground",
+    "will_terminate",
+};
+
+// Backs device_foreground/0, matching iOS's "applicationState == Active":
+// true from did_become_active until will_resign_active. Starts true so an app
+// whose MainActivity predates the lifecycle hook keeps the old answer.
+var g_app_active = std.atomic.Value(bool).init(true);
+
+fn deviceSendAtom(comptime tag: [:0]const u8, atom_name: [*:0]const u8) void {
+    if (!g_device_dispatcher_set) return;
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    const msg = erts.makeTuple(env, .{ erts.atom(env, tag), erts.enif_make_atom(env, atom_name) });
+    var pid = g_device_dispatcher_pid;
+    _ = erts.enif_send(null, &pid, env, msg);
+}
+
+/// Called from beam_jni.c's `Java_..._MainActivity_nativeNotifyAppLifecycle`
+/// with one of `app_lifecycle_events`. Delivers `{:mob_device, event}` (the
+/// cross-platform `:app` category) and `{:mob_device_android, event}`
+/// (`Mob.Device.Android`), as iOS does with `mob_device_ios`. Unknown names
+/// are ignored.
+pub export fn mob_send_app_lifecycle(event: ?[*:0]const u8) callconv(.c) void {
+    const name = std.mem.sliceTo(event orelse return, 0);
+    for (app_lifecycle_events) |known| {
+        if (std.mem.eql(u8, name, known)) {
+            if (std.mem.eql(u8, known, "did_become_active")) g_app_active.store(true, .monotonic);
+            if (std.mem.eql(u8, known, "will_resign_active")) g_app_active.store(false, .monotonic);
+            deviceSendAtom("mob_device", known.ptr);
+            deviceSendAtom("mob_device_android", known.ptr);
+            return;
+        }
+    }
 }
 
 // Last-known interface orientation, updated by mob_send_orientation_changed.
@@ -3833,8 +3876,7 @@ export fn nif_device_foreground(
 ) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     _ = argv;
-    // TODO(android): track via ProcessLifecycleOwner.
-    return erts.atom(env, "true");
+    return if (g_app_active.load(.monotonic)) erts.atom(env, "true") else erts.atom(env, "false");
 }
 
 export fn nif_device_os_version(

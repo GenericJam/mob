@@ -45,11 +45,21 @@ defmodule Mob.Router.Hooks do
   destination's. Nothing fires in a VM that never commits a frame, including
   test routers that don't render (`Mob.Router.start_link/3`).
 
+  The module of the screen whose frame was committed is appended to the
+  hook's arguments (`nil` only while a hot code push has mixed old and new
+  framework modules). A plugin that needs a frame from one particular
+  screen — mob_deliver ends an update's probation only on the app's real
+  root, not on its own "please update" screen — calls `rearm_first_render/0`
+  from its hook when the screen isn't the one it wants: the next committed
+  frame, from any screen, fires the hook again.
+
       Mob.Router.Hooks.register(:before_navigate, {MyPlugin, :before_navigate, []})
       Mob.Router.Hooks.register(:after_first_render, {MyPlugin, :first_render, []})
 
-  The destination is appended to a `:before_navigate` hook's arguments;
-  `:after_first_render` hooks get the arguments as given.
+      # MyPlugin.before_navigate(destination), MyPlugin.first_render(screen_module)
+
+  The destination is appended to a `:before_navigate` hook's arguments, and
+  the committed screen's module to an `:after_first_render` hook's.
   """
 
   require Logger
@@ -98,13 +108,31 @@ defmodule Mob.Router.Hooks do
   end
 
   @doc false
-  @spec after_first_render() :: :ok
-  def after_first_render do
+  # Called by Mob.Sender after each committed frame; cheap until it fires.
+  @spec after_first_render(module() | nil) :: :ok
+  def after_first_render(screen) do
     unless :persistent_term.get(@first_render, false) do
       :persistent_term.put(@first_render, true)
-      for {module, fun, args} <- registered(:after_first_render), do: spawn(module, fun, args)
+
+      for {module, fun, args} <- registered(:after_first_render),
+          do: spawn(module, fun, args ++ [screen])
     end
 
+    :ok
+  end
+
+  @doc """
+  Makes `:after_first_render` fire again for the next frame committed, from
+  any screen, with that screen's module.
+
+  For a plugin waiting for a frame from a particular screen: call it from the
+  hook when the screen that rendered isn't the one you're waiting for. Until
+  then the hook has fired and stays quiet.
+  """
+  @spec rearm_first_render() :: :ok
+  def rearm_first_render do
+    # An atom value: erasing or replacing it triggers no global GC.
+    :persistent_term.erase(@first_render)
     :ok
   end
 
@@ -124,8 +152,5 @@ defmodule Mob.Router.Hooks do
   @doc false
   # Tests only: lets a test observe the once-per-VM first render again.
   @spec __reset_first_render__() :: :ok
-  def __reset_first_render__ do
-    :persistent_term.erase(@first_render)
-    :ok
-  end
+  def __reset_first_render__, do: rearm_first_render()
 end

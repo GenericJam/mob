@@ -193,19 +193,26 @@ screen — with `Mob.Router.Hooks.register/2`. No app configuration.
   than the router starting. A root screen whose `render/1` raises never
   triggers it; if a restart of that screen later renders, it fires then. If
   the root screen navigates away before painting, the destination's first
-  frame counts.
+  frame counts. The committed screen's module is appended to the hook's
+  arguments. To wait for a frame from a particular screen, call
+  `Mob.Router.Hooks.rearm_first_render/0` from the hook when it's the wrong
+  one: the next committed frame, from any screen, fires it again.
 
 ```elixir
 def on_start do
   Mob.Router.Hooks.register(:before_navigate, {MyPlugin, :before_navigate, []})
   Mob.Router.Hooks.register(:after_first_render, {MyPlugin, :first_render, []})
 end
+
+# MyPlugin.before_navigate(destination) :: :ok | {:redirect, m} | {:reset, m} | {:error, r}
+# MyPlugin.first_render(screen_module)
 ```
 
 `mob_deliver` uses both: `:before_navigate` fetches a just-in-time screen
 (or resets to its "please update" screen), `:after_first_render` ends a
 freshly installed update's probation — safe only because a crash in the
-root screen's render never reaches it.
+root screen's render never reaches it, and only on a frame from the app's
+own root (it rearms while its update screen is the one showing).
 
 ## Multiple plugins and conflicts
 

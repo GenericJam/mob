@@ -68,7 +68,7 @@ defmodule Mob.Router.HooksTest do
       end
     end
 
-    def first_render(test_pid), do: send(test_pid, :first_render)
+    def first_render(test_pid, screen), do: send(test_pid, {:first_render, screen})
   end
 
   defmodule StubNif do
@@ -189,14 +189,14 @@ defmodule Mob.Router.HooksTest do
       end)
     end
 
-    test "fires once after the root screen's first paint, not on later router starts" do
+    test "fires once, with the root screen's module, not on later router starts" do
       {:ok, router} = Mob.Router.start_root(HomeScreen, %{}, nif: StubNif)
-      assert_receive :first_render
+      assert_receive {:first_render, HomeScreen}
       Mob.Test.ProcessHelpers.stop_pid(router)
 
       {:ok, again} = Mob.Router.start_root(HomeScreen, %{}, nif: StubNif)
       on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(again) end)
-      refute_receive :first_render, 100
+      refute_receive {:first_render, _}, 100
     end
 
     @tag :capture_log
@@ -205,7 +205,7 @@ defmodule Mob.Router.HooksTest do
       {:ok, router} = Mob.Router.start_root(CrashingScreen, %{}, nif: StubNif)
       on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(router) end)
 
-      refute_receive :first_render, 300
+      refute_receive {:first_render, _}, 300
     end
 
     @tag :capture_log
@@ -215,9 +215,34 @@ defmodule Mob.Router.HooksTest do
       {:ok, router} = Mob.Router.start_root(CrashingScreen, %{}, nif: StubNif)
       on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(router) end)
 
-      assert_receive :first_render, 1_000
+      assert_receive {:first_render, CrashingScreen}, 1_000
       assert GenServer.call(router, :get_current_module) == CrashingScreen
-      refute_receive :first_render, 100
+      refute_receive {:first_render, _}, 100
+    end
+
+    # mob_deliver boots into its update screen and ends probation only on a
+    # frame from the app's real root; it rearms until that frame commits.
+    test "rearming fires again, once, for the next committed frame's screen" do
+      {:ok, router} = Mob.Router.start_root(HomeScreen, %{}, nif: StubNif)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(router) end)
+      assert_receive {:first_render, HomeScreen}
+
+      assert :ok = Hooks.rearm_first_render()
+      send(Mob.Router.get_screen_pid(router), {:tap, :push})
+      assert_receive {:hook_called, DetailScreen}
+
+      assert_receive {:first_render, DetailScreen}
+      refute_receive {:first_render, _}, 100
+    end
+
+    test "without a rearm, later frames from other screens don't fire it" do
+      {:ok, router} = Mob.Router.start_root(HomeScreen, %{}, nif: StubNif)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(router) end)
+      assert_receive {:first_render, HomeScreen}
+
+      send(Mob.Router.get_screen_pid(router), {:tap, :push})
+      assert_receive {:hook_called, DetailScreen}
+      refute_receive {:first_render, _}, 200
     end
   end
 end
