@@ -184,57 +184,44 @@ your Mac.
 
 ---
 
-## iOS simulator: BEAM dies silently when an Android device is also connected
+## iOS simulator: BEAM dies silently on a dist port collision
 
-**Symptom:** Single-device iOS-sim deploy succeeds (`Apps restarted.`), but the
-sim never reaches the app — stays on the home screen or shows the launcher
-spinner for a few hundred ms before the app process exits. `mix mob.connect`
-may briefly see the node and then lose it. `Documents/beam_stdout.log` inside
-the sim's app container shows:
+**Symptom (before MOB-139):** the sim never reaches the app — it stays on the
+home screen or shows the launcher spinner for a few hundred ms before the app
+process exits. `mix mob.connect` may briefly see the node and then lose it.
+There is no crash report. `Documents/beam_stdout.log` inside the sim's app
+container shows:
 
 ```
 Protocol 'inet_tcp': register/listen error: eaddrinuse
 ```
 
-Since MOB-139 the app checks its dist port before starting the BEAM: a taken
-port stays on the startup error screen with "Distribution can't start: port N
-(MOB_DIST_PORT) is already in use", and the same line appears in the system
-log as `[MobBeam] ERROR: …`. A launch without `MOB_DIST_PORT` picks a free
-port itself.
+**Cause:** iOS simulators share the Mac's network stack, so a simulator app's
+dist port competes with every other listener on `127.0.0.1`: other simulator
+apps and `adb forward` tunnels for Android devices. Without `MOB_DIST_PORT`
+(icon tap, `xcrun simctl launch`, agent-device relaunch) every simulator app
+used to listen on 9101, so the second one launched that way failed to bind,
+and the boot script exited, taking the app process with it.
 
-**Cause:** `adb forward tcp:9100 tcp:9100` (set up automatically when an
-Android device is attached) binds host `127.0.0.1:9100` so the corresponding
-device port is tunneled. iOS simulators share the Mac's network stack, so
-when the sim's BEAM tries to bind `127.0.0.1:9100` for `inet_dist_listen_min`,
-it collides with adb. The OTP runtime catches the bind failure, prints the
-error to its redirected stdout, and the boot script exits — taking the BEAM
-(and the whole app process) with it.
+**Now:** a launch without `MOB_DIST_PORT` takes the first free port from the
+one mob_dev would assign (`9100 + crc32("<app>@<udid>") rem 800`). A pinned
+port that is taken (`mix mob.deploy --dist-port N`, or
+`SIMCTL_CHILD_MOB_DIST_PORT=N`) is not handed to the BEAM: the app stays on
+the startup error screen with "Distribution can't start: port N
+(MOB_DIST_PORT) is already in use", and the system log carries the same line
+as `[MobBeam] ERROR: …`.
 
-Mob's per-device dist-port allocator (`MobDev.Tunnel.dist_port/1`) returns
-`9100 + index`. With a single iOS sim targeted (`mix mob.deploy --device
-<udid>`), index is 0, port is 9100 — which adb already owns. Multi-device
-deploys with iOS sims later in the list (e.g. index 5, port 9105) avoid the
-collision by accident; single-iOS-sim deploys hit it head-on.
-
-**Fix:** Pass an explicit `--dist-port` outside the adb forward range:
+**Fix:** find the holder and either stop it or pick another port:
 
 ```bash
-mix mob.deploy --device <ios-sim-udid> --dist-port 9200
+lsof -nP -iTCP:N -sTCP:LISTEN
+epmd -names
+mix mob.deploy --device <ios-sim-udid> --dist-port <free port>
 ```
 
-A clean way to be sure the port is free is `lsof -nP -iTCP:9100-9199 -sTCP:LISTEN`.
-adb's forwards live on `127.0.0.1` for the duration of the connected devices.
-
-**Why this is recurring:** Android tooling has bitten the iOS sim path several
-times. The shared Mac network stack means anything adb listens on (forward
-tunnels, the adb server itself on 5037, the bridge daemon) competes with
-simulators for the same `127.0.0.1` namespace. When investigating a "the iOS
-sim won't start" problem and an Android device is connected, suspect a
-host-port collision before assuming a sim or BEAM bug.
-
-A follow-up fix to `MobDev.Tunnel` to base iOS-sim dist ports above the adb
-forward range (e.g. 9200+) is tracked separately. Until then, the manual
-`--dist-port` flag is the workaround.
+`mix mob.deploy` and `mix mob.connect` already skip ports registered in EPMD
+and other devices' adb forwards; a collision there means a listener neither
+of those shows.
 
 ---
 

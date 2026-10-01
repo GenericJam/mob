@@ -571,10 +571,11 @@ adb forward tcp:<port> tcp:<port>   # dist:  Mac → device, same port both ends
 
 ### Port assignment (handled by mob_dev)
 
-Each device's dist port is derived from its Android serial or iOS UDID
-(`MobDev.Tunnel.serial_base_port/1`, a crc32 hash into `9100..9899`), not a per-run
-index. A given device gets the same port across runs and projects, and
-`Tunnel.assign_dist_port/2` bumps past any port a live node or forward already holds.
+Each app's dist port on a device is derived from the Android serial or iOS UDID and
+the app name (`MobDev.Tunnel.base_port/2`, crc32 of `"<app>@<serial>"` into
+`9100..9899`), not a per-run index. A given app on a given device gets the same port
+across runs, and `Tunnel.assign_dist_port/3` bumps past any port a live node or another
+device's forward already holds.
 The device-side BEAM listens on that same port, so the forward is 1:1 and the port
 EPMD advertises matches it.
 
