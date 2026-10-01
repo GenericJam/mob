@@ -354,11 +354,17 @@ the cookie can be rotated per session via the manifest.
    (often due to the EPMD port conflict above).
 
 3. **Do cookies match?**
-   `mix mob.connect` manages the app's private cookie automatically. An iOS
-   app started from Xcode or the home screen, or an Android app no
-   `mix mob.deploy` / `mix mob.connect` has written a cookie for yet, runs with
-   a random cookie; let `mix mob.connect` restart it. A custom cookie in your
-   app's `Mob.Dist.ensure_started/1` call must be passed as `--cookie`.
+   `mix mob.connect` manages the app's private cookie automatically, and
+   `mix mob.deploy` writes it next to the app's BEAMs (`mob_dist_cookie`), so a
+   relaunch from the home screen or `xcrun simctl launch` keeps it. An app
+   with no valid cookie file runs with a random cookie: an iOS app built from
+   Xcode or last deployed by mob_dev 0.7.7 or older, a physical iPhone only
+   hot-loaded since a mob_dev 0.7.7 deploy (deploy once with `--native`), or
+   an Android app no `mix mob.deploy` / `mix mob.connect` has written a cookie
+   for yet.
+   Let `mix mob.connect` restart it. On iOS the system log says which cookie
+   the app used (`[MobBeam] dist cookie: …`). A custom cookie in your app's
+   `Mob.Dist.ensure_started/1` call must be passed as `--cookie`.
 
 4. **iOS: is the simulator booted?**
    ```bash

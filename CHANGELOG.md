@@ -8,7 +8,18 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.9.9] - 2026-10-01
+
+### Upgrading
+- **iOS users on mob 0.9.8 / mob_dev 0.7.7: update both (mob 0.9.9, mob_dev
+  0.7.8) and redeploy with `mix mob.deploy --native`** (MOB-348). The fix
+  needs this release's `mob_beam.m` in the app and the cookie file that
+  mob_dev 0.7.8 writes into the beams dir; `--native` installs the first and,
+  on a physical iPhone, is the deploy that writes the second (a phone that is
+  only hot-loaded over dist gets no file). With only one of them updated,
+  relaunches keep 0.9.8's behaviour: mob 0.9.9 with mob_dev 0.7.7 finds no
+  file, and mob 0.9.8 with mob_dev 0.7.8 ignores it (see Changed for
+  `mob_secret`).
 
 ### Fixed
 - **iOS: an app relaunched outside mob_dev is reachable again** (MOB-348).
@@ -16,12 +27,18 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   the launch environment, so tapping the icon, `xcrun simctl launch` or an
   agent-device relaunch started the node with a random cookie that nothing
   could connect with. Like Android, `mob_beam.m` now falls back to
-  `$MOB_BEAMS_DIR/mob_dist_cookie`, which `mix mob.deploy` writes (needs the
-  matching mob_dev), before the random cookie. The system log says which one
-  it used (`[MobBeam] dist cookie: …`), never the value. Like Android, iOS now
-  ignores the public `mob_secret` even in `MOB_DIST_COOKIE`, so
-  `mix mob.connect --cookie mob_secret` no longer reaches it. See
-  `decisions/2026-10-01-ios-dist-cookie-file.md`.
+  `$MOB_BEAMS_DIR/mob_dist_cookie`, which `mix mob.deploy` writes (mob_dev
+  0.7.8 or later), before the random cookie. The system log says which one it
+  used (`[MobBeam] dist cookie: …`), never the value. See
+  `decisions/2026-10-01-ios-dist-cookie-file.md`. The troubleshooting guide's
+  cookie advice now describes the file.
+
+### Changed
+- **iOS ignores the public `mob_secret` cookie even in `MOB_DIST_COOKIE`**
+  (MOB-348), as Android's `Mob.Dist` already did, so
+  `mix mob.connect --cookie mob_secret` no longer reaches an iOS app on this
+  mob; it falls back to the cookie file or a random cookie. Use the private
+  cookie `mix mob.connect` manages (no `--cookie`).
 
 ## [0.9.8] - 2026-10-01
 
