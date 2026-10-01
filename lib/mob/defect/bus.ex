@@ -200,10 +200,12 @@ defmodule Mob.Defect.Bus do
   but does not need it to unsubscribe (unsubscription is by pid).
   Idempotent: subscribing an already-subscribed pid is a no-op.
 
-  The subscriber is monitored; its exit, or its node disconnecting, prunes it.
-  From a connected node, pass the pid to receive on — `:rpc.call(node,
-  Mob.Defect.Bus, :subscribe, [self()])`. Without it, `:rpc` subscribes the
-  short-lived process it runs the call in, which receives nothing.
+  The subscriber is monitored; its exit prunes it. A subscriber on another node
+  whose connection drops stops receiving and resumes when the node reconnects,
+  without re-subscribing (see `Mob.Diag.Subscribers`). From a connected node,
+  pass the pid to receive on — `:rpc.call(node, Mob.Defect.Bus, :subscribe,
+  [self()])`. Without it, `:rpc` subscribes the short-lived process it runs the
+  call in, which receives nothing.
   """
   @spec subscribe() :: {:ok, reference()}
   @spec subscribe(pid()) :: {:ok, reference()}

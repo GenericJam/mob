@@ -99,6 +99,12 @@ pruning resumes. `Event.Trace` no longer has a table: tracing is on while the
 tracer list is non-empty. `subscribe/2` takes a pid, for `:rpc` callers.
 `Trace.start/0` is deprecated and does nothing.
 
+> **Corrected 2026-09-30 (MOB-304):** pruning on every `:DOWN` was wrong for
+> remote subscribers. A `:noconnection` now *parks* the subscriber (off the
+> published list, topics and meta kept) until its node reconnects, and parked
+> entries are persisted beside the published lists. See
+> `decisions/2026-09-30-remote-subscribers-park-on-disconnect.md`.
+
 **`Registry.emit_once/2`** records the id, runs the emit, and forgets the id if
 the emit raises, counting it as lost. An artifact still on disk (a crash dump)
 is retried by the next sweep. MetricKit and ApplicationExitInfo drains are

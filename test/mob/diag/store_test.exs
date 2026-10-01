@@ -405,7 +405,7 @@ defmodule Mob.Diag.StoreTest do
   defp stop_subscribers do
     ProcessHelpers.stop_if_running(Mob.Diag.Subscribers)
 
-    for k <- [:topics, :defect_bus, :event_trace],
+    for k <- [:topics, :parked, :defect_bus, :event_trace],
         do: :persistent_term.erase({Mob.Diag.Subscribers, k})
   end
 end

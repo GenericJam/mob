@@ -308,6 +308,14 @@ releases), deduplicated, with bounded, redaction-tagged evidence.
 Pass `self()` when subscribing over `:rpc`: the call runs in a short-lived
 process on the device, and subscribing that process delivers to nobody.
 
+If the connection to the device drops (over `adb` the device cannot dial back,
+so it stays down until your shell reconnects), the subscription is parked, not
+lost: once `Node.connect/1` or any `:rpc.call` re-establishes it, delivery
+resumes without subscribing again. Capsules emitted while disconnected are not
+replayed; read them with `:recent`. A shell that stays away for 10 minutes
+(`config :mob, :subscriber_park_ms`) is dropped. `Mob.Diag.health/0` counts
+parked subscribers under `subscribers.parked`.
+
 `Mob.Defect.Sinks.Dev` logs every capsule at a severity-driven level if you
 start it; mob owns the format and the bus, never the destination.
 

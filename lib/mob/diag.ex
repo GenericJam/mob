@@ -251,8 +251,9 @@ defmodule Mob.Diag do
     * `store` — store-specific counts, e.g. evictions
 
   Plus the heir and the subscriber lists of `Mob.Defect.Bus` and
-  `Mob.Event.Trace`. Counts and pids only, never recorded content. Read-only:
-  it starts nothing and repairs nothing.
+  `Mob.Event.Trace`: per topic, how many receive (`topics`) and how many are
+  waiting for their node to reconnect (`parked`). Counts and pids only, never
+  recorded content. Read-only: it starts nothing and repairs nothing.
   """
   @spec health() :: map()
   def health do
