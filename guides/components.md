@@ -511,7 +511,7 @@ An editable text input. Has defaults injected by the renderer (surface_raised ba
 | `disabled` / `enabled` | boolean | `disabled: true` or `enabled: false` makes the field read-only and dims its text to 38% |
 | `max_length` | integer | Rejects edits that would lengthen the text past this many UTF-16 units; a longer value set by the screen can still be shortened |
 | `lines` | integer | Above 1: a multi-line field this many rows tall; return inserts a newline and `on_submit` does not fire |
-| `caret` | `"end"` | Pins the insertion point to the end of the text wherever the field is tapped (segmented code inputs). On iOS this field is single-line: `lines` is ignored with it |
+| `caret` | `"end"` | Pins the insertion point to the end of the text wherever the field is tapped (segmented code inputs). On iOS a pinned field is single-line: `lines` is ignored with it |
 | `underline` | boolean | Android only: Material's indicator line (default: on unless the field draws its own border) |
 
 ### `:divider`

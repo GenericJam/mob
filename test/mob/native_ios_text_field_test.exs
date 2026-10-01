@@ -98,7 +98,10 @@ defmodule Mob.NativeIOSTextFieldTest do
   end
 
   test "caret: end routes to the UIKit field, which pins the caret" do
-    assert text_field() =~ "if node.onCompose != nil || node.caretAtEnd {"
+    # Single-line max_length too: a SwiftUI rollback can leave the rejected
+    # character on screen (seen on the simulator: max 5 accepted "123458").
+    assert text_field() =~
+             "if node.onCompose != nil || node.caretAtEnd || (node.maxLength > 0 && node.textFieldLines <= 1) {"
 
     uikit = uikit_field()
     assert uikit =~ "guard parent.node.caretAtEnd, textField.markedTextRange == nil"
@@ -119,6 +122,10 @@ defmodule Mob.NativeIOSTextFieldTest do
     assert uikit =~ "field.isEnabled = !node.disabled"
     assert uikit =~ "[.foregroundColor: placeholderColor"
     assert uikit =~ "return newLength <= limit || newLength <= current.length"
+    # A number pad has no return key; without the accessory Done a pinned
+    # OTP or capped numeric field could never be dismissed.
+    assert uikit =~ "field.inputAccessoryView = toolbar"
+    assert uikit =~ ~r/@objc func done\(\) \{\s*field\?\.resignFirstResponder\(\)/
   end
 
   test "the UIKit field keeps the keyboard across keystrokes" do

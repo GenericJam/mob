@@ -33,6 +33,13 @@ props, plus `disabled`/`enabled`, `max_length`, `lines`, `caret: "end"` and
   A `UITextField` is single-line, so with `caret: "end"` (or `on_compose`)
   iOS ignores `lines`; Android honours both. The inputs that pin the caret
   (OTP, masks) are single-line, and a `UITextView` variant was not worth it.
+- **A single-line `max_length` field also uses the UIKit field.** Rolling the
+  SwiftUI binding back in `onChange` is not reliable: on the simulator a max-5
+  field typed 123456789 once gave 12345 and once 123458, with the extra
+  character on screen. `shouldChangeCharactersIn` rejects before the field
+  changes. Multi-line fields keep the SwiftUI rollback (best effort).
+- **The UIKit field carries its own Done accessory.** The SwiftUI keyboard
+  toolbar does not reach it, and a number pad has no return key.
 - **The UIKit field's focus is a plain `@State`, not the `@FocusState`.** A
   `@FocusState` bound to no `.focused` view is reset by SwiftUI on the next
   update; routed through it, the UIKit field resigned the keyboard after every
@@ -44,6 +51,7 @@ props, plus `disabled`/`enabled`, `max_length`, `lines`, `caret: "end"` and
 
 ## Consequences
 
-Theme changes restyle text fields on both platforms. The keyboard toolbar's
-Done button is a SwiftUI toolbar and does not appear for the UIKit field;
-return dismisses it.
+Theme changes restyle text fields on both platforms. Fields that use the
+UIKit field (`caret: "end"`, `on_compose`, single-line `max_length`) have no
+SwiftUI-only behaviour such as `.submitLabel`; the UIKit field maps the same
+props itself.

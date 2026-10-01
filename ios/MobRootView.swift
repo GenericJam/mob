@@ -1870,9 +1870,10 @@ private struct MobTextField: View {
 
     @ViewBuilder
     private var field: some View {
-        // `caret: "end"` needs the UIKit field: SwiftUI exposes no selection
-        // before iOS 18, and this build targets 17.
-        if node.onCompose != nil || node.caretAtEnd {
+        // `caret: "end"` needs the UIKit field (no SwiftUI selection before
+        // iOS 18; this targets 17), and so does a single-line `max_length`: a
+        // SwiftUI rollback in onChange can leave the extra character on screen.
+        if node.onCompose != nil || node.caretAtEnd || (node.maxLength > 0 && node.textFieldLines <= 1) {
             MobComposingTextField(
                 node: node,
                 placeholder: placeholder,
@@ -1922,10 +1923,9 @@ private struct MobTextField: View {
             // See MobToggle: compare against the BEAM's value rather than
             // latching, so a re-seed is silent by construction.
             .onChange(of: text) { oldValue, newValue in
-                // `max_length` rejects a lengthening user edit (only a focused
-                // field is typed in; the re-seeds below write unfocused), in
-                // UTF-16 units as on Android; shortening passes, so a value the
-                // BEAM set past the limit stays deletable.
+                // Multi-line `max_length` (single-line is the UIKit field's):
+                // reject a lengthening user edit, as the UIKit delegate does.
+                // Gated on focus: the re-seeds below write unfocused.
                 if node.maxLength > 0, focused,
                    newValue.utf16.count > node.maxLength,
                    newValue.utf16.count > oldValue.utf16.count {

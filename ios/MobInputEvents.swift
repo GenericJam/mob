@@ -195,6 +195,20 @@ struct MobComposingTextField: UIViewRepresentable {
             action: #selector(Coordinator.textDidChange(_:)),
             for: .editingChanged
         )
+        // The SwiftUI fields' keyboard toolbar Done button does not reach a
+        // UIKit field, and a number pad has no return key: without this a
+        // `caret: "end"` OTP or a capped numeric field could not be dismissed.
+        let toolbar = UIToolbar()
+        toolbar.items = [
+            UIBarButtonItem(systemItem: .flexibleSpace),
+            UIBarButtonItem(
+                title: "Done", style: .done, target: context.coordinator,
+                action: #selector(Coordinator.done)
+            )
+        ]
+        toolbar.sizeToFit()
+        field.inputAccessoryView = toolbar
+        context.coordinator.field = field
         configure(field)
         context.coordinator.synchronizeProgrammaticText(text)
         return field
@@ -327,6 +341,12 @@ struct MobComposingTextField: UIViewRepresentable {
         func textFieldDidEndEditing(_ textField: UITextField) {
             observeComposition(in: textField)
             if parent.isFocused { parent.onFocusChange(false) }
+        }
+
+        weak var field: UITextField?
+
+        @objc func done() {
+            field?.resignFirstResponder()
         }
 
         func textFieldShouldReturn(_ textField: UITextField) -> Bool {
