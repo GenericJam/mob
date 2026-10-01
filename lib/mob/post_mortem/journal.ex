@@ -5,8 +5,11 @@ defmodule Mob.PostMortem.Journal do
   @pending {__MODULE__, :pending}
   @call_timeout 5_000
   # `Bus.recent/1` is a reader, often an agent's first call: a journal owner
-  # stuck in a hung fsync must not hold it for the full call timeout. Missing
-  # an observation only means the entry is emitted again next boot.
+  # stuck in a hung fsync must not hold it for the full call timeout. A
+  # timed-out request is not withdrawn: the owner applies it once it gets to
+  # it, which is right, since the reader did get the capsule. Only if the
+  # owner dies first is the observation lost, and then the entry is emitted
+  # again next boot.
   @observe_timeout 500
 
   @moduledoc """
@@ -170,11 +173,12 @@ defmodule Mob.PostMortem.Journal do
   catch
     # The owner died mid-call, timed out, or would not start. The journal is a
     # second copy; losing it for one call must not cost the caller the first.
+    # A timed-out request stays queued and may still be applied.
     # credo:disable-for-next-line ExSlop.Check.Warning.BlanketRescue
     kind, reason ->
       Logger.warning(
         "[Mob.PostMortem.Journal] #{request_name(msg)} failed (#{inspect(kind)} " <>
-          "#{inspect(reason, limit: 8)}); the journal was not updated"
+          "#{inspect(reason, limit: 8)}); the journal may not reflect it"
       )
 
       fallback

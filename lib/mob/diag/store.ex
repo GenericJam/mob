@@ -158,7 +158,7 @@ defmodule Mob.Diag.Store do
 
   @doc "Re-run setup: create anything missing and re-read configuration, keeping counters."
   @spec reload(module()) :: :ok
-  def reload(store), do: sync(store)
+  def reload(store), do: sync(store, :reload)
 
   # ── Readback ─────────────────────────────────────────────────────────────
 
@@ -226,12 +226,12 @@ defmodule Mob.Diag.Store do
 
   # Called from the owner itself (a store's `after_setup/0` writing to its own
   # tables), a call would deadlock; the owner is already running setup.
-  defp sync(store) do
+  defp sync(store, request \\ :ensure) do
     if Process.whereis(owner_name(store)) == self() do
       setup(store)
     else
       {:ok, pid} = start(store)
-      GenServer.call(pid, :ensure, :infinity)
+      GenServer.call(pid, request, :infinity)
     end
   end
 
@@ -314,7 +314,16 @@ defmodule Mob.Diag.Store do
   end
 
   @impl GenServer
+  # Concurrent callers that all saw the same stale state queue one `:ensure`
+  # each (twelve first writes after an upgrade queued twelve). The first sets
+  # the store up; the rest find nothing left to do and must not repeat setup,
+  # `after_setup/0` included, while writers wait on them.
   def handle_call(:ensure, _from, state) do
+    unless set_up?(state.store, state.heir), do: setup(state.store, state.heir)
+    {:reply, :ok, state}
+  end
+
+  def handle_call(:reload, _from, state) do
     setup(state.store, state.heir)
     {:reply, :ok, state}
   end
@@ -335,6 +344,18 @@ defmodule Mob.Diag.Store do
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
+
+  # Nothing setup would change: the state is this code's, and no table is
+  # missing or still with the heir. Tables an older `mob`'s owner holds count
+  # as set up: setup leaves them alone.
+  defp set_up?(store, heir) do
+    vsn = store.state_vsn()
+
+    match?(%{framework_vsn: @framework_vsn, vsn: ^vsn}, :persistent_term.get(key(store), nil)) and
+      Enum.all?(store.tables(), fn {name, _} ->
+        :ets.info(name, :owner) not in [:undefined, heir]
+      end)
+  end
 
   defp setup(store), do: setup(store, Mob.Diag.Heir.ensure())
 

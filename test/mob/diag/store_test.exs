@@ -401,6 +401,45 @@ defmodule Mob.Diag.StoreTest do
     # build had already orphaned. No new transfer reaches the heir, so the
     # first write must notice it runs newer store code and set the store up.
 
+    test "concurrent first writes after an upgrade set the store up once, not once each" do
+      on_exit(fn ->
+        tear_down(ProbeStore)
+        for key <- [{Store, ProbeStore}, {ProbeStore, :test}], do: :persistent_term.erase(key)
+      end)
+
+      :ok = Store.ensure(ProbeStore)
+      :persistent_term.put({ProbeStore, :test}, self())
+      entry = :persistent_term.get({Store, ProbeStore})
+      :persistent_term.put({Store, ProbeStore}, Map.delete(entry, :framework_vsn))
+
+      # All see the stale entry before any sync completes: the owner is
+      # suspended until every writer's call is queued behind it.
+      :sys.suspend(owner(ProbeStore))
+      writers = for _ <- 1..12, do: Task.async(fn -> Store.state(ProbeStore) end)
+
+      ProcessHelpers.eventually(fn ->
+        Process.info(owner(ProbeStore), :message_queue_len) == {:message_queue_len, 12}
+      end)
+
+      :sys.resume(owner(ProbeStore))
+      Task.await_many(writers)
+
+      assert_receive {:setup, _}
+      refute_receive {:setup, _}, 100
+    end
+
+    test "reload/1 still sets the store up when nothing is stale" do
+      on_exit(fn ->
+        tear_down(ProbeStore)
+        for key <- [{Store, ProbeStore}, {ProbeStore, :test}], do: :persistent_term.erase(key)
+      end)
+
+      :ok = Store.ensure(ProbeStore)
+      :persistent_term.put({ProbeStore, :test}, self())
+      :ok = Store.reload(ProbeStore)
+      assert_receive {:setup, _}
+    end
+
     test "the first write sets the store up again and an orphaned owner comes back, once" do
       :ok = TestStore.write(:kept)
 

@@ -79,10 +79,12 @@ Nothing is added to the emit fanout.
   never called by an emit.
 - Sweep calls have a 5 s timeout; `recent/1`'s observation call has 500 ms,
   because a reader (often an agent's first call) must not wait out a hung
-  fsync, and a missed observation only means one more re-emit next boot. Any
-  exit is caught: the caller logs a warning and carries on. A sweep still
-  emits, unjournaled if the record step failed. The next caller starts a new
-  owner.
+  fsync. Any exit is caught: the caller logs a warning and carries on. A
+  timed-out request is not withdrawn; the owner applies it when it runs again,
+  which for an observation is right, since the reader did get the capsule.
+  Only an owner that dies first loses it, and the entry is emitted again next
+  boot. A sweep still emits, unjournaled if the record step failed. The next
+  caller starts a new owner.
 - The file is the record, so the owner dying loses no evidence. It loses only
   this boot's chance to clear an entry through `recent/1`, and the next boot
   emits that entry again.

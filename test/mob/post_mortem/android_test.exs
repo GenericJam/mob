@@ -418,7 +418,7 @@ defmodule Mob.PostMortem.AndroidTest do
       assert 3 in journaled_pids()
     end
 
-    test "a stuck journal owner holds a recent/1 reader only briefly, and keeps the entry" do
+    test "a stuck journal owner holds a recent/1 reader only briefly; the observation lands once it resumes" do
       Process.put(:test_entries, [entry(pid: 1, timestamp_ms: 1)])
       [_] = Android.sweep_with(FakeNIF, journal())
       owner = Process.whereis(Journal)
@@ -431,9 +431,12 @@ defmodule Mob.PostMortem.AndroidTest do
 
       assert [%{evidence: %{timestamp_ms: 1}}] = recent
       assert micros < 3_000_000
-      :sys.resume(owner)
-      # The observation was lost, not applied: the exit is still journaled.
       assert 1 in journaled_pids()
+
+      # The request was not withdrawn, and the reader did see the exit: the
+      # owner clears it once it runs again.
+      :sys.resume(owner)
+      eventually(fn -> journaled_pids() == [] end)
     end
   end
 

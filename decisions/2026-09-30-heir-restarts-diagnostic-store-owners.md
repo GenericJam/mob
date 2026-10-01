@@ -76,6 +76,12 @@ store's `vsn`.
   none, and setup reclaims heir-held tables through the existing branch.
   `new_state(previous)` carries counters over. Setup publishes the current
   version, so the next write takes the hot path again; it cannot loop.
+  Writers that race the first one each queue an `:ensure` call; the owner
+  sets up only if something is still stale (state version, a missing table,
+  a table with the heir), so the rest return without repeating setup.
+  Release review (codex) measured twelve setups from twelve concurrent
+  writers before this check. `reload/1` still forces setup with its own
+  request.
 - **Entries from 0.9.5 have no `framework_vsn`.** They fail the match like any
   other mismatch, and setup reads only `counters` and `data` from them, which
   0.9.5 entries have. They cannot crash.
