@@ -40,6 +40,19 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   point, with the same `source`.
 
 ### Fixed
+- **iOS simulator: a second mob app launched outside mob_dev no longer dies
+  on a dist port collision** (MOB-139). Without `MOB_DIST_PORT` (tapping the
+  icon, `xcrun simctl launch`, agent-device relaunches) every simulator app
+  listened on 9101; simulators share the Mac's network, so the second one
+  halted on `eaddrinuse` a second after start, with the error only in
+  `Documents/beam_stdout.log`. A simulator app now derives its port from the
+  app name and simulator UDID the way mob_dev does (9100–9899) and takes the
+  first free one from there. A port that is taken anyway (`MOB_DIST_PORT`
+  pointing at an occupied port, or 9101 on a device) now logs
+  `[MobBeam] ERROR: Distribution can't start: port N … is already in use`,
+  with how to find the holder, and shows it on the startup error screen
+  instead of exiting silently. See
+  `decisions/2026-10-01-ios-sim-dist-port-per-app.md`.
 - **iOS: `:text_field` ignored the theme and the type props** (MOB-237).
   It drew the system `.roundedBorder` field (white, system font) on every
   theme. It now draws the node's `background`, `border_color` /

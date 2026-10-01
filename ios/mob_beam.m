@@ -4,6 +4,7 @@
 // Swift-generated header) so this file stays free of app-specific includes.
 
 #include "mob_beam.h"
+#include "mob_dist_port.h"
 #import <Foundation/Foundation.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -252,12 +253,59 @@ void mob_start_beam(const char *app_module) {
     setenv("ERL_CRASH_DUMP", crash_dump, 1);
     setenv("ERL_CRASH_DUMP_SECONDS", "30", 1);
 
-    // Dist port: read from MOB_DIST_PORT env var (simulator via SIMCTL_CHILD_ prefix),
-    // default to 9101 for standalone/physical launch.
+#ifndef MOB_RELEASE
+    // Dist port: see mob_dist_port.h. MOB_DIST_PORT (SIMCTL_CHILD_ prefix on a
+    // simulator) pins it; otherwise a simulator derives a free one per app and
+    // simulator, and a physical device uses 9101. A port that is already taken
+    // is reported here: the BEAM would halt on eaddrinuse, writing only to
+    // beam_stdout.log, and the app would vanish without a word.
+#ifdef MOB_BUNDLE_OTP
+    const int dist_simulator = 0;
+    const uint32_t dist_addr = INADDR_ANY;
+#else
+    const int dist_simulator = 1;
+    const uint32_t dist_addr = INADDR_LOOPBACK;
+#endif
     const char *env_port = getenv("MOB_DIST_PORT");
+    mob_dist_port_choice dist = mob_resolve_dist_port(env_port, dist_simulator, app_module,
+                                                      getenv("SIMULATOR_UDID"), dist_addr);
+    if (env_port && env_port[0] && dist.source != MOB_DIST_PORT_FROM_ENV)
+        NSLog(@"[MobBeam] ignoring invalid MOB_DIST_PORT=\"%s\"", env_port);
+    if (dist.busy) {
+        char msg[640];
+        const char *how = dist.source == MOB_DIST_PORT_FROM_ENV
+                              ? "Relaunch with another MOB_DIST_PORT (on a simulator: "
+                                "SIMCTL_CHILD_MOB_DIST_PORT=<free port>), or stop the holder."
+                              : "Stop the app holding it, or launch with "
+                                "MOB_DIST_PORT=<free port>.";
+        if (dist.source == MOB_DIST_PORT_FROM_APP_UDID) {
+            snprintf(msg, sizeof(msg),
+                     "Distribution can't start: no free port in %d-%d (eaddrinuse). "
+                     "epmd -names lists the nodes holding them. %s",
+                     MOB_DIST_PORT_BASE, MOB_DIST_PORT_BASE + MOB_DIST_PORT_SPAN - 1, how);
+        } else {
+            snprintf(msg, sizeof(msg),
+                     "Distribution can't start: port %d (%s) is already in use "
+                     "(eaddrinuse). Find the holder with: lsof -nP -iTCP:%d -sTCP:LISTEN, "
+                     "or epmd -names. %s",
+                     dist.port, dist.source == MOB_DIST_PORT_FROM_ENV ? "MOB_DIST_PORT" : "default",
+                     dist.port, how);
+        }
+        mob_write_diag(docs_dir, "mob_diag_dist_port.txt", msg);
+        mob_set_startup_error(msg); // logs "[MobBeam] ERROR: …" and stalls the screen
+        return;
+    }
     static char dist_port_min[16], dist_port_max[16];
-    snprintf(dist_port_min, sizeof(dist_port_min), "%s", env_port ? env_port : "9101");
-    snprintf(dist_port_max, sizeof(dist_port_max), "%s", env_port ? env_port : "9101");
+    snprintf(dist_port_min, sizeof(dist_port_min), "%d", dist.port);
+    snprintf(dist_port_max, sizeof(dist_port_max), "%d", dist.port_max);
+    if (dist.source == MOB_DIST_PORT_FROM_APP_UDID) {
+        NSLog(@"[MobBeam] dist port %d (derived from app and simulator UDID, base %d)", dist.port,
+              dist.base);
+    } else {
+        NSLog(@"[MobBeam] dist port %d (%s)", dist.port,
+              dist.source == MOB_DIST_PORT_FROM_ENV ? "MOB_DIST_PORT" : "default");
+    }
+#endif
 
     // Determine node hostname:
     //   MOB_BUNDLE_OTP = physical device build (OTP bundled in .app).
@@ -457,8 +505,6 @@ void mob_start_beam(const char *app_module) {
     // the env var lets app code probe for release mode without parsing
     // erl args).
     setenv("MOB_RELEASE", "1", 1);
-    (void)dist_port_min;
-    (void)dist_port_max;
     (void)node_name;
 #endif
     args[ac++] = "-noshell";

@@ -571,15 +571,21 @@ adb forward tcp:<port> tcp:<port>   # dist:  Mac → device, same port both ends
 
 ### Port assignment (handled by mob_dev)
 
-Each device's dist port is derived from its Android serial or iOS UDID
-(`MobDev.Tunnel.serial_base_port/1`, a crc32 hash into `9100..9899`), not a per-run
-index. A given device gets the same port across runs and projects, and
-`Tunnel.assign_dist_port/2` bumps past any port a live node or forward already holds.
+Each app's dist port on a device is derived from the Android serial or iOS UDID and
+the app name (`MobDev.Tunnel.base_port/2`, crc32 of `"<app>@<serial>"` into
+`9100..9899`), not a per-run index. A given app on a given device gets the same port
+across runs, and `Tunnel.assign_dist_port/3` bumps past any port a live node or another
+device's forward already holds.
 The device-side BEAM listens on that same port, so the forward is 1:1 and the port
 EPMD advertises matches it.
 
 iOS dist port is passed via `SIMCTL_CHILD_MOB_DIST_PORT` env var; `mob_beam.m` reads
-`MOB_DIST_PORT` at startup. Android dist port is passed as the `mob_dist_port` intent
+`MOB_DIST_PORT` at startup. A simulator launch without it (icon tap, `xcrun simctl
+launch`) derives the port the way `Tunnel.base_port/2` does from the app and
+`SIMULATOR_UDID`, then takes the first free one in the window (`ios/mob_dist_port.h`);
+a physical device uses 9101. A port that won't bind is shown on the startup error
+screen and logged as `[MobBeam] ERROR: Distribution can't start: …`, not handed to
+the BEAM. Android dist port is passed as the `mob_dist_port` intent
 extra (set by `MobDev.Discovery.Android.restart_app/4`); the generated app's
 `MainActivity.kt` reads it (`intent.extras.getInt("mob_dist_port")`) and exports it as
 the `MOB_DIST_PORT` env var, which `mob_beam` consumes at startup. Override with

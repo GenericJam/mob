@@ -74,14 +74,18 @@ jobs:
         run: |
           xcrun clang-format --dry-run -Werror \
             ios/mob_nif.m \
+            ios/mob_beam.m \
+            ios/mob_dist_port.h \
+            test/native/dist_port_test.c \
             android/jni/mob_beam.h
 
-      - name: Native harness (frame registry — MOB-102/MOB-103)
-        # The only automated guard on the element-frame registry's ownership,
-        # generation-gating and purge rules. It reproduces the algorithm rather
-        # than linking ios/mob_nif.m (which needs UIKit + the swiftc-generated
-        # header), so it can drift — running it in CI is what keeps the copy
-        # honest. Same toolchain the clang-format step above already uses.
+      - name: Native harness (frame registry MOB-102/MOB-103, dist port MOB-139)
+        # The frame-registry check is the only automated guard on the
+        # element-frame registry's ownership, generation-gating and purge rules.
+        # It reproduces the algorithm rather than linking ios/mob_nif.m (which
+        # needs UIKit + the swiftc-generated header), so it can drift — running
+        # it in CI is what keeps the copy honest. The dist-port check compiles
+        # ios/mob_dist_port.h itself. Same toolchain as the clang-format step.
         run: make -C test/native run
 
       - name: Install swiftlint
