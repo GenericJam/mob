@@ -136,40 +136,46 @@ defmodule Mob.Screen.Server do
   # become the exit reason the router logs, the exit the caller of a
   # `GenServer.call` receives, and OTP's crash report. A `FunctionClauseError`
   # frame holds the socket and a `KeyError` embeds the map it searched, so the
-  # crash is redacted here, before any of them sees it.
+  # crash is redacted here, before any of them sees it, and so is a returned
+  # `{:stop, reason, ...}`. `terminate/2` scrubs the mailbox and dictionary,
+  # which proc_lib's crash report reads directly.
   @impl GenServer
   def init(opts) do
-    do_init(opts)
+    opts |> do_init() |> Mob.CrashReport.result()
   catch
-    kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
+    kind, reason -> Mob.CrashReport.reraise_init(kind, reason, __STACKTRACE__)
   end
 
   @impl GenServer
   def handle_call(request, from, state) do
-    do_handle_call(request, from, state)
+    request |> do_handle_call(from, state) |> Mob.CrashReport.result()
   catch
     kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
   end
 
   @impl GenServer
   def handle_cast(request, state) do
-    do_handle_cast(request, state)
+    request |> do_handle_cast(state) |> Mob.CrashReport.result()
   catch
     kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
   end
 
   @impl GenServer
   def handle_info(message, state) do
-    do_handle_info(message, state)
+    message |> do_handle_info(state) |> Mob.CrashReport.result()
   catch
     kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
   end
 
+  # The reason is redacted on the way in too: a stop from outside (the
+  # owner's EXIT, `GenServer.stop/3`) never passed through a callback here.
   @impl GenServer
   def terminate(reason, state) do
-    do_terminate(reason, state)
+    reason |> Mob.CrashReport.reason() |> do_terminate(state)
   catch
     kind, crash -> Mob.CrashReport.reraise(kind, crash, __STACKTRACE__)
+  after
+    Mob.CrashReport.scrub_process()
   end
 
   # MOB-310. OTP's crash report and `:sys.get_status/1` print the state, the

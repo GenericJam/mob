@@ -42,11 +42,31 @@ reason is reduced by `Mob.CrashReport.reason/1`; a throw is re-thrown as is,
 because gen_server treats a thrown value as the callback's return value. The
 receipt is recorded inside, from the raw exception, before this runs.
 
+A **returned** stop reason is an exit reason too: the wrappers pass each
+callback's result through `Mob.CrashReport.result/1`, which reduces the reason
+in `{:stop, reason}` (init), `{:stop, reason, state}` and
+`{:stop, reason, reply, state}`, and in a thrown one. `terminate/2` reduces
+the reason it is given before the app's `terminate/2` sees it, which covers
+stops that never passed through a callback here (the owner's EXIT,
+`GenServer.stop/3`). A component stops with its screen's `:DOWN` reason, so
+this is what keeps a screen's raw reason out of its components' exits.
+
 `format_status/1` on both servers redacts the state (assigns keep their keys),
-the last message, the queue, and the `:sys` debug log, for the crash report and
-for `:sys.get_status/1`. The router's log lines go through
+the last message, the queue, and the formatted `:sys` debug log, for
+gen_server's crash report. The router's log lines go through
 `Mob.CrashReport.format/1`, which is idempotent, so a reason that did not come
 through the wrapper (a screen killed from outside) is still reduced.
+
+**proc_lib's crash report is a second channel** that `format_status/1` never
+sees: it reads the dying process's mailbox and dictionary directly. Elixir
+drops it unless the app sets `handle_sasl_reports: true`, but an app may. So
+the process is scrubbed by construction rather than by a logger filter (a
+global filter would be an app-wide policy mob installs out of band):
+`terminate/2` empties the mailbox and erases every dictionary key not starting
+with `$` after the app's `terminate/2` has run, and `init/1` does the same
+before it fails. Messages still queued then die with the process anyway. This
+narrows the mailbox channel rather than closing it: a message that lands in
+the instant between the scrub and proc_lib's read is still printed.
 
 **Messages are dropped, default-deny**, by `Mob.Agent.Receipt.summarize_error/3`
 itself, which builds the redacted exception: exception messages are where app
@@ -67,6 +87,13 @@ side: the wrapper redacts `reason`, but the request (an event's params) stays
 raw. Today the only caller of a screen's `{:event, ...}` call,
 `Mob.Router.safe_call/1`, discards the exit; a new caller that logs or crashes
 on it would print the params.
+
+`:sys.get_status/1` returns the process dictionary and the raw `:sys` debug
+ring (when someone turned on `:sys.log/2` or `:sys.trace/2`) beside the
+formatted part; only the formatted part is redacted. That is a live
+introspection call by someone with node access, who can as easily call
+`:sys.get_state/1` or `Mob.Screen.get_socket/1` and read every assign, so it
+is not treated as a log.
 
 ## Alternatives rejected
 

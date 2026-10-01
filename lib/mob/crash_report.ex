@@ -19,6 +19,8 @@ defmodule Mob.CrashReport do
   # exit reason: `format_status/1` cannot, because gen_server appends the raw
   # stacktrace to the reason after calling it.
 
+  import Kernel, except: [reraise: 3]
+
   defmodule Redacted do
     @moduledoc false
     # Stands in for the raised exception so log formatters still print a
@@ -36,17 +38,73 @@ defmodule Mob.CrashReport do
 
   @doc """
   Re-raises a callback's crash with the reason reduced by `reason/1` and the
-  stacktrace's arguments replaced by their arity. A throw is re-thrown as it
-  is: gen_server treats a thrown value from a callback as its return value.
+  stacktrace's arguments replaced by their arity. gen_server treats a thrown
+  value as the callback's return value, so a throw is re-thrown with only a
+  stop reason in it reduced, by `result/1`.
   """
   @spec reraise(:error | :exit | :throw, term(), Exception.stacktrace()) :: no_return()
-  def reraise(:throw, value, stacktrace), do: :erlang.raise(:throw, value, stacktrace)
+  def reraise(:throw, value, stacktrace), do: :erlang.raise(:throw, result(value), stacktrace)
 
   def reraise(:error, error, stacktrace),
     do: :erlang.raise(:error, redact_exception(error, stacktrace), strip(stacktrace))
 
   def reraise(:exit, reason, stacktrace),
     do: :erlang.raise(:exit, reason(reason), strip(stacktrace))
+
+  @doc """
+  `reraise/3` for `init/1`, where a crash ends the process without a
+  `terminate/2`, so the process is scrubbed first (see `scrub_process/0`).
+  """
+  @spec reraise_init(:error | :exit | :throw, term(), Exception.stacktrace()) :: no_return()
+  def reraise_init(kind, reason, stacktrace) do
+    if kind != :throw, do: scrub_process()
+    reraise(kind, reason, stacktrace)
+  end
+
+  @doc """
+  A callback's return value with its stop reason reduced by `reason/1`. A
+  returned stop reason becomes the exit reason, what `terminate/2` and every
+  monitor receive, as much as a raised one does. `init/1`'s `{:stop, reason}`
+  ends the process without a `terminate/2`, so it scrubs the process too.
+  """
+  @spec result(term()) :: term()
+  def result({:stop, reason}) do
+    scrub_process()
+    {:stop, reason(reason)}
+  end
+
+  def result({:stop, reason, state}), do: {:stop, reason(reason), state}
+  def result({:stop, reason, reply, state}), do: {:stop, reason(reason), reply, state}
+  def result(other), do: other
+
+  @doc """
+  Empties the mailbox and erases the process dictionary, except the `$`-keys
+  OTP and Elixir keep there, of a process that is about to exit.
+
+  proc_lib's crash report reads both straight from the dying process, without
+  `format_status/1`: a queued `{:change, tag, value}` or anything the app put
+  in the dictionary would otherwise be printed once SASL reports are on
+  (`handle_sasl_reports: true`). Messages still queued at this point are lost
+  with the process either way.
+  """
+  @spec scrub_process() :: :ok
+  def scrub_process do
+    flush()
+
+    for {key, _value} <- Process.get(), not reserved_key?(key), do: Process.delete(key)
+    :ok
+  end
+
+  defp flush do
+    receive do
+      _message -> flush()
+    after
+      0 -> :ok
+    end
+  end
+
+  defp reserved_key?(key) when is_atom(key), do: String.starts_with?(Atom.to_string(key), "$")
+  defp reserved_key?(_key), do: false
 
   @doc """
   An exit reason as it may be logged: exceptions and raw Erlang errors become

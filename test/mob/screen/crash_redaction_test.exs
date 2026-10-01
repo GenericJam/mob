@@ -20,6 +20,9 @@ defmodule Mob.Screen.CrashRedactionTest do
     def mount(%{"fail_mount" => true} = params, _session, _socket),
       do: Map.fetch!(params, :no_such_key)
 
+    # A refusal whose reason carries the params, as {:error, reason}.
+    def mount(%{"refuse" => true} = params, _session, _socket), do: {:error, {:refused, params}}
+
     def mount(params, _session, socket),
       do: {:ok, Mob.Socket.assign(socket, %{password: @secret, params: params})}
 
@@ -48,6 +51,15 @@ defmodule Mob.Screen.CrashRedactionTest do
 
     # A typed value arrives as the message itself: OTP's "last message".
     def handle_info({:change, :name, _value}, _socket), do: raise(ArgumentError, "bad change")
+
+    # Crashes with a typed value still queued and a secret in the dictionary,
+    # both of which proc_lib's crash report reads straight from the process.
+    def handle_info(:crash_with_queue, _socket) do
+      send(self(), {:change, :name, @secret})
+      Process.put(:mob310_token, @secret)
+      raise ArgumentError, "queued"
+    end
+
     def handle_info(_message, socket), do: {:noreply, socket}
   end
 
@@ -81,7 +93,16 @@ defmodule Mob.Screen.CrashRedactionTest do
 
     @secret "s3cr3t-MOB310"
 
-    def mount(_props, socket), do: {:ok, Mob.Socket.assign(socket, :password, @secret)}
+    def mount(props, socket) do
+      socket = Mob.Socket.assign(socket, :password, @secret)
+      {:ok, Mob.Socket.assign(socket, :observer, Map.get(props, :observer))}
+    end
+
+    def terminate(reason, socket) do
+      if observer = socket.assigns.observer, do: send(observer, {:component_terminate, reason})
+      :ok
+    end
+
     def render(_assigns), do: %{}
     def handle_event("noop", _payload, socket), do: {:noreply, socket}
   end
@@ -230,6 +251,47 @@ defmodule Mob.Screen.CrashRedactionTest do
     assert_redacted(logs, ["failed to start", "KeyError", "Screen.mount/3"])
   end
 
+  test "a root screen that refuses to mount returns a reason without its params",
+       %{router: router} do
+    Mob.Test.ProcessHelpers.stop_root(router)
+    Process.flag(:trap_exit, true)
+
+    logs =
+      all_logs(nil, fn ->
+        assert {:error, reason} =
+                 Mob.Router.start_root(Screen, %{"refuse" => true, "token" => @secret}, nif: Nif)
+
+        assert reason == {:refused, :redacted}
+      end)
+
+    assert_redacted(logs, ["failed to start", "{:refused, :redacted}"])
+  end
+
+  # proc_lib's crash report (SASL; off unless the app sets
+  # `handle_sasl_reports: true`) reads the dying process's mailbox and
+  # dictionary directly, so format_status/1 never sees them.
+  test "with SASL reports on, a queued value and the dictionary stay out", %{router: router} do
+    %{filters: filters} = :logger.get_primary_config()
+    {:logger_translator, {translate, config}} = List.keyfind(filters, :logger_translator, 0)
+
+    sasl =
+      List.keyreplace(
+        filters,
+        :logger_translator,
+        0,
+        {:logger_translator, {translate, %{config | sasl: true}}}
+      )
+
+    :ok = :logger.set_primary_config(:filters, sasl)
+    on_exit(fn -> :logger.set_primary_config(:filters, filters) end)
+
+    logs = crash(router, fn screen -> send(screen, :crash_with_queue) end)
+
+    # The proc_lib report did arrive; otherwise this proves nothing.
+    assert logs =~ "Initial Call: Mob.Screen.Server.init/1", logs
+    assert_redacted(logs, ["ArgumentError"])
+  end
+
   test ":sys.get_status/1 keeps the assigns' keys and drops their values", %{router: router} do
     status = inspect(:sys.get_status(screen_pid(router)), limit: :infinity)
 
@@ -238,7 +300,7 @@ defmodule Mob.Screen.CrashRedactionTest do
   end
 
   describe "a component process" do
-    defp start_component(screen_pid) do
+    defp start_component(screen_pid, props \\ %{}) do
       {:ok, _} = Mob.Test.ProcessHelpers.ensure_component_registry()
 
       {:ok, pid} =
@@ -246,7 +308,7 @@ defmodule Mob.Screen.CrashRedactionTest do
           module: Component,
           id: :secret_box,
           screen_pid: screen_pid,
-          props: %{},
+          props: props,
           platform: :no_render
         )
 
@@ -271,17 +333,20 @@ defmodule Mob.Screen.CrashRedactionTest do
     # before it sees the :DOWN, so this stands in a screen that dies with a raw
     # reason (killed from outside, or running code from before MOB-310): the
     # component stops with that reason and OTP reports it.
-    test "stopped by its screen's exit keeps that reason out of its report", %{router: router} do
+    test "stopped by its screen's exit keeps that reason out of its report and its exit",
+         %{router: router} do
       screen = spawn(fn -> receive do: (reason -> exit(reason)) end)
-      component = start_component(screen)
+      component = start_component(screen, %{observer: self()})
       ref = Process.monitor(component)
 
       logs =
         all_logs(router, fn ->
           send(screen, {:crashed, %{password: @secret}})
-          assert_receive {:DOWN, ^ref, :process, ^component, _reason}, 2_000
+          assert_receive {:DOWN, ^ref, :process, ^component, reason}, 2_000
+          assert reason == {:crashed, :redacted}
         end)
 
+      assert_receive {:component_terminate, {:crashed, :redacted}}
       assert_redacted(logs, ["{:crashed, :redacted}", "Last message: {:DOWN"])
     end
   end

@@ -40,41 +40,45 @@ defmodule Mob.ComponentServer do
   # ── GenServer ──────────────────────────────────────────────────────────────
 
   # MOB-310. Same as `Mob.Screen.Server`: every callback runs app code, so a
-  # crash is redacted before it becomes this process's exit reason, and the
-  # state and last message are redacted for OTP's crash report.
+  # crash or a returned stop reason is redacted before it becomes this
+  # process's exit reason, terminate/2 scrubs what proc_lib's crash report
+  # reads, and the state and last message are redacted for OTP's crash report.
+  # A component stops with its screen's exit reason, so that is redacted too.
   @impl GenServer
   def init(opts) do
-    do_init(opts)
+    opts |> do_init() |> Mob.CrashReport.result()
   catch
-    kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
+    kind, reason -> Mob.CrashReport.reraise_init(kind, reason, __STACKTRACE__)
   end
 
   @impl GenServer
   def handle_call(request, from, state) do
-    do_handle_call(request, from, state)
+    request |> do_handle_call(from, state) |> Mob.CrashReport.result()
   catch
     kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
   end
 
   @impl GenServer
   def handle_cast(request, state) do
-    do_handle_cast(request, state)
+    request |> do_handle_cast(state) |> Mob.CrashReport.result()
   catch
     kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
   end
 
   @impl GenServer
   def handle_info(message, state) do
-    do_handle_info(message, state)
+    message |> do_handle_info(state) |> Mob.CrashReport.result()
   catch
     kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
   end
 
   @impl GenServer
   def terminate(reason, state) do
-    do_terminate(reason, state)
+    reason |> Mob.CrashReport.reason() |> do_terminate(state)
   catch
     kind, crash -> Mob.CrashReport.reraise(kind, crash, __STACKTRACE__)
+  after
+    Mob.CrashReport.scrub_process()
   end
 
   @impl GenServer
