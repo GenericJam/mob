@@ -7,33 +7,52 @@ autolinks those contributions into the host app's build.
 
 This doc covers:
 
-- The five plugin tiers and what each one ships
+- The two kinds of plugin, and the tiers the tooling still uses
 - The manifest schema, annotated with concrete examples
 - Install + activation flow
 - Validation + compatibility rules
 
-For the surrounding ecosystem questions (why Hex, why a manifest,
-plugin authoring via `mix mob.new_plugin`), see `RELEASE.md` and the
-relevant guides.
+For writing, signing, testing and publishing a plugin step by step, see
+the [Writing a Plugin guide](guides/plugins.md); for signing and trust,
+[`MOB_PLUGIN_SECURITY.md`](MOB_PLUGIN_SECURITY.md).
 
-## Plugin tiers
+## Plugin kinds and tiers
 
 Plugins range from "10 lines of helper code" to "embedded chat app."
 The manifest scales — small plugins use 3 fields, big plugins use a
 dozen. Every section below the required header is optional; you only
 write what you need.
 
-| Tier | Example | What it ships | Hot-pushable? |
+What matters most is which of two kinds a plugin is:
+
+- **BEAM-only** — Elixir code only: helpers, screens, `expand:`
+  composites, lifecycle and router hooks, supervised workers or the
+  plugin's own OTP application, settings, notification handlers,
+  migrations. It reaches a device with a plain `mix mob.deploy` and
+  hot-pushes. `mob_deliver` is the reference.
+- **Native** — anything the native build has to integrate: `nifs`,
+  native `ui_components`, `android` / `ios` sections (bridges, Gradle
+  deps, frameworks, plist keys), `permissions`, `host_requirements`. It
+  needs `mix mob.deploy --native`; only its Elixir half hot-pushes.
+  `mob_nfc`, `mob_camera` and `mob_wake` are examples.
+
+The sections below are organised by **tier**, which `mix mob.new_plugin
+--tier N` uses to pick a template and `mix mob.plugins` prints (the
+highest section present). A tier says what a plugin ships, not what it
+costs; `mix mob.plugins`' `HOT-PUSH` column (computed from the native
+sections above) says that.
+
+| Tier | Example | What it ships | Kind |
 |--|--|--|--|
-| 0 | `mob_color_palette` | Pure Elixir module, no native, no manifest | Yes (regular Hex pkg) |
-| 1 | `mob_haptic_extras` | NIF + Elixir wrapper | No (native rebuild) |
-| 2 | `mob_signature_pad` | + new `<SignaturePad>` component | No |
-| 3 | `mob_in_app_purchase` | + `Mob.Screen` modules, migrations, assets | No |
-| 4 | `mob_chat_kit` | + lifecycle hooks, settings, notification handlers | No |
+| 0 | `mob_color_palette` | Pure Elixir module, no manifest | BEAM-only |
+| 1 | `mob_haptic_extras` | NIF + Elixir wrapper | Native |
+| 2 | `mob_signature_pad` | + new `<SignaturePad>` component | Native (BEAM-only for an `expand:` composite) |
+| 3 | `mob_in_app_purchase` | + `Mob.Screen` modules, migrations, assets | BEAM-only unless it also has native sections (fonts and images are copied by the native build) |
+| 4 | `mob_chat_kit` | + lifecycle hooks, settings, notification handlers | BEAM-only unless it also has native sections |
 
 A tier-0 plugin doesn't need this spec at all — it's just a Hex
-package depending on `:mob`. The manifest matters from tier 1
-upward.
+package depending on `:mob`. Every plugin with a manifest must be
+signed (see `MOB_PLUGIN_SECURITY.md`).
 
 ## Minimum viable manifest (tier 1)
 
@@ -845,17 +864,15 @@ before deprecating the old spec.
 
 ## Hot-push compatibility
 
-| Plugin tier | Hot-pushable? | Why |
-|--|--|--|
-| 0 (regular Hex pkg) | Yes | Pure Elixir; `.beam` ships via `mix mob.push` |
-| 1 (NIFs) | No | Native code requires APK/IPA rebuild |
-| 2 (visual component) | No | Same |
-| 3 (multi-screen) | Partial — Elixir code in screens IS hot-pushable; native code IS NOT |
-| 4 (sub-app) | Partial — same |
+Hot-pushability follows the plugin's kind, not its tier.
+`MobDev.Plugin.Manifest.hot_pushable/1` computes it from the populated
+sections, and `mix mob.plugins` prints it:
 
-The manifest validator computes `hot_pushable` automatically from
-which sections are populated. Plugin docs should make this explicit
-so users understand why some changes need a rebuild.
+| Plugin has | Hot-pushable? | Why |
+|--|--|--|
+| No native sections (BEAM-only, any tier) | Yes | Pure Elixir; `.beam` ships via `mix mob.push` / `mix mob.deploy` |
+| Only native sections (`nifs`, native `ui_components`, `android`, `ios`, `permissions`) | No | Native code requires an APK/IPA rebuild |
+| Native sections plus `screens`, `lifecycle` or `migrations` | Partial | The Elixir half hot-pushes; the native half needs a rebuild |
 
 ## Why this design
 

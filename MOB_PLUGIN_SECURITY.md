@@ -15,8 +15,13 @@ The model has three layers:
 3. **What's left to the ecosystem** (a curated allowlist, a concerns
    feed, community vetting).
 
-This is design-stage. Implementation tasks track in
-`plugin_extraction_plan.md` Phase 2.
+Parts of this doc are still design. What ships today (mob_dev 0.7.6):
+manifest signing with v2 envelopes, the trust store
+(`mix mob.plugin.trust`), the build-time signature gate, and the
+`config :mob, :acknowledge_unsafe_plugins` escape hatch for unsigned
+plugins (see [Manifest signing](#manifest-signing)). The security modes
+and per-plugin exemptions under "Development mode" are not implemented.
+Implementation tasks track in `plugin_extraction_plan.md` Phase 2.
 
 ## Threat model — what we're defending against
 
@@ -102,34 +107,55 @@ to link (preferred) or is flagged by `mix mob.audit_plugins`.
 
 ### Manifest signing
 
-Each plugin manifest should be cryptographically signed by the
-plugin's author. Mob_dev verifies the signature before activating.
+Every plugin with a manifest is signed by its author with an Ed25519 key,
+and mob_dev refuses to build a host whose activated plugin has a missing,
+invalid or untrusted signature. The keys and tasks:
 
-The signed envelope covers:
+- `mix mob.plugin.keygen` writes the private key to
+  `~/.mob/keys/<name>.priv` (mode 0600) and the public key to the plugin's
+  `priv/mob_plugin.pub`, which is committed and shipped.
+- `mix mob.plugin.sign` writes `priv/mob_plugin.sig`.
+- `mix mob.plugin.trust <name>`, run in the host, shows the plugin's
+  fingerprint and declared capabilities (frameworks, permissions, Gradle
+  dependencies, plist keys), asks `y/N`, and records the fingerprint in
+  `config :mob, :trusted_plugins` in `mob.exs`. Later releases signed by the
+  same key pass; a *different key signing the same plugin name* is refused
+  as a key rotation until the user trusts it again.
 
-- The manifest's contents (sha256 of the canonical encoding)
-- A hash of every file path the manifest references (Swift, Kotlin,
-  C, Zig, plist keys, gradle deps)
-- The plugin's `name`, `version`, `mob_version`
+**What the signature covers (v2 envelope).** The envelope lists
+`{path, sha256}` for every file the host's native build reads from the
+plugin, and the signature covers that list. The set comes from one function
+the build also uses (`MobDev.Plugin.Sign.build_inputs/2`): the manifest
+itself, NIF sources and every file in their directories (C, Objective-C, Zig,
+headers, `cpp_archive` sources), `jni_source`, Swift and Kotlin files,
+resource files, migrations, fonts and images. The verifier rehashes every
+listed file and checks the signature **before** it evaluates
+`priv/mob_plugin.exs`, so a tampered manifest is never run. It then
+recomputes the build inputs and refuses a signature that leaves any out
+(MOB-297, mob_dev 0.7.3). Elixir code under `lib/` is not a build input;
+Hex's package checksum and `mix.lock` pin it. Rationale:
+mob_dev `decisions/2026-09-30-plugin-signature-coverage.md`.
 
-A plugin's signature is bound to a public key the author registers
-once with the mob project. First-install workflow:
+**Legacy v1 envelopes are refused.** A v1 signature covered the
+*evaluated* manifest map, so checking it meant running the manifest first.
+From mob_dev 0.7.6 every v1 envelope fails with
+`plugin :<name> ships a legacy v1 signature` (MOB-301); the earlier
+transition window for Hex-pinned first-party plugins is gone. Hosts move to a
+v2-signed release with `mix deps.update <name>`; authors re-sign with
+`mix mob.plugin.sign` and publish a new version.
 
-```bash
-mix mob.trust_plugin mob_bluetooth
-```
-
-…prompts the user with the plugin's public-key fingerprint, the
-maintainer's mob.dev profile URL (if any), and the manifest's
-declared capabilities. User says yes / no. The fingerprint is
-recorded in `mob.exs` so subsequent versions of the same plugin are
-silently trusted — but a *different key signing the same plugin name*
-is flagged as a key rotation event requiring re-confirmation.
+**Releases sign in CI.** `priv/mob_plugin.sig` is gitignored, never
+committed. The release workflow that `mix mob.new_plugin` generates (mob_dev
+0.7.6+, the same pattern as the first-party plugins) reads the private key
+from the `MOB_PLUGIN_SIGN_KEY` repository secret, refuses to publish if the
+secret is empty or doesn't derive the committed `priv/mob_plugin.pub`, signs
+the files it is about to publish, and runs `mix hex.publish`. The published
+signature is therefore always made over exactly what ships. See the
+[Writing a Plugin guide](guides/plugins.md#9-publish-to-hex).
 
 This catches threat 2 (compromised maintainer credentials republishing
-under same name) — the signing key change is visible. It also catches
-threat 4 (capability creep) — the new manifest needs to be re-trusted
-when its declared capability set grows.
+under same name): without the signing key, a republished package fails
+verification, and a new key is a visible key-rotation prompt.
 
 ### Source-hash pinning
 
@@ -187,17 +213,24 @@ mob_demo_xyz       0.1.0   installed   unsigned             audit ✗ blocking
 
 States:
 
-- **unsigned** — plugin has no signature. Allowed for `path:` deps
-  (local dev) but warned for Hex deps. User can choose to trust
-  manually.
-- **signed** — manifest signature verifies. Key fingerprint shown.
+- **unsigned** — plugin has no signature. A native build refuses it,
+  path dependency or not, unless it is listed in
+  `config :mob, :acknowledge_unsafe_plugins` (which prints a banner on every
+  build).
+- **signed** — the v2 signature verifies. Key fingerprint shown.
 - **trusted** — plugin's key has been explicitly trusted via
-  `mix mob.trust_plugin`. Subsequent updates with same key pass
+  `mix mob.plugin.trust`. Subsequent updates with same key pass
   silently.
 - **audit ✓ / ⚠ / ✗** — outcome of `mix mob.audit_plugins`.
   ✗ blocks activation by default.
 
 ## Development mode — author your own without fighting the framework
+
+> **Status: design, not implemented.** `config :mob, :plugin_security` and
+> `config :mob, :unsafe_plugins` don't exist. Today an unsigned plugin you're
+> developing either gets signed locally (`mix mob.plugin.keygen` once, then
+> `mix mob.plugin.sign` after each change to a build input) or is listed in
+> `config :mob, :acknowledge_unsafe_plugins`.
 
 Security that gets in the way of plugin authors is security that
 gets globally disabled. The framework provides explicit modes so
