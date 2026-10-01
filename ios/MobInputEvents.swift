@@ -126,9 +126,10 @@ struct MobContinuousInputModifier: ViewModifier {
 }
 
 extension MobNode {
-    /// `resolvedFont` for UIKit views (the UITextField behind `caret: "end"`
-    /// and `on_compose`), from the same props. A custom family gets its weight
-    /// and italic as font traits, as `Font.custom(...).weight(...)` does.
+    /// `resolvedFont` for the UIKit field (`caret: "end"`, `on_compose`,
+    /// single-line `max_length`), from the same props. A custom font is
+    /// matched by family plus weight trait: a descriptor that keeps the face's
+    /// `.name` would ignore the weight and stay on that face.
     var resolvedUIFont: UIFont {
         let size: CGFloat = textSize > 0 ? textSize : 16.0
         let weight: UIFont.Weight = {
@@ -143,8 +144,11 @@ extension MobNode {
         }()
         let base: UIFont
         if let name = MobNode.resolveFontName(primary: fontFamily), let custom = UIFont(name: name, size: size) {
-            let traits: [UIFontDescriptor.TraitKey: Any] = [.weight: weight]
-            base = UIFont(descriptor: custom.fontDescriptor.addingAttributes([.traits: traits]), size: size)
+            let descriptor = UIFontDescriptor(fontAttributes: [
+                .family: custom.familyName,
+                .traits: [UIFontDescriptor.TraitKey.weight: weight]
+            ])
+            base = UIFont(descriptor: descriptor, size: size)
         } else {
             base = .systemFont(ofSize: size, weight: weight)
         }
@@ -154,18 +158,21 @@ extension MobNode {
         return UIFont(descriptor: descriptor, size: size)
     }
 
-    var uiTextAlignment: NSTextAlignment {
+    /// `textAlignEnum` for UIKit: "right" is the trailing edge, as in SwiftUI
+    /// and Android (`TextAlign.End`), so it flips in a right-to-left layout.
+    func uiTextAlignment(_ direction: UIUserInterfaceLayoutDirection) -> NSTextAlignment {
         switch textAlign {
         case "center": return .center
-        case "right":  return .right
+        case "right":  return direction == .rightToLeft ? .left : .right
         default:       return .natural
         }
     }
 }
 
 // SwiftUI's TextField does not expose UITextInput.markedTextRange or (before
-// iOS 18) the selection. Opt into a UIKit-backed field only when on_compose or
-// `caret: "end"` needs one; ordinary fields keep the SwiftUI implementation.
+// iOS 18) the selection, and cannot reject an edit before it lands. Opt into a
+// UIKit-backed field for on_compose, `caret: "end"` and single-line
+// `max_length`; other fields keep the SwiftUI implementation.
 struct MobComposingTextField: UIViewRepresentable {
     let node: MobNode
     let placeholder: String
@@ -244,23 +251,30 @@ struct MobComposingTextField: UIViewRepresentable {
         field.autocapitalizationType = .sentences
 
         // The same type and colour props the SwiftUI field takes through
-        // modifiers, which do not reach a wrapped UIKit view (MOB-237).
+        // modifiers, which do not reach a wrapped UIKit view (MOB-237). Not
+        // while the IME holds marked text: restyling under a composition can
+        // break it, and the props cannot have changed mid-composition anyway.
+        guard field.markedTextRange == nil else { return }
         // `font` and `textColor` are set before `defaultTextAttributes`, which
         // is read-modify-write so they survive the kerning.
+        let font = node.resolvedUIFont
         let color = node.textColor ?? .label
-        field.font = node.resolvedUIFont
+        if field.font != font { field.font = font }
         field.textColor = node.disabled ? color.withAlphaComponent(color.cgColor.alpha * 0.38) : color
-        field.defaultTextAttributes[.kern] = node.letterSpacing
-        field.textAlignment = node.uiTextAlignment
+        if field.defaultTextAttributes[.kern] as? CGFloat != node.letterSpacing {
+            field.defaultTextAttributes[.kern] = node.letterSpacing
+        }
+        field.textAlignment = node.uiTextAlignment(field.effectiveUserInterfaceLayoutDirection)
         // The caret follows the text unless told otherwise; nil keeps the
         // system accent. See MobTextField.caretColor.
         field.tintColor = node.caretColor ?? node.textColor
         field.isEnabled = !node.disabled
         if let placeholderColor = node.placeholderColor {
-            field.attributedPlaceholder = NSAttributedString(
+            let attributed = NSAttributedString(
                 string: placeholder,
-                attributes: [.foregroundColor: placeholderColor, .font: node.resolvedUIFont]
+                attributes: [.foregroundColor: placeholderColor, .font: font, .kern: node.letterSpacing]
             )
+            if field.attributedPlaceholder != attributed { field.attributedPlaceholder = attributed }
         } else {
             field.placeholder = placeholder
         }
@@ -319,14 +333,19 @@ struct MobComposingTextField: UIViewRepresentable {
         // `caret: "end"`: whatever a tap or drag selects, the insertion point
         // goes back to the end, so a segmented code input never inserts in
         // front of the digits it already has. Marked text is left alone; the
-        // IME owns the selection while composing. The assignment re-enters
-        // here once, then finds the caret already at the end.
+        // IME owns the selection while composing. A whole-text selection is
+        // left alone too, so select-all then delete (and the test harness's
+        // clear_text) still clears the field. The assignment re-enters here
+        // once, then finds the caret already at the end.
         private func pinCaret(in textField: UITextField) {
             guard parent.node.caretAtEnd, textField.markedTextRange == nil else { return }
+            let start = textField.beginningOfDocument
             let end = textField.endOfDocument
-            if let selected = textField.selectedTextRange,
-               selected.isEmpty, textField.compare(selected.start, to: end) == .orderedSame {
-                return
+            if let selected = textField.selectedTextRange {
+                let atEnd = selected.isEmpty && textField.compare(selected.start, to: end) == .orderedSame
+                let wholeText = textField.compare(selected.start, to: start) == .orderedSame
+                    && textField.compare(selected.end, to: end) == .orderedSame
+                if atEnd || wholeText { return }
             }
             textField.selectedTextRange = textField.textRange(from: end, to: end)
         }

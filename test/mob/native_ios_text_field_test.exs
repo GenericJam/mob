@@ -106,6 +106,8 @@ defmodule Mob.NativeIOSTextFieldTest do
     uikit = uikit_field()
     assert uikit =~ "guard parent.node.caretAtEnd, textField.markedTextRange == nil"
     assert uikit =~ "textField.selectedTextRange = textField.textRange(from: end, to: end)"
+    # Select-all survives, so select-all + delete and clear_text still clear.
+    assert uikit =~ "if atEnd || wholeText { return }"
     assert uikit =~ ~r/func textFieldDidChangeSelection.*pinCaret\(in: textField\)/s
     assert uikit =~ ~r/func textFieldDidBeginEditing.*pinCaret\(in: textField\)/s
   end
@@ -114,13 +116,21 @@ defmodule Mob.NativeIOSTextFieldTest do
     uikit = uikit_field()
     assert uikit =~ "field.borderStyle = .none"
     refute uikit =~ ".roundedRect"
-    assert uikit =~ "field.font = node.resolvedUIFont"
+    assert uikit =~ "let font = node.resolvedUIFont"
+    assert uikit =~ "if field.font != font { field.font = font }"
+    # Never restyle under an IME composition.
+    assert uikit =~
+             ~r/guard field\.markedTextRange == nil else \{ return \}\s*let font = node\.resolvedUIFont/
+
     assert uikit =~ "color.withAlphaComponent(color.cgColor.alpha * 0.38)"
     assert uikit =~ "field.defaultTextAttributes[.kern] = node.letterSpacing"
-    assert uikit =~ "field.textAlignment = node.uiTextAlignment"
+
+    assert uikit =~
+             "field.textAlignment = node.uiTextAlignment(field.effectiveUserInterfaceLayoutDirection)"
+
     assert uikit =~ "field.tintColor = node.caretColor ?? node.textColor"
     assert uikit =~ "field.isEnabled = !node.disabled"
-    assert uikit =~ "[.foregroundColor: placeholderColor"
+    assert uikit =~ "[.foregroundColor: placeholderColor, .font: font, .kern: node.letterSpacing]"
     assert uikit =~ "return newLength <= limit || newLength <= current.length"
     # A number pad has no return key; without the accessory Done a pinned
     # OTP or capped numeric field could never be dismissed.
@@ -140,5 +150,15 @@ defmodule Mob.NativeIOSTextFieldTest do
     assert field =~ "private var focused: Bool { isFocused || uikitFocused }"
     assert field =~ ".onChange(of: focused) {"
     assert field =~ "if !focused && text != newValue {"
+  end
+
+  test "UIKit text matches SwiftUI: custom font weight by family, right is trailing" do
+    helpers =
+      NativeSource.region(@input_swift, "extension MobNode {", "struct MobComposingTextField")
+
+    # A descriptor keeping the face's .name ignores the weight trait.
+    assert helpers =~ ".family: custom.familyName"
+    refute helpers =~ "custom.fontDescriptor.addingAttributes"
+    assert helpers =~ ~s|case "right":  return direction == .rightToLeft ? .left : .right|
   end
 end
