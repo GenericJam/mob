@@ -23,10 +23,10 @@ dep and activate it in `mob.exs` (see the [Plugins guide](plugins.md)):
 config :mob, :plugins, [:mob_notify]
 ```
 
-Delivery is unchanged core behavior: `{:notification, notif}` and
-`{:push_token, platform, token}` arrive in your screen's `handle_info/2`.
-The server side is the separate [`mob_push`](https://hexdocs.pm/mob_push)
-package, also unchanged.
+Delivery is core behavior: `{:notification, notif}` and
+`{:push_token, platform, token}` arrive in your screen's `handle_info/2`
+(the shape is below and in `Mob.Notification`). The server side is the
+separate [`mob_push`](https://hexdocs.pm/mob_push) package.
 
 ---
 
@@ -80,16 +80,49 @@ MobNotify.cancel(socket, "reminder_1")
 
 ### Receiving
 
-All app states deliver the same message:
+Every notification arrives as `{:notification, notif}`, where `notif` is a
+`Mob.Notification` map:
 
 ```elixir
-def handle_info({:notification, %{id: id, data: data, source: :local}}, socket) do
-  case data["screen"] do
+%{
+  presentation: :tap,          # or :foreground
+  action: "default",           # nil for :foreground
+  source: :local,              # or :push
+  id: "reminder_1",
+  title: "Time to check in",
+  body: "Open the app to see today's updates",
+  data: %{screen: "reminders"} # atom keys at the top level
+}
+```
+
+`presentation` tells an arrival from a tap:
+
+* `:foreground` — the notification arrived while the app was in the
+  foreground. The OS still shows its banner. Refresh state, don't navigate.
+* `:tap` — the user opened it, whether the app was in the foreground, in the
+  background, or killed. Navigate here.
+
+```elixir
+def handle_info({:notification, %{presentation: :tap, data: data}}, socket) do
+  case data[:screen] do
     "reminders" -> {:noreply, Mob.Socket.push_screen(socket, MyApp.RemindersScreen)}
     _           -> {:noreply, socket}
   end
 end
+
+def handle_info({:notification, %{presentation: :foreground}}, socket) do
+  {:noreply, socket}
+end
 ```
+
+`action` is `"default"` for a tap on the notification itself. An app that
+registers its own iOS notification categories also sees `"dismiss"` and its
+own action identifiers there.
+
+**Which process receives it.** The process that registered through
+`mob_notify` (`MobNotify.register_push/1`; on iOS also `MobNotify.schedule/2`)
+while it is alive, otherwise the screen currently showing. A tap that
+launched the app goes to the root screen once it has mounted, exactly once.
 
 ---
 
@@ -192,13 +225,14 @@ your stored token current.
 
 #### 3. Handle received notifications
 
-All three delivery scenarios deliver the same message to your screen:
+Pushes arrive as the same `Mob.Notification` map as local notifications, with
+`source: :push` (see [Receiving](#receiving)). `data` holds your payload's
+custom keys; on iOS, APNs' own `aps` dictionary is left out (its alert is in
+`title` and `body`).
 
 ```elixir
-def handle_info({:notification, notif}, socket) do
-  # notif has string keys: "title", "body", "data", "source"
-  # notif["source"] is "push" for remote or "local" for scheduled
-  case get_in(notif, ["data", "screen"]) do
+def handle_info({:notification, %{presentation: :tap, data: data}}, socket) do
+  case data[:screen] do
     "chat"    -> {:noreply, Mob.Socket.push_screen(socket, MyApp.ChatScreen)}
     "inbox"   -> {:noreply, Mob.Socket.push_screen(socket, MyApp.InboxScreen)}
     _         -> {:noreply, socket}
@@ -210,11 +244,45 @@ end
 
 | App state | What happens |
 |-----------|-------------|
-| **Foreground** | OS does not show a system notification. `{:notification, notif}` arrives directly. |
-| **Background** (home button pressed) | OS shows the notification in the tray. When tapped, the app foregrounds and `{:notification, notif}` arrives. |
-| **Killed** (fully closed) | OS shows the notification. When tapped, the app launches and `{:notification, notif}` arrives once BEAM has booted. |
+| **Foreground** | iOS shows its banner and `{:notification, %{presentation: :foreground}}` arrives; tapping the banner delivers a second message with `presentation: :tap`. Android: a push reaches mob in the foreground only through an app-owned `MobFirebaseService` (see the upgrade step below); FCM documents that it shows no tray banner for a push it hands to that service. |
+| **Background** (home button pressed) | OS shows the notification. When tapped, the app foregrounds and `{:notification, %{presentation: :tap}}` arrives. |
+| **Killed** (fully closed) | OS shows the notification. When tapped, the app launches and `{:notification, %{presentation: :tap}}` arrives at the root screen once it has mounted. |
 
-You don't need separate code paths — the same `handle_info` clause handles all three.
+Match on `presentation` when an arrival and a tap need different handling.
+
+> **Android pushes.** Mob delivers what reaches the app through its
+> `NotificationReceiver` (local notifications) and `MainActivity` (taps that
+> carry `mob_notification_json`). `mob_push` puts that key in the FCM `data`
+> block of every visible push so that `MainActivity` can rebuild the
+> notification when the user taps it in the tray; FCM documents copying the
+> `data` block into the launch intent's extras for such a tap (not verified on
+> a device for this guide). A push sent without that key (another sender, the
+> Firebase console) carries no mob payload, so its tap reaches the app without
+> a `{:notification, _}`.
+
+#### Upgrading an app with its own `MobFirebaseService`
+
+Apps generated by mob_new 0.1.45–0.4.10 own a `MobFirebaseService` whose
+`onMessageReceived` hands a push that arrives in the foreground to
+`MobBridge.nativeDeliverNotification`. Its JSON has no `presentation`, and a
+missing `presentation` means `:tap`, so a screen that navigates on taps would
+navigate on every push that arrives while the app is open. Mark it as an
+arrival before the call:
+
+```kotlin
+val json = JSONObject(
+    message.data["mob_notification_json"] ?: run {
+        val notif = message.notification ?: return
+        JSONObject().apply {
+            put("title", notif.title ?: "")
+            put("body", notif.body ?: "")
+            put("source", "push")
+            put("data", JSONObject())
+        }.toString()
+    }
+).put("presentation", "foreground").toString()
+MobBridge.nativeDeliverNotification(pid, json)
+```
 
 ### Sending from your server
 

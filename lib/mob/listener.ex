@@ -4,7 +4,7 @@ defmodule Mob.Listener do
 
   Native knows two things and neither of them is a screen: the registered name
   `:mob_screen` (used by `enif_whereis_pid` for the back gesture, alert actions
-  and the launch-notification fallback, on both platforms) and whatever pid was
+  and notification delivery, on both platforms) and whatever pid was
   stored in a tap handle by `register_tap/1`. This module takes over the second.
 
   ## The envelope

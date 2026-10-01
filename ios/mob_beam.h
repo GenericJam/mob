@@ -6,9 +6,15 @@
 
 #include <stdbool.h>
 
-// Call from application:didFinishLaunchingWithOptions: (main thread).
-// No-op in the SwiftUI build; kept for API compatibility.
+// Call from application:didFinishLaunchingWithOptions: (main thread), before it
+// returns. Installs mob's notification-center delegate (unless the app set its
+// own), which iOS requires before launch finishes to hand over the notification
+// tap that launched the app.
 void mob_init_ui(void);
+
+// What mob_init_ui calls for the delegate. Exposed for a host that boots mob
+// without mob_init_ui; same before-launch-finishes requirement.
+void mob_install_notification_delegate(void);
 
 // Call mob_start_beam on a background thread — erl_start never returns.
 // app_module: Erlang module name, e.g. "mob_demo"
@@ -25,10 +31,14 @@ void mob_set_startup_error(const char *error);
 // Convert the raw NSData to a hex string before calling.
 void mob_send_push_token(const char *hex_token);
 
-// Store a notification JSON payload that launched the app from a killed state.
-// Call from application:didFinishLaunchingWithOptions: or scene:willConnectTo:
-// when a remote/local notification is the launch cause. The BEAM will deliver
-// it via handle_info({:notification, ...}) after the root screen is mounted.
+// Hand mob a notification as the Mob.Notification JSON envelope
+// ({"id","title","body","source","presentation","action","data"}; a missing
+// "presentation" means "tap"). Delivered as handle_info({:notification, map})
+// to the screen showing, after the root screen has mounted if the BEAM is not
+// up yet. Not needed for notifications posted through UNUserNotificationCenter:
+// mob's delegate delivers those, including the tap that launched the app, so
+// calling this for that tap as well would deliver it twice. Passing NULL clears
+// any stored, not yet delivered notifications.
 void mob_set_launch_notification_json(const char *json);
 
 // Call from AppDelegate application:openURL:options: (or scene equivalent) when

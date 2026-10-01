@@ -135,6 +135,7 @@ void mob_init_ui(void) {
     // SwiftUI: the UI is driven by MobViewModel (Swift ObservableObject).
     // No UIViewController reference needed here; the hosting controller is
     // created by MobUIFactory in AppDelegate.m.
+    mob_install_notification_delegate();
     NSLog(@"[MobBeam] mob_init_ui: SwiftUI mode ready");
 }
 

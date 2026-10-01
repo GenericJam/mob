@@ -138,6 +138,13 @@ The same reasoning covers `decode_notification_json/1`, which runs in the owner
 because a launch notification comes from native rather than from a screen.
 `:json.decode/1` raises on malformed input.
 
+> **Updated 2026-10-01 (MOB-315/316/178):** the decoder is now
+> `Mob.Notification.decode/1`, which returns an error tuple instead of raising,
+> and the owner decodes every notification, not just the launch one. A payload
+> that does not decode is logged and dropped rather than delivered as an empty
+> `%{source: :local, data: %{}}`. See
+> `2026-10-01-notification-delivery-envelope.md`.
+
 ### Giving up on a screen falls back to a live tab
 
 When a screen cannot be re-mounted and its own stack has nothing beneath it,

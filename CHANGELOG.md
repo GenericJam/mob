@@ -10,6 +10,35 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Changed
+- **Notifications say whether they arrived or were tapped, with the same shape
+  on both platforms** (MOB-315, MOB-316). `{:notification, notif}` now carries
+  `presentation: :foreground | :tap` and `action` (`"default"` for a tap on the
+  notification, `nil` for an arrival) alongside `id`, `title`, `body`, `source`
+  and `data`; see `Mob.Notification`. iOS sent the same message for a banner
+  arriving and for a tap, always with `source: :local` and without title or
+  body. Android sent the raw `{:mob_launch_notification, json}` to the
+  registered screen, which dropped it. Both natives now hand one JSON envelope
+  to the router, which decodes it and forwards it to the process registered
+  through mob_notify, else to the current screen. iOS `data` drops `aps` and
+  keeps nested values, booleans and floats. A payload that does not decode is
+  logged and dropped. Delivery now needs a root screen (`Mob.Screen.start_root`,
+  as every generated app has): on iOS a process registered through mob_notify
+  in an app without one used to get notifications directly. Notifications that
+  come in before the root screen starts are kept, up to 16, and delivered to
+  it in order. See `decisions/2026-10-01-notification-delivery-envelope.md`.
+
+  **Upgrade step for apps with their own `MobFirebaseService`** (mob_new
+  0.1.45–0.4.10 generated one): its `onMessageReceived` hands a foreground push
+  to `MobBridge.nativeDeliverNotification` without `presentation`, and a
+  missing `presentation` means `:tap`, so a screen that navigates on taps
+  would navigate on every push that arrives while the app is open. Add
+  `"presentation": "foreground"` to that JSON before the call (both the
+  `mob_notification_json` string and the object it builds); see the push
+  notifications guide. mob cannot fix this on its side: the taps an older
+  `MainActivity` hands over also lack the field and reach the same entry
+  point, with the same `source`.
+
 ### Fixed
 - **iOS: `:text_field` ignored the theme and the type props** (MOB-237).
   It drew the system `.roundedBorder` field (white, system font) on every
@@ -65,6 +94,26 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   reads directly. `terminate/2`, monitors and `start_root/3`'s
   `{:error, reason}` receive the redacted reason. See
   `decisions/2026-09-30-screen-crashes-are-redacted-at-the-source.md`.
+- **iOS delivers the notification tap that launched the app** (MOB-178).
+  `mob_init_ui()` installs mob's notification-center delegate (unless the app
+  set its own), so it exists before `didFinishLaunching` returns, which is
+  when iOS requires it to hand over the launching tap. Previously mob_notify
+  installed it after the BEAM was up and the tap was lost. Delivered once, to
+  the root screen after it mounts. Existing apps get this with the mob update.
+- **Android delivers a warm notification tap when no screen registered
+  through mob_notify**, from a `MainActivity` that hands every tap to
+  `nativeDeliverNotification` (mob_new's template, from the release with the
+  matching change). It used to be stored for the next cold start and lost.
+  An app-owned `MainActivity` generated earlier calls `setLaunchNotification`
+  from every `onCreate`, and from `onNewIntent` when nothing is registered.
+  That still only stores the tap while the BEAM is not running yet (a cold
+  launch, delivered once at boot) and drops it once it runs, as before. So
+  while the process lives, relaunching from Recents or re-creating the
+  activity, which replay the launching intent, does not repeat the tap; after
+  the system kills the process, a relaunch that restores the task still
+  replays it at boot, as before. Until it ports the new `MainActivity`, such an
+  app also still loses a tap that re-creates a finished activity in a running
+  process, and a warm tap with nothing registered.
 
 ### Security
 - **Development nodes no longer accept the public `mob_secret` cookie**

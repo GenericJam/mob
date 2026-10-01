@@ -319,8 +319,10 @@ MobNotify.schedule(socket,
 # Cancel
 MobNotify.cancel(socket, "reminder_1")
 
-# Receive in handle_info (all app states: foreground, background, relaunched):
-def handle_info({:notification, %{id: id, data: data, source: :local}}, socket) do
+# Receive in handle_info. :foreground = arrived while the app was open,
+# :tap = opened by the user (from foreground, background, or a cold launch).
+# Full shape: Mob.Notification.
+def handle_info({:notification, %{presentation: :tap, id: id, data: data}}, socket) do
   {:noreply, socket}
 end
 ```
@@ -341,9 +343,9 @@ def handle_info({:push_token, platform, token}, socket) do
   {:noreply, socket}
 end
 
-# Receive push notifications (foreground, background tap, or killed → tapped):
-def handle_info({:notification, notif}, socket) do
-  # notif["source"] == "push", notif["data"] contains your custom payload
+# Receive push notifications (foreground arrival, background tap, or killed → tapped):
+def handle_info({:notification, %{source: :push} = notif}, socket) do
+  # notif.presentation is :foreground or :tap; notif.data holds your custom keys
   {:noreply, socket}
 end
 ```

@@ -62,7 +62,9 @@ not be rediscovered by reading the code.
 
 * navigation actions a screen produces (`{:nav_action, …}`)
 * the back gesture, alert actions, and launch notifications, which native
-  addresses to `:mob_screen`
+  addresses to `:mob_screen` (since 2026-10-01, every notification: native
+  hands each one to the router to decode — see
+  `2026-10-01-notification-delivery-envelope.md`)
 * device events and plugin messages sent to `:mob_screen`, forwarded to the
   active screen
 * `Mob.Screen.dispatch/3`, the programmatic entry point used by tests and
