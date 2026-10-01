@@ -20,10 +20,10 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   adding the flag in the template, but pre-existing apps kept a stale
   app-owned `build.zig` and hit a compile error at `mob_nif.zig:4374`
   that said nothing about mob. The three declarations now live in
-  `android/jni/mob_zig.zig` as `pub extern fn` — the `"c"` qualifier is
-  what tripped zig's libc-dependency check for those specific symbol
-  names; a bare `extern fn` in an imported module sidesteps the check
-  and the runtime linkage against Bionic's `libc.so` is unchanged.
+  `android/jni/mob_zig.zig` as bare `pub extern fn` — the `"c"` library
+  annotation is what trips zig's libc-dependency check; a bare `extern fn`
+  names no library, and the runtime linkage against Bionic's `libc.so` is
+  unchanged.
   Existing apps pick the fix up on their next native build, no template
   change or app edit needed. `link_libc = true` in mob_new 0.5.1's
   Android `build.zig.eex` becomes redundant but is not removed — costs

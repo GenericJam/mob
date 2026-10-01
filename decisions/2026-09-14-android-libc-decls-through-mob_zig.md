@@ -16,14 +16,14 @@ extern "c" fn write(...) isize;
 extern "c" fn close(...) c_int;
 ```
 
-Under zig `0.17.0-dev.269+ebff43698`, an `extern "c" fn` declaration whose
-symbol name matches one of a handful of well-known libc entry points fails
-the compilation unit with `dependency on libc must be explicitly specified
-in the build command` unless the object's module is created with
-`.link_libc = true`. `open`, `write`, and `close` are on that list; `fopen`,
-`fread`, `fclose`, `mkdir`, `unlink`, `snprintf`, `read`, etc. — all
-declared in `mob_zig.zig` as `pub extern fn` — are not, or are not detected
-by the same check.
+Under zig `0.17.0-dev.269+ebff43698`, `extern "c"` is a *library* annotation
+(link against library `c`), not a calling-convention qualifier. Sema rejects
+any extern declaration whose library name is libc with `dependency on libc
+must be explicitly specified in the build command` unless the module is
+created with `.link_libc = true` (see `src/Sema.zig` L8444-8465 at
+`ebff43698`). The check is on the library name, not the symbol name: the
+bare `pub extern fn` declarations in `mob_zig.zig` (`fopen`, `read`,
+`snprintf`, `__android_log_print`, ...) carry no library and pass.
 
 MOB-196 fixed this for newly-generated apps by adding `.link_libc = true`
 to `addZigObject` in `mob_new`'s Android `build.zig.eex`. But every app
@@ -36,16 +36,16 @@ flag. Pointing such an app at mob master or mob 0.8.x fails on
 
 Move the three declarations into `android/jni/mob_zig.zig` (aliased as `jni`
 in `mob_nif.zig`) alongside the sibling libc bindings already there —
-`pub extern fn`, no `"c"` calling-convention qualifier. `writeMarker` in
+bare `pub extern fn`, no `"c"` library annotation. `writeMarker` in
 `mob_nif.zig` now calls `jni.open`, `jni.write`, `jni.close` and references
 `jni.O_WRONLY | jni.O_CREAT | jni.O_TRUNC` for the flag constants (also
 lifted into `mob_zig.zig`). The three `posix_open/write/close` inline
 wrappers in `mob_nif.zig` are deleted.
 
-The reason this works is the specific shape of zig 0.17's check: it is
-triggered by `extern "c" fn <libc-name>` in a compilation-unit module that
-was not created with `.link_libc = true`. A bare `extern fn` — the default
-calling convention is C on host-target ABIs anyway — sidesteps it. The
+The reason this works: zig's check fires on the `"c"` library annotation in
+a module not created with `.link_libc = true`. A bare `extern fn` names no
+library — the default calling convention is the target's C ABI either way —
+so it sidesteps the check. The
 object semantics are identical: both forms emit an unresolved external
 symbol whose calling convention is whatever the target's C ABI is, and
 Bionic's `libc.so` provides the definition at APK-load time. The APK's
@@ -62,17 +62,15 @@ narrowest way to unbreak every existing app.
 ## Consequences
 
 - New libc symbols added for use from mob's Zig code go into `mob_zig.zig`
-  as `pub extern fn`, not into a per-caller `extern "c" fn` block. If a
-  variadic C function is genuinely needed (where the `"c"` qualifier
-  matters for calling convention), that is the exception — and it belongs
-  in `mob_zig.zig` too, where the rest of the FFI surface is auditable in
-  one file.
-- `test/mob/android_libc_free_test.exs` guards the invariant by asserting
-  `mob_nif.zig` declares no `extern "c" fn` and that the `writeMarker`
-  path routes through `jni.*`. It is a source-scan test — CI does not run
-  zig — but it catches the specific class of change that would reintroduce
-  the break, and its failure message names the offending lines so an author
-  who trips it sees the tradeoff before an old-style app breaks.
+  as bare `pub extern fn`, never `extern "c" fn` — including variadic
+  functions (`snprintf` and `__android_log_print` are already declared bare
+  with `...`; the `"c"` annotation is not needed for varargs).
+- `test/mob/android_libc_free_test.exs` guards the invariant by running
+  `zig build-obj` on `mob_nif.zig` for `aarch64-linux.24.0-android` with no
+  libc — the same shape as a pre-0.5.1 app's build.zig — so any libc
+  dependency reintroduced anywhere in the module fails it. It is tagged
+  `:zig` and excluded when no `zig` is on PATH (CI has none), so it runs on
+  developer machines that build Android.
 - `link_libc = true` in `mob_new`'s Android `build.zig.eex` (MOB-196) is
   now redundant — new apps do not need it either. Not removed here: it
   costs nothing, and if a future addition genuinely does need libc the
