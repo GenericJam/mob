@@ -355,6 +355,26 @@ These are the things we've burned ourselves on. Following them isn't optional.
     callers use something `init/1` creates. `GenServer.start/3` returning
     `already_started` means the name exists, not that `init/1` finished. See
     `decisions/2026-09-30-diagnostic-stores-share-one-hardened-owner.md`.
+    A write path must read `Mob.Diag.Store.state/1` (that is where an upgrade
+    re-runs setup), and a test that stops a store owner deletes its tables
+    first: an owner that dies holding them hands them to the heir, which
+    starts another owner under your teardown (MOB-302).
+
+18. **Never `:global.trans` for a node-local lock, and never let evidence from
+    a destructive drain live only in memory.** `:global` backs off by sleeping
+    (0.2–2.5 s under contention) and releases on the node name captured at
+    acquire time, so a `Node.start` inside the section (Android `Mob.Dist`,
+    seconds after boot) leaks the lock for good. Serialise through a locally
+    registered process. A drain that advances a marker or empties an OS queue
+    is written to `Mob.PostMortem.Journal` before it is emitted and kept until
+    that specific capsule is observed, never inferred from a sequence range
+    (MOB-303).
+
+19. **Native input never passes through `Mob.Event.dispatch/4`.** Taps,
+    changes and gestures arrive at `Mob.Screen.Server.handle_info/2` as
+    `{event, tag[, payload]}` via `Mob.Listener`. Anything that should observe
+    user actions hooks there through `Mob.Event.NativeInput.kind/1`, and never
+    records the payload: text-field values are user data (MOB-305).
 
 ## Where to look
 

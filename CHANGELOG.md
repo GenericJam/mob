@@ -8,6 +8,73 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- **A dead diagnostic store owner is restarted** (MOB-302). When a store
+  owner died, `Mob.Diag.Heir` kept its tables intact but nothing ever started
+  a new owner: `Mob.Diag.health/0` showed `owner: nil` indefinitely, and if
+  the heir then died every row went with it (seven receipts on a Moto G,
+  counted as a `reset`). The heir now starts one replacement per death, which
+  takes the tables back without waiting for a write; an owner that dies in
+  its own setup is not restarted in a loop. `Mob.Diag.Store` also carries a
+  framework version, so the first write after a `mob` upgrade sets each store
+  up once, reclaiming owners an older `mob` left dead. See
+  `decisions/2026-09-30-heir-restarts-diagnostic-store-owners.md`.
+- **Post-mortems from destructive OS drains survive until someone sees them**
+  (MOB-303). Android's `ApplicationExitInfo` marker advances when an exit is
+  drained and MetricKit hands a payload over once, so a boot killed before
+  anyone attached (`mix mob.connect` restarts the app) lost the crash's exit
+  record for good. `Mob.PostMortem.Journal` writes each drained entry to
+  `mob_post_mortem_journal.etf` in `Mob.data_dir/0` before emitting it, and
+  every sweep emits it again (once per boot) until that capsule was handed to
+  a bus subscriber when emitted, or returned by `Mob.Defect.Bus.recent/1`.
+  Subscribing later or listing `classes/1` does not count. At most 32 entries
+  are kept. BEAM crash dumps are unchanged. See
+  `decisions/2026-09-30-destructive-post-mortem-drains-are-journaled-until-observed.md`.
+- **Remote bus and trace subscribers survive a dropped connection**
+  (MOB-304). `Mob.Diag.Subscribers` pruned a subscriber on any `:DOWN`,
+  including `:noconnection`, so a host shell subscribed over adb (which cannot
+  dial the host back) was silently dropped when the connection blinked. Such a
+  subscriber is now parked: nothing is sent to its node while it is away, and
+  it is republished, filters intact, when the node reconnects. It is dropped
+  if its pid died meanwhile or the node stays away past
+  `:mob, :subscriber_park_ms` (10 minutes). Parked subscribers survive a
+  registry restart. Events emitted while parked are not replayed; read
+  `Mob.Defect.Bus.recent/1`. See
+  `decisions/2026-09-30-remote-subscribers-park-on-disconnect.md`.
+- **Real taps leave receipts and traces** (MOB-305). Native input reaches a
+  screen as `{:tap, tag}` / `{:change, tag, value}` / … through
+  `Mob.Listener` and `handle_info/2`, never through `Mob.Screen.dispatch/3` or
+  `Mob.Event.dispatch/4`, so a tap that changed state produced no
+  `Mob.Agent.Receipts` entry and `Mob.Event.Trace` saw nothing. Discrete
+  native input (tap, list-row select, change, focus, blur, submit, select,
+  dismiss, single-fire gestures) now gets a receipt around `handle_info/2`
+  with the same observed stages as the event path; every native input,
+  including display-rate streams, is traced by canonical address. A receipt
+  names the input and never carries its payload. A `:change` is named by its
+  value's type (`:toggle` for a boolean, `:text_field` for text). See
+  `decisions/2026-09-30-native-input-is-an-action.md`.
+- **Taps that hit a screen being restarted are no longer lost silently**
+  (MOB-306). After a handler crash, native kept routing taps to the dead
+  screen's pid until the replacement's tree committed, and they vanished.
+  They are still not redirected (the UI they aimed at is gone), but each now
+  gets an `:undeliverable` receipt (owner `:event_routing`), is counted in
+  `Mob.Diag.health/0` as `listener.undeliverable`, and is logged once, all
+  without its payload.
+
+### Changed
+- **`Mob.Diag.health/0`** gains `listener` (`process`, `undeliverable`),
+  `subscribers.parked` per topic, and each store's `framework_vsn`.
+- **`Mob.Test.select/3`** now sends the native list-row shape
+  `{:tap, {:list, id, :select, index}}`, so it is receipted like a real row
+  tap. A screen still receives `{:select, id, index}` in `handle_info/2`.
+- **App messages shaped like native input** (for example
+  `send(self(), {:tap, :refresh})`) now get receipts and traces too, the same
+  as `Mob.Test.tap/2`.
+- **`Mob.PostMortem.Android.sweep_with/1` and `Mob.PostMortem.IOS.sweep_with/1`**
+  (`@doc false` test seams) are now `sweep_with/2`, taking the journal path.
+
 ## [0.9.6] - 2026-09-30
 
 ### Added
