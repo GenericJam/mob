@@ -2607,8 +2607,9 @@ export fn nif_share_text(
 // router drains when it starts (nif_take_launch_notification, one per call).
 // A FIFO, not one slot: a foreground arrival during boot must not displace the
 // tap that launched the app. Kotlin enters through mob_deliver_notification
-// (MainActivity, NotificationReceiver); mob_set_launch_notification is the
-// legacy entry of app-owned activities generated before mob_new's change.
+// (MainActivity, and NotificationReceiver for arrivals, in mob_new templates
+// with the matching change) and mob_set_launch_notification (the legacy entry
+// of app-owned activities generated before it).
 
 const stored_notifications_max = 16;
 var g_stored_notifs: [stored_notifications_max]?[*:0]u8 = @splat(null);

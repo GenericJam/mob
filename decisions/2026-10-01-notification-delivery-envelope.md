@@ -97,12 +97,16 @@ deliberately not read, since forwarding both would deliver the tap twice.
 mob_notify's first call still makes mob's delegate the center's delegate,
 replacing an app's own, as it did before.
 
-**Android arrival.** The generated `NotificationReceiver` reports an arrival
-only while `MainActivity` is between `onResume` and `onPause`, which is when
-iOS calls `willPresent`. Both cold and warm taps go through
-`mob_deliver_notification` with `MobNotifyHub.notifyPid`. `onCreate` skips
-re-creation from saved state and relaunch from Recents, which replay the
+**Android arrival.** The `NotificationReceiver` that mob_new generates from
+the release with the matching change (unreleased when this was written; no
+released template does it yet) reports an arrival only while `MainActivity`
+is between `onResume` and `onPause`, which is when iOS calls `willPresent`.
+That template sends both cold and warm taps through
+`mob_deliver_notification` with `MobNotifyHub.notifyPid`, and its `onCreate`
+skips re-creation from saved state and relaunch from Recents, which replay the
 launching intent: with delivery to a running BEAM, they would repeat the tap.
+Until then a generated Android app gets no `:foreground` arrival for a local
+notification.
 
 **Legacy `mob_set_launch_notification` keeps its old meaning.** App-owned
 `MainActivity` code generated before mob_new's change calls it from every
