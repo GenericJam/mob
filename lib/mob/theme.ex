@@ -375,21 +375,18 @@ defmodule Mob.Theme do
   end
 
   # A failed on_load purges mob_nif, so every Theme caller would otherwise
-  # retry the same failing load. The first probe is serialised across callers;
-  # a later successful native code load makes the module visible and re-enables
-  # all native theme calls.
+  # retry the same failing load. Probes are serialised through
+  # `Mob.Theme.NifProbe` (a local process, never `:global` — MOB-311); a later
+  # successful native code load makes the module visible and re-enables all
+  # native theme calls.
   defp probe_nif(fallback, call) do
-    :global.trans(
-      {@nif_status, self()},
-      fn ->
-        case :persistent_term.get(@nif_status, :unknown) do
-          :available -> invoke_nif(fallback, call, false)
-          :unavailable -> recover_nif_without_lock(fallback, call)
-          :unknown -> invoke_nif(fallback, call, true)
-        end
-      end,
-      [node()]
-    )
+    Mob.Theme.NifProbe.run(fn ->
+      case :persistent_term.get(@nif_status, :unknown) do
+        :available -> invoke_nif(fallback, call, false)
+        :unavailable -> recover_nif_without_lock(fallback, call)
+        :unknown -> invoke_nif(fallback, call, true)
+      end
+    end)
   end
 
   defp recover_nif_without_lock(fallback, call) do

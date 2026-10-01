@@ -28,6 +28,13 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   change or app edit needed. `link_libc = true` in mob_new 0.5.1's
   Android `build.zig.eex` becomes redundant but is not removed — costs
   nothing and covers a future addition that does need libc.
+- **The first native theme probe no longer uses a `:global` lock** (MOB-311).
+  `Mob.Theme` serialised its first `mob_nif` probe with `:global.trans/3`,
+  which made concurrent first theme calls sleep through `:global`'s random
+  back-off, and released on the node name captured at acquire time, so
+  `Mob.Dist` starting distribution during a probe leaked the lock and every
+  later probe blocked for as long as the probing process lived. Probes now
+  run one at a time in a locally registered process, `Mob.Theme.NifProbe`.
 
 ## [0.9.7] - 2026-09-30
 
