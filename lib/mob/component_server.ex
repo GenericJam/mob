@@ -76,6 +76,8 @@ defmodule Mob.ComponentServer do
   def terminate(reason, state) do
     reason |> Mob.CrashReport.reason() |> do_terminate(state)
   catch
+    # gen_server ignores what terminate/2 returns or throws.
+    :throw, value -> value
     kind, crash -> Mob.CrashReport.reraise(kind, crash, __STACKTRACE__)
   after
     Mob.CrashReport.scrub_process()

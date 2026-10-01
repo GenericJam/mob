@@ -36,6 +36,10 @@ defmodule Mob.Screen.CrashRedactionTest do
     # stack frame holds the event, the params and the socket.
     def handle_event("noop", _params, socket), do: {:noreply, socket}
 
+    # gen_server takes a thrown value as the callback's return value and exits
+    # with {:bad_return_value, value}, here the socket.
+    def handle_event("throw", _params, socket), do: throw({:gave_up, socket})
+
     def handle_event("crash_task", _params, socket) do
       Task.start_link(fn -> Map.fetch!(socket.assigns, :no_such_key) end)
       {:noreply, socket}
@@ -182,6 +186,17 @@ defmodule Mob.Screen.CrashRedactionTest do
       "Mob.Screen.CrashRedactionTest.Screen.handle_event/3",
       "GenServer"
     ])
+  end
+
+  test "a value thrown from a handler is not the exit reason", %{router: router} do
+    screen = screen_pid(router)
+    ref = Process.monitor(screen)
+    logs = crash(router, fn _ -> Mob.Screen.dispatch(router, "throw", %{}) end)
+
+    # The exit reason reaches monitors, links and proc_lib's crash report.
+    assert_receive {:DOWN, ^ref, :process, ^screen, reason}
+    assert {:bad_return_value, {:gave_up, :redacted}} = reason
+    assert_redacted(logs, ["{:bad_return_value, {:gave_up, :redacted}}"])
   end
 
   test "an exception whose message embeds the assigns is logged without its message",

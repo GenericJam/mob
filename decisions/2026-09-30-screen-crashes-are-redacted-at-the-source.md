@@ -38,14 +38,19 @@ every gen_server callback (`init`, `handle_call`, `handle_cast`, `handle_info`,
 `Mob.CrashReport.reraise/3`: an error becomes `%Mob.CrashReport.Redacted{}`
 naming the exception's module, with a stacktrace whose argument lists are
 replaced by arities and whose locations keep only file and line; an exit
-reason is reduced by `Mob.CrashReport.reason/1`; a throw is re-thrown as is,
-because gen_server treats a thrown value as the callback's return value. The
-receipt is recorded inside, from the raw exception, before this runs.
+reason is reduced by `Mob.CrashReport.reason/1`. gen_server takes a thrown
+value as the callback's return value and exits with
+`{:bad_return_value, value}`; a throw that escapes these callbacks is app code's,
+which never holds the server's state, so it becomes that exit directly with
+the value reduced (`terminate/2` keeps ignoring throws, as gen_server does).
+(An earlier revision of this record said throws were re-thrown as is; that let
+the thrown term, often the socket, become the exit reason raw.) The receipt is
+recorded inside, from the raw exception, before this runs.
 
 A **returned** stop reason is an exit reason too: the wrappers pass each
 callback's result through `Mob.CrashReport.result/1`, which reduces the reason
 in `{:stop, reason}` (init), `{:stop, reason, state}` and
-`{:stop, reason, reply, state}`, and in a thrown one. `terminate/2` reduces
+`{:stop, reason, reply, state}`. `terminate/2` reduces
 the reason it is given before the app's `terminate/2` sees it, which covers
 stops that never passed through a callback here (the owner's EXIT,
 `GenServer.stop/3`). A component stops with its screen's `:DOWN` reason, so

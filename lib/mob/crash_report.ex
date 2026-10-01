@@ -38,12 +38,18 @@ defmodule Mob.CrashReport do
 
   @doc """
   Re-raises a callback's crash with the reason reduced by `reason/1` and the
-  stacktrace's arguments replaced by their arity. gen_server treats a thrown
-  value as the callback's return value, so a throw is re-thrown with only a
-  stop reason in it reduced, by `result/1`.
+  stacktrace's arguments replaced by their arity.
+
+  gen_server treats a value thrown from a callback as its return value, and
+  exits with `{:bad_return_value, value}` when it is not a valid one. A throw
+  that escapes these servers' callbacks comes from app code, which never holds
+  the server's state, so it can only be invalid (or, worse, valid and replace
+  the state); it becomes that exit directly, with the value reduced by
+  `message/1`. `terminate/2` handles throws itself: gen_server ignores them.
   """
   @spec reraise(:error | :exit | :throw, term(), Exception.stacktrace()) :: no_return()
-  def reraise(:throw, value, stacktrace), do: :erlang.raise(:throw, result(value), stacktrace)
+  def reraise(:throw, value, stacktrace),
+    do: :erlang.raise(:exit, {:bad_return_value, message(value)}, strip(stacktrace))
 
   def reraise(:error, error, stacktrace),
     do: :erlang.raise(:error, redact_exception(error, stacktrace), strip(stacktrace))
@@ -57,7 +63,7 @@ defmodule Mob.CrashReport do
   """
   @spec reraise_init(:error | :exit | :throw, term(), Exception.stacktrace()) :: no_return()
   def reraise_init(kind, reason, stacktrace) do
-    if kind != :throw, do: scrub_process()
+    scrub_process()
     reraise(kind, reason, stacktrace)
   end
 
