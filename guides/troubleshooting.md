@@ -169,7 +169,6 @@ In your app's `application.ex`, pass the port when starting distribution:
 ```elixir
 Mob.Dist.ensure_started(
   node:      :"my_app_android@127.0.0.1",
-  cookie:    :mob_secret,
   epmd_port: Application.get_env(:mob_dev, :epmd_port, 4369)
 )
 ```
@@ -327,9 +326,15 @@ builds are safe by default:
 ```elixir
 # lib/my_app/application.ex
 if Application.get_env(:my_app, :env) == :dev do
-  Mob.Dist.ensure_started(node: :"my_app_ios@127.0.0.1", cookie: :mob_secret)
+  Mob.Dist.ensure_started(node: :"my_app_android@127.0.0.1")
 end
 ```
+
+Development nodes are protected by a private per-app cookie that `mob_dev`
+generates and hands to the app at deploy/connect time (Android: a file in the
+app's private storage; iOS: the launch environment). Don't embed a cookie in
+application source; `:mob_secret`, which generated apps used to pass, is public
+and ignored.
 
 **With OTA BEAM updates:** distribution needs to be live, but only during the
 update session. The recommended pattern is on-demand: the app polls your server
@@ -356,8 +361,11 @@ the cookie can be rotated per session via the manifest.
    (often due to the EPMD port conflict above).
 
 3. **Do cookies match?**
-   The cookie in your app's `Mob.Dist.ensure_started/1` call must match the
-   `--cookie` flag passed to `mix mob.connect` (default: `mob_secret`).
+   `mix mob.connect` manages the app's private cookie automatically. An iOS
+   app started from Xcode or the home screen, or an Android app no
+   `mix mob.deploy` / `mix mob.connect` has written a cookie for yet, runs with
+   a random cookie; let `mix mob.connect` restart it. A custom cookie in your
+   app's `Mob.Dist.ensure_started/1` call must be passed as `--cookie`.
 
 4. **iOS: is the simulator booted?**
    ```bash
@@ -439,7 +447,7 @@ by 3 seconds on Android.
 delay:
 
 ```elixir
-Mob.Dist.ensure_started(node: :"my_app_android@127.0.0.1", cookie: :mob_secret, delay: 5000)
+Mob.Dist.ensure_started(node: :"my_app_android@127.0.0.1", delay: 5000)
 ```
 
 ---

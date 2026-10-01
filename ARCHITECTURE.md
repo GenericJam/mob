@@ -35,9 +35,18 @@ and remote inspection go through this channel.
 Node naming convention:
 - Android: `mob_demo_android@127.0.0.1` (USB tunnel via `adb forward`)
 - iOS simulator: `mob_demo_ios@127.0.0.1` (simulator shares Mac network stack)
-- iOS physical / Android wireless: device's LAN IP (future)
+- iOS physical: device's USB, WiFi, or Tailscale IP
+- Android wireless: device's LAN IP (future)
 
-Cookie: `:mob_secret` (dev only, not for production use)
+Cookie: a private 256-bit cookie per app, generated and kept by `mob_dev`
+under `~/.mob/dist_cookies/`. Android reads it from the app's private storage,
+where `mix mob.deploy` / `mix mob.connect` write it; iOS receives it in the
+launch environment. Distribution is excluded from iOS release builds.
+
+Listeners: Android and the iOS simulator bind distribution to loopback only
+(the Mac reaches Android through `adb forward`). A physical iPhone's EPMD and
+dist port still listen on every interface, since the Mac reaches it over
+USB, WiFi or Tailscale; the private cookie is what protects it.
 
 ## Connection lifecycle
 

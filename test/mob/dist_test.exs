@@ -21,6 +21,21 @@ defmodule Mob.DistTest do
     end
   end
 
+  defp non_loopback_ipv4 do
+    {:ok, ifaddrs} = :inet.getifaddrs()
+
+    ifaddrs
+    |> Enum.flat_map(fn {_name, opts} -> Keyword.get_values(opts, :addr) end)
+    |> Enum.find(&match?({a, _, _, _} when a != 127, &1))
+  end
+
+  defp free_port do
+    {:ok, sock} = :gen_tcp.listen(0, [])
+    {:ok, port} = :inet.port(sock)
+    :gen_tcp.close(sock)
+    port
+  end
+
   describe "stop/0" do
     test "returns :ok when distribution is not running" do
       if not Node.alive?() do
@@ -53,6 +68,92 @@ defmodule Mob.DistTest do
       # even when the node list would need to be flushed.
       assert Mob.Dist.stop() == :ok
       assert not Node.alive?()
+    end
+  end
+
+  describe "start_distribution/3" do
+    @kernel_keys [
+      :start_epmd,
+      :inet_dist_listen_min,
+      :inet_dist_listen_max,
+      :inet_dist_use_interface
+    ]
+
+    setup do
+      Mob.Dist.stop()
+      previous = Map.new(@kernel_keys, &{&1, :application.get_env(:kernel, &1)})
+
+      on_exit(fn ->
+        Mob.Dist.stop()
+
+        for {key, value} <- previous do
+          case value do
+            {:ok, v} -> :application.set_env(:kernel, key, v)
+            :undefined -> :application.unset_env(:kernel, key)
+          end
+        end
+      end)
+    end
+
+    # The phone's WiFi address must not reach the node; `adb forward` lands on
+    # the device's loopback, so that is the only interface the Mac needs.
+    test "listens on loopback only, with the given cookie" do
+      lan_ip = non_loopback_ipv4() || flunk("host has no non-loopback IPv4 address to probe")
+      port = free_port()
+
+      assert {:ok, _} =
+               Mob.Dist.start_distribution(:"mob_dist_bind@127.0.0.1", :bind_test_cookie, port)
+
+      assert Node.get_cookie() == :bind_test_cookie
+      assert {:ok, sock} = :gen_tcp.connect({127, 0, 0, 1}, port, [], 1_000)
+      :gen_tcp.close(sock)
+      assert {:error, :econnrefused} = :gen_tcp.connect(lan_ip, port, [], 1_000)
+    end
+  end
+
+  describe "android_cookie/1" do
+    setup do
+      previous = System.get_env("MOB_BEAMS_DIR")
+      dir = Mob.Test.ProcessHelpers.tmp_path("mob_dist_cookie")
+      File.mkdir_p!(dir)
+      System.put_env("MOB_BEAMS_DIR", dir)
+
+      on_exit(fn ->
+        File.rm_rf!(dir)
+
+        if previous,
+          do: System.put_env("MOB_BEAMS_DIR", previous),
+          else: System.delete_env("MOB_BEAMS_DIR")
+      end)
+
+      %{cookie_file: Path.join(dir, "mob_dist_cookie")}
+    end
+
+    @managed String.duplicate("0123456789abcdef", 4)
+
+    test "uses the cookie mob_dev wrote, over the public :mob_secret", %{cookie_file: file} do
+      File.write!(file, @managed <> "\n")
+
+      assert Mob.Dist.android_cookie(cookie: :mob_secret) == {:managed, String.to_atom(@managed)}
+      assert Mob.Dist.android_cookie([]) == {:managed, String.to_atom(@managed)}
+    end
+
+    test "a custom app cookie wins over the managed one", %{cookie_file: file} do
+      File.write!(file, @managed)
+      assert Mob.Dist.android_cookie(cookie: :ota_session) == {:app, :ota_session}
+    end
+
+    test "without a valid managed cookie, the node gets a fresh random one", %{cookie_file: file} do
+      hex64 = Regex.compile!("\\A[0-9a-f]{64}\\z")
+
+      for contents <- [nil, "mob_secret", String.upcase(@managed), @managed <> "00"] do
+        if contents, do: File.write!(file, contents), else: File.rm(file)
+
+        assert {:ephemeral, first} = Mob.Dist.android_cookie(cookie: :mob_secret)
+        assert {:ephemeral, second} = Mob.Dist.android_cookie([])
+        assert Atom.to_string(first) =~ hex64
+        refute first == second
+      end
     end
   end
 

@@ -21,29 +21,47 @@ defmodule Mob.Dist do
   be reachable before calling `Node.start/2`. If the tunnel is not up within 10s
   (standalone launch, no `mix mob.connect`), distribution is skipped gracefully.
 
+  The Android listener binds to loopback only. The Mac reaches it through the
+  `adb forward` mob_dev sets up, which connects to the device's own loopback,
+  so nothing on the phone's WiFi can reach the distribution port.
+
+  ## Cookie
+
+  The cookie is private per app: `mix mob.deploy` and `mix mob.connect` write
+  the project's managed cookie (kept by mob_dev under `~/.mob/dist_cookies/`)
+  to `$MOB_BEAMS_DIR/mob_dist_cookie` in the app's private storage, and the
+  node uses it. An explicit `:cookie` other than `:mob_secret` takes precedence
+  (then pass the same value to `mix mob.connect --cookie`). `:mob_secret`, the
+  value generated apps used to embed, is public, so it is ignored. With neither
+  a custom nor a managed cookie the node gets a random one and can't be
+  attached until mob_dev restarts it.
+
   ## Usage (in your app's start/0)
 
-      Mob.Dist.ensure_started(node: :"mob_demo@127.0.0.1", cookie: :mob_secret)
+      Mob.Dist.ensure_started(node: :"mob_demo@127.0.0.1")
 
   Options:
   - `:node`   — node name atom, e.g. `:"mob_demo@127.0.0.1"` (required on Android)
-  - `:cookie` — cookie atom, e.g. `:mob_secret` (required on Android)
+  - `:cookie` — custom cookie atom (optional; see above)
   - `:delay`  — ms to wait before starting dist on Android (default: 3_000)
   """
 
   @default_delay 3_000
+  @legacy_cookie :mob_secret
+  @cookie_file "mob_dist_cookie"
 
   @doc """
   Ensure Erlang distribution is running for the current platform.
 
   - iOS: no-op (dist already started via BEAM args in mob_beam.m).
   - Android: spawns a process that sleeps for `:delay` ms then calls
-    `Node.start/2` + `Node.set_cookie/1`. Pins the dist port to `:dist_port`
-    (default 9100) so `dev_connect.sh` knows which port to forward.
+    `Node.start/2` + `Node.set_cookie/1`, listening on loopback only. Pins the
+    dist port to `:dist_port` (default 9100) so mob_dev knows which port to
+    forward.
 
   Options:
   - `:node`      — base node name atom (required on Android)
-  - `:cookie`    — cookie atom (required on Android)
+  - `:cookie`    — custom cookie atom; `:mob_secret` is ignored (see the moduledoc)
   - `:delay`     — ms to wait before starting dist (default: 3_000)
   - `:dist_port` — Erlang dist listen port (default: 9100)
 
@@ -81,7 +99,7 @@ defmodule Mob.Dist do
 
           :android ->
             base_node = Keyword.fetch!(opts, :node)
-            cookie = Keyword.fetch!(opts, :cookie)
+            {cookie_source, cookie} = android_cookie(opts)
             delay = Keyword.get(opts, :delay, @default_delay)
             {suffix, dist_port} = android_settings(opts)
             node = apply_suffix(base_node, suffix)
@@ -90,6 +108,7 @@ defmodule Mob.Dist do
               :mob_nif.log("Mob.Dist: node suffix applied — #{base_node} → #{node}")
             end
 
+            :mob_nif.log("Mob.Dist: #{cookie_log(cookie_source, opts)}")
             spawn(fn -> start_after(node, cookie, delay, dist_port) end)
             :ok
         end
@@ -194,6 +213,59 @@ defmodule Mob.Dist do
     end
   end
 
+  @doc false
+  # Precedence: a custom `:cookie` from the app, the managed cookie mob_dev
+  # wrote, then a random one. Returns the source alongside, for the log line;
+  # the value itself is never logged.
+  @spec android_cookie(keyword()) :: {:app | :managed | :ephemeral, atom()}
+  def android_cookie(opts) do
+    case Keyword.get(opts, :cookie) do
+      cookie when is_atom(cookie) and cookie not in [nil, @legacy_cookie] ->
+        {:app, cookie}
+
+      _ ->
+        case managed_cookie() do
+          nil -> {:ephemeral, random_cookie()}
+          cookie -> {:managed, cookie}
+        end
+    end
+  end
+
+  defp managed_cookie do
+    with dir when dir not in [nil, ""] <- System.get_env("MOB_BEAMS_DIR"),
+         {:ok, raw} <- File.read(Path.join(dir, @cookie_file)),
+         cookie = String.trim(raw),
+         true <- valid_cookie?(cookie) do
+      String.to_atom(cookie)
+    else
+      _ -> nil
+    end
+  end
+
+  # mob_dev writes 32 random bytes as lowercase hex; anything else is not its file.
+  defp valid_cookie?(cookie) do
+    byte_size(cookie) == 64 and
+      cookie |> String.to_charlist() |> Enum.all?(&(&1 in ?0..?9 or &1 in ?a..?f))
+  end
+
+  defp random_cookie do
+    32 |> :crypto.strong_rand_bytes() |> Base.encode16(case: :lower) |> String.to_atom()
+  end
+
+  defp cookie_log(:app, _opts), do: "using the app's custom distribution cookie"
+  defp cookie_log(:managed, _opts), do: "using the mob_dev-managed distribution cookie"
+
+  defp cookie_log(:ephemeral, opts) do
+    legacy =
+      if Keyword.get(opts, :cookie) == @legacy_cookie,
+        do: "ignoring the public :mob_secret cookie; ",
+        else: ""
+
+    legacy <>
+      "no managed cookie in $MOB_BEAMS_DIR/#{@cookie_file}, using a random one " <>
+      "(run mix mob.connect to restart with the managed cookie)"
+  end
+
   @doc """
   Stop Erlang distribution and shut down EPMD.
 
@@ -225,6 +297,26 @@ defmodule Mob.Dist do
     :ok
   end
 
+  @doc false
+  # Without `inet_dist_use_interface` the listener binds every interface, so
+  # anyone on the phone's WiFi could reach it. Loopback is all the Mac needs:
+  # `adb forward` connects to the device's own 127.0.0.1.
+  @spec start_distribution(node(), atom(), pos_integer()) :: {:ok, pid()} | {:error, term()}
+  def start_distribution(node, cookie, dist_port) do
+    # Prevent OTP from spawning a local epmd daemon — the Mac's EPMD is available
+    # via the ADB reverse tunnel and we must not fight it for port 4369.
+    :application.set_env(:kernel, :start_epmd, false)
+    # Pin the dist port so mob_dev knows which port to adb-forward.
+    :application.set_env(:kernel, :inet_dist_listen_min, dist_port)
+    :application.set_env(:kernel, :inet_dist_listen_max, dist_port)
+    :application.set_env(:kernel, :inet_dist_use_interface, {127, 0, 0, 1})
+
+    with {:ok, _} = started <- Node.start(node, :longnames) do
+      Node.set_cookie(cookie)
+      started
+    end
+  end
+
   defp start_after(node, cookie, delay, dist_port) do
     Process.sleep(delay)
     # Wait for EPMD on port 4369 before starting distribution.
@@ -244,23 +336,10 @@ defmodule Mob.Dist do
         # OTP auth tries to write HOME/.config/erlang/.erlang.cookie — ensure the dir exists.
         home = System.get_env("HOME") || "/data/data/com.mob.demo/files"
         File.mkdir_p("#{home}/.config/erlang")
-        # Prevent OTP from spawning a local epmd daemon — the Mac's EPMD is available
-        # via the ADB reverse tunnel and we must not fight it for port 4369.
-        :application.set_env(:kernel, :start_epmd, false)
-        # Pin the dist port so dev_connect.sh knows which port to adb-forward.
-        :application.set_env(:kernel, :inet_dist_listen_min, dist_port)
-        :application.set_env(:kernel, :inet_dist_listen_max, dist_port)
-        result = Node.start(node, :longnames)
+        result = start_distribution(node, cookie, dist_port)
         :mob_nif.log("Mob.Dist: result=#{inspect(result)}")
 
-        case result do
-          {:ok, _} ->
-            Node.set_cookie(cookie)
-            :mob_nif.log("Mob.Dist: distribution started")
-
-          _ ->
-            :ok
-        end
+        if match?({:ok, _}, result), do: :mob_nif.log("Mob.Dist: distribution started")
 
       :timeout ->
         :mob_nif.log(

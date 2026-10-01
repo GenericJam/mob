@@ -33,6 +33,37 @@ static void *epmd_thread(void *arg) {
 }
 #endif
 
+#ifndef MOB_RELEASE
+// Resolve the development distribution cookie without shipping a public
+// credential. mob_dev supplies MOB_DIST_COOKIE when it launches an app for a
+// connection session. Direct/Xcode launches get an unlogged random fallback,
+// so a LAN-visible development node is never protected by a repository-known
+// cookie. The fallback intentionally changes on every process launch.
+static const char *resolve_dist_cookie(void) {
+    static char cookie[256];
+    const char *configured = getenv("MOB_DIST_COOKIE");
+
+    if (configured) {
+        size_t len = strlen(configured);
+        if (len > 0 && len < sizeof(cookie)) {
+            memcpy(cookie, configured, len + 1);
+            return cookie;
+        }
+    }
+
+    static const char hex[] = "0123456789abcdef";
+    unsigned char random_bytes[32];
+    arc4random_buf(random_bytes, sizeof(random_bytes));
+
+    for (size_t i = 0; i < sizeof(random_bytes); i++) {
+        cookie[i * 2] = hex[random_bytes[i] >> 4];
+        cookie[i * 2 + 1] = hex[random_bytes[i] & 0x0f];
+    }
+    cookie[sizeof(random_bytes) * 2] = '\0';
+    return cookie;
+}
+#endif
+
 // Compile-time defaults (simulator). Override via -D flags for device builds.
 //
 // On simulator the OTP runtime is not bundled in the .app — it's written to a
@@ -240,10 +271,12 @@ void mob_start_beam(const char *app_module) {
     //   127.0.0.1 is last resort; dist only reachable via iproxy in that case.
     //   The in-process EPMD and dist port both bind 0.0.0.0, so the node is
     //   reachable via any interface regardless of which IP was chosen as the name.
+    //   That exposure is why development builds use the private cookie above.
     //
     //   Without MOB_BUNDLE_OTP = simulator build. Simulator shares the Mac's network
     //   stack, including Mac's USB link-local interfaces, so find_link_local_ip()
-    //   would return the Mac's USB IP (wrong). Always use 127.0.0.1 on simulator.
+    //   would return the Mac's USB IP (wrong). Always use 127.0.0.1 on simulator,
+    //   and listen only there: the Mac's own WiFi address must not reach it.
 #ifdef MOB_BUNDLE_OTP
     // Physical device: WiFi/LAN → USB link-local → loopback fallback.
     // Two physical devices on different LAN IPs already get distinct node
@@ -401,16 +434,22 @@ void mob_start_beam(const char *app_module) {
 #ifndef MOB_RELEASE
     // Distribution flags. Omitted for App Store builds — see MOB_RELEASE
     // notes at the top of this file.
+    const char *dist_cookie = resolve_dist_cookie();
     args[ac++] = "-name";
     args[ac++] = node_name;
     args[ac++] = "-setcookie";
-    args[ac++] = "mob_secret";
+    args[ac++] = dist_cookie;
     args[ac++] = "-kernel";
     args[ac++] = "inet_dist_listen_min";
     args[ac++] = dist_port_min;
     args[ac++] = "-kernel";
     args[ac++] = "inet_dist_listen_max";
     args[ac++] = dist_port_max;
+#ifndef MOB_BUNDLE_OTP
+    args[ac++] = "-kernel";
+    args[ac++] = "inet_dist_use_interface";
+    args[ac++] = "{127,0,0,1}";
+#endif
 #else
     // Mark MOB_RELEASE in env so Mob.Dist.ensure_started/1 short-circuits
     // before trying Node.start (which would fail without -name anyway, but

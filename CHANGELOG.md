@@ -52,6 +52,20 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `{:error, reason}` receive the redacted reason. See
   `decisions/2026-09-30-screen-crashes-are-redacted-at-the-source.md`.
 
+### Security
+- **Development nodes no longer accept the public `mob_secret` cookie**
+  (MOB-49). Every dev build was an Erlang node anyone on the same network
+  could run code in. iOS now takes a private per-app cookie from mob_dev at
+  launch (`MOB_DIST_COOKIE`; a launch without it gets a random one), and
+  Android's `Mob.Dist` reads it from `$MOB_BEAMS_DIR/mob_dist_cookie`, which
+  mob_dev writes into the app's private storage. `cookie: :mob_secret` in
+  `Mob.Dist.ensure_started/1` is ignored; a custom cookie still wins. Android
+  and the iOS simulator also listen on loopback only (a physical iPhone still
+  listens on every interface, MOB-323). Needs the mob_dev that manages the
+  cookie; with an older one the node gets a random cookie and can't be
+  attached. See
+  `decisions/2026-09-30-private-dist-cookie-and-loopback-listeners.md`.
+
 ## [0.9.7] - 2026-09-30
 
 ### Fixed
