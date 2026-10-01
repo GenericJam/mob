@@ -32,8 +32,9 @@ defmodule Mob.Event.Trace do
       Mob.Event.Trace.unsubscribe()   # this process
       Mob.Event.Trace.stop()          # every tracer
 
-  Tracers are monitored by `Mob.Diag.Subscribers`, so one that exits (or whose
-  node disconnects) stops being traced to without an `unsubscribe/1`.
+  Tracers are monitored by `Mob.Diag.Subscribers`, so one that exits stops being
+  traced to without an `unsubscribe/1`. One whose node disconnects is paused,
+  filter kept, until that node reconnects.
 
   ## What is not traced
 
