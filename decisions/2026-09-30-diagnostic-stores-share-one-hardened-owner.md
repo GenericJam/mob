@@ -73,6 +73,10 @@ not the old `<Store>.Owner` name: an app that hot-pushes this over an older
   compares the stored `vsn` with the code's `state_vsn/0` and re-runs setup when
   they differ. That covers the first write after a hot push that changed a
   state shape.
+  *(Amended 2026-09-30, MOB-302: it also compares `Mob.Diag.Store`'s own
+  `framework_vsn`. So the first write after a `mob` upgrade sets each store up
+  again, and restarts an owner that older code left down. Every write path
+  reads `state/1`. See `2026-09-30-heir-restarts-diagnostic-store-owners.md`.)*
 - **Heir.** Tables are created with `Mob.Diag.Heir` as their ETS heir. An owner's
   death hands its tables, rows intact and still writable, to the heir, and the
   next owner takes them back. The owner monitors the heir and re-points its

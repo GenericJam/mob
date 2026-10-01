@@ -444,6 +444,8 @@ defmodule Mob.RenderStats do
 
   defp do_store(record) do
     Store.ensure(__MODULE__)
+    # For its version check alone: see "State is versioned" in `Mob.Diag.Store`.
+    Store.state(__MODULE__)
     :ets.insert(@table, {System.unique_integer([:monotonic]), record})
 
     # Ring rather than unbounded: this runs on a memory-constrained device and a

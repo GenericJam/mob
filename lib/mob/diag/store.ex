@@ -26,9 +26,14 @@ defmodule Mob.Diag.Store do
     * **Setup is idempotent.** It creates only what is missing, and a store's
       state (counters, sequence numbers) is carried into the new state, so
       `reload/1` re-reads configuration without resetting counters.
-    * **State is versioned.** Code loaded by a hot push can change a store's
-      state shape; `state/1` notices the version change and re-runs setup, so
-      the first write after `mix mob.push` gets state it can read.
+    * **State is versioned, and so is this module.** Code loaded by a hot push
+      can change a store's state shape, or the machinery here. `state/1`
+      compares the stored entry with both the store's `state_vsn/0` and this
+      module's own version, and re-runs setup when either differs. So the
+      first write after `mix mob.push` gets state it can read, and the first
+      write after a `mob` upgrade restarts an owner that older code left down
+      (an older heir did not restart owners). Every write path therefore reads
+      `state/1`, even one with no state to use.
     * **Writes never raise and never lose silently.** `guard/3` catches any
       failure on a write path, counts it (`lost`), repairs missing tables, and
       returns a fallback. `health/1` reports `lost`, `resets` (tables recreated
@@ -76,6 +81,11 @@ defmodule Mob.Diag.Store do
   @resets 2
   @owner_starts 3
 
+  # Bump on any change to this module or `Mob.Diag.Heir` that an app upgrading
+  # `mob` needs every store set up again for: the first write per store then
+  # re-runs setup. Entries written by 0.9.5 carry no `framework_vsn`.
+  @framework_vsn 1
+
   # ── Hot path ─────────────────────────────────────────────────────────────
 
   @doc "Return once `store`'s tables exist."
@@ -85,13 +95,16 @@ defmodule Mob.Diag.Store do
     :ok
   end
 
-  @doc "The store's current state, re-running setup first if its version is stale."
+  @doc """
+  The store's current state, re-running setup first if it was set up by
+  another version of the store or of this module.
+  """
   @spec state(module()) :: map()
   def state(store) do
     vsn = store.state_vsn()
 
     case :persistent_term.get(key(store), nil) do
-      %{vsn: ^vsn, data: data} ->
+      %{framework_vsn: @framework_vsn, vsn: ^vsn, data: data} ->
         data
 
       _stale_or_missing ->
@@ -154,6 +167,8 @@ defmodule Mob.Diag.Store do
   table, so it reports a broken store instead of repairing it. Never raises:
   state left in an older shape by a hot push, which the store's `health/1`
   cannot read, is reported as `store: :stale` until the next write updates it.
+  A `framework_vsn` that differs from the expected one, after a `mob` upgrade,
+  leaves the store's state readable; the next write sets the store up again.
   """
   @spec health(module()) :: map()
   def health(store) do
@@ -165,6 +180,7 @@ defmodule Mob.Diag.Store do
     base = %{
       owner: owner,
       state_vsn: %{current: entry && entry.vsn, expected: expected},
+      framework_vsn: %{current: entry[:framework_vsn], expected: @framework_vsn},
       lost: counter(entry, @lost),
       resets: counter(entry, @resets),
       owner_starts: counter(entry, @owner_starts),
@@ -344,7 +360,7 @@ defmodule Mob.Diag.Store do
     vsn = store.state_vsn()
     counters = (previous && previous[:counters]) || :atomics.new(3, signed: false)
     data = store.new_state(previous && previous[:data])
-    entry = %{vsn: vsn, counters: counters, data: data}
+    entry = %{framework_vsn: @framework_vsn, vsn: vsn, counters: counters, data: data}
 
     if entry != previous, do: :persistent_term.put(key(store), entry)
   end

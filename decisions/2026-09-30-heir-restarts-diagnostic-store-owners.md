@@ -57,6 +57,49 @@ replacement owner. The owner's existing setup takes the tables back with
   anything. Tables that an older `mob`'s owner holds never name this heir, so
   they are unaffected.
 
+### Owners orphaned by older code
+
+A restart needs a transfer, and a transfer to an heir running older code
+starts nothing. On the Moto G, a build was hot-pushed onto a running 0.9.5 app.
+An owner killed during the push window, while the heir still ran 0.9.5 code,
+was still orphaned after all the new code had loaded (`owner: nil`,
+`held_by: :heir`). An app that already had an orphaned store from 0.9.5 (one
+was seen on the emulator) is in the same position: no transfer is coming.
+
+So the version that `state/1` already checks on every write now includes the
+store machinery's own version, `@framework_vsn` in `Mob.Diag.Store`. It is kept
+in each store's `:persistent_term` entry as `framework_vsn`, next to the
+store's `vsn`.
+
+- **One sync per store per upgrade.** The first write after a `mob` upgrade
+  sees a different version and syncs. The sync starts an owner if there is
+  none, and setup reclaims heir-held tables through the existing branch.
+  `new_state(previous)` carries counters over. Setup publishes the current
+  version, so the next write takes the hot path again; it cannot loop.
+- **Entries from 0.9.5 have no `framework_vsn`.** They fail the match like any
+  other mismatch, and setup reads only `counters` and `data` from them, which
+  0.9.5 entries have. They cannot crash.
+- **The hot path is unchanged.** It is still one `:persistent_term` read and
+  one map match, now against one more literal field. It allocates nothing.
+- **Every write path reads `state/1`.** Receipts, the bus and confirmed
+  invariants already did. `Registry.mark_seen/1`, `Registry.forget/1`, the
+  render-stats frame store and `Invariant.run/2` keep no state they need, so
+  they now read `state/1` for its version check alone. That costs one
+  `:persistent_term` read per write.
+- **Health keeps the two versions apart.** `health/1` reports `framework_vsn`
+  (`current`, `nil` for 0.9.5, and `expected`) beside `state_vsn`. `store:
+  :stale` still means only that the store's data has a shape this code cannot
+  read. A framework mismatch leaves that data readable, and the next write
+  sets the store up again.
+- `@framework_vsn` is bumped on any change to `Mob.Diag.Store` or
+  `Mob.Diag.Heir` that every store needs setting up again for. This change
+  sets it to 1.
+
+Rejected: a check in `guard/3`. It would cover every write path without each
+store remembering, but receipts and the bus, the hottest paths, would read
+`:persistent_term` twice. A check in `ensure/1` would put a read on every
+read path too.
+
 Alternatives rejected:
 
 - **Restart from `ensure/1`.** Checking the owner as well as the flag table
@@ -75,8 +118,9 @@ Alternatives rejected:
 
 - In `Mob.Diag.health/0`, `owner: nil` is now transient. If an owner stays `nil`
   while the heir holds its tables, the restart failed and the reason was
-  logged. The next setup, from `reload/1` or a state-version change, takes the
-  tables back.
+  logged. The next setup takes the tables back. That setup comes from
+  `reload/1`, a state-version change, or the first write after a `mob`
+  upgrade.
 - Each owner death costs one spawned process and one owner start.
 - If an owner dies while its own restart is failing, no further restart
   follows. That is the price of never looping.
@@ -89,7 +133,18 @@ Alternatives rejected:
   - when it restarts once per transfer, or sets a fresh owner up twice (the
     test that each death gets one restart);
   - when it dedupes per dying owner rather than per generation (the crash
-    loop).
+    loop);
+  - when `state/1` ignores the framework version (both upgrade tests), or
+    when any one of the registry, render stats and invariant write paths does
+    not read `state/1` (the every-store upgrade test, each checked
+    separately).
+
+  A host smoke compiled 0.9.5's `Mob.Diag.Store` and `Mob.Diag.Heir` from git.
+  It recorded three receipts, then killed the owner: `owner: nil`, the table
+  held by the heir. It loaded this build's beams the way `mix mob.push` does,
+  and the store was still orphaned 200 ms later. One `Receipts.record/1` then
+  brought back an owner holding all four rows, with `owner_starts` at 2 and
+  `resets` at 0. Killing the heir afterwards lost nothing.
 
   Two guards have no failing test that fails every time:
   - The store check on heir data fails its test in about nine runs of ten.
