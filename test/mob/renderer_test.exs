@@ -763,6 +763,13 @@ defmodule Mob.RendererTest do
       decoded = :json.decode(json)
       assert decoded["props"]["placeholder_color"] == 0xFFEEEEEE
     end
+
+    test "caret_color atom is resolved to ARGB integer" do
+      tree = %{type: :text_field, props: %{caret_color: :gray_200}, children: []}
+      Renderer.render(tree, :ios, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      assert :json.decode(json)["props"]["caret_color"] == 0xFFEEEEEE
+    end
   end
 
   describe "style token resolution" do

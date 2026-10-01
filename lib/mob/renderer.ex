@@ -21,7 +21,7 @@ defmodule Mob.Renderer do
   resolved at render time through the active `Mob.Theme` and the base palette.
 
   **Color props** (`:background`, `:text_color`, `:border_color`, `:color`,
-  `:placeholder_color`): resolved via theme semantic tokens first, then the
+  `:placeholder_color`, `:caret_color`): resolved via theme semantic tokens first, then the
   base palette. E.g. `:primary` → theme's primary → `:blue_500` → `0xFF2196F3`.
 
   **Spacing props** (`:padding`, `:padding_top`, etc., `:gap`, `:spacing`,
@@ -32,7 +32,7 @@ defmodule Mob.Renderer do
   **Radius props** (`:corner_radius`): accept `:radius_sm`, `:radius_md`,
   `:radius_lg`, `:radius_pill` from the active theme.
 
-  **Border** (currently honored on `:box` only): set both `:border_color`
+  **Border** (honored on `:box` and `:text_field`): set both `:border_color`
   (a color token like `:primary` or `:border`) and `:border_width` (an
   integer pt/dp value, e.g. `1`). When width is 0 or color is unset, no
   border draws.
@@ -176,7 +176,7 @@ defmodule Mob.Renderer do
   }
 
   # Props whose atom values are resolved as colors
-  @color_props ~w(background text_color border_color color placeholder_color scrim drag_indicator_color)a
+  @color_props ~w(background text_color border_color color placeholder_color caret_color scrim drag_indicator_color)a
   # Props whose atom values are resolved as spacing or radius tokens
   @spacing_props ~w(padding padding_top padding_right padding_bottom padding_left gap spacing run_spacing)a
   @radius_props ~w(corner_radius)a

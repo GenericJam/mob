@@ -11,6 +11,20 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 ## [Unreleased]
 
 ### Fixed
+- **iOS: `:text_field` ignored the theme and the type props** (MOB-237).
+  It drew the system `.roundedBorder` field (white, system font) on every
+  theme. It now draws the node's `background`, `border_color` /
+  `border_width`, `corner_radius` and `padding`, and honours `text_color`,
+  `placeholder_color`, the new `caret_color` (default: follows the text
+  colour), `font` / `text_size` / `font_weight` / `italic` /
+  `letter_spacing`, `text_align`, `disabled` / `enabled: false`,
+  `max_length`, `lines` and `caret: "end"`, with the same semantics as
+  Android since mob_new#82. `caret_color` theme atoms now resolve like the
+  other colour props.
+- **iOS: a font named by face (`font: "Inter-Bold"`, the documented theme
+  `heading` pattern) rendered at regular weight** when `font_weight` was not
+  set: `resolvedFont` always applied `.weight(.regular)`. The named face is now
+  kept unless `font_weight` asks for another weight (MOB-237).
 - **Android: fresh `mix mob.deploy --native --android` failed on every app
   generated before mob_new 0.5.1** (MOB-226, regression from MOB-180 in
   0.8.0). MOB-180 added `extern "c" fn open/write/close` to the
