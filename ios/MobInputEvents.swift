@@ -144,11 +144,16 @@ extension MobNode {
         }()
         let base: UIFont
         if let name = MobNode.resolveFontName(primary: fontFamily), let custom = UIFont(name: name, size: size) {
-            let descriptor = UIFontDescriptor(fontAttributes: [
-                .family: custom.familyName,
-                .traits: [UIFontDescriptor.TraitKey.weight: weight]
-            ])
-            base = UIFont(descriptor: descriptor, size: size)
+            // No `font_weight`: the named face as-is, so `font: "Inter-Bold"`
+            // stays bold rather than matching the family at regular weight.
+            if fontWeight == "regular" {
+                base = custom
+            } else {
+                base = UIFont(descriptor: UIFontDescriptor(fontAttributes: [
+                    .family: custom.familyName,
+                    .traits: [UIFontDescriptor.TraitKey.weight: weight]
+                ]), size: size)
+            }
         } else {
             base = .systemFont(ofSize: size, weight: weight)
         }

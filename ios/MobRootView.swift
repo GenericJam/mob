@@ -190,7 +190,7 @@ extension MobNode {
         } else {
             font = .system(size: size)
         }
-        font = font.weight(weight)
+        if fontWeight != "regular" { font = font.weight(weight) } // else keep a named face ("Inter-Bold")
         if italic { font = font.italic() }
         return font
     }
@@ -1980,7 +1980,7 @@ private struct MobTextField: View {
                     .allowsHitTesting(false)
             )
             // Only contribute keyboard-toolbar items when THIS field is
-            // focused. Without the `if isFocused` guard, every MobTextField
+            // focused. Without the `if focused` guard, every MobTextField
             // on the screen contributes its own Done button to the shared
             // keyboard accessory toolbar — producing N stacked Done buttons
             // when there are N fields visible. Guarded, only the focused

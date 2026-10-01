@@ -159,6 +159,10 @@ defmodule Mob.NativeIOSTextFieldTest do
     # A descriptor keeping the face's .name ignores the weight trait.
     assert helpers =~ ".family: custom.familyName"
     refute helpers =~ "custom.fontDescriptor.addingAttributes"
+    # Without font_weight a named face (font: "Inter-Bold") is used as-is.
+    assert helpers =~ ~r/if fontWeight == "regular" \{\s*base = custom/
+    # The SwiftUI path too: `.weight(.regular)` turned AvenirNext-Bold regular.
+    assert @root_swift =~ ~s|if fontWeight != "regular" { font = font.weight(weight) }|
     assert helpers =~ ~s|case "right":  return direction == .rightToLeft ? .left : .right|
   end
 end
