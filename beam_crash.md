@@ -42,7 +42,10 @@ crash should either be auto-recovered or surface a useful message.
   `mob_beam.m` should bump to 9102+ and try again before reporting
   failure. Same on Android (`MainActivity.java` reads
   `mob_dist_port` from intent — needs to attempt bind, fall back).
-  - **Status**: Not yet implemented. Sketch in `mitigations/port_bump.md` (TODO).
+  - **Status**: iOS done (MOB-139): without `MOB_DIST_PORT` a simulator
+    app takes the first free port from its app+UDID base
+    (`ios/mob_dist_port.h`); a pinned port that is taken is reported, not
+    bumped. Android not implemented.
 
 ### Surface
 
@@ -56,9 +59,9 @@ crash should either be auto-recovered or surface a useful message.
     [Incident #1](#incident-1-android-beam-exits-cleanly-with-code-1-after-on_start)
     below.
 - **`mob_set_startup_error(...)` already exists** — it just needs more
-  hookpoints. Currently fires on "BEAM exited unexpectedly". Should
-  also fire on first-render failure, NIF load failure, distribution
-  bind failure.
+  hookpoints. Currently fires on "BEAM exited unexpectedly" and, on iOS,
+  on a dist port that won't bind (MOB-139). Should also fire on
+  first-render failure and NIF load failure.
 - **Diagnose-on-blank-screen** — when the native side waits >2 seconds
   for the first render and gets nothing, it should grab whatever the
   startup error is and present it inline (not just splash forever).

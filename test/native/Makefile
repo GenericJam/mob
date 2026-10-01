@@ -3,13 +3,13 @@
 #   make run    build + run everything here
 #   make clean
 #
-# See frame_registry_test.m for what this does and does not cover.
+# Each test file's header says what it does and does not cover.
 
 CC      ?= clang
 CFLAGS  ?= -fobjc-arc -Wall -Wextra -Wno-unused-parameter
 LDFLAGS ?= -framework Foundation
 
-BINS := frame_registry_test
+BINS := frame_registry_test dist_port_test
 
 .PHONY: run clean
 run: $(BINS)
@@ -17,6 +17,9 @@ run: $(BINS)
 
 frame_registry_test: frame_registry_test.m
 	$(CC) $(CFLAGS) $(LDFLAGS) $< -o $@
+
+dist_port_test: dist_port_test.c ../../ios/mob_dist_port.h
+	$(CC) -Wall -Wextra -Werror $< -o $@
 
 clean:
 	rm -f $(BINS)

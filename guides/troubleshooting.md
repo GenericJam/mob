@@ -196,6 +196,12 @@ the sim's app container shows:
 Protocol 'inet_tcp': register/listen error: eaddrinuse
 ```
 
+Since MOB-139 the app checks its dist port before starting the BEAM: a taken
+port stays on the startup error screen with "Distribution can't start: port N
+(MOB_DIST_PORT) is already in use", and the same line appears in the system
+log as `[MobBeam] ERROR: …`. A launch without `MOB_DIST_PORT` picks a free
+port itself.
+
 **Cause:** `adb forward tcp:9100 tcp:9100` (set up automatically when an
 Android device is attached) binds host `127.0.0.1:9100` so the corresponding
 device port is tunneled. iOS simulators share the Mac's network stack, so
@@ -484,18 +490,21 @@ Mob.Test.navigate(node, MyApp.HomeScreen)
 node, but `:rpc.call/4` returns `{:badrpc, :nodedown}` or hangs.
 
 **Cause:** The iOS simulator shares the Mac's network stack, so EPMD
-registration works. But if the dist port (default 9101 for iOS) is blocked by
-macOS firewall or already in use, the actual distribution channel can't be
-established even though EPMD sees the node.
+registration works. But if the dist port is blocked by the macOS firewall, the
+actual distribution channel can't be established even though EPMD sees the
+node. (A port that is already taken no longer gets this far: the app shows
+"Distribution can't start: port N … is already in use" on its startup error
+screen instead.)
 
-**Fix:** Check if 9101 is in use:
+**Fix:** Find the node's port and check what listens on it:
 
 ```bash
-lsof -i :9101
+epmd -names                # name <app>_ios_<udid8> at port N
+lsof -nP -iTCP:N -sTCP:LISTEN
 ```
 
-If something else is using it, configure a different dist port in
-`Mob.Dist.ensure_started/1` and update `mob.exs` accordingly.
+Pin a different port with `mix mob.deploy --dist-port <N>`, or launch with
+`SIMCTL_CHILD_MOB_DIST_PORT=<N>`.
 
 ---
 
