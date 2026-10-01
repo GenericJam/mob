@@ -77,9 +77,12 @@ Nothing is added to the emit fanout.
   every process.
 - It is called by sweeps, and by `recent/1` while entries are waiting. It is
   never called by an emit.
-- Calls have a 5 s timeout, and any exit is caught. A caller whose owner died
-  or stalled logs a warning and carries on. A sweep still emits, unjournaled
-  if the record step failed. The next caller starts a new owner.
+- Sweep calls have a 5 s timeout; `recent/1`'s observation call has 500 ms,
+  because a reader (often an agent's first call) must not wait out a hung
+  fsync, and a missed observation only means one more re-emit next boot. Any
+  exit is caught: the caller logs a warning and carries on. A sweep still
+  emits, unjournaled if the record step failed. The next caller starts a new
+  owner.
 - The file is the record, so the owner dying loses no evidence. It loses only
   this boot's chance to clear an entry through `recent/1`, and the next boot
   emits that entry again.

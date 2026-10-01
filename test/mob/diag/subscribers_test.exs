@@ -17,7 +17,15 @@ defmodule Mob.Diag.SubscribersTest do
   setup_all do
     System.cmd("epmd", ["-daemon"], stderr_to_stdout: true)
     started? = not Node.alive?()
-    if started?, do: {:ok, _} = Node.start(:"mob_subscribers_test@127.0.0.1", :longnames)
+
+    # A unique name: a fixed one collides with any other VM running this file
+    # (parallel CI jobs, another checkout) or with this VM's previous run while
+    # epmd still holds it, and `Node.start` then fails with :nodistribution.
+    if started? do
+      name = List.to_atom(:peer.random_name(~c"mob_subscribers_test") ++ ~c"@127.0.0.1")
+      {:ok, _} = Node.start(name, :longnames)
+    end
+
     on_exit(fn -> if started?, do: Node.stop() end)
     :ok
   end

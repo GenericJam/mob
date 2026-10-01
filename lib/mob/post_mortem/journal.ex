@@ -4,6 +4,10 @@ defmodule Mob.PostMortem.Journal do
   @keep 32
   @pending {__MODULE__, :pending}
   @call_timeout 5_000
+  # `Bus.recent/1` is a reader, often an agent's first call: a journal owner
+  # stuck in a hung fsync must not hold it for the full call timeout. Missing
+  # an observation only means the entry is emitted again next boot.
+  @observe_timeout 500
 
   @moduledoc """
   Keeps what a destructive post-mortem drain returned until someone has
@@ -116,7 +120,7 @@ defmodule Mob.PostMortem.Journal do
     if :persistent_term.get(@pending, false) do
       case for %Capsule{id: id} <- capsules, do: id do
         [] -> :ok
-        ids -> call({:observed, ids}, :ok)
+        ids -> call({:observed, ids}, :ok, @observe_timeout)
       end
     end
 
@@ -161,20 +165,23 @@ defmodule Mob.PostMortem.Journal do
         do: {id, capsule, delivered}
   end
 
-  defp call(msg, fallback) do
-    GenServer.call(server(), msg, @call_timeout)
+  defp call(msg, fallback, timeout \\ @call_timeout) do
+    GenServer.call(server(), msg, timeout)
   catch
     # The owner died mid-call, timed out, or would not start. The journal is a
     # second copy; losing it for one call must not cost the caller the first.
     # credo:disable-for-next-line ExSlop.Check.Warning.BlanketRescue
     kind, reason ->
       Logger.warning(
-        "[Mob.PostMortem.Journal] #{elem(msg, 0)} failed (#{inspect(kind)} " <>
+        "[Mob.PostMortem.Journal] #{request_name(msg)} failed (#{inspect(kind)} " <>
           "#{inspect(reason, limit: 8)}); the journal was not updated"
       )
 
       fallback
   end
+
+  defp request_name(msg) when is_tuple(msg), do: elem(msg, 0)
+  defp request_name(msg), do: msg
 
   defp server do
     with nil <- Process.whereis(__MODULE__) do

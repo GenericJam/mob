@@ -360,12 +360,12 @@ defmodule Mob.PostMortem.AndroidTest do
       assert Enum.count(Android.sweep_with(FakeNIF, journal())) == 32
     end
 
-    test "concurrent sweeps keep every entry they drained, without waiting on each other" do
+    test "concurrent sweeps keep every entry they drained" do
       path = journal()
 
       # `Capsule.new/1` probes the NIF, and on the host every probe is a failed
-      # load that would swamp the time measured here. Build each capsule from
-      # one made up front instead.
+      # load (slow, and noisy in the log). Build each capsule from one made up
+      # front instead.
       template = Mob.Defect.appexit_capsule(entry())
       build = fn e -> %{template | id: "c#{e.pid}", fingerprint: "fp#{e.pid}"} end
 
@@ -378,17 +378,14 @@ defmodule Mob.PostMortem.AndroidTest do
           end)
         end
 
-      # 16 serialised writes, each fsynced: 0.1–0.4 s on a laptop whose disk
-      # other test runs share. A lock that backs off by sleeping (`:global`'s
-      # retries sleep a random 125 ms or more) took 2.3–6 s here.
-      {micros, emitted} =
-        :timer.tc(fn ->
-          for t <- tasks, do: send(t.pid, :go)
-          Task.await_many(tasks, 2_000)
-        end)
+      # Correctness only. The lock this replaced (`:global.trans`) also slept a
+      # random 125 ms or more per retry, but a wall-clock bound on 16 fsynced
+      # writes flakes on a shared disk (1.08 s observed); the owner process
+      # has no backoff to measure.
+      for t <- tasks, do: send(t.pid, :go)
+      emitted = Task.await_many(tasks, 30_000)
 
       assert Enum.all?(emitted, &match?([_], &1))
-      assert micros < 1_000_000
       assert Enum.sort(journaled_pids()) == Enum.to_list(1..16)
     end
 
@@ -415,11 +412,36 @@ defmodule Mob.PostMortem.AndroidTest do
         assert capsule.evidence.timestamp_ms == 2
       end)
 
+      # Not wedged: the next sweep reaches the restarted owner and journals.
       Process.put(:test_entries, [entry(pid: 3, timestamp_ms: 3)])
-      {micros, [_]} = :timer.tc(fn -> Android.sweep_with(FakeNIF, path) end)
-
-      assert micros < 1_000_000
+      [_] = Android.sweep_with(FakeNIF, path)
       assert 3 in journaled_pids()
     end
+
+    test "a stuck journal owner holds a recent/1 reader only briefly, and keeps the entry" do
+      Process.put(:test_entries, [entry(pid: 1, timestamp_ms: 1)])
+      [_] = Android.sweep_with(FakeNIF, journal())
+      owner = Process.whereis(Journal)
+      :sys.suspend(owner)
+      on_exit(fn -> if Process.alive?(owner), do: :sys.resume(owner) end)
+
+      # The reader's observation call gives up long before the 5 s call
+      # timeout the sweep uses; the bound leaves a wide margin either side.
+      {micros, recent} = capture_log_result(fn -> :timer.tc(fn -> Bus.recent() end) end)
+
+      assert [%{evidence: %{timestamp_ms: 1}}] = recent
+      assert micros < 3_000_000
+      :sys.resume(owner)
+      # The observation was lost, not applied: the exit is still journaled.
+      assert 1 in journaled_pids()
+    end
+  end
+
+  # `capture_log/1` runs `fun` in this process; pass its result out by message.
+  defp capture_log_result(fun) do
+    log = capture_log(fn -> send(self(), {:result, fun.()}) end)
+    assert log =~ "observed failed"
+    assert_received {:result, result}
+    result
   end
 end
