@@ -160,18 +160,20 @@ no longer collide.
 
 `Mob.Test` and every `:rpc.call` need a distributed caller with the app's
 cookie. It is private per app: mob_dev generates it under `~/.mob/dist_cookies/`
-and hands it to the app at deploy/connect time. `mix mob.cookie` prints it, from
-the project directory. From a shell, one-shot:
+and hands it to the app at deploy/connect time. Load it inside the VM, from
+the project directory, so it never shows up in the process arguments. From a
+shell, one-shot:
 
 ```bash
-elixir --name agent_$$@127.0.0.1 --cookie "$(mix mob.cookie)" -S mix run --no-start \
-  -e 'IO.inspect Mob.Test.screen(:"my_app_ios_1a2b3c4d@127.0.0.1")'
+elixir --name agent_$$@127.0.0.1 -S mix run --no-start -e '
+Node.set_cookie(MobDev.DistCookie.for_project!())
+IO.inspect Mob.Test.screen(:"my_app_ios_1a2b3c4d@127.0.0.1")'
 ```
 
 An app built against mob before MOB-49 still answers only to the old public
 `mob_secret`; mob_dev's own tasks fall back to it with a warning. Update the
-`mob` dependency and run `mix mob.deploy` (`--native` for iOS) to move the app to
-the private cookie.
+`mob` dependency and run `mix mob.deploy` (`--native` for iOS): deploy restarts
+an app on the legacy cookie, so it comes back on the private one.
 
 A host node name already in use isn't fatal for the mob_dev tasks: `mix
 mob.connect`, `mix mob.deploy` and `mix mob.watch` fall back to
@@ -206,7 +208,8 @@ Mob.Test.inspect(node)
 #=> %{screen: MobDemo.CounterScreen, assigns: %{count: 4}, nav_history: [], tree: ...}
 ```
 
-This is available from `iex --name me@127.0.0.1 --cookie "$(mix mob.cookie)" -S mix` (after
+This is available from `iex --name me@127.0.0.1 -S mix` after
+`Node.set_cookie(MobDev.DistCookie.for_project!())` (once
 `mix mob.connect` has set up the tunnels), from `mix mob.connect`'s own IEx
 session, or from an agent that can run shell commands with the one-shot
 `elixir --name … -S mix run --no-start -e …` form under Prerequisites. A plain
@@ -696,7 +699,8 @@ screenshots or adb screencap as your primary inspection method.
 Instead:
 1. Run `mix mob.connect --no-iex` to establish distribution tunnels and print the
    node names (it restarts the app; add `--no-restart` to keep a running session)
-2. Use `Mob.Test` from a distributed IEx (`iex --name me@127.0.0.1 --cookie "$(mix mob.cookie)" -S mix`)
+2. Use `Mob.Test` from a distributed IEx (`iex --name me@127.0.0.1 -S mix`, then
+   `Node.set_cookie(MobDev.DistCookie.for_project!())`)
    to query exact state:
    - `Mob.Test.capabilities(node)` — ask FIRST: which probes does this build serve?
    - `Mob.Test.screen(node)` — what screen is active?
