@@ -146,6 +146,10 @@ NS_ASSUME_NONNULL_BEGIN
 //   text:  the in-progress (or committed) text
 //   phase: "began" | "updating" | "committed" | "cancelled"
 @property(nonatomic, copy, nullable) void (^onCompose)(NSString *text, NSString *phase);
+@property(nonatomic, strong, nullable) UIColor *caretColor; // nil = follow textColor
+@property(nonatomic) BOOL caretAtEnd;           // `caret: "end"`: insertion point pinned to the end
+@property(nonatomic) NSInteger maxLength;       // UTF-16 units; 0 = unlimited
+@property(nonatomic) NSInteger textFieldLines;  // `lines:`; > 1 = multi-line, n rows tall
 // toggle
 @property(nonatomic) BOOL checked;
 // slider

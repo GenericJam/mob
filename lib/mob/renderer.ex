@@ -176,7 +176,7 @@ defmodule Mob.Renderer do
   }
 
   # Props whose atom values are resolved as colors
-  @color_props ~w(background text_color border_color color placeholder_color scrim drag_indicator_color)a
+  @color_props ~w(background text_color border_color color placeholder_color caret_color scrim drag_indicator_color)a
   # Props whose atom values are resolved as spacing or radius tokens
   @spacing_props ~w(padding padding_top padding_right padding_bottom padding_left gap spacing run_spacing)a
   @radius_props ~w(corner_radius)a

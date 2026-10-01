@@ -526,8 +526,9 @@ struct MobNodeView: View {
             case .textField:
                 let placeholder = node.placeholder ?? ""
                 let initialText = node.text ?? ""
+                // Padding is applied inside MobTextField, between the text
+                // and the background/border it now draws from props.
                 MobTextField(node: node, placeholder: placeholder, initialText: initialText)
-                    .padding(node.paddingEdgeInsets)
 
             case .toggle:
                 MobToggle(node: node)
@@ -1777,6 +1778,17 @@ private struct MobTextField: View {
     // activation re-seed: both write `text` programmatically, and reporting
     // either back to the BEAM echoes a value the BEAM just sent.
     @FocusState private var isFocused: Bool
+    // The UIKit field's focus. A @FocusState bound to no `.focused` view is
+    // reset by SwiftUI on the next update, so routing the UIKit field through
+    // `isFocused` resigned the keyboard after every keystroke.
+    @State private var uikitFocused = false
+
+    private var focused: Bool { isFocused || uikitFocused }
+
+    private func dropFocus() {
+        isFocused = false
+        uikitFocused = false
+    }
 
     init(node: MobNode, placeholder: String, initialText: String) {
         self.node = node
@@ -1835,9 +1847,32 @@ private struct MobTextField: View {
         }
     }
 
+    // The placeholder in the theme's placeholder_color. A plain-string title
+    // would draw in the system's placeholder grey whatever the theme says.
+    private var prompt: Text {
+        let prompt = Text(placeholder)
+        guard let color = node.placeholderColor else { return prompt }
+        return prompt.foregroundColor(Color(color))
+    }
+
+    private var textColor: Color {
+        let color = node.textColor.map { Color($0) } ?? Color.primary
+        // Dimmed like Android's disabled text (38% of the text colour).
+        return node.disabled ? color.opacity(0.38) : color
+    }
+
+    // The caret follows the text unless told otherwise, as on Android, so a
+    // field with transparent text (the OTP overlay) shows no caret over the
+    // slots drawn behind it. nil keeps the system accent.
+    private var caretColor: Color? {
+        (node.caretColor ?? node.textColor).map { Color($0) }
+    }
+
     @ViewBuilder
     private var field: some View {
-        if node.onCompose != nil {
+        // `caret: "end"` needs the UIKit field: SwiftUI exposes no selection
+        // before iOS 18, and this build targets 17.
+        if node.onCompose != nil || node.caretAtEnd {
             MobComposingTextField(
                 node: node,
                 placeholder: placeholder,
@@ -1845,34 +1880,62 @@ private struct MobTextField: View {
                 returnKeyType: returnKeyType,
                 textContentType: textContentType,
                 text: $text,
-                isFocused: isFocused,
-                onFocusChange: { focused in isFocused = focused }
+                isFocused: uikitFocused,
+                onFocusChange: { focused in uikitFocused = focused }
             )
         } else if node.isSecure {
-            SecureField(placeholder, text: $text)
+            SecureField(text: $text, prompt: prompt) { Text(placeholder) }
+                .focused($isFocused)
+        } else if node.textFieldLines > 1 {
+            // Return inserts a newline here, so on_submit is single-line only,
+            // as on Android.
+            TextField(text: $text, prompt: prompt, axis: .vertical) { Text(placeholder) }
+                .lineLimit(node.textFieldLines, reservesSpace: true)
                 .focused($isFocused)
         } else {
-            TextField(placeholder, text: $text)
+            TextField(text: $text, prompt: prompt) { Text(placeholder) }
                 .focused($isFocused)
         }
     }
 
     var body: some View {
         field
+            // No platform chrome: the background, border and radius below
+            // come from the node, which the renderer fills from the theme.
+            // `.roundedBorder` drew a white system field on every theme and
+            // ignored all four colour props (MOB-237).
+            .textFieldStyle(.plain)
+            .font(node.resolvedFont)
+            .kerning(node.letterSpacing)
+            .foregroundStyle(textColor)
+            .tint(caretColor)
+            .multilineTextAlignment(node.textAlignEnum)
+            .disabled(node.disabled)
             .keyboardType(keyboardType)
             .textContentType(textContentType)
             .submitLabel(submitLabel)
             .onSubmit {
                 node.onSubmit?()
                 // dismiss for terminal actions; "next" intentionally keeps keyboard open
-                if node.returnKeyStr != "next" { isFocused = false }
+                if node.returnKeyStr != "next" { dropFocus() }
             }
             // See MobToggle: compare against the BEAM's value rather than
             // latching, so a re-seed is silent by construction.
-            .onChange(of: text) { _, newValue in
+            .onChange(of: text) { oldValue, newValue in
+                // `max_length` rejects a lengthening user edit (only a focused
+                // field is typed in; the re-seeds below write unfocused), in
+                // UTF-16 units as on Android; shortening passes, so a value the
+                // BEAM set past the limit stays deletable.
+                if node.maxLength > 0, focused,
+                   newValue.utf16.count > node.maxLength,
+                   newValue.utf16.count > oldValue.utf16.count {
+                    // Re-enters with `oldValue`; reporting it again is harmless.
+                    text = oldValue
+                    return
+                }
                 if newValue != initialText { node.onChangeStr?(newValue) }
             }
-            .onChange(of: isFocused) { _, focused in
+            .onChange(of: focused) { _, focused in
                 if focused { node.onFocus?() } else { node.onBlur?() }
             }
             // Sync from parent when the `value:` prop changes externally —
@@ -1881,7 +1944,7 @@ private struct MobTextField: View {
             // controlled-input fix for the case where Elixir code updates
             // the bound value via Mob.Socket.assign without user input.
             .onChange(of: initialText) { _, newValue in
-                if !isFocused && text != newValue {
+                if !focused && text != newValue {
                     text = newValue
                 }
             }
@@ -1896,7 +1959,7 @@ private struct MobTextField: View {
             // outgoing screen must not arrive focused on the incoming one.
             .onChange(of: isActive) { _, nowActive in
                 guard nowActive else {
-                    isFocused = false
+                    dropFocus()
                     return
                 }
 
@@ -1904,8 +1967,18 @@ private struct MobTextField: View {
                     text = initialText
                 }
             }
-            .textFieldStyle(.roundedBorder)
             .frame(maxWidth: .infinity)
+            .padding(node.paddingEdgeInsets)
+            .background(
+                RoundedRectangle(cornerRadius: node.cornerRadius)
+                    .fill(node.backgroundColor.map { Color($0) } ?? Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: node.cornerRadius)
+                    .stroke(node.borderColor.map { Color($0) } ?? Color.clear,
+                            lineWidth: node.borderWidth)
+                    .allowsHitTesting(false)
+            )
             // Only contribute keyboard-toolbar items when THIS field is
             // focused. Without the `if isFocused` guard, every MobTextField
             // on the screen contributes its own Done button to the shared
@@ -1914,9 +1987,9 @@ private struct MobTextField: View {
             // field's button shows.
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
-                    if isFocused {
+                    if focused {
                         Spacer()
-                        Button("Done") { isFocused = false }
+                        Button("Done") { dropFocus() }
                     }
                 }
             }

@@ -162,8 +162,11 @@ defmodule Mob.NativeParkedScreenTest do
       body = region(code_only(@ios), "private struct MobTextField: View {", "\n}\n")
       assert body =~ "@Environment(\\.mobScreenIsActive) private var isActive"
 
-      assert body =~ ~r/guard nowActive else \{\s*isFocused = false/,
+      assert body =~ ~r/guard nowActive else \{\s*dropFocus\(\)/,
              "parking must drop focus"
+
+      # Both focus sources: the SwiftUI fields' and the UIKit field's.
+      assert body =~ ~r/func dropFocus\(\) \{\s*isFocused = false\s*uikitFocused = false/
 
       assert body =~ ~r/if text != initialText \{\s*text = initialText/
     end
@@ -196,7 +199,7 @@ defmodule Mob.NativeParkedScreenTest do
         body = region(code_only(@ios), "private struct #{unquote(struct_name)}: View {", "\n}\n")
 
         assert body =~
-                 ~r/\.onChange\(of: #{unquote(watched)}\) \{ _, newValue in\s*if newValue != #{Regex.escape(unquote(from_beam))} \{/,
+                 ~r/\.onChange\(of: #{unquote(watched)}\) \{ \w+, newValue in[^}]*?(\{[^}]*\}[^}]*?)*if newValue != #{Regex.escape(unquote(from_beam))} \{/,
                "the change watcher must compare against the BEAM's value"
 
         refute body =~ "seeding",

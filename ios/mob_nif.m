@@ -921,6 +921,8 @@ typedef NS_ENUM(NSUInteger, MobPropKey) {
     MOB_PROP_background,
     MOB_PROP_border_color,
     MOB_PROP_border_width,
+    MOB_PROP_caret,
+    MOB_PROP_caret_color,
     MOB_PROP_color,
     MOB_PROP_component_handle,
     MOB_PROP_content_mode,
@@ -933,6 +935,7 @@ typedef NS_ENUM(NSUInteger, MobPropKey) {
     MOB_PROP_drag_indicator_rail_height,
     MOB_PROP_drag_indicator_width,
     MOB_PROP_draw,
+    MOB_PROP_enabled,
     MOB_PROP_facing,
     MOB_PROP_fade_on_scroll,
     MOB_PROP_fill_height,
@@ -948,9 +951,11 @@ typedef NS_ENUM(NSUInteger, MobPropKey) {
     MOB_PROP_keyboard,
     MOB_PROP_letter_spacing,
     MOB_PROP_line_height,
+    MOB_PROP_lines,
     MOB_PROP_loop,
     MOB_PROP_max,
     MOB_PROP_max_lines,
+    MOB_PROP_max_length,
     MOB_PROP_min,
     MOB_PROP_module,
     MOB_PROP_name,
@@ -1051,6 +1056,8 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
           [MOB_PROP_background] = @"background",
           [MOB_PROP_border_color] = @"border_color",
           [MOB_PROP_border_width] = @"border_width",
+          [MOB_PROP_caret] = @"caret",
+          [MOB_PROP_caret_color] = @"caret_color",
           [MOB_PROP_color] = @"color",
           [MOB_PROP_component_handle] = @"component_handle",
           [MOB_PROP_content_mode] = @"content_mode",
@@ -1063,6 +1070,7 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
           [MOB_PROP_drag_indicator_rail_height] = @"drag_indicator_rail_height",
           [MOB_PROP_drag_indicator_width] = @"drag_indicator_width",
           [MOB_PROP_draw] = @"draw",
+          [MOB_PROP_enabled] = @"enabled",
           [MOB_PROP_facing] = @"facing",
           [MOB_PROP_fade_on_scroll] = @"fade_on_scroll",
           [MOB_PROP_fill_height] = @"fill_height",
@@ -1078,9 +1086,11 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
           [MOB_PROP_keyboard] = @"keyboard",
           [MOB_PROP_letter_spacing] = @"letter_spacing",
           [MOB_PROP_line_height] = @"line_height",
+          [MOB_PROP_lines] = @"lines",
           [MOB_PROP_loop] = @"loop",
           [MOB_PROP_max] = @"max",
           [MOB_PROP_max_lines] = @"max_lines",
+          [MOB_PROP_max_length] = @"max_length",
           [MOB_PROP_min] = @"min",
           [MOB_PROP_module] = @"module",
           [MOB_PROP_name] = @"name",
@@ -1914,6 +1924,28 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         id disabled = pv[MOB_PROP_disabled];
         if ([disabled isKindOfClass:[NSNumber class]]) {
             node.disabled = [disabled boolValue];
+        }
+
+        if (node.nodeType == MobNodeTypeTextField) {
+            // The Mishka inputs spell it `enabled: false`; either spelling
+            // disables, as on Android. Applied after `disabled`, so neither can
+            // re-enable a field the other disabled.
+            id enabled = pv[MOB_PROP_enabled];
+            if ([enabled isKindOfClass:[NSNumber class]] && ![enabled boolValue]) {
+                node.disabled = YES;
+            }
+            id caretColor = pv[MOB_PROP_caret_color];
+            if ([caretColor isKindOfClass:[NSNumber class]])
+                node.caretColor = color_from_argb((long)[caretColor longLongValue]);
+            id caret = pv[MOB_PROP_caret];
+            if ([caret isKindOfClass:[NSString class]])
+                node.caretAtEnd = [caret isEqualToString:@"end"];
+            id maxLength = pv[MOB_PROP_max_length];
+            if ([maxLength isKindOfClass:[NSNumber class]])
+                node.maxLength = [maxLength integerValue];
+            id lines = pv[MOB_PROP_lines];
+            if ([lines isKindOfClass:[NSNumber class]])
+                node.textFieldLines = [lines integerValue];
         }
     }
 

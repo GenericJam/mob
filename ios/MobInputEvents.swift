@@ -125,9 +125,47 @@ struct MobContinuousInputModifier: ViewModifier {
     }
 }
 
-// SwiftUI's TextField does not expose UITextInput.markedTextRange. Opt into a
-// UIKit-backed field only when on_compose is registered; ordinary fields keep
-// their existing SwiftUI implementation and behavior.
+extension MobNode {
+    /// `resolvedFont` for UIKit views (the UITextField behind `caret: "end"`
+    /// and `on_compose`), from the same props. A custom family gets its weight
+    /// and italic as font traits, as `Font.custom(...).weight(...)` does.
+    var resolvedUIFont: UIFont {
+        let size: CGFloat = textSize > 0 ? textSize : 16.0
+        let weight: UIFont.Weight = {
+            switch fontWeight {
+            case "bold":     return .bold
+            case "semibold": return .semibold
+            case "medium":   return .medium
+            case "light":    return .light
+            case "thin":     return .thin
+            default:         return .regular
+            }
+        }()
+        let base: UIFont
+        if let name = MobNode.resolveFontName(primary: fontFamily), let custom = UIFont(name: name, size: size) {
+            let traits: [UIFontDescriptor.TraitKey: Any] = [.weight: weight]
+            base = UIFont(descriptor: custom.fontDescriptor.addingAttributes([.traits: traits]), size: size)
+        } else {
+            base = .systemFont(ofSize: size, weight: weight)
+        }
+        guard italic, let descriptor = base.fontDescriptor.withSymbolicTraits(
+            base.fontDescriptor.symbolicTraits.union(.traitItalic)
+        ) else { return base }
+        return UIFont(descriptor: descriptor, size: size)
+    }
+
+    var uiTextAlignment: NSTextAlignment {
+        switch textAlign {
+        case "center": return .center
+        case "right":  return .right
+        default:       return .natural
+        }
+    }
+}
+
+// SwiftUI's TextField does not expose UITextInput.markedTextRange or (before
+// iOS 18) the selection. Opt into a UIKit-backed field only when on_compose or
+// `caret: "end"` needs one; ordinary fields keep the SwiftUI implementation.
 struct MobComposingTextField: UIViewRepresentable {
     let node: MobNode
     let placeholder: String
@@ -148,7 +186,9 @@ struct MobComposingTextField: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UITextField {
         let field = UITextField(frame: .zero)
-        field.borderStyle = .roundedRect
+        // No chrome of its own: MobTextField draws the node's background,
+        // border, radius and padding around it, as for the SwiftUI field.
+        field.borderStyle = .none
         field.delegate = context.coordinator
         field.addTarget(
             context.coordinator,
@@ -180,7 +220,6 @@ struct MobComposingTextField: UIViewRepresentable {
     }
 
     private func configure(_ field: UITextField) {
-        field.placeholder = placeholder
         field.keyboardType = keyboardType
         field.returnKeyType = returnKeyType
         // UITextField.textContentType is optional; nil = no hint (system
@@ -189,6 +228,28 @@ struct MobComposingTextField: UIViewRepresentable {
         field.isSecureTextEntry = node.isSecure
         field.autocorrectionType = .default
         field.autocapitalizationType = .sentences
+
+        // The same type and colour props the SwiftUI field takes through
+        // modifiers, which do not reach a wrapped UIKit view (MOB-237).
+        // `font` and `textColor` are set before `defaultTextAttributes`, which
+        // is read-modify-write so they survive the kerning.
+        let color = node.textColor ?? .label
+        field.font = node.resolvedUIFont
+        field.textColor = node.disabled ? color.withAlphaComponent(color.cgColor.alpha * 0.38) : color
+        field.defaultTextAttributes[.kern] = node.letterSpacing
+        field.textAlignment = node.uiTextAlignment
+        // The caret follows the text unless told otherwise; nil keeps the
+        // system accent. See MobTextField.caretColor.
+        field.tintColor = node.caretColor ?? node.textColor
+        field.isEnabled = !node.disabled
+        if let placeholderColor = node.placeholderColor {
+            field.attributedPlaceholder = NSAttributedString(
+                string: placeholder,
+                attributes: [.foregroundColor: placeholderColor, .font: node.resolvedUIFont]
+            )
+        } else {
+            field.placeholder = placeholder
+        }
     }
 
     final class Coordinator: NSObject, UITextFieldDelegate {
@@ -223,10 +284,44 @@ struct MobComposingTextField: UIViewRepresentable {
             // editingChanged. Observing both hooks makes phase transitions
             // reliable; identical marked text is deduplicated below.
             observeComposition(in: textField)
+            pinCaret(in: textField)
+        }
+
+        func textField(
+            _ textField: UITextField,
+            shouldChangeCharactersIn range: NSRange,
+            replacementString string: String
+        ) -> Bool {
+            // `max_length` rejects a lengthening edit outright, as on Android
+            // and the web, in UTF-16 units (NSString's). A value the BEAM set
+            // past the limit must still be deletable, so shortening passes.
+            let limit = parent.node.maxLength
+            guard limit > 0 else { return true }
+            let current = (textField.text ?? "") as NSString
+            let newLength = current.length - range.length + (string as NSString).length
+            return newLength <= limit || newLength <= current.length
+        }
+
+        // `caret: "end"`: whatever a tap or drag selects, the insertion point
+        // goes back to the end, so a segmented code input never inserts in
+        // front of the digits it already has. Marked text is left alone; the
+        // IME owns the selection while composing. The assignment re-enters
+        // here once, then finds the caret already at the end.
+        private func pinCaret(in textField: UITextField) {
+            guard parent.node.caretAtEnd, textField.markedTextRange == nil else { return }
+            let end = textField.endOfDocument
+            if let selected = textField.selectedTextRange,
+               selected.isEmpty, textField.compare(selected.start, to: end) == .orderedSame {
+                return
+            }
+            textField.selectedTextRange = textField.textRange(from: end, to: end)
         }
 
         func textFieldDidBeginEditing(_ textField: UITextField) {
             if !parent.isFocused { parent.onFocusChange(true) }
+            // The focusing tap placed the caret before this runs; UIKit can
+            // also re-place it after, which didChangeSelection catches.
+            pinCaret(in: textField)
         }
 
         func textFieldDidEndEditing(_ textField: UITextField) {
