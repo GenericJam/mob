@@ -49,13 +49,20 @@ defmodule Mob.CrashReport do
   """
   @spec reraise(:error | :exit | :throw, term(), Exception.stacktrace()) :: no_return()
   def reraise(:throw, value, stacktrace),
-    do: :erlang.raise(:exit, {:bad_return_value, message(value)}, strip(stacktrace))
+    do: :erlang.raise(:exit, {:bad_return_value, thrown(value)}, strip(stacktrace))
 
   def reraise(:error, error, stacktrace),
     do: :erlang.raise(:error, redact_exception(error, stacktrace), strip(stacktrace))
 
   def reraise(:exit, reason, stacktrace),
     do: :erlang.raise(:exit, reason(reason), strip(stacktrace))
+
+  # A thrown term is arbitrary app data: no position in it is a name the
+  # screen's source defines, so only an atom tag survives.
+  defp thrown(value) when is_tuple(value) and tuple_size(value) > 0 and is_atom(elem(value, 0)),
+    do: tag_only(value)
+
+  defp thrown(_value), do: :redacted
 
   @doc """
   `reraise/3` for `init/1`, where a crash ends the process without a

@@ -40,6 +40,10 @@ defmodule Mob.Screen.CrashRedactionTest do
     # with {:bad_return_value, value}, here the socket.
     def handle_event("throw", _params, socket), do: throw({:gave_up, socket})
 
+    # Shaped like an {:event, name, params} message, whose name message/1 keeps.
+    def handle_event("throw_event_shaped", _params, socket),
+      do: throw({:event, socket.assigns.password, nil})
+
     def handle_event("crash_task", _params, socket) do
       Task.start_link(fn -> Map.fetch!(socket.assigns, :no_such_key) end)
       {:noreply, socket}
@@ -197,6 +201,16 @@ defmodule Mob.Screen.CrashRedactionTest do
     assert_receive {:DOWN, ^ref, :process, ^screen, reason}
     assert {:bad_return_value, {:gave_up, :redacted}} = reason
     assert_redacted(logs, ["{:bad_return_value, {:gave_up, :redacted}}"])
+  end
+
+  test "a thrown term keeps only its tag, whatever its shape", %{router: router} do
+    screen = screen_pid(router)
+    ref = Process.monitor(screen)
+    logs = crash(router, fn _ -> Mob.Screen.dispatch(router, "throw_event_shaped", %{}) end)
+
+    assert_receive {:DOWN, ^ref, :process, ^screen, reason}
+    assert reason == {:bad_return_value, {:event, :redacted, :redacted}}
+    assert_redacted(logs, ["bad_return_value"])
   end
 
   test "an exception whose message embeds the assigns is logged without its message",
