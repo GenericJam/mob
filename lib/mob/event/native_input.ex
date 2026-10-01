@@ -31,7 +31,10 @@ defmodule Mob.Event.NativeInput do
   `Mob.Event.Bridge.legacy_to_canonical/3` where the Bridge models the shape.
   Where it does not, the same rule applies with the widget kind the event
   implies (`:text_field` for focus, blur and submit, `:sheet` for dismiss,
-  `:button` otherwise, as for a tap). A tag that is not a valid address id
+  `:button` otherwise, as for a tap). A `:change` takes its widget from the
+  value's type, which is all native tells us about the control: a boolean is a
+  `:toggle`, a binary a `:text_field` (anything else keeps the Bridge's
+  default). A tag that is not a valid address id
   (`Mob.Event.Address.validate_id/1`) is named `:opaque`.
 
   A receipt carries the name and never the payload: a text field's value is
@@ -77,11 +80,17 @@ defmodule Mob.Event.NativeInput do
   """
   @spec canonical(tuple(), term()) :: {Address.t() | :opaque, atom(), term()}
   def canonical(message, screen) do
-    case Bridge.legacy_to_canonical(message, screen) do
+    case Bridge.legacy_to_canonical(message, screen, widget_opts(message)) do
       {:ok, {:mob_event, addr, event, payload}} -> {addr, event, payload}
       :passthrough -> unmodelled(message, screen)
     end
   end
+
+  # The Bridge calls every `:change` a `:text_field`, which mislabels a toggle.
+  # Only the value's type is read; a receipt still never carries the value.
+  defp widget_opts({:change, _tag, value}) when is_boolean(value), do: [widget: :toggle]
+  defp widget_opts({:change, _tag, value}) when is_binary(value), do: [widget: :text_field]
+  defp widget_opts(_message), do: []
 
   @doc """
   What a receipt records for a native input: `{event, address}`, or

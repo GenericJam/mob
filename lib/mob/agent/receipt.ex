@@ -259,6 +259,9 @@ defmodule Mob.Agent.Receipt do
     asked; confirming what happened needs the router, which is not wired yet.
   * `:no_visible_change` — the handler ran and the frame came out identical.
   * `:not_committed` — a new frame was built and never handed to the sender.
+  * `:inert` — the handler ran and changed nothing. For native input this is
+    also what a tap no `handle_info/2` clause acted on reads as: the screen's
+    catch-all ran, so there is no "no clause matched" to observe.
   * `:unhandled` — no clause matched the event.
   * `:undeliverable` — the input was addressed to a screen that had died, so no
     handler ran. Not forwarded to its replacement, which may be showing

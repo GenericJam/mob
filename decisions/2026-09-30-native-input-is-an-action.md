@@ -79,7 +79,11 @@ an agent drives.
 is `{event_atom, %Mob.Event.Address{}}`, from
 `Mob.Event.Bridge.legacy_to_canonical/3` where the Bridge models the shape, and
 from the same rule with an implied widget kind (`:text_field` for focus, blur,
-submit; `:sheet` for dismiss; `:button` otherwise) where it does not. The
+submit; `:sheet` for dismiss; `:button` otherwise) where it does not. A
+`:change` takes its widget from the value's type — a boolean is a `:toggle`, a
+binary a `:text_field` — because the Bridge calls every change a text field,
+and on the Moto G a `<Toggle>` flip was receipted as one; the Bridge's own
+documented default is left alone. Only the type is read. The
 payload is dropped because a text field's value is what the user typed, and a
 receipt is written to ETS and handed to telemetry — MOB-155's rule that a
 receipt carries nothing out of the socket, extended to what came in. A tag that

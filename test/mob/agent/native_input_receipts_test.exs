@@ -97,7 +97,9 @@ defmodule Mob.Agent.NativeInputReceiptsTest do
 
     capture_log(fn ->
       send(screen, {:tap, :boom})
-      assert_receive {:DOWN, ^ref, :process, ^screen, _reason}
+      # Not the 100 ms default: the crash report is formatted before the exit,
+      # and that alone has exceeded it on a cold, loaded VM.
+      assert_receive {:DOWN, ^ref, :process, ^screen, _reason}, 5_000
     end)
 
     receipt = recent()
@@ -118,6 +120,18 @@ defmodule Mob.Agent.NativeInputReceiptsTest do
 
     refute inspect(receipt, limit: :infinity) =~ "secret",
            "the receipt carried the field's value"
+  end
+
+  test "a toggle flip is named as a toggle, not a text field", %{screen: screen} do
+    # Seen on the Moto G: the Bridge calls every :change a :text_field, so a
+    # <Toggle on_change=...> flip was receipted and traced as one. The value's
+    # type is the only thing native says about which control fired.
+    Mob.Event.Trace.subscribe()
+
+    deliver(screen, {:change, :flag, true})
+
+    assert {:change, %Address{widget: :toggle, id: :flag}} = recent().event
+    assert_received {:mob_trace, %Address{widget: :toggle, id: :flag}, :change, true}
   end
 
   test "a tag that is not a valid address id is recorded as opaque", %{screen: screen} do
