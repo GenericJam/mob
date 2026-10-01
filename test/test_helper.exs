@@ -23,4 +23,8 @@
 # async module before any sync one, so it cannot race the two above.
 {:ok, _} = Mob.ComponentRegistry.start_link()
 
-ExUnit.start(exclude: [:onboarding, :on_device])
+# `:zig` tests shell out to a real zig toolchain (MOB-226); skip where none is
+# installed (CI) rather than fail.
+zig_exclude = if System.find_executable("zig"), do: [], else: [:zig]
+
+ExUnit.start(exclude: [:onboarding, :on_device] ++ zig_exclude)
