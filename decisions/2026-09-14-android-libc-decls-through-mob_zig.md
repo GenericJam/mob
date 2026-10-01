@@ -77,5 +77,8 @@ narrowest way to unbreak every existing app.
   flag lets the app keep building. If someone re-audits the template,
   drop it then.
 - The runtime behavior of the post_mortem marker write is unchanged; the
-  file at `<data>/mob_post_mortem_last_ts` is opened, written, and closed
-  by the same three Bionic calls as before.
+  file at `<filesDir>/mob_post_mortem_appexit_marker.txt` is opened,
+  written, and closed by the same three Bionic calls as before.
+  (Corrected 2026-10-01: an earlier revision named it
+  `<data>/mob_post_mortem_last_ts`, which is not the file's name; see
+  `MARKER_FILENAME` in `android/jni/mob_nif.zig`.)
