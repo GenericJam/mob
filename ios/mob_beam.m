@@ -50,7 +50,7 @@ static const char *resolve_dist_cookie(const char *beams_dir) {
         NSLog(@"[MobBeam] dist cookie: %s/%s", beams_dir, MOB_DIST_COOKIE_FILE);
         break;
     case MOB_DIST_COOKIE_RANDOM:
-        NSLog(@"[MobBeam] dist cookie: random for this launch (no MOB_DIST_COOKIE, no valid "
+        NSLog(@"[MobBeam] dist cookie: random for this launch (no usable MOB_DIST_COOKIE, no valid "
               @"%s/%s); mob_dev can't connect — run mix mob.deploy",
               beams_dir, MOB_DIST_COOKIE_FILE);
         break;
