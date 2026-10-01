@@ -35,9 +35,10 @@ defmodule Mob.PostMortem.Android do
   boot that dies before anyone looks — `mix mob.connect` restarts the
   app, for one — would take the exit with it. So each drained exit is
   written to `Mob.PostMortem.Journal` before it is emitted, and every
-  sweep, in this boot or a later one, emits it again until a
-  subscriber has received it or a reader has asked the bus. Within one
-  boot a re-sweep emits nothing it already emitted.
+  sweep, in this boot or a later one, emits it again until its capsule
+  was handed to a subscriber when emitted or returned by
+  `Mob.Defect.Bus.recent/1`. Within one boot a re-sweep emits nothing
+  it already emitted.
 
   ## Platform gating
 
@@ -88,7 +89,7 @@ defmodule Mob.PostMortem.Android do
     case safe_platform(nif) do
       :android ->
         fresh = nif |> safe_drain() |> Enum.flat_map(&identify/1)
-        Journal.sweep(journal, :android, fresh, &Defect.emit_appexit_reason/1)
+        Journal.sweep(journal, :android, fresh, &Defect.appexit_capsule/1)
 
       _ ->
         []

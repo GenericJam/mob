@@ -208,7 +208,13 @@ defmodule Mob.Defect do
     kept running, this is a heads-up)
   """
   @spec emit_metrickit_payload(map()) :: Capsule.t()
-  def emit_metrickit_payload(
+  def emit_metrickit_payload(payload), do: payload |> metrickit_capsule() |> Bus.emit()
+
+  @doc false
+  # The capsule `emit_metrickit_payload/1` emits, for a caller that emits it
+  # itself (`Mob.PostMortem.Journal`, which needs `Bus.emit_delivered/1`).
+  @spec metrickit_capsule(map()) :: Capsule.t()
+  def metrickit_capsule(
         %{
           kind: kind,
           top_frame: %{binary: binary, offset: offset},
@@ -233,7 +239,6 @@ defmodule Mob.Defect do
         raw_json: Map.get(payload, :raw_json)
       }
     )
-    |> Bus.emit()
   end
 
   defp metrickit_severity(:native_crash), do: :fatal
@@ -285,7 +290,13 @@ defmodule Mob.Defect do
   triage row.
   """
   @spec emit_appexit_reason(map()) :: Capsule.t()
-  def emit_appexit_reason(
+  def emit_appexit_reason(entry), do: entry |> appexit_capsule() |> Bus.emit()
+
+  @doc false
+  # The capsule `emit_appexit_reason/1` emits, for a caller that emits it
+  # itself (`Mob.PostMortem.Journal`, which needs `Bus.emit_delivered/1`).
+  @spec appexit_capsule(map()) :: Capsule.t()
+  def appexit_capsule(
         %{
           reason_code: reason_code,
           pid: _pid,
@@ -314,7 +325,6 @@ defmodule Mob.Defect do
         timestamp_ms: timestamp_ms
       }
     )
-    |> Bus.emit()
   end
 
   # Reason code → defect kind. Numeric constants from

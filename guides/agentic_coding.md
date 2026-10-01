@@ -328,10 +328,13 @@ picks up the evidence the OS and the BEAM leave behind and puts it on the bus:
 fingerprint), iOS MetricKit crash, hang and CPU/disk diagnostics, and
 Android's `ApplicationExitInfo` history (crashes, ANRs, OOM kills). The OS
 hands a MetricKit payload or an exit over once, so mob journals it and every
-sweep, across boots, emits it again until it has been observed: delivered to a
-`Mob.Defect.Bus` subscriber, or read with `recent/1`, `classes/1` or
-`subscribe/1`. An app restart before you attached (`mix mob.connect` does one)
-no longer loses it. Nothing runs automatically; call it from
+sweep, across boots, emits it again until that capsule has been observed:
+handed to a `Mob.Defect.Bus` subscriber when it was emitted, or returned by
+`Mob.Defect.Bus.recent/1`. Subscribing afterwards, or listing `classes/1`, does
+not count. An app restart before you attached (`mix mob.connect` does one) no
+longer loses it: the new boot's sweep emits it again, and
+`:rpc.call(node, Mob.Defect.Bus, :recent, [])` shows it (a sweep that already
+ran this boot emits nothing new). Nothing runs automatically; call it from
 `on_start/0` or from your session after a launch you did not watch.
 
 ```elixir
