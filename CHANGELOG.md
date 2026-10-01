@@ -8,7 +8,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.9.6] - 2026-09-30
 
 ### Added
 - **Project config reaches the device.** `Mob.App.start/0` now applies the
