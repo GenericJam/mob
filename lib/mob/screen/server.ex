@@ -132,8 +132,52 @@ defmodule Mob.Screen.Server do
 
   # ── GenServer ─────────────────────────────────────────────────────────────
 
+  # MOB-310. Every callback runs app code, and a crash's reason and stacktrace
+  # become the exit reason the router logs, the exit the caller of a
+  # `GenServer.call` receives, and OTP's crash report. A `FunctionClauseError`
+  # frame holds the socket and a `KeyError` embeds the map it searched, so the
+  # crash is redacted here, before any of them sees it.
   @impl GenServer
   def init(opts) do
+    do_init(opts)
+  catch
+    kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
+  end
+
+  @impl GenServer
+  def handle_call(request, from, state) do
+    do_handle_call(request, from, state)
+  catch
+    kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
+  end
+
+  @impl GenServer
+  def handle_cast(request, state) do
+    do_handle_cast(request, state)
+  catch
+    kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
+  end
+
+  @impl GenServer
+  def handle_info(message, state) do
+    do_handle_info(message, state)
+  catch
+    kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
+  end
+
+  @impl GenServer
+  def terminate(reason, state) do
+    do_terminate(reason, state)
+  catch
+    kind, crash -> Mob.CrashReport.reraise(kind, crash, __STACKTRACE__)
+  end
+
+  # MOB-310. OTP's crash report and `:sys.get_status/1` print the state, the
+  # last message and the reason; all three can carry assigns or typed values.
+  @impl GenServer
+  def format_status(status), do: Mob.CrashReport.format_status(status)
+
+  defp do_init(opts) do
     # Trapping so this screen shuts down gracefully when its owner exits:
     # gen_server turns the parent's EXIT into a terminate/2 call, which is what
     # runs the user's terminate/2 and the final Mob.ScreenState dump. Without
@@ -185,8 +229,7 @@ defmodule Mob.Screen.Server do
     end
   end
 
-  @impl GenServer
-  def handle_call({:event, event, params}, _from, state) do
+  defp do_handle_call({:event, event, params}, _from, state) do
     # MOB-155. The receipt is assembled around the callback rather than inside
     # it, so the stages are observed rather than reported: a handler cannot
     # claim it changed something it did not.
@@ -238,22 +281,22 @@ defmodule Mob.Screen.Server do
     end
   end
 
-  def handle_call(:get_socket, _from, state), do: {:reply, state.socket, state}
+  defp do_handle_call(:get_socket, _from, state), do: {:reply, state.socket, state}
 
-  def handle_call(:discard_persisted_state, _from, state) do
+  defp do_handle_call(:discard_persisted_state, _from, state) do
     if state.module.__mob_persist__(), do: Mob.ScreenState.delete(state.module, state.socket)
     {:reply, :ok, Map.put(state, :persist_on_terminate, false)}
   end
 
-  def handle_call(:get_tree, _from, state) do
+  defp do_handle_call(:get_tree, _from, state) do
     {:reply, state.module.render(state.socket.assigns), state}
   end
 
-  def handle_call({:render_sync, transition}, _from, state) do
+  defp do_handle_call({:render_sync, transition}, _from, state) do
     {:reply, :ok, %{state | socket: paint(state, transition, :sync)}}
   end
 
-  def handle_call({:render_sync, transition, activation_token}, _from, state) do
+  defp do_handle_call({:render_sync, transition, activation_token}, _from, state) do
     {:reply, :ok, %{state | socket: paint(state, transition, :sync, activation_token)}}
   end
 
@@ -350,28 +393,26 @@ defmodule Mob.Screen.Server do
   defp summarize({kind, reason}, stacktrace),
     do: Mob.Agent.Receipt.summarize_error(kind, reason, stacktrace)
 
-  @impl GenServer
-  def handle_cast({:render, transition}, state) do
+  defp do_handle_cast({:render, transition}, state) do
     {:noreply, %{state | socket: paint(state, transition)}}
   end
 
-  def handle_cast({:render, transition, activation_token}, state) do
+  defp do_handle_cast({:render, transition, activation_token}, state) do
     {:noreply, %{state | socket: paint(state, transition, :async, activation_token)}}
   end
 
-  def handle_cast(:__mob_hot_reload__, state) do
+  defp do_handle_cast(:__mob_hot_reload__, state) do
     {:noreply, %{state | socket: paint(state, :none)}}
   end
 
-  @impl GenServer
   # A list row selection arrives as a tap with a structured tag; the user sees
   # the simpler {:select, id, index}.
-  def handle_info({:tap, {:list, id, :select, index}} = input, state) do
+  defp do_handle_info({:tap, {:list, id, :select, index}} = input, state) do
     forward_input(input, {:select, id, index}, state)
   end
 
   # A component's state changed — repaint so the native view gets fresh props.
-  def handle_info({:component_changed, _id, _module}, state) do
+  defp do_handle_info({:component_changed, _id, _module}, state) do
     {:noreply, %{state | socket: paint(state, :none)}}
   end
 
@@ -384,8 +425,7 @@ defmodule Mob.Screen.Server do
   # reached from a paint, and nothing repaints when a scene connects. A screen
   # that painted during a prewarmed launch would show its placeholder as the
   # user's first visible frame and keep it until they interacted.
-  @impl GenServer
-  def handle_info({:mob_window, :connected}, state) do
+  defp do_handle_info({:mob_window, :connected}, state) do
     socket = Mob.Socket.put_mob(state.socket, :safe_area_confirmed, false)
     state = %{state | socket: socket}
     {:noreply, %{state | socket: do_paint(state, :none, :async, nil, false)}}
@@ -393,7 +433,7 @@ defmodule Mob.Screen.Server do
 
   # Periodic state sync — intercepted before the user's handle_info so the
   # screen module never sees this internal message.
-  def handle_info(:__mob_sync_state__, state) do
+  defp do_handle_info(:__mob_sync_state__, state) do
     if Map.get(state, :persist_on_terminate, true) and state.module.__mob_persist__() do
       Mob.ScreenState.dump(state.module, state.socket)
       schedule_state_sync()
@@ -404,19 +444,19 @@ defmodule Mob.Screen.Server do
 
   # Android file/camera/photo/scan results arrive JSON-encoded; decode and
   # re-dispatch as the user-facing event tuple.
-  def handle_info({:mob_file_result, event, sub, json_binary}, state) do
-    handle_info(decode_file_result(event, sub, json_binary), state)
+  defp do_handle_info({:mob_file_result, event, sub, json_binary}, state) do
+    do_handle_info(decode_file_result(event, sub, json_binary), state)
   end
 
   # A few Peripheral.* events carry JSON-encoded device records; the
   # transport's own module knows how to decode them.
-  def handle_info({:peripheral, :vendor_usb, _tag, _session, _payload} = msg, state) do
-    handle_info(Mob.VendorUsb.normalize_message(msg), state)
+  defp do_handle_info({:peripheral, :vendor_usb, _tag, _session, _payload} = msg, state) do
+    do_handle_info(Mob.VendorUsb.normalize_message(msg), state)
   end
 
   # Activated plugins get first crack at every notification. One whose :match
   # matches handles it and the screen never sees it.
-  def handle_info({:notification, payload} = message, state) when is_map(payload) do
+  defp do_handle_info({:notification, payload} = message, state) when is_map(payload) do
     case Mob.Plugins.dispatch_notification(payload) do
       :handled -> {:noreply, state}
       :unhandled -> forward(message, state)
@@ -427,17 +467,17 @@ defmodule Mob.Screen.Server do
   # instead of killing this screen. Passing it to the user's handle_info would
   # silently swallow it — the default clause ignores unknown messages — so say
   # so, then let the screen see it in case it wants to react.
-  def handle_info({:EXIT, pid, reason} = message, state)
-      when reason != :normal and pid != :erlang.map_get(:owner, state) do
+  defp do_handle_info({:EXIT, pid, reason} = message, state)
+       when reason != :normal and pid != :erlang.map_get(:owner, state) do
     Logger.warning(
       "[mob] #{inspect(state.module)}: linked process #{inspect(pid)} exited: " <>
-        "#{inspect(reason)}"
+        Mob.CrashReport.format(reason)
     )
 
     forward(message, state)
   end
 
-  def handle_info(message, state) do
+  defp do_handle_info(message, state) do
     case Mob.Event.NativeInput.kind(message) do
       :discrete ->
         forward_input(message, message, state)
@@ -451,8 +491,7 @@ defmodule Mob.Screen.Server do
     end
   end
 
-  @impl GenServer
-  def terminate(reason, state) do
+  defp do_terminate(reason, state) do
     if Map.get(state, :persist_on_terminate, true) and state.module.__mob_persist__() do
       Mob.ScreenState.dump(state.module, state.socket)
     end

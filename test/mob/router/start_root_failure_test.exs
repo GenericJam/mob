@@ -77,7 +77,9 @@ defmodule Mob.Router.StartRootFailureTest do
     assert log =~
              "[mob] root screen Mob.Router.StartRootFailureTest.RaisingMountScreen failed to start"
 
-    assert log =~ "delivered mount bug"
+    # The exception and where it was raised; its message is withheld (MOB-310).
+    assert log =~ "RuntimeError"
+    assert log =~ "RaisingMountScreen.mount/3"
   end
 
   test "a root screen whose mount returns an error is logged with the reason" do

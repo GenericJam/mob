@@ -39,8 +39,48 @@ defmodule Mob.ComponentServer do
 
   # ── GenServer ──────────────────────────────────────────────────────────────
 
+  # MOB-310. Same as `Mob.Screen.Server`: every callback runs app code, so a
+  # crash is redacted before it becomes this process's exit reason, and the
+  # state and last message are redacted for OTP's crash report.
   @impl GenServer
   def init(opts) do
+    do_init(opts)
+  catch
+    kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
+  end
+
+  @impl GenServer
+  def handle_call(request, from, state) do
+    do_handle_call(request, from, state)
+  catch
+    kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
+  end
+
+  @impl GenServer
+  def handle_cast(request, state) do
+    do_handle_cast(request, state)
+  catch
+    kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
+  end
+
+  @impl GenServer
+  def handle_info(message, state) do
+    do_handle_info(message, state)
+  catch
+    kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
+  end
+
+  @impl GenServer
+  def terminate(reason, state) do
+    do_terminate(reason, state)
+  catch
+    kind, crash -> Mob.CrashReport.reraise(kind, crash, __STACKTRACE__)
+  end
+
+  @impl GenServer
+  def format_status(status), do: Mob.CrashReport.format_status(status)
+
+  defp do_init(opts) do
     # A component is isolated from its screen, but still needs graceful
     # termination so its native handle and user state are released.
     Process.flag(:trap_exit, true)
@@ -121,37 +161,34 @@ defmodule Mob.ComponentServer do
       @no_handle
   end
 
-  @impl GenServer
-  def handle_call(:render_props, _from, %{module: module, socket: socket} = state) do
+  defp do_handle_call(:render_props, _from, %{module: module, socket: socket} = state) do
     {:reply, module.render(socket.assigns), state}
   end
 
-  def handle_call(:get_handle, _from, %{handle: handle} = state) do
+  defp do_handle_call(:get_handle, _from, %{handle: handle} = state) do
     {:reply, handle, state}
   end
 
-  @impl GenServer
-  def handle_cast({:update, new_props}, %{module: module, socket: socket} = state) do
+  defp do_handle_cast({:update, new_props}, %{module: module, socket: socket} = state) do
     case module.update(new_props, socket) do
       {:ok, new_socket} -> {:noreply, %{state | socket: new_socket}}
       _ -> {:noreply, state}
     end
   end
 
-  def handle_cast(
-        {:event, event, payload},
-        %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state
-      ) do
+  defp do_handle_cast(
+         {:event, event, payload},
+         %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state
+       ) do
     {:noreply, new_socket} = module.handle_event(event, payload, socket)
     send(screen_pid, {:component_changed, id, module})
     {:noreply, %{state | socket: new_socket}}
   end
 
-  @impl GenServer
-  def handle_info(
-        {:component_event, event, payload_json},
-        %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state
-      ) do
+  defp do_handle_info(
+         {:component_event, event, payload_json},
+         %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state
+       ) do
     event = to_binary(event)
     payload = decode_payload(payload_json)
 
@@ -160,23 +197,23 @@ defmodule Mob.ComponentServer do
     {:noreply, %{state | socket: new_socket}}
   end
 
-  def handle_info(
-        {:DOWN, monitor, :process, screen_pid, reason},
-        %{screen_monitor: monitor, screen_pid: screen_pid} = state
-      ) do
+  defp do_handle_info(
+         {:DOWN, monitor, :process, screen_pid, reason},
+         %{screen_monitor: monitor, screen_pid: screen_pid} = state
+       ) do
     {:stop, reason, state}
   end
 
   # Preserve graceful termination for callers that deliberately link a
   # component process despite ComponentServer.start/1 itself being unlinked.
-  def handle_info({:EXIT, _from, reason}, state) do
+  defp do_handle_info({:EXIT, _from, reason}, state) do
     {:stop, reason, state}
   end
 
-  def handle_info(
-        message,
-        %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state
-      ) do
+  defp do_handle_info(
+         message,
+         %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state
+       ) do
     {:noreply, new_socket} = module.handle_info(message, socket)
     send(screen_pid, {:component_changed, id, module})
     {:noreply, %{state | socket: new_socket}}
@@ -232,15 +269,14 @@ defmodule Mob.ComponentServer do
     ErlangError -> %{}
   end
 
-  @impl GenServer
-  def terminate(reason, %{
-        module: module,
-        socket: socket,
-        screen_pid: screen_pid,
-        id: id,
-        handle: handle,
-        nif: nif
-      }) do
+  defp do_terminate(reason, %{
+         module: module,
+         socket: socket,
+         screen_pid: screen_pid,
+         id: id,
+         handle: handle,
+         nif: nif
+       }) do
     Mob.ComponentRegistry.deregister(screen_pid, id, module, self())
     if handle >= 0, do: nif.deregister_component(handle)
     module.terminate(reason, socket)

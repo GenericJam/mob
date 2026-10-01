@@ -237,6 +237,18 @@ and loses its assigns — persisted screens get their dumped state back through
 itself is visible to the user. Restarts are capped (5 in 10 seconds per screen)
 so a screen that crashes on every render cannot spin.
 
+The crash is logged without the screen's data, because on a device the log is
+logcat or the iOS console, which `adb` and bug reports read in release builds.
+The router's line, OTP's crash report and the exit reason (including the
+`reason` your `terminate/2` receives) name the exception's module and its
+stacktrace by arity — `KeyError` in `MyScreen.handle_event/3` at line 12 — but
+never its message (unless mob wrote it) or the call's arguments: a `KeyError`'s
+message embeds the map it searched, and a `FunctionClauseError` frame holds the
+socket. The crash report shows the assigns' keys, not their values, and of the
+last message only its tag and the names your source defines, never a value
+(`{:change, :name, :redacted}`, `{:event, "save", :redacted}`).
+`Mob.Agent.Receipts` records which event a crash came from.
+
 Because each screen owns its own process, `self()` in a callback is that
 screen's pid. A task or timer started by a screen delivers to that screen —
 even if it's parked under an inactive tab — and if the screen has been popped
