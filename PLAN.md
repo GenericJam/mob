@@ -715,7 +715,7 @@ iOS: `AVCaptureMetadataOutput` + `MobScannerViewController`. Android: `MobScanne
 
 All notifications arrive via `handle_info` regardless of app state. When the app is killed and relaunched via a notification tap, the payload is stored at launch time and delivered after the root screen's `mount/3` completes.
 
-**iOS setup:** In your `AppDelegate`/scene delegate, call `mob_set_launch_notification_json(json)` for remote-notification launches, and `mob_send_push_token(hexToken)` from `application(_:didRegisterForRemoteNotificationsWithDeviceToken:)`.
+**iOS setup:** Call `mob_send_push_token(hexToken)` from `application(_:didRegisterForRemoteNotificationsWithDeviceToken:)`. The launch tap needs no call: `mob_init_ui()` (from `didFinishLaunching`) installs mob's delegate, which delivers it (2026-10-01, MOB-178; calling `mob_set_launch_notification_json` for it as well would deliver it twice).
 
 **Android setup:** `NotificationReceiver` BroadcastReceiver handles scheduled local notifications. Push requires adding `com.google.firebase:firebase-messaging` to build.gradle and uncommenting the FCM token retrieval in `MobBridge.notify_register_push`.
 

@@ -46,7 +46,7 @@ defmodule Mob.Test do
       Mob.Test.send_message(node, {:permission, :camera, :granted})
       Mob.Test.send_message(node, {:camera, :photo, %{path: "/tmp/photo.jpg", width: 1920, height: 1080}})
       Mob.Test.send_message(node, {:location, %{lat: 43.65, lon: -79.38, accuracy: 10.0, altitude: 80.0}})
-      Mob.Test.send_message(node, {:notification, %{id: "n1", title: "Hi", body: "Hey", data: %{}, source: :push}})
+      Mob.Test.send_message(node, {:notification, %{id: "n1", title: "Hi", body: "Hey", data: %{}, source: :push, presentation: :tap, action: "default"}})
 
   ## Tap vs send_message
 
@@ -647,7 +647,7 @@ defmodule Mob.Test do
       Mob.Test.send_message(node, {:scan, :result, %{type: :qr, value: "https://example.com"}})
 
       # Notifications
-      Mob.Test.send_message(node, {:notification, %{id: "n1", title: "Hi", body: "Hello", data: %{}, source: :push}})
+      Mob.Test.send_message(node, {:notification, %{id: "n1", title: "Hi", body: "Hello", data: %{}, source: :push, presentation: :tap, action: "default"}})
       Mob.Test.send_message(node, {:push_token, :ios, "abc123def456"})
 
       # Biometric

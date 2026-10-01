@@ -43,6 +43,7 @@ extern char *dlerror(void) __attribute__((weak));
 #import <Photos/Photos.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <UserNotifications/UserNotifications.h>
+#import <os/lock.h>
 #include <string.h>
 
 #define LOGI(...) NSLog(@"[MobNIF] " __VA_ARGS__)
@@ -3336,21 +3337,37 @@ static UIViewController *mob_root_vc(void) {
     return nil;
 }
 
-// ── Launch notification global ─────────────────────────────────────────────
-// Written by mob_set_launch_notification_json() (called from app delegate);
-// read and cleared by nif_take_launch_notification.
-static char *g_launch_notification_json = NULL;
-static ErlNifMutex *g_launch_notif_mutex = NULL;
+// ── Notification delivery ──────────────────────────────────────────────────
+// Every notification reaches the BEAM as Mob.Notification's JSON envelope,
+// handed to the :mob_screen router, which decodes it once for both platforms
+// and forwards {:notification, map} (decisions/2026-10-01-notification-
+// delivery-envelope.md). When the router can't take it yet — erts not up, as
+// for the tap that cold-launched the app — the envelope waits in a FIFO that
+// the router drains when it starts (nif_take_launch_notification, one per
+// call). A FIFO, not one slot: a foreground arrival during boot must not
+// displace the tap that launched the app.
+#define MOB_STORED_NOTIFICATIONS_MAX 16
+static char *g_stored_notifications[MOB_STORED_NOTIFICATIONS_MAX];
+static size_t g_stored_notifications_head = 0;
+static size_t g_stored_notifications_count = 0;
+// Guards the FIFO. Not an ErlNifMutex: the delegate stores before erts exists
+// (the launching tap) and can store while it is still starting (a foreground
+// arrival during boot), so the lock has to work then.
+static os_unfair_lock g_launch_notif_lock = OS_UNFAIR_LOCK_INIT;
 
 @interface MobNotificationDelegate : NSObject <UNUserNotificationCenterDelegate>
+// Set by mob_notify (main queue only); hasScreenPid is NO until then.
 @property(nonatomic) ErlNifPid screenPid;
+@property(nonatomic) BOOL hasScreenPid;
 @end
 static MobNotificationDelegate *g_notif_delegate;
+// Whether mob_notify has made g_notif_delegate the center's delegate. Main queue.
+static BOOL g_notif_delegate_claimed = NO;
 
 // Called from AppDelegate didRegisterForRemoteNotificationsWithDeviceToken.
 // Sends {:push_token, :ios, token_hex_string} to the registered screen process.
 void mob_send_push_token(const char *hex_token) {
-    if (!g_notif_delegate)
+    if (!mob_runtime_up() || !g_notif_delegate.hasScreenPid)
         return;
     ErlNifPid p = g_notif_delegate.screenPid;
     ErlNifEnv *e = enif_alloc_env();
@@ -3364,29 +3381,101 @@ void mob_send_push_token(const char *hex_token) {
     enif_free_env(e);
 }
 
+// {:mob_notification, json, target | nil} to the router. NO when there is no
+// router to send to, so the caller stores the envelope instead.
+static BOOL mob_send_notification_to_router(const char *json, const ErlNifPid *target) {
+    if (!mob_runtime_up())
+        return NO;
+    ErlNifEnv *e = enif_alloc_env();
+    ErlNifPid router;
+    BOOL sent = NO;
+    if (enif_whereis_pid(e, enif_make_atom(e, "mob_screen"), &router)) {
+        size_t len = strlen(json);
+        ErlNifBinary b;
+        enif_alloc_binary(len, &b);
+        memcpy(b.data, json, len);
+        ERL_NIF_TERM t = target ? enif_make_pid(e, target) : enif_make_atom(e, "nil");
+        ERL_NIF_TERM msg =
+            enif_make_tuple3(e, enif_make_atom(e, "mob_notification"), enif_make_binary(e, &b), t);
+        sent = enif_send(NULL, &router, e, msg) ? YES : NO;
+    }
+    enif_free_env(e);
+    return sent;
+}
+
+// Appends to the FIFO. When it is full (no router has drained it, e.g. an
+// app that never starts a root screen) the newest envelope is dropped, so the
+// launching tap is kept.
+static void mob_store_notification(const char *json) {
+    char *copy = strdup(json);
+    os_unfair_lock_lock(&g_launch_notif_lock);
+    BOOL stored = g_stored_notifications_count < MOB_STORED_NOTIFICATIONS_MAX;
+    if (stored) {
+        size_t tail = (g_stored_notifications_head + g_stored_notifications_count) %
+                      MOB_STORED_NOTIFICATIONS_MAX;
+        g_stored_notifications[tail] = copy;
+        g_stored_notifications_count++;
+    }
+    os_unfair_lock_unlock(&g_launch_notif_lock);
+    if (!stored) {
+        NSLog(@"[Mob] notification dropped: %d already waiting for the router",
+              MOB_STORED_NOTIFICATIONS_MAX);
+        free(copy);
+    }
+}
+
+static void mob_clear_stored_notifications(void) {
+    os_unfair_lock_lock(&g_launch_notif_lock);
+    while (g_stored_notifications_count > 0) {
+        free(g_stored_notifications[g_stored_notifications_head]);
+        g_stored_notifications[g_stored_notifications_head] = NULL;
+        g_stored_notifications_head =
+            (g_stored_notifications_head + 1) % MOB_STORED_NOTIFICATIONS_MAX;
+        g_stored_notifications_count--;
+    }
+    os_unfair_lock_unlock(&g_launch_notif_lock);
+}
+
+// Send the envelope to the router, or store it for the router to take. The
+// router drains the FIFO in its init, which runs after erts is up and after it
+// registers :mob_screen. A store that misses that drain happened after both,
+// so the checks after the store see erts up and the router registered, and
+// tell it to drain again. Each take pops one envelope under the lock, so
+// whichever drain comes first gets it and the other finds nothing: delivered
+// once.
+static void mob_deliver_notification_json(const char *json, const ErlNifPid *target) {
+    if (mob_send_notification_to_router(json, target))
+        return;
+    mob_store_notification(json);
+    if (!mob_runtime_up())
+        return;
+    ErlNifEnv *e = enif_alloc_env();
+    ErlNifPid router;
+    if (enif_whereis_pid(e, enif_make_atom(e, "mob_screen"), &router))
+        enif_send(NULL, &router, e, enif_make_atom(e, "mob_notification_stored"));
+    enif_free_env(e);
+}
+
 void mob_set_launch_notification_json(const char *json) {
-    // Store even before nif_load created the mutex: on a cold start from a
-    // notification tap, the app delegate calls this before the BEAM starts,
-    // and nothing reads the global until take_launch_notification
-    // (post-nif_load), so there's no concurrent access in that window. The
-    // previous early return silently dropped exactly that cold-start payload
-    // — tap-to-open from a killed app never worked.
-    if (g_launch_notif_mutex)
-        enif_mutex_lock(g_launch_notif_mutex);
-    free(g_launch_notification_json);
-    g_launch_notification_json = json ? strdup(json) : NULL;
-    if (g_launch_notif_mutex)
-        enif_mutex_unlock(g_launch_notif_mutex);
+    if (!json) {
+        mob_clear_stored_notifications();
+        return;
+    }
+    mob_deliver_notification_json(json, NULL);
 }
 
 static ERL_NIF_TERM nif_take_launch_notification(ErlNifEnv *env, int argc,
                                                  const ERL_NIF_TERM argv[]) {
-    if (!g_launch_notif_mutex)
-        return enif_make_atom(env, "none");
-    enif_mutex_lock(g_launch_notif_mutex);
-    char *json = g_launch_notification_json;
-    g_launch_notification_json = NULL;
-    enif_mutex_unlock(g_launch_notif_mutex);
+    os_unfair_lock_lock(&g_launch_notif_lock);
+    char *json = NULL;
+    if (g_stored_notifications_count > 0) {
+        json = g_stored_notifications[g_stored_notifications_head];
+        g_stored_notifications[g_stored_notifications_head] = NULL;
+        g_stored_notifications_head =
+            (g_stored_notifications_head + 1) % MOB_STORED_NOTIFICATIONS_MAX;
+        g_stored_notifications_count--;
+    }
+    os_unfair_lock_unlock(&g_launch_notif_lock);
     if (!json)
         return enif_make_atom(env, "none");
     ErlNifBinary bin;
@@ -4402,80 +4491,110 @@ static ERL_NIF_TERM nif_motion_stop(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 
 // ── Notifications ─────────────────────────────────────────────────────────
 
+// The Mob.Notification envelope for one notification. `action` is nil for an
+// arrival. Returns nil only if serialisation fails, which the filtering below
+// is there to prevent.
+static NSString *mob_notification_envelope(UNNotification *notification, NSString *presentation,
+                                           NSString *action) {
+    UNNotificationContent *content = notification.request.content;
+    NSMutableDictionary *data = [NSMutableDictionary dictionary];
+    [content.userInfo enumerateKeysAndObjectsUsingBlock:^(id key, id val, BOOL *stop) {
+      // `aps` is APNs' own dictionary (alert, badge, sound), already surfaced as
+      // title/body. userInfo can also hold NSDate/NSData, which JSON can't carry
+      // and which would fail the whole envelope, so those values are dropped.
+      if (![key isKindOfClass:[NSString class]] || [key isEqualToString:@"aps"])
+          return;
+      if ([NSJSONSerialization isValidJSONObject:@[ val ]])
+          data[key] = val;
+    }];
+    BOOL push = [notification.request.trigger isKindOfClass:[UNPushNotificationTrigger class]];
+    NSDictionary *envelope = @{
+        @"id" : notification.request.identifier ?: [NSNull null],
+        @"title" : content.title.length ? content.title : [NSNull null],
+        @"body" : content.body.length ? content.body : [NSNull null],
+        @"source" : push ? @"push" : @"local",
+        @"presentation" : presentation,
+        @"action" : action ?: [NSNull null],
+        @"data" : data
+    };
+    NSError *err = nil;
+    NSData *bytes = [NSJSONSerialization dataWithJSONObject:envelope options:0 error:&err];
+    if (!bytes) {
+        NSLog(@"[Mob] notification %@ could not be serialised: %@", notification.request.identifier,
+              err);
+        return nil;
+    }
+    return [[NSString alloc] initWithData:bytes encoding:NSUTF8StringEncoding];
+}
+
 @implementation MobNotificationDelegate
-// Foreground delivery
+// Arrived while the app is in the foreground. The banner is still shown.
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
        willPresentNotification:(UNNotification *)notification
          withCompletionHandler:(void (^)(UNNotificationPresentationOptions))handler {
     handler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionSound);
-    [self deliverNotification:notification.request.content
-                       source:@"local"
-                           id:notification.request.identifier];
+    [self deliver:mob_notification_envelope(notification, @"foreground", nil)];
 }
-// Tap on notification (foreground or background)
+// The user opened the notification, including the tap that launched the app:
+// iOS delivers that one here too, after didFinishLaunching, provided this
+// delegate was set before launch finished (mob_install_notification_delegate).
+// The scene's connectionOptions.notificationResponse carries the same response
+// and is deliberately not read, or the tap would arrive twice.
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
     didReceiveNotificationResponse:(UNNotificationResponse *)response
              withCompletionHandler:(void (^)(void))handler {
-    [self deliverNotification:response.notification.request.content
-                       source:@"local"
-                           id:response.notification.request.identifier];
+    NSString *action = response.actionIdentifier;
+    if ([action isEqualToString:UNNotificationDefaultActionIdentifier])
+        action = @"default";
+    else if ([action isEqualToString:UNNotificationDismissActionIdentifier])
+        action = @"dismiss";
+    [self deliver:mob_notification_envelope(response.notification, @"tap", action)];
     handler();
 }
-- (void)deliverNotification:(UNNotificationContent *)content
-                     source:(NSString *)src
-                         id:(NSString *)nid {
-    ErlNifPid p = self.screenPid;
-    ErlNifEnv *e = enif_alloc_env();
-    // Build data map from userInfo
-    ERL_NIF_TERM data_map = enif_make_new_map(e);
-    NSDictionary *ui = content.userInfo;
-    for (NSString *key in ui) {
-        id val = ui[key];
-        const char *ck = key.UTF8String;
-        ERL_NIF_TERM kterm = enif_make_atom(e, ck);
-        ERL_NIF_TERM vterm;
-        if ([val isKindOfClass:[NSString class]]) {
-            const char *cv = [val UTF8String];
-            ErlNifBinary b;
-            enif_alloc_binary(strlen(cv), &b);
-            memcpy(b.data, cv, strlen(cv));
-            vterm = enif_make_binary(e, &b);
-        } else if ([val isKindOfClass:[NSNumber class]]) {
-            vterm = enif_make_int64(e, [val longLongValue]);
-        } else {
-            vterm = enif_make_atom(e, "nil");
-        }
-        enif_make_map_put(e, data_map, kterm, vterm, &data_map);
-    }
-    const char *cid = nid.UTF8String;
-    const char *csrc = src.UTF8String;
-    ErlNifBinary ib;
-    enif_alloc_binary(strlen(cid), &ib);
-    memcpy(ib.data, cid, strlen(cid));
-    ERL_NIF_TERM keys[3] = {enif_make_atom(e, "id"), enif_make_atom(e, "source"),
-                            enif_make_atom(e, "data")};
-    ERL_NIF_TERM vals[3] = {enif_make_binary(e, &ib), enif_make_atom(e, csrc), data_map};
-    ERL_NIF_TERM map;
-    enif_make_map_from_arrays(e, keys, vals, 3, &map);
-    ERL_NIF_TERM msg = enif_make_tuple2(e, enif_make_atom(e, "notification"), map);
-    enif_send(NULL, &p, e, msg);
-    enif_free_env(e);
+- (void)deliver:(NSString *)envelope {
+    if (!envelope)
+        return;
+    ErlNifPid target = self.screenPid;
+    mob_deliver_notification_json(envelope.UTF8String, self.hasScreenPid ? &target : NULL);
 }
 @end
 
-// Plugin seam (mob_notify): ensure the core-owned notification-center
-// delegate exists and point deliveries (foreground present + tap) at pid.
-// The scheduling/cancel/register NIFs moved to the mob_notify plugin; the
-// DELEGATE, mob_send_push_token (host AppDelegate) and the launch-
-// notification handoff stay here. Counterpart of the generated Android
+// Called from mob_init_ui, i.e. from application:didFinishLaunchingWithOptions:.
+// iOS hands the tap that launched the app only to a delegate set before launch
+// finishes; mob_notify used to install this one on its first call, after the
+// BEAM was up, so that tap was lost (MOB-178). A delegate the app set itself
+// first is left alone.
+void mob_install_notification_delegate(void) {
+    void (^install)(void) = ^{
+      if (!g_notif_delegate)
+          g_notif_delegate = [[MobNotificationDelegate alloc] init];
+      UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
+      if (!center.delegate)
+          center.delegate = g_notif_delegate;
+    };
+    if ([NSThread isMainThread])
+        install();
+    else
+        dispatch_async(dispatch_get_main_queue(), install);
+}
+
+// Plugin seam (mob_notify): point deliveries (arrival + tap) and the push token
+// at pid. The first call also makes this the center's delegate, replacing one
+// the app may have set (as before mob_install_notification_delegate existed).
+// The scheduling/cancel/register NIFs live in the mob_notify plugin; the
+// DELEGATE, mob_send_push_token (host AppDelegate) and the launch-notification
+// handoff stay here. Counterpart of the generated Android
 // io.mob.plugin.MobNotifyHub.
 void mob_notify_set_screen_pid(ErlNifPid pid) {
     dispatch_async(dispatch_get_main_queue(), ^{
-      if (!g_notif_delegate) {
+      if (!g_notif_delegate)
           g_notif_delegate = [[MobNotificationDelegate alloc] init];
+      if (!g_notif_delegate_claimed) {
           [UNUserNotificationCenter currentNotificationCenter].delegate = g_notif_delegate;
+          g_notif_delegate_claimed = YES;
       }
       g_notif_delegate.screenPid = pid;
+      g_notif_delegate.hasScreenPid = YES;
     });
 }
 
@@ -8705,12 +8824,7 @@ static int nif_load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info) {
         LOGE(@"nif_load: failed to create component mutex");
         return -1;
     }
-    g_launch_notif_mutex = enif_mutex_create("mob_launch_notif_mutex");
     g_opened_doc_mutex = enif_mutex_create("mob_opened_doc_mutex");
-    if (!g_launch_notif_mutex) {
-        LOGE(@"nif_load: failed to create launch notif mutex");
-        return -1;
-    }
     LOGI(@"nif_load: mob_nif ready");
     atomic_store(&g_runtime_up, true);
     return 0;

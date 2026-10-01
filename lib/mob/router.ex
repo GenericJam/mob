@@ -5,8 +5,8 @@ defmodule Mob.Router do
   Which stacks exist, which is active, and one `Mob.Screen.Server` per live
   screen — this process starts them, stops them, and restarts one that crashes.
   It keeps the `:mob_screen` registered name, so the native layer's
-  `enif_whereis_pid` lookups (back gesture, alert actions, launch
-  notifications) are unaffected.
+  `enif_whereis_pid` lookups (back gesture, alert actions, notifications) are
+  unaffected.
 
   ## Not in the per-message path
 
@@ -249,6 +249,15 @@ defmodule Mob.Router do
       Mob.Listener.ensure_started()
     end
 
+    # Notifications native stored while no router was registered: the tap
+    # that launched the app from a killed state, and anything that arrived
+    # during boot. Taken now, right after registering (see
+    # :mob_notification_stored), and delivered once the root screen has
+    # mounted, from init itself: a notification sent live while the screen
+    # mounts waits in the mailbox, so it still arrives after these.
+    stored_notifications =
+      if render_mode == :render, do: take_stored_notifications(nif), else: []
+
     # Seed the stacks this app declared. The screen we are about to mount
     # becomes the active stack's current screen; every other declared stack
     # stays unmounted until first visited.
@@ -270,18 +279,10 @@ defmodule Mob.Router do
         state = make_current(state, entry, :none)
 
         if render_mode == :render do
-          # A notification that launched the app from a killed state. Sent to
-          # self so it arrives via handle_info after init returns, consistent
-          # with foreground notification delivery.
-          case nif.take_launch_notification() do
-            :none -> :ok
-            json -> send(self(), {:mob_launch_notification, json})
-          end
-
           paint(entry, :none, state)
         end
 
-        {:ok, state}
+        {:ok, deliver_stored_notifications(stored_notifications, state)}
 
       {:error, reason} ->
         {:stop, reason}
@@ -378,24 +379,21 @@ defmodule Mob.Router do
     end
   end
 
-  # A notification that launched the app from a killed state.
-  def handle_info({:mob_launch_notification, json}, state) do
-    # Decoded here rather than in the screen because the payload comes from
-    # native, not from a screen. :json.decode/1 raises on malformed input, and
-    # this runs in the owner — so a bad payload would take down every screen.
-    notification =
-      try do
-        decode_notification_json(json)
-      rescue
-        error ->
-          Logger.error(
-            "[mob] launch notification could not be decoded: " <> Exception.message(error)
-          )
+  # Every notification native hands over, as Mob.Notification's JSON envelope.
+  # `target` is the pid registered through mob_notify, or nil. Decoded here,
+  # once for both platforms, rather than natively per platform; see
+  # Mob.Notification. Anything native stored first goes first: a sender can
+  # store, then lose the race to poke this process against a live send.
+  def handle_info({:mob_notification, json, target}, state) when is_binary(json) do
+    state = deliver_stored_notifications(take_stored_notifications(state.nif), state)
+    {:noreply, deliver_envelope(json, target, state)}
+  end
 
-          %{source: :local, data: %{}}
-      end
-
-    handle_info({:notification, notification}, state)
+  # Native stored a notification instead of sending it, because this process
+  # was not registered when it checked, and then saw it registered. Taking
+  # here covers a store that landed after init's take.
+  def handle_info(:mob_notification_stored, state) do
+    {:noreply, deliver_stored_notifications(take_stored_notifications(state.nif), state)}
   end
 
   # System back gesture (Android hardware/swipe, iOS edge-pan). Handled here so
@@ -1153,31 +1151,46 @@ defmodule Mob.Router do
 
   # ── Helpers ───────────────────────────────────────────────────────────────
 
-  defp decode_notification_json(json) when is_binary(json) do
-    case :json.decode(json) do
-      map when is_map(map) ->
-        source =
-          case Map.get(map, "source", "local") do
-            "push" -> :push
-            _ -> :local
-          end
+  # Native keeps stored envelopes in a FIFO and hands back one per take,
+  # oldest first.
+  defp take_stored_notifications(nif) do
+    case nif.take_launch_notification() do
+      :none -> []
+      json -> [json | take_stored_notifications(nif)]
+    end
+  end
 
-        data =
-          case Map.get(map, "data") do
-            d when is_map(d) -> Map.new(d, fn {k, v} -> {String.to_atom(k), v} end)
-            _ -> %{}
-          end
+  # Stored envelopes carry no target: the registration of a launching tap
+  # belonged to a previous boot, and nothing could register for one that
+  # arrived during boot. They go to the current screen.
+  defp deliver_stored_notifications(jsons, state) do
+    Enum.reduce(jsons, state, &deliver_envelope(&1, nil, &2))
+  end
 
-        %{
-          id: Map.get(map, "id"),
-          title: Map.get(map, "title"),
-          body: Map.get(map, "body"),
-          data: data,
-          source: source
-        }
+  defp deliver_envelope(json, target, state) do
+    case Mob.Notification.decode(json) do
+      {:ok, notification} ->
+        {:noreply, state} = deliver_notification(notification, target, state)
+        state
 
-      _ ->
-        %{source: :local, data: %{}}
+      {:error, reason} ->
+        Logger.error("[mob] dropped a notification that could not be decoded: #{reason}")
+        state
+    end
+  end
+
+  # To the process that registered through mob_notify while it lives; it need
+  # not be the screen showing (a tab that called register_push still hears
+  # taps from another tab). Otherwise to the current screen, which is also
+  # where a cold-launch tap goes: nothing has registered yet at that point.
+  defp deliver_notification(notification, target, state) do
+    message = {:notification, notification}
+
+    if is_pid(target) and target != self() and Process.alive?(target) do
+      send(target, message)
+      {:noreply, state}
+    else
+      handle_info(message, state)
     end
   end
 end

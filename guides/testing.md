@@ -176,7 +176,7 @@ Mob.Test.send_message(node, {:location, %{lat: 43.6532, lon: -79.3832, accuracy:
 Mob.Test.send_message(node, {:motion, %{ax: 0.1, ay: 9.8, az: 0.0, gx: 0.0, gy: 0.0, gz: 0.0}})
 
 # Notifications / Push
-Mob.Test.send_message(node, {:notification, %{id: "n1", title: "Hi", body: "Hello", data: %{}, source: :push}})
+Mob.Test.send_message(node, {:notification, %{id: "n1", title: "Hi", body: "Hello", data: %{}, source: :push, presentation: :tap, action: "default"}})
 Mob.Test.send_message(node, {:push_token, :ios, "abc123"})
 
 # Biometric / Scanner

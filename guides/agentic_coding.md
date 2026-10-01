@@ -635,7 +635,7 @@ Cold-start and notification paths are drivable without a hand on the device.
 For the **in-app half** — your `handle_info/2` clauses — stay in-process:
 
 ```elixir
-Mob.Test.send_message(node, {:notification, %{id: "n1", title: "Hi", body: "Hello", data: %{}, source: :push}})
+Mob.Test.send_message(node, {:notification, %{id: "n1", title: "Hi", body: "Hello", data: %{}, source: :push, presentation: :tap, action: "default"}})
 ```
 
 For the **OS half** — delivery while backgrounded, cold-start from a

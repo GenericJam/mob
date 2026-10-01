@@ -10,6 +10,24 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Changed
+- **Notifications say whether they arrived or were tapped, with the same shape
+  on both platforms** (MOB-315, MOB-316). `{:notification, notif}` now carries
+  `presentation: :foreground | :tap` and `action` (`"default"` for a tap on the
+  notification, `nil` for an arrival) alongside `id`, `title`, `body`, `source`
+  and `data`; see `Mob.Notification`. iOS sent the same message for a banner
+  arriving and for a tap, always with `source: :local` and without title or
+  body. Android sent the raw `{:mob_launch_notification, json}` to the
+  registered screen, which dropped it. Both natives now hand one JSON envelope
+  to the router, which decodes it and forwards it to the process registered
+  through mob_notify, else to the current screen. iOS `data` drops `aps` and
+  keeps nested values, booleans and floats. A payload that does not decode is
+  logged and dropped. Delivery now needs a root screen (`Mob.Screen.start_root`,
+  as every generated app has): on iOS a process registered through mob_notify
+  in an app without one used to get notifications directly. Notifications that
+  come in before the root screen starts are kept, up to 16, and delivered to
+  it in order. See `decisions/2026-10-01-notification-delivery-envelope.md`.
+
 ### Fixed
 - **iOS: `:text_field` ignored the theme and the type props** (MOB-237).
   It drew the system `.roundedBorder` field (white, system font) on every
@@ -65,6 +83,19 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   reads directly. `terminate/2`, monitors and `start_root/3`'s
   `{:error, reason}` receive the redacted reason. See
   `decisions/2026-09-30-screen-crashes-are-redacted-at-the-source.md`.
+- **iOS delivers the notification tap that launched the app** (MOB-178).
+  `mob_init_ui()` installs mob's notification-center delegate (unless the app
+  set its own), so it exists before `didFinishLaunching` returns, which is
+  when iOS requires it to hand over the launching tap. Previously mob_notify
+  installed it after the BEAM was up and the tap was lost. Delivered once, to
+  the root screen after it mounts. Existing apps get this with the mob update.
+- **Android delivers a warm notification tap when no screen registered
+  through mob_notify.** It used to be stored for the next cold start, and a
+  notification stored while the Activity was re-created was never delivered.
+  An app-owned `MainActivity` generated before mob_new's matching change hands
+  over the launching intent on every `onCreate`; port that change (skip
+  `savedInstanceState != null` and `FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY`) or a
+  re-created activity repeats the tap.
 
 ### Security
 - **Development nodes no longer accept the public `mob_secret` cookie**

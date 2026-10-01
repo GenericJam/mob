@@ -2598,27 +2598,124 @@ export fn nif_share_text(
     return erts.ok(env);
 }
 
-// ── Launch notification (written from Kotlin on cold start) ──────────────
-// MobBridge.setLaunchNotification(json) → mob_set_launch_notification(json).
-// Apps call Mob.Device.take_launch_notification/0 → nif_take_launch_notification
-// to consume it. Guarded by g_launch_notif_mutex once nif_load created it;
-// stores before that are unguarded on purpose (see below).
+// ── Notification delivery ────────────────────────────────────────────────
+// Every notification reaches the BEAM as Mob.Notification's JSON envelope,
+// handed to the :mob_screen router, which decodes it once for both platforms
+// and forwards {:notification, map} (decisions/2026-10-01-notification-
+// delivery-envelope.md). When the router can't take it yet — the BEAM not up,
+// as for the tap that cold-launched the app — the envelope waits in a FIFO the
+// router drains when it starts (nif_take_launch_notification, one per call).
+// A FIFO, not one slot: a foreground arrival during boot must not displace the
+// tap that launched the app. Kotlin enters through mob_set_launch_notification
+// (MainActivity.onCreate) and mob_deliver_notification (onNewIntent,
+// NotificationReceiver).
 
-var g_launch_notif_json: ?[*:0]u8 = null;
-var g_launch_notif_mutex: ?*erts.ErlNifMutex = null;
+const stored_notifications_max = 16;
+var g_stored_notifs: [stored_notifications_max]?[*:0]u8 = @splat(null);
+var g_stored_notifs_head: usize = 0;
+var g_stored_notifs_count: usize = 0;
+
+// Guards the FIFO. A spinlock, not an ErlNifMutex: Kotlin stores before the
+// BEAM exists (onCreate), and NotificationReceiver can store while nif_load is
+// still running, so the lock has to work before erts does. It is held for a
+// few loads and stores.
+var g_launch_notif_lock = std.atomic.Value(bool).init(false);
+
+// Set at the end of nif_load: enif_* calls are safe from then on.
+var g_nif_loaded = std.atomic.Value(bool).init(false);
+
+fn lockLaunchSlot() void {
+    while (g_launch_notif_lock.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
+        std.atomic.spinLoopHint();
+    }
+}
+
+fn unlockLaunchSlot() void {
+    g_launch_notif_lock.store(false, .release);
+}
+
+// Appends to the FIFO. When it is full (no router has drained it) the newest
+// envelope is dropped, so the launching tap is kept.
+fn storeNotification(json: [*:0]const u8) void {
+    const copy = jni.strdup(json) orelse return;
+    lockLaunchSlot();
+    const stored = g_stored_notifs_count < stored_notifications_max;
+    if (stored) {
+        g_stored_notifs[(g_stored_notifs_head + g_stored_notifs_count) % stored_notifications_max] = copy;
+        g_stored_notifs_count += 1;
+    }
+    unlockLaunchSlot();
+    if (!stored) {
+        loge_nif("notification dropped: {d} already waiting for the router", .{stored_notifications_max});
+        jni.free(@as(?*anyopaque, @ptrCast(copy)));
+    }
+}
+
+// Pops the oldest stored envelope; the caller frees it.
+fn popStoredNotification() ?[*:0]u8 {
+    lockLaunchSlot();
+    defer unlockLaunchSlot();
+    if (g_stored_notifs_count == 0) return null;
+    const json = g_stored_notifs[g_stored_notifs_head];
+    g_stored_notifs[g_stored_notifs_head] = null;
+    g_stored_notifs_head = (g_stored_notifs_head + 1) % stored_notifications_max;
+    g_stored_notifs_count -= 1;
+    return json;
+}
+
+fn clearStoredNotifications() void {
+    while (popStoredNotification()) |json| jni.free(@as(?*anyopaque, @ptrCast(json)));
+}
+
+fn whereisRouter(env: ?*erts.ErlNifEnv, router: *erts.ErlNifPid) bool {
+    return erts.enif_whereis_pid(env, erts.atom(env, "mob_screen"), router) != 0;
+}
+
+// {:mob_notification, json, target | nil} to the router; false when there is
+// no router to send to.
+fn sendToRouter(json: [*:0]const u8, jtarget: jni.JLong) bool {
+    const env = erts.enif_alloc_env() orelse return false;
+    defer erts.enif_free_env(env);
+    var router: erts.ErlNifPid = undefined;
+    if (!whereisRouter(env, &router)) return false;
+    const len = jni.strlen(json);
+    var jb: erts.ErlNifBinary = undefined;
+    _ = erts.enif_alloc_binary(len, &jb);
+    @memcpy(jb.data[0..len], json[0..len]);
+    // enif_make_pid is a C macro: the pid's term is the pid itself.
+    const target = if (jtarget != 0) pidFromLong(jtarget).pid else erts.atom(env, "nil");
+    const msg = erts.makeTuple(env, .{
+        erts.atom(env, "mob_notification"),
+        erts.enif_make_binary(env, &jb),
+        target,
+    });
+    return erts.enif_send(null, &router, env, msg) != 0;
+}
+
+fn pokeRouter() void {
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    var router: erts.ErlNifPid = undefined;
+    if (whereisRouter(env, &router)) {
+        _ = erts.enif_send(null, &router, env, erts.atom(env, "mob_notification_stored"));
+    }
+}
+
+// Send the envelope to the router, or store it for the router to take. The
+// router drains the FIFO in its init, which runs after nif_load and after it
+// registers :mob_screen. A store that misses that drain happened after both,
+// so the checks after the store see the BEAM loaded and the router registered,
+// and tell it to drain again. Each take pops one envelope under the lock, so
+// whichever drain comes first gets it and the other finds nothing: delivered
+// once. `jtarget` is MobNotifyHub.notifyPid; 0 means none.
+fn deliverNotification(json: [*:0]const u8, jtarget: jni.JLong) void {
+    if (g_nif_loaded.load(.acquire) and sendToRouter(json, jtarget)) return;
+    storeNotification(json);
+    if (g_nif_loaded.load(.acquire)) pokeRouter();
+}
 
 pub export fn mob_set_launch_notification(json: ?[*:0]const u8) callconv(.c) void {
-    // Store even before nif_load created the mutex: on a cold start from a
-    // notification tap, MainActivity.onCreate calls this before the BEAM
-    // thread starts, and nothing reads the global until take_launch_notification
-    // (post-nif_load), so there's no concurrent access in that window. The
-    // previous `orelse return` silently dropped exactly that cold-start
-    // payload — tap-to-open from a killed app never worked. Same pattern as
-    // mob_set_opened_document below.
-    if (g_launch_notif_mutex) |mutex| erts.enif_mutex_lock(mutex);
-    if (g_launch_notif_json) |old| jni.free(@as(?*anyopaque, @ptrCast(old)));
-    g_launch_notif_json = if (json) |j| jni.strdup(j) else null;
-    if (g_launch_notif_mutex) |mutex| erts.enif_mutex_unlock(mutex);
+    deliverNotification(json orelse return clearStoredNotifications(), 0);
 }
 
 export fn nif_take_launch_notification(
@@ -2628,12 +2725,7 @@ export fn nif_take_launch_notification(
 ) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     _ = argv;
-    const mutex = g_launch_notif_mutex orelse return erts.atom(env, "none");
-    erts.enif_mutex_lock(mutex);
-    const taken = g_launch_notif_json;
-    g_launch_notif_json = null;
-    erts.enif_mutex_unlock(mutex);
-    const json = taken orelse return erts.atom(env, "none");
+    const json = popStoredNotification() orelse return erts.atom(env, "none");
     const len = jni.strlen(json);
     var bin: erts.ErlNifBinary = undefined;
     _ = erts.enif_alloc_binary(len, &bin);
@@ -2915,19 +3007,10 @@ pub export fn mob_deliver_push_token(jpid: jni.JLong, token: [*:0]const u8) call
     _ = erts.enif_send(null, &pid, env, msg);
 }
 
+// A notification opened or arrived while the Activity exists: `jpid` is
+// MobNotifyHub.notifyPid (0 = nothing registered). See deliverNotification.
 pub export fn mob_deliver_notification(jpid: jni.JLong, json: [*:0]const u8) callconv(.c) void {
-    var pid = pidFromLong(jpid);
-    const env = erts.enif_alloc_env() orelse return;
-    defer erts.enif_free_env(env);
-    const len = jni.strlen(json);
-    var jb: erts.ErlNifBinary = undefined;
-    _ = erts.enif_alloc_binary(len, &jb);
-    @memcpy(jb.data[0..len], json[0..len]);
-    const msg = erts.makeTuple(env, .{
-        erts.atom(env, "mob_launch_notification"),
-        erts.enif_make_binary(env, &jb),
-    });
-    _ = erts.enif_send(null, &pid, env, msg);
+    deliverNotification(json, jpid);
 }
 
 /// `mob_deliver_alert_action` — called from beam_jni.c when a dialog
@@ -4861,12 +4944,6 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     // atom cache, paired-list accumulator, NIFs, and delivery exports now live
     // in the plugin's own zig NIF + bridge class; core no longer knows about bt.
 
-    g_launch_notif_mutex = erts.enif_mutex_create("mob_launch_notif_mutex");
-    if (g_launch_notif_mutex == null) {
-        loge_nif("nif_load: failed to create launch notif mutex", .{});
-        return -1;
-    }
-
     g_opened_doc_mutex = erts.enif_mutex_create("mob_opened_doc_mutex");
     if (g_opened_doc_mutex == null) {
         loge_nif("nif_load: failed to create opened doc mutex", .{});
@@ -4896,6 +4973,7 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     cacheOptional(jenv, "renderStatsEnable", "(Z)Z", &Bridge.render_stats_enable);
 
     logi_nif("Mob NIF loaded (Compose backend)", .{});
+    g_nif_loaded.store(true, .release);
     return 0;
 }
 

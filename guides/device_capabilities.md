@@ -319,8 +319,10 @@ MobNotify.schedule(socket,
 # Cancel
 MobNotify.cancel(socket, "reminder_1")
 
-# Receive in handle_info (all app states: foreground, background, relaunched):
-def handle_info({:notification, %{id: id, data: data, source: :local}}, socket) do
+# Receive in handle_info. :foreground = arrived while the app was open,
+# :tap = opened by the user (from foreground, background, or a cold launch).
+# Full shape: Mob.Notification.
+def handle_info({:notification, %{presentation: :tap, id: id, data: data}}, socket) do
   {:noreply, socket}
 end
 ```

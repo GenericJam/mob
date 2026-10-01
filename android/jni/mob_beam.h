@@ -112,6 +112,13 @@ void mob_deliver_file_result(jlong pid, const char *event, const char *sub, cons
 void mob_deliver_camera_frame(jlong pid, const unsigned char *bytes, size_t nbytes, int width,
                               int height, const char *format, jlong timestamp_ms, jlong dropped);
 void mob_deliver_push_token(jlong pid, const char *token);
+// Hand mob a notification as the Mob.Notification JSON envelope
+// ({"id","title","body","source","presentation","action","data"}; a missing
+// "presentation" means "tap"). The BEAM delivers {:notification, map} to `pid`
+// (MobNotifyHub.notifyPid; 0 = none) while it lives, else to the screen showing.
+// Safe before the BEAM is up: the envelope is kept until the router starts.
+// mob_set_launch_notification is the same with no pid; NULL clears any stored,
+// not yet delivered notifications.
 void mob_deliver_notification(jlong pid, const char *json);
 void mob_set_launch_notification(const char *json);
 // Store a document ("open with") item JSON ({path,name,mime,size}) handed to us
