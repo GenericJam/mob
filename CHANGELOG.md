@@ -114,6 +114,17 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   replays it at boot, as before. Until it ports the new `MainActivity`, such an
   app also still loses a tap that re-creates a finished activity in a running
   process, and a warm tap with nothing registered.
+- **`component_server_test.exs` failed under a full `mix test` run**
+  (MOB-339). Its tests waited a fixed 100–500 ms for a component to report a
+  change or exit. A component that stops with a crash reason (its screen's
+  `:killed`, a raising `terminate/2`) makes OTP log a crash report, and
+  formatting that report loads about a dozen modules on first use. Each load
+  is a round trip to the code server, queued behind every other async test's
+  loads: up to 1.8 s measured. The exits are now awaited with no deadline of
+  their own (the `:DOWN` cannot arrive before the process is gone; ExUnit's
+  per-test timeout still fails a component that never exits), and change
+  notifications are checked behind a `render_props/1` call, which the
+  component answers only after sending them.
 
 ### Security
 - **Development nodes no longer accept the public `mob_secret` cookie**

@@ -88,11 +88,15 @@ defmodule Mob.ComponentServerTest do
   end
 
   describe "native :component_event delivery" do
+    # `render_props/1` is the barrier, not a receive timeout (MOB-339). The call
+    # queues behind the event this test sent, and the component sends
+    # `:component_changed` before it replies, so the message is already in the
+    # mailbox when the call returns.
     test "accepts a binary event name and binary JSON payload", %{pid: pid} do
       send(pid, {:component_event, "tapped", ~s({"index":1})})
-      assert_receive {:component_changed, :r, Recorder}
-
       props = Mob.ComponentServer.render_props(pid)
+
+      assert_received {:component_changed, :r, Recorder}
       assert props.last_event == "tapped"
       assert props.last_payload == %{"index" => 1}
     end
@@ -103,42 +107,42 @@ defmodule Mob.ComponentServerTest do
         {:component_event, String.to_charlist("tapped"), String.to_charlist(~s({"index":1}))}
       )
 
-      assert_receive {:component_changed, :r, Recorder}
-
       props = Mob.ComponentServer.render_props(pid)
+
+      assert_received {:component_changed, :r, Recorder}
       assert props.last_event == "tapped"
       assert props.last_payload == %{"index" => 1}
     end
 
     test "the component always receives a binary event name, never a charlist", %{pid: pid} do
       send(pid, {:component_event, String.to_charlist("charlist_event"), "{}"})
-      assert_receive {:component_changed, :r, Recorder}
 
       assert Mob.ComponentServer.render_props(pid).last_event == "charlist_event"
+      assert_received {:component_changed, :r, Recorder}
     end
 
     test "malformed JSON falls back to an empty map instead of crashing the component", %{
       pid: pid
     } do
       send(pid, {:component_event, "bad", "not json"})
-      assert_receive {:component_changed, :r, Recorder}
 
       assert Mob.ComponentServer.render_props(pid).last_payload == %{}
+      assert_received {:component_changed, :r, Recorder}
       assert Process.alive?(pid)
     end
 
     test "valid but non-map JSON falls back to an empty map", %{pid: pid} do
       send(pid, {:component_event, "bad", "5"})
-      assert_receive {:component_changed, :r, Recorder}
 
       assert Mob.ComponentServer.render_props(pid).last_payload == %{}
+      assert_received {:component_changed, :r, Recorder}
     end
 
     test "an unexpected event shape doesn't crash the component", %{pid: pid} do
       send(pid, {:component_event, :not_a_string, "{}"})
-      assert_receive {:component_changed, :r, Recorder}
 
       assert Mob.ComponentServer.render_props(pid).last_event == ""
+      assert_received {:component_changed, :r, Recorder}
       assert Process.alive?(pid)
     end
   end
@@ -282,7 +286,7 @@ defmodule Mob.ComponentServerTest do
       # Wait for the process to actually be gone rather than sleeping a fixed
       # 10 ms and hoping. `terminate/2` runs before the exit signal completes,
       # so DOWN means the callback has finished — the thing this asserts about.
-      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 500
+      await_down(ref, pid)
       assert MockNIF.calls() == []
     end
 
@@ -302,7 +306,7 @@ defmodule Mob.ComponentServerTest do
       ref = Process.monitor(pid)
       Process.exit(pid, :shutdown)
 
-      assert_receive {:DOWN, ^ref, :process, ^pid, _}, 500
+      await_down(ref, pid)
       assert {:deregister_component, [0]} in MockNIF.calls()
     end
 
@@ -325,7 +329,7 @@ defmodule Mob.ComponentServerTest do
       ref = Process.monitor(pid)
       Process.exit(screen_pid, :kill)
 
-      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 500
+      assert await_down(ref, pid) == :killed
       assert {:error, :not_found} = Mob.ComponentRegistry.lookup(screen_pid, :owned, Recorder)
       assert {:deregister_component, [0]} in MockNIF.calls()
     end
@@ -346,8 +350,11 @@ defmodule Mob.ComponentServerTest do
       screen_ref = Process.monitor(screen_pid)
       Process.exit(screen_pid, :kill)
 
-      assert_receive {:DOWN, ^screen_ref, :process, ^screen_pid, :killed}, 100
-      assert_receive {:component_terminating, ^component_pid, :killed}, 500
+      assert await_down(screen_ref, screen_pid) == :killed
+      assert await_terminating(component_pid) == :killed
+
+      # The owner is gone while the component is still parked in terminate/2.
+      assert Process.alive?(component_pid)
 
       assert {:error, :not_found} =
                Mob.ComponentRegistry.lookup(screen_pid, :blocking, BlockingTermination)
@@ -373,9 +380,9 @@ defmodule Mob.ComponentServerTest do
       component_ref = Process.monitor(component_pid)
       Process.exit(screen_pid, :kill)
 
-      assert_receive {:DOWN, ^screen_ref, :process, ^screen_pid, :killed}, 100
-      assert_receive {:component_terminating, ^component_pid, :killed}, 500
-      assert_receive {:DOWN, ^component_ref, :process, ^component_pid, _reason}, 500
+      assert await_down(screen_ref, screen_pid) == :killed
+      assert await_terminating(component_pid) == :killed
+      await_down(component_ref, component_pid)
 
       assert {:error, :not_found} =
                Mob.ComponentRegistry.lookup(screen_pid, :raising, RaisingTermination)
@@ -414,7 +421,7 @@ defmodule Mob.ComponentServerTest do
 
       old_ref = Process.monitor(old_pid)
       :ok = :sys.resume(old_pid)
-      assert_receive {:DOWN, ^old_ref, :process, ^old_pid, :shutdown}, 500
+      assert await_down(old_ref, old_pid) == :shutdown
 
       assert {:ok, ^replacement_pid} =
                Mob.ComponentRegistry.lookup(screen_pid, :replaced, Recorder)
@@ -443,11 +450,12 @@ defmodule Mob.ComponentServerTest do
           # Still fully functional as an Elixir process — exhaustion only
           # costs native rendering, not the component's own state/events.
           send(pid, {:component_event, "tapped", "{}"})
-          assert_receive {:component_changed, :exhausted, Recorder}
+          assert Mob.ComponentServer.render_props(pid).last_event == "tapped"
+          assert_received {:component_changed, :exhausted, Recorder}
 
           ref = Process.monitor(pid)
           Process.exit(pid, :shutdown)
-          assert_receive {:DOWN, ^ref, :process, ^pid, _}, 500
+          await_down(ref, pid)
         end)
 
       assert log =~ "component slot pool exhausted"
@@ -525,7 +533,7 @@ defmodule Mob.ComponentServerTest do
         # Keep the monitor assertion so a future asynchronous implementation
         # cannot make the next cycle race the old registration.
         ref = Process.monitor(pid)
-        assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 500
+        await_down(ref, pid)
       end
 
       assert Enum.count(MockNIF.calls(), &match?({:register_component, _}, &1)) == 5
@@ -550,6 +558,26 @@ defmodule Mob.ComponentServerTest do
       assert Mob.ComponentServer.decode_payload("5") == %{}
       assert Mob.ComponentServer.decode_payload("null") == %{}
       assert Mob.ComponentServer.decode_payload("[1,2]") == %{}
+    end
+  end
+
+  # Waits on the `:DOWN` itself, with no deadline of its own (MOB-339). A
+  # component stopping with a crash reason (its screen's `:killed`, a raising
+  # `terminate/2`) makes OTP log a crash report, and formatting it loads about
+  # a dozen modules on first use. Every load is a round trip to the code
+  # server, which during the async phase of a full run is queued behind every
+  # other test's loads: 1.8 s measured, against the 500 ms this used to allow.
+  # The `:DOWN` cannot arrive before the process is gone, and ExUnit's
+  # per-test timeout still fails a component that never exits.
+  defp await_down(ref, pid) do
+    receive do
+      {:DOWN, ^ref, :process, ^pid, reason} -> reason
+    end
+  end
+
+  defp await_terminating(component_pid) do
+    receive do
+      {:component_terminating, ^component_pid, reason} -> reason
     end
   end
 end

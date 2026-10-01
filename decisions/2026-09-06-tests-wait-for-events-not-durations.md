@@ -161,6 +161,11 @@ in place the injected regression fails the test, as it should.
   not addressed here: it waits 500ms for a `:DOWN` and an oversubscribed machine
   exceeds that. Filed separately rather than folded in, because widening the
   timeout is the tempting wrong fix.
+  MOB-339 traced it: the component's exit logs an OTP crash report, whose
+  formatting loads about a dozen modules through the code server on first use,
+  queued behind every other async test's loads (up to 1.8 s). The test now
+  waits on the `:DOWN` with no deadline of its own; ExUnit's per-test timeout
+  is what fails a component that never exits.
 
 - **Twice I watched a failure go past and lost it**, because the loop running
   the suite only kept the summary line. Both were unreproducible afterwards.
