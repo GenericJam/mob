@@ -100,6 +100,20 @@ introspection call by someone with node access, who can as easily call
 `:sys.get_state/1` or `Mob.Screen.get_socket/1` and read every assign, so it
 is not treated as a log.
 
+**`$`-keys in the dictionary are kept on purpose.** `scrub_process/0` erases
+the process dictionary except keys beginning with `$`, which OTP and Elixir
+own. Two of them carry app-chosen text into crash output:
+`:"$logger_metadata$"` (`Logger.metadata/1`) and `:"$process_label"`
+(`:proc_lib.set_label/1`; gen_server logs the label even with SASL reports
+off). They are kept: setting them is the app explicitly handing that data to
+the logging system so it appears in its own reports (a request id, a user
+id it chose to log), which is the opposite of what this record prevents,
+mob printing assigns the app never asked to log. Erasing them would strip
+exactly the context an app added for its crash reports. The rule for apps:
+anything put in logger metadata or a process label will be logged, so never
+put assigns or secrets there. (Decided 2026-10-01, from the third pre-merge
+review of #176.)
+
 ## Alternatives rejected
 
 - **`format_status/1` alone.** It cannot reach the stacktrace: gen_server hands

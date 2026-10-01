@@ -98,7 +98,9 @@ defmodule Mob.CrashReport do
   `format_status/1`: a queued `{:change, tag, value}` or anything the app put
   in the dictionary would otherwise be printed once SASL reports are on
   (`handle_sasl_reports: true`). Messages still queued at this point are lost
-  with the process either way.
+  with the process either way. Logger metadata (`$logger_metadata$`) and the
+  process label (`$process_label`) survive on purpose: they are what the app
+  chose to log (see decisions/2026-09-30-screen-crashes-are-redacted-at-the-source.md).
   """
   @spec scrub_process() :: :ok
   def scrub_process do

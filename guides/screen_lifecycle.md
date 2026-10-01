@@ -247,7 +247,10 @@ message embeds the map it searched, and a `FunctionClauseError` frame holds the
 socket. The crash report shows the assigns' keys, not their values, and of the
 last message only its tag and the names your source defines, never a value
 (`{:change, :name, :redacted}`, `{:event, "save", :redacted}`).
-`Mob.Agent.Receipts` records which event a crash came from.
+`Mob.Agent.Receipts` records which event a crash came from. What you put in
+`Logger.metadata/1` or a process label (`:proc_lib.set_label/1`) is kept and
+logged with the crash, since that is you choosing to log it, so never put
+assigns or secrets there.
 
 Because each screen owns its own process, `self()` in a callback is that
 screen's pid. A task or timer started by a screen delivers to that screen —
