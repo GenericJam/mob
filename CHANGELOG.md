@@ -8,7 +8,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.9.7] - 2026-09-30
 
 ### Fixed
 - **A dead diagnostic store owner is restarted** (MOB-302). When a store
