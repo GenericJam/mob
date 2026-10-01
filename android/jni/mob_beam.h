@@ -117,8 +117,10 @@ void mob_deliver_push_token(jlong pid, const char *token);
 // "presentation" means "tap"). The BEAM delivers {:notification, map} to `pid`
 // (MobNotifyHub.notifyPid; 0 = none) while it lives, else to the screen showing.
 // Safe before the BEAM is up: the envelope is kept until the router starts.
-// mob_set_launch_notification is the same with no pid; NULL clears any stored,
-// not yet delivered notifications.
+// mob_set_launch_notification is the legacy entry of app-owned MainActivity
+// code: it only stores, and only while the router is not running (a cold
+// launch), dropping replays once the app runs; NULL clears any stored, not yet
+// delivered notifications.
 void mob_deliver_notification(jlong pid, const char *json);
 void mob_set_launch_notification(const char *json);
 // Store a document ("open with") item JSON ({path,name,mime,size}) handed to us

@@ -44,8 +44,10 @@ defmodule Mob.NotificationTest do
                decode!(%{"presentation" => "foreground", "action" => "default"})
     end
 
-    # App-owned Android code generated before the field existed only ever sends
-    # taps, and so does a caller of the iOS mob_set_launch_notification_json hook.
+    # The taps that predate the field (older app-owned MainActivity code, the
+    # iOS mob_set_launch_notification_json hook) reach the same entry without it.
+    # The one older caller that sends arrivals, an app-owned MobFirebaseService,
+    # has to add "presentation": "foreground" (CHANGELOG upgrade step).
     test "an envelope without presentation is a tap" do
       assert {:ok, %{presentation: :tap, action: "default", source: :local}} =
                decode!(%{

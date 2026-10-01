@@ -3408,6 +3408,8 @@ static BOOL mob_send_notification_to_router(const char *json, const ErlNifPid *t
 // launching tap is kept.
 static void mob_store_notification(const char *json) {
     char *copy = strdup(json);
+    if (!copy)
+        return;
     os_unfair_lock_lock(&g_launch_notif_lock);
     BOOL stored = g_stored_notifications_count < MOB_STORED_NOTIFICATIONS_MAX;
     if (stored) {

@@ -343,9 +343,9 @@ def handle_info({:push_token, platform, token}, socket) do
   {:noreply, socket}
 end
 
-# Receive push notifications (foreground, background tap, or killed → tapped):
-def handle_info({:notification, notif}, socket) do
-  # notif["source"] == "push", notif["data"] contains your custom payload
+# Receive push notifications (foreground arrival, background tap, or killed → tapped):
+def handle_info({:notification, %{source: :push} = notif}, socket) do
+  # notif.presentation is :foreground or :tap; notif.data holds your custom keys
   {:noreply, socket}
 end
 ```

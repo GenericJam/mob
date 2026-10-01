@@ -58,9 +58,12 @@ defmodule Mob.Notification do
   @doc """
   Decodes the JSON envelope native code hands to the router.
 
-  `presentation` defaults to `"tap"` when absent: app-owned Android code
-  generated before it existed sends only taps, and so does any caller of the
-  iOS `mob_set_launch_notification_json/1` hook.
+  `presentation` defaults to `"tap"` when absent. Most callers that predate
+  the field send taps: app-owned Android `MainActivity` code and callers of
+  the iOS `mob_set_launch_notification_json/1` hook. The exception is the
+  app-owned `MobFirebaseService` that mob_new 0.1.45–0.4.10 generated, which
+  hands over foreground pushes without it; such an app must add
+  `"presentation": "foreground"` (see the push notifications guide).
   """
   @spec decode(binary()) ::
           {:ok, t()} | {:error, :invalid_json | :not_an_object | :data_key_too_long}

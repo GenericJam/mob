@@ -190,7 +190,7 @@ and orthogonal — composition over a fat component library.
 | Local notification scheduling | ✅ | ✓ | ✓ | `MobNotify.schedule/2`, cancel (`mob_notify` plugin) |
 | Push notification registration | ✅ | ✓ | ✓ | `MobNotify.register_push/1` (`mob_notify` plugin) → token to `handle_info` |
 | Push delivery via APNs / FCM | ✅ | ✓ | ✓ | Via `mob_push` Hex package |
-| Notification tap handling | 🟡 | ✓ | 🟡 | `{:notification, %{presentation: :foreground \| :tap}}` (`Mob.Notification`), including the tap that cold-launches the app, delivered once. Android: local notifications only; a push the tray shows for FCM on its own carries no mob payload |
+| Notification tap handling | 🟡 | ✓ | 🟡 | `{:notification, %{presentation: :foreground \| :tap}}` (`Mob.Notification`), including the tap that cold-launches the app, delivered once. Android: local notifications, and taps on pushes that carry mob_push's `mob_notification_json` data key (per FCM's documented behaviour, not device-verified); a push sent without it carries no mob payload |
 | Notification actions (buttons) | ❌ | — | — | Plugin / core candidate |
 | Critical / time-sensitive flags (iOS) | ❌ | — | n/a | Plugin candidate |
 | Notification grouping / threading | ❌ | — | — | Plugin candidate |

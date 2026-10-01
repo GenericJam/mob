@@ -2606,9 +2606,9 @@ export fn nif_share_text(
 // as for the tap that cold-launched the app — the envelope waits in a FIFO the
 // router drains when it starts (nif_take_launch_notification, one per call).
 // A FIFO, not one slot: a foreground arrival during boot must not displace the
-// tap that launched the app. Kotlin enters through mob_set_launch_notification
-// (MainActivity.onCreate) and mob_deliver_notification (onNewIntent,
-// NotificationReceiver).
+// tap that launched the app. Kotlin enters through mob_deliver_notification
+// (MainActivity, NotificationReceiver); mob_set_launch_notification is the
+// legacy entry of app-owned activities generated before mob_new's change.
 
 const stored_notifications_max = 16;
 var g_stored_notifs: [stored_notifications_max]?[*:0]u8 = @splat(null);
@@ -2635,20 +2635,32 @@ fn unlockLaunchSlot() void {
 }
 
 // Appends to the FIFO. When it is full (no router has drained it) the newest
-// envelope is dropped, so the launching tap is kept.
-fn storeNotification(json: [*:0]const u8) void {
+// envelope is dropped, so the launching tap is kept. With `unless_queued`, an
+// envelope equal to one already waiting is not added again.
+fn storeNotification(json: [*:0]const u8, unless_queued: bool) void {
     const copy = jni.strdup(json) orelse return;
     lockLaunchSlot();
-    const stored = g_stored_notifs_count < stored_notifications_max;
+    const queued = unless_queued and isQueuedLocked(copy);
+    const stored = !queued and g_stored_notifs_count < stored_notifications_max;
     if (stored) {
         g_stored_notifs[(g_stored_notifs_head + g_stored_notifs_count) % stored_notifications_max] = copy;
         g_stored_notifs_count += 1;
     }
     unlockLaunchSlot();
     if (!stored) {
-        loge_nif("notification dropped: {d} already waiting for the router", .{stored_notifications_max});
+        if (!queued) loge_nif("notification dropped: {d} already waiting for the router", .{stored_notifications_max});
         jni.free(@as(?*anyopaque, @ptrCast(copy)));
     }
+}
+
+// Caller holds the lock.
+fn isQueuedLocked(json: [*:0]const u8) bool {
+    var i: usize = 0;
+    while (i < g_stored_notifs_count) : (i += 1) {
+        const waiting = g_stored_notifs[(g_stored_notifs_head + i) % stored_notifications_max] orelse continue;
+        if (std.mem.orderZ(u8, waiting, json) == .eq) return true;
+    }
+    return false;
 }
 
 // Pops the oldest stored envelope; the caller frees it.
@@ -2692,6 +2704,13 @@ fn sendToRouter(json: [*:0]const u8, jtarget: jni.JLong) bool {
     return erts.enif_send(null, &router, env, msg) != 0;
 }
 
+// The router's pid, if it is registered. Only after nif_load.
+fn findRouter(router: *erts.ErlNifPid) bool {
+    const env = erts.enif_alloc_env() orelse return false;
+    defer erts.enif_free_env(env);
+    return whereisRouter(env, router);
+}
+
 fn pokeRouter() void {
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
@@ -2710,12 +2729,30 @@ fn pokeRouter() void {
 // once. `jtarget` is MobNotifyHub.notifyPid; 0 means none.
 fn deliverNotification(json: [*:0]const u8, jtarget: jni.JLong) void {
     if (g_nif_loaded.load(.acquire) and sendToRouter(json, jtarget)) return;
-    storeNotification(json);
+    storeNotification(json, false);
     if (g_nif_loaded.load(.acquire)) pokeRouter();
 }
 
+// Legacy entry. App-owned MainActivity code generated before mob_new's matching
+// change calls it from every onCreate (the template now calls
+// mob_deliver_notification and skips replays), including re-creation from saved
+// state and relaunch from Recents, which replay the launching intent; and from
+// onNewIntent when nothing registered through mob_notify. It keeps its old
+// meaning: store for the router to take at boot, and drop once a router runs,
+// so a replay is not delivered again. The old single slot also collapsed a
+// replay during boot (an activity re-created before the router registered)
+// into one delivery, so an envelope already waiting is not queued twice. The
+// store-then-poke closes the window where the router registers and drains
+// between the check and the store.
 pub export fn mob_set_launch_notification(json: ?[*:0]const u8) callconv(.c) void {
-    deliverNotification(json orelse return clearStoredNotifications(), 0);
+    const j = json orelse return clearStoredNotifications();
+    var router: erts.ErlNifPid = undefined;
+    if (g_nif_loaded.load(.acquire) and findRouter(&router)) {
+        logi_nif("legacy launch notification dropped: the app is running", .{});
+        return;
+    }
+    storeNotification(j, true);
+    if (g_nif_loaded.load(.acquire)) pokeRouter();
 }
 
 export fn nif_take_launch_notification(

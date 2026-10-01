@@ -28,6 +28,17 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   come in before the root screen starts are kept, up to 16, and delivered to
   it in order. See `decisions/2026-10-01-notification-delivery-envelope.md`.
 
+  **Upgrade step for apps with their own `MobFirebaseService`** (mob_new
+  0.1.45–0.4.10 generated one): its `onMessageReceived` hands a foreground push
+  to `MobBridge.nativeDeliverNotification` without `presentation`, and a
+  missing `presentation` means `:tap`, so a screen that navigates on taps
+  would navigate on every push that arrives while the app is open. Add
+  `"presentation": "foreground"` to that JSON before the call (both the
+  `mob_notification_json` string and the object it builds); see the push
+  notifications guide. mob cannot fix this on its side: the taps an older
+  `MainActivity` hands over also lack the field and reach the same entry
+  point, with the same `source`.
+
 ### Fixed
 - **iOS: `:text_field` ignored the theme and the type props** (MOB-237).
   It drew the system `.roundedBorder` field (white, system font) on every
@@ -90,12 +101,19 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   installed it after the BEAM was up and the tap was lost. Delivered once, to
   the root screen after it mounts. Existing apps get this with the mob update.
 - **Android delivers a warm notification tap when no screen registered
-  through mob_notify.** It used to be stored for the next cold start, and a
-  notification stored while the Activity was re-created was never delivered.
-  An app-owned `MainActivity` generated before mob_new's matching change hands
-  over the launching intent on every `onCreate`; port that change (skip
-  `savedInstanceState != null` and `FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY`) or a
-  re-created activity repeats the tap.
+  through mob_notify**, from a `MainActivity` that hands every tap to
+  `nativeDeliverNotification` (mob_new's template, from the release with the
+  matching change). It used to be stored for the next cold start and lost.
+  An app-owned `MainActivity` generated earlier calls `setLaunchNotification`
+  from every `onCreate`, and from `onNewIntent` when nothing is registered.
+  That still only stores the tap while the BEAM is not running yet (a cold
+  launch, delivered once at boot) and drops it once it runs, as before. So
+  while the process lives, relaunching from Recents or re-creating the
+  activity, which replay the launching intent, does not repeat the tap; after
+  the system kills the process, a relaunch that restores the task still
+  replays it at boot, as before. Until it ports the new `MainActivity`, such an
+  app also still loses a tap that re-creates a finished activity in a running
+  process, and a warm tap with nothing registered.
 
 ### Security
 - **Development nodes no longer accept the public `mob_secret` cookie**

@@ -33,8 +33,26 @@ through mob_notify, or `nil`. The router decodes it with
 `Mob.Notification.decode/1` and sends `{:notification, map}` to `target` while
 it is alive, otherwise to the current screen. The shape is defined once, in
 Elixir, where it is tested. `presentation` is `"foreground"` or `"tap"`; a
-missing one means a tap, which keeps app-owned Android code that predates the
-field correct.
+missing one means a tap.
+
+> **Corrected 2026-10-01, before merge.** This record first said a missing
+> `presentation` "keeps app-owned Android code that predates the field
+> correct", because that code "only ever sends taps". That was false. The
+> `MobFirebaseService` that mob_new 0.1.45–0.4.10 generated (still app-owned in
+> sloppy_joe and other apps) hands a foreground FCM arrival to
+> `nativeDeliverNotification` without `presentation`, so it now decodes as
+> `:tap`; before, Android sent it as the raw tuple the screen dropped. The
+> default stays `:tap`, because the alternatives cannot tell that caller from
+> the taps that also lack the field and reach the same native entry point:
+> the old `MainActivity.onNewIntent` (a warm tap) and `onCreate`, both with
+> `source: "push"` when the tray tap carried mob_push's `mob_notification_json`.
+> "Missing means foreground" would turn every one of those taps into an
+> arrival, and "missing with `source: "push"` on the live path means
+> foreground" would do it to every push tap, which is the case mob_push's
+> data block exists for. So the fix is an upgrade step (CHANGELOG, push
+> guide): an app with its own `MobFirebaseService` adds
+> `"presentation": "foreground"` to the JSON before calling
+> `nativeDeliverNotification`.
 
 **One fallback.** When the router cannot take the envelope yet (erts not up, or
 `:mob_screen` not registered), native appends it to a FIFO that replaces the
@@ -86,6 +104,22 @@ iOS calls `willPresent`. Both cold and warm taps go through
 re-creation from saved state and relaunch from Recents, which replay the
 launching intent: with delivery to a running BEAM, they would repeat the tap.
 
+**Legacy `mob_set_launch_notification` keeps its old meaning.** App-owned
+`MainActivity` code generated before mob_new's change calls it from every
+`onCreate`, replays included, and from `onNewIntent` when nothing registered
+through mob_notify. Delivering it live would repeat the tap on every relaunch
+from Recents. It stores only while no router is registered (a cold launch) and
+drops otherwise, which is what it effectively did before: its slot was only
+read at boot. While the router is not registered yet it does not queue an
+envelope equal to one already waiting, since the old single slot collapsed a
+replay during boot into one delivery. Such an app still loses what the old
+slot lost: a tap that re-creates a finished activity in a running process,
+and a warm tap with nothing registered, until it ports the new `MainActivity`,
+which calls `mob_deliver_notification`. A relaunch after the system killed
+the process still replays the launching tap at boot, as before.
+(Corrected before merge: the first version delivered it live and asked apps
+to port the `onCreate` guard instead.)
+
 ## Alternatives rejected
 
 * **Decode on Android natively** (Zig `std.json` to terms), matching iOS. That
@@ -110,6 +144,10 @@ launching intent: with delivery to a running BEAM, they would repeat the tap.
   JSON cannot carry (`NSDate`, `NSData`) are dropped.
 * An app with no mob_notify registration now gets arrivals and taps at the
   current screen on both platforms. Before, iOS installed no delegate at all,
-  and Android stored warm taps and never delivered them.
-* Android pushes that the tray displays for FCM on its own carry no mob payload
-  and still reach no screen; that is a separate gap.
+  and Android stored warm taps and never delivered them (still the case with
+  an app-owned `MainActivity` that predates mob_new's change, see above).
+* A push the tray displays for FCM on its own reaches a screen only when its
+  launcher intent carries `mob_notification_json`, which mob_push puts in the
+  FCM `data` block. One sent without it (another sender, or the FCM console)
+  carries no mob payload and still reaches no screen; that is a separate gap.
+  Not verified on a device.
