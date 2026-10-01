@@ -4,6 +4,7 @@
 // Swift-generated header) so this file stays free of app-specific includes.
 
 #include "mob_beam.h"
+#include "mob_dist_cookie.h"
 #include "mob_dist_port.h"
 #import <Foundation/Foundation.h>
 #include <arpa/inet.h>
@@ -36,31 +37,24 @@ static void *epmd_thread(void *arg) {
 
 #ifndef MOB_RELEASE
 // Resolve the development distribution cookie without shipping a public
-// credential. mob_dev supplies MOB_DIST_COOKIE when it launches an app for a
-// connection session. Direct/Xcode launches get an unlogged random fallback,
-// so a LAN-visible development node is never protected by a repository-known
-// cookie. The fallback intentionally changes on every process launch.
-static const char *resolve_dist_cookie(void) {
+// credential: MOB_DIST_COOKIE from the launch env, else the private cookie
+// `mix mob.deploy` wrote to <beams_dir>/mob_dist_cookie, else an unlogged
+// random one that changes on every launch. See mob_dist_cookie.h.
+static const char *resolve_dist_cookie(const char *beams_dir) {
     static char cookie[256];
-    const char *configured = getenv("MOB_DIST_COOKIE");
-
-    if (configured) {
-        size_t len = strlen(configured);
-        if (len > 0 && len < sizeof(cookie)) {
-            memcpy(cookie, configured, len + 1);
-            return cookie;
-        }
+    switch (mob_resolve_dist_cookie(getenv("MOB_DIST_COOKIE"), beams_dir, cookie, sizeof(cookie))) {
+    case MOB_DIST_COOKIE_FROM_ENV:
+        NSLog(@"[MobBeam] dist cookie: MOB_DIST_COOKIE");
+        break;
+    case MOB_DIST_COOKIE_FROM_FILE:
+        NSLog(@"[MobBeam] dist cookie: %s/%s", beams_dir, MOB_DIST_COOKIE_FILE);
+        break;
+    case MOB_DIST_COOKIE_RANDOM:
+        NSLog(@"[MobBeam] dist cookie: random for this launch (no usable MOB_DIST_COOKIE, no valid "
+              @"%s/%s); mob_dev can't connect — run mix mob.deploy",
+              beams_dir, MOB_DIST_COOKIE_FILE);
+        break;
     }
-
-    static const char hex[] = "0123456789abcdef";
-    unsigned char random_bytes[32];
-    arc4random_buf(random_bytes, sizeof(random_bytes));
-
-    for (size_t i = 0; i < sizeof(random_bytes); i++) {
-        cookie[i * 2] = hex[random_bytes[i] >> 4];
-        cookie[i * 2 + 1] = hex[random_bytes[i] & 0x0f];
-    }
-    cookie[sizeof(random_bytes) * 2] = '\0';
     return cookie;
 }
 #endif
@@ -483,7 +477,7 @@ void mob_start_beam(const char *app_module) {
 #ifndef MOB_RELEASE
     // Distribution flags. Omitted for App Store builds — see MOB_RELEASE
     // notes at the top of this file.
-    const char *dist_cookie = resolve_dist_cookie();
+    const char *dist_cookie = resolve_dist_cookie(beams_dir);
     args[ac++] = "-name";
     args[ac++] = node_name;
     args[ac++] = "-setcookie";

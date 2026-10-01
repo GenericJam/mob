@@ -9,7 +9,7 @@ CC      ?= clang
 CFLAGS  ?= -fobjc-arc -Wall -Wextra -Wno-unused-parameter
 LDFLAGS ?= -framework Foundation
 
-BINS := frame_registry_test dist_port_test
+BINS := frame_registry_test dist_port_test dist_cookie_test
 
 .PHONY: run clean
 run: $(BINS)
@@ -19,6 +19,9 @@ frame_registry_test: frame_registry_test.m
 	$(CC) $(CFLAGS) $(LDFLAGS) $< -o $@
 
 dist_port_test: dist_port_test.c ../../ios/mob_dist_port.h
+	$(CC) -Wall -Wextra -Werror $< -o $@
+
+dist_cookie_test: dist_cookie_test.c ../../ios/mob_dist_cookie.h
 	$(CC) -Wall -Wextra -Werror $< -o $@
 
 clean:

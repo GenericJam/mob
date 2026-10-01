@@ -25,7 +25,9 @@ could reach the dist port could authenticate and run arbitrary code in the app
 1. **Cookie.** mob_dev keeps one random 256-bit cookie per app on the Mac and
    hands it to the app at deploy/connect time. iOS reads `MOB_DIST_COOKIE` from
    the launch environment before `erl_start`; a launch without it (Xcode, home
-   screen) generates an unlogged random cookie. Android's `Mob.Dist` reads
+   screen) generates an unlogged random cookie. (Amended by MOB-348: iOS now
+   falls back to `$MOB_BEAMS_DIR/mob_dist_cookie` before the random cookie; see
+   `2026-10-01-ios-dist-cookie-file.md`.) Android's `Mob.Dist` reads
    `$MOB_BEAMS_DIR/mob_dist_cookie` from the app's private storage. A custom
    `:cookie` passed to `Mob.Dist.ensure_started/1` still wins (the OTA example
    in its docs), but `:mob_secret` is treated as no cookie, since every
