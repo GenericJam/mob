@@ -15,7 +15,7 @@ Mob does not wrap a web renderer — you are writing directly to SwiftUI and Com
 | `:scroll` | `ScrollView` (vertical or horizontal) | `Column/Row` + `.verticalScroll` / `.horizontalScroll` |
 | `:text` | `Text` | `Text` |
 | `:button` | `Button` with `Text` label | `Button` with `Text` content |
-| `:text_field` | `TextField` (SwiftUI `roundedBorder` style) | `TextField` (Material 3 filled style) |
+| `:text_field` | `TextField` (`.plain` style; the node's `background`, `border_color` and `corner_radius` draw the box), or a wrapped `UITextField` for `caret: "end"`, `on_compose` and single-line `max_length` | `TextField` (Material 3 filled style) |
 | `:toggle` | `Toggle` | `Switch` inside a `Row` |
 | `:slider` | `Slider` | `Slider` |
 | `:divider` | `Divider` | `HorizontalDivider` |
