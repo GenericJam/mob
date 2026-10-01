@@ -35,6 +35,22 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `Mob.Dist` starting distribution during a probe leaked the lock and every
   later probe blocked for as long as the probing process lived. Probes now
   run one at a time in a locally registered process, `Mob.Theme.NifProbe`.
+- **A screen crash no longer writes the screen's data to the log** (MOB-310).
+  A `FunctionClauseError`'s stack frame carries the event params and the whole
+  socket, a `KeyError`'s message embeds the map it searched, and OTP's crash
+  report printed the screen's state and its last message (a typed
+  `{:change, tag, value}`); `Mob.Router` and `Mob.NativeLogger` wrote all of it
+  to logcat or the iOS console, in release builds too. `Mob.Screen.Server` and
+  `Mob.ComponentServer` now redact a callback's crash, and a returned
+  `{:stop, reason, ...}`, before it becomes the exit reason: the exception's
+  module and its stacktrace by arity, never its arguments, and no message
+  except the ones mob writes itself. Their `format_status/1` shows assigns by
+  key and of the last message only its tag and the names the screen's source
+  defines, never a value. A dying screen or component empties its mailbox and
+  dictionary, which proc_lib's crash report (`handle_sasl_reports: true`)
+  reads directly. `terminate/2`, monitors and `start_root/3`'s
+  `{:error, reason}` receive the redacted reason. See
+  `decisions/2026-09-30-screen-crashes-are-redacted-at-the-source.md`.
 
 ## [0.9.7] - 2026-09-30
 

@@ -271,7 +271,8 @@ defmodule Mob.Screen.RestartTest do
       log = capture_log(fn -> assert GenServer.call(owner, :inspect).tree == nil end)
 
       assert Process.alive?(owner), "render/1 must run in the screen, not the owner"
-      assert log =~ "render exploded"
+      # The message is withheld from crash logs (MOB-310); the frame names it.
+      assert log =~ "BadRenderScreen.render/1"
     end
   end
 

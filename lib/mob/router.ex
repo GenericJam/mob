@@ -138,7 +138,7 @@ defmodule Mob.Router do
         # sits on a black screen with nothing in logcat.
         Logger.error(
           "[mob] root screen #{inspect(screen_module)} failed to start; the app has no screen: " <>
-            format_start_error(reason)
+            Mob.CrashReport.format(reason)
         )
 
         # Nothing else registered as the router means no screen will ever
@@ -158,12 +158,6 @@ defmodule Mob.Router do
         started
     end
   end
-
-  defp format_start_error({exception, stacktrace})
-       when is_exception(exception) and is_list(stacktrace),
-       do: Exception.format(:error, exception, stacktrace)
-
-  defp format_start_error(reason), do: inspect(reason)
 
   defp default_on_no_live_screen(:mob_nif), do: &halt_app/1
   defp default_on_no_live_screen(_injected_nif), do: nil
@@ -554,7 +548,7 @@ defmodule Mob.Router do
       Logger.error(
         "[mob] screen #{inspect(entry.module)} crashed #{@max_restarts + 1} times in " <>
           "#{@restart_window_ms}ms and is being given up on rather than restarted in a loop. " <>
-          "Reason: #{inspect(reason)}"
+          "Reason: " <> Mob.CrashReport.format(reason)
       )
 
       recover_from_failed_restart(entry, state)
@@ -698,17 +692,20 @@ defmodule Mob.Router do
     %{state | nav: nav}
   end
 
+  # MOB-310. A screen's exit reason carries its socket (a FunctionClauseError's
+  # stack frame holds the call's arguments) and exception messages embed
+  # assigns, and this line reaches logcat in release builds.
   defp log_restart(module, reason) do
     Logger.error(
       "[mob] screen #{inspect(module)} crashed and is being restarted; its assigns are lost. " <>
-        "Reason: #{inspect(reason)}"
+        "Reason: " <> Mob.CrashReport.format(reason)
     )
   end
 
   defp log_restart_failure(module, reason) do
     Logger.error(
       "[mob] screen #{inspect(module)} could not be restarted — mount/3 failed: " <>
-        "#{inspect(reason)}"
+        Mob.CrashReport.format(reason)
     )
   end
 
