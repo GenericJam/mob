@@ -119,6 +119,40 @@ defmodule Mob.Diag.SubscribersTest do
     ProcessHelpers.eventually(fn -> mailbox(peer, sink) == [{:mob_defect, delivered}] end)
   end
 
+  # MOB-303 × MOB-304: the first journal design cleared everything up to the
+  # newest delivered capsule, so a subscriber resumed from parking (which saw
+  # nothing while away) "observed" an exit emitted during its absence the
+  # moment any later capsule reached it.
+  @tag :tmp_dir
+  test "a journaled exit emitted while the only subscriber is parked survives its resumption",
+       %{peer: peer, node: node, sink: sink, tmp_dir: tmp_dir} do
+    Mob.PostMortem.Registry.reset()
+    Mob.PostMortem.Journal.reset()
+    on_exit(&Mob.PostMortem.Journal.reset/0)
+    path = Path.join(tmp_dir, "journal.etf")
+
+    {:ok, _} = Bus.subscribe(sink)
+    disconnect(node, sink)
+    assert Bus.subscribers() == []
+
+    exit = %{reason_code: 4, pid: 7, timestamp_ms: 7, process_name: "app", description: "crash"}
+
+    Mob.PostMortem.Journal.sweep(
+      fn -> path end,
+      :android,
+      [{"exit-7", exit}],
+      &Mob.Defect.appexit_capsule/1
+    )
+
+    true = Node.connect(node)
+    ProcessHelpers.eventually(fn -> published?(sink) and no_parked?() end)
+    later = capsule(:after_resume)
+    Bus.emit(later)
+    ProcessHelpers.eventually(fn -> mailbox(peer, sink) == [{:mob_defect, later}] end)
+
+    assert [{:android, "exit-7", _}] = Mob.PostMortem.Journal.read(path).entries
+  end
+
   test "a node that reconnects while the registry is down is picked up by the next one",
        %{node: node, sink: sink} do
     {:ok, _} = Bus.subscribe(sink)
