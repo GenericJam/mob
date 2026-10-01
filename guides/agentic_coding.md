@@ -126,19 +126,50 @@ available to you"* — it should enumerate both server namespaces.
 
 ### Prerequisites
 
-Before an agent can inspect the running app, tunnels must be established:
+Before an agent can inspect the running app, the tunnels must be up and the app
+registered in the Mac's EPMD:
 
 ```bash
-mix mob.connect --no-iex
+mix mob.connect --no-iex               # restarts the app, prints node names, exits
+mix mob.connect --no-iex --no-restart  # attaches to the app as it is, state intact
 ```
 
-This sets up the adb/simctl tunnels and prints node names, then exits — leaving the
-distribution network open. Keep this running in a terminal while you're working with
-an agent. Re-run it after a device restart or if `mix mob.push` loses contact.
+`mix mob.connect` sets up the adb/simctl tunnels, waits for each node, prints
+its name and exits; the tunnels stay in place. By default it **restarts** the
+app, which is what makes a fresh session reliable (the app registers in the
+Mac's EPMD through the tunnels just set up). When the agent is there to
+inspect a session that is already running (a bug reproduced by hand, state
+you don't want to lose), pass `--no-restart`. That attaches only if the app
+started while the tunnels were up; if it didn't, restart it. Add
+`--device <serial or udid substring>` to target one device. Re-run after a
+device reboot.
 
-Node names:
-- iOS simulator:     `mob_demo_ios@127.0.0.1`
-- Android emulator:  `mob_demo_android@127.0.0.1`
+Node names (`<app>` is your OTP app name):
+- Android:        `<app>_android_<serial stub>@127.0.0.1` after a deploy or
+  `mix mob.connect` restart. A start from the launcher reuses that name and
+  port: every Android deploy records them in the app's `mob_dist` file, which
+  mob 0.9.6+ reads when the launch intent carries none. `--no-restart` also
+  finds an app registered under the bare `<app>_android`.
+- iOS simulator:  `<app>_ios_<first 8 hex of the udid>@127.0.0.1`
+- iOS device:     `<app>_ios@<device ip>`
+
+Don't hard-code a name or port: read the names `mix mob.connect --no-iex`
+prints, or `epmd -names`. Each app's dist port is derived from the device
+serial **and** the app name (mob_dev 0.7.5+), so two Mob apps on one device
+no longer collide.
+
+`Mob.Test` and every `:rpc.call` need a distributed caller with the app's
+cookie (`mob_secret` by default). From a shell, one-shot:
+
+```bash
+elixir --name agent_$$@127.0.0.1 --cookie mob_secret -S mix run --no-start \
+  -e 'IO.inspect Mob.Test.screen(:"my_app_ios_1a2b3c4d@127.0.0.1")'
+```
+
+A host node name already in use isn't fatal for the mob_dev tasks: `mix
+mob.connect`, `mix mob.deploy` and `mix mob.watch` fall back to
+`mob_dev_<os pid>@127.0.0.1` when `mob_dev@127.0.0.1` is taken, so an agent's
+session and yours can run side by side.
 
 ### The three-layer inspection stack
 
@@ -150,7 +181,7 @@ Use these in order. Only go deeper if the layer above doesn't answer your questi
 No image parsing, no heuristics, no guessing.
 
 ```elixir
-node = :"mob_demo_ios@127.0.0.1"
+node = :"mob_demo_ios_1a2b3c4d@127.0.0.1"   # as printed by mix mob.connect --no-iex
 
 Mob.Test.screen(node)
 #=> MobDemo.CounterScreen
@@ -168,12 +199,11 @@ Mob.Test.inspect(node)
 #=> %{screen: MobDemo.CounterScreen, assigns: %{count: 4}, nav_history: [], tree: ...}
 ```
 
-This is available via `iex -S mix` (after `mix mob.connect` has set up the tunnels)
-or directly from an agent that can run shell commands, using:
-
-```bash
-iex -S mix --eval 'IO.inspect Mob.Test.assigns(:"mob_demo_ios@127.0.0.1")'
-```
+This is available from `iex --name me@127.0.0.1 --cookie mob_secret -S mix` (after
+`mix mob.connect` has set up the tunnels), from `mix mob.connect`'s own IEx
+session, or from an agent that can run shell commands with the one-shot
+`elixir --name … -S mix run --no-start -e …` form under Prerequisites. A plain
+`iex -S mix` is not distributed, so every call answers `{:badrpc, :nodedown}`.
 
 **Ask what this build can be probed with, before committing to an approach.**
 
@@ -447,7 +477,7 @@ or a specific low-level query has no higher-level equivalent.
 
 ```
 1. Edit Elixir source
-2. mix mob.push                      ← push changed BEAMs (no restart needed)
+2. mix mob.push                      ← hot-load changed BEAMs (no restart, state kept)
 3. mix mob.attest                    ← prove the device runs the code you pushed
 4. Mob.Test.screen(node)             ← confirm which screen is active
 5. Mob.Test.assigns(node)            ← confirm data state is what you expect
@@ -469,7 +499,7 @@ For changes that touch native code (NIFs, Swift, Kotlin):
 ```
 1. Edit source
 2. mix mob.deploy --native           ← full rebuild + install + restart
-3. mix mob.connect --no-iex          ← re-establish tunnels after restart
+3. mix mob.connect --no-iex --no-restart  ← attach to the app the deploy just started
 4. continue with loop above
 ```
 
@@ -486,11 +516,11 @@ mix mob.deploy && echo "deployed"    # exit 0 — but to what?
 
 # The Mob approach — prove the app is up and answering
 mix mob.deploy --device <id>
-mix mob.connect --no-iex
+mix mob.connect --no-iex --no-restart   # prints the node name; keeps the app as deployed
 ```
 
 ```elixir
-node = :"mob_demo_ios@127.0.0.1"
+node = :"mob_demo_ios_1a2b3c4d@127.0.0.1"   # the name mob.connect printed
 Mob.Test.screen(node)
 #=> MobDemo.HomeScreen        ← the app exists, the node connects, a screen is live
 # {:badrpc, :nodedown} here means the deploy did NOT land — stop and find out why
@@ -503,9 +533,12 @@ when the check could not run at all. Failing that, bump something observable
 (a version assign, a log line) and read it back through `Mob.Test.assigns/1`
 before trusting any further conclusions.
 
-A deploy to a physical iPhone deserves one more check: `mix mob.deploy` can
-report "Apps restarted" over a process iOS killed at launch. An empty
-`Documents/beam_stdout.log` in the app container, or a fresh `.ips` from
+Read the deploy summary as data too: it says per device whether the app was
+hot-loaded over dist (`Hot-loaded into the running app — not restarted`, the
+same pid and state) or pushed and restarted (`Apps restarted`). A physical
+iPhone deserves one more check: `mix mob.deploy` can report "Apps restarted"
+over a process iOS killed at launch. An empty `Documents/beam_stdout.log` in
+the app container, or a fresh `.ips` from
 `xcrun devicectl device copy from --domain-type systemCrashLogs`, is the tell
 (MOB-199 was found this way).
 
@@ -654,10 +687,12 @@ This is a Mob app. The running app is an Erlang/OTP node. Do NOT use xcrun simct
 screenshots or adb screencap as your primary inspection method.
 
 Instead:
-1. Run `mix mob.connect --no-iex` to establish distribution tunnels (if not already running)
-2. Use `Mob.Test` from IEx to query exact state:
-   - `Mob.Test.capabilities(node)  # ask FIRST: which probes does this build serve?
-Mob.Test.screen(node)` — what screen is active?
+1. Run `mix mob.connect --no-iex` to establish distribution tunnels and print the
+   node names (it restarts the app; add `--no-restart` to keep a running session)
+2. Use `Mob.Test` from a distributed IEx (`iex --name me@127.0.0.1 --cookie mob_secret -S mix`)
+   to query exact state:
+   - `Mob.Test.capabilities(node)` — ask FIRST: which probes does this build serve?
+   - `Mob.Test.screen(node)` — what screen is active?
    - `Mob.Test.assigns(node)` — what is the live data?
    - `Mob.Test.tap(node, :tag)` — drive a tap by tag atom
    - `Mob.Test.find(node, "text")` — locate a widget by visible text
@@ -665,12 +700,10 @@ Mob.Test.screen(node)` — what screen is active?
 3. Only reach for `mcp__ios-simulator__screenshot` or `mcp__adb__dump_image` when
    you need to verify rendering or layout — not to check app state.
 
-Node names:
-- iOS simulator:    mob_demo_ios@127.0.0.1
-- Android emulator: mob_demo_android@127.0.0.1
+Node names: use the ones `mix mob.connect --no-iex` prints (or `epmd -names`):
+- Android:        <app>_android_<serial stub>@127.0.0.1
+- iOS simulator:  <app>_ios_<8-char udid prefix>@127.0.0.1
 ```
-
-Replace `mob_demo` with your actual app name.
 
 ### Why Mob.Test beats screenshots for state inspection
 
@@ -707,7 +740,7 @@ iex -S mix
 ```
 
 ```elixir
-node = :"mob_demo_ios@127.0.0.1"
+node = :"mob_demo_ios_1a2b3c4d@127.0.0.1"
 
 # Before
 Mob.Test.assigns(node)
@@ -734,7 +767,7 @@ Tags come from `on_tap: {self(), :tag_atom}` in the render tree. To see all widg
 and their tags on the current screen, use the full snapshot:
 
 ```elixir
-node = :"mob_demo_ios@127.0.0.1"
+node = :"mob_demo_ios_1a2b3c4d@127.0.0.1"
 Mob.Test.inspect(node)
 # %{screen: ..., assigns: ..., tree: %{"type" => "column", "children" => [...]}}
 ```
@@ -801,9 +834,12 @@ lands on physical devices and on other agents' targets. (In-memory only —
 a restart clears it — but the other agents' evidence is now polluted.)
 
 Fleet rule: treat `mob.push`/`mob.watch` as single-developer conveniences.
-Agents in a fleet deploy per device with `mix mob.deploy --device <id>`, or
-hot-push over their own distribution connection (`nl/1` from their named
-session pushes only to the nodes *that session* is connected to). Read the
+Agents in a fleet deploy per device with `mix mob.deploy --device <id>` (over a
+live dist connection that is a hot load: the app keeps its pid and state and
+the BEAMs are also persisted for its next launch; otherwise it pushes and
+restarts), or hot-push over their own distribution connection (`nl/1` from
+their named session pushes only to the nodes *that session* is connected to).
+Read the
 result as data — `mix mob.deploy --json` names the deployed, failed and
 skipped devices — and attest per node (`mix mob.attest --node <name>`)
 before reporting that anything landed.

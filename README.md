@@ -259,13 +259,15 @@ your app.
 ## Live development
 
 ```bash
-mix mob.connect          # tunnel + connect IEx to running device
-nl(MyApp.SomeScreen)     # hot-push new bytecode, no restart
+mix mob.connect              # tunnel + restart the app + connect IEx
+mix mob.connect --no-restart # attach to the running app, state intact
+nl(MyApp.SomeScreen)         # hot-push new bytecode, no restart
 
-# In IEx:
-Mob.Test.screen(:"my_app_ios@127.0.0.1")  #=> MyApp.CounterScreen
-Mob.Test.assigns(:"my_app_ios@127.0.0.1") #=> %{count: 3, ...}
-Mob.Test.tap(:"my_app_ios@127.0.0.1", :increment)
+# In IEx (node names as printed by mob.connect, e.g. my_app_ios_<udid prefix>):
+[node | _] = Node.list()
+Mob.Test.screen(node)  #=> MyApp.CounterScreen
+Mob.Test.assigns(node) #=> %{count: 3, ...}
+Mob.Test.tap(node, :increment)
 ```
 
 ## Testing
