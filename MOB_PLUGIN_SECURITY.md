@@ -433,13 +433,16 @@ the curated list for the actual call.
 
 A user activating a new plugin walks through:
 
-1. `mix mob.add_plugin mob_bluetooth`
+1. Add `mob_bluetooth` to `deps` and to `config :mob, :plugins` in
+   `mob.exs`, run `mix deps.get`, then `mix mob.plugin.trust mob_bluetooth`.
    - Hex resolves + downloads the package.
    - Mob verifies the manifest signature (Layer 2).
    - Mob checks the audit ruleset (Layer 2).
    - Mob checks the curated allowlist (Layer 3).
    - Mob checks the concerns feed (Layer 3).
-2. Mob prints a one-screen summary:
+2. Mob prints a one-screen summary. Today `mix mob.plugin.trust` prints
+   the fingerprint and declared capabilities; the author, audit, vetted
+   and concerns lines are design:
 
    ```
    mob_bluetooth 0.3.1

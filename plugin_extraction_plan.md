@@ -173,8 +173,8 @@ Multi-screen plugin — a browse-screen for the contents of
 - [ ] Host wires the screens into `App.navigation/1` after activation.
 
 **Validates:** screen module discovery + route declaration, migration
-prefix collision rules, asset merging, the `mix mob.add_plugin`
-interactive flow (if implemented).
+prefix collision rules, asset merging, the manifest's `:setup` prompts
+(if an interactive install flow is built).
 
 ### `plugins/mob_demo_uptime_kit` (Tier 4)
 
