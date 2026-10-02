@@ -1078,9 +1078,12 @@ static BOOL mob_scene_is_application(UIScene *scene) {
 }
 
 // The lowest tap set no entry holds, or -1 when all MOB_SCENE_LIMIT are taken.
-static int mob_scene_free_set_locked(void) {
+// `excluded` are sets removed from the registry but not yet released: their
+// tables still hold the gone window's handles, and the BEAM has not yet been
+// told that window is gone, so its router may still render into them.
+static int mob_scene_free_set_locked(NSArray<NSNumber *> *excluded) {
     for (int candidate = 0; candidate < MOB_SCENE_LIMIT; candidate++)
-        if (!mob_scene_entry_for_set_locked(candidate))
+        if (!mob_scene_entry_for_set_locked(candidate) && ![excluded containsObject:@(candidate)])
             return candidate;
     return -1;
 }
@@ -1088,8 +1091,8 @@ static int mob_scene_free_set_locked(void) {
 // Give `entry`, a window that connected with every set taken, the lowest free
 // set, if there is one now. Set 0 brings the shared model, as it does for a new
 // scene; any other keeps the entry's own model, with its error screen cleared.
-static BOOL mob_scene_assign_set_locked(MobSceneEntry *entry) {
-    int set = mob_scene_free_set_locked();
+static BOOL mob_scene_assign_set_locked(MobSceneEntry *entry, NSArray<NSNumber *> *excluded) {
+    int set = mob_scene_free_set_locked(excluded);
     if (set < 0)
         return NO;
     entry.tapSet = set;
@@ -1265,7 +1268,7 @@ static MobSceneEntry *mob_scene_promote_over_limit(void) {
     @synchronized(mob_scene_lock()) {
         for (MobSceneEntry *entry in g_scene_entries)
             if (entry.attached && entry.tapSet < 0)
-                return mob_scene_assign_set_locked(entry) ? entry : nil;
+                return mob_scene_assign_set_locked(entry, nil) ? entry : nil;
     }
     return nil;
 }
@@ -1318,6 +1321,7 @@ NSObject *mob_scene_attach(UIWindowScene *scene) {
     MobSceneEntry *entry;
     NSString *replacedId = nil;
     BOOL announce = NO;
+    BOOL hasSet = NO; // under the lock, i.e. before finish_removal can promote it
     NSMutableArray<NSNumber *> *released = [NSMutableArray array];
     NSMutableArray<NSString *> *discarded = [NSMutableArray array];
 
@@ -1354,8 +1358,13 @@ NSObject *mob_scene_attach(UIWindowScene *scene) {
             announce = YES;
         }
 
+        // Not from a set this attach just pruned (see
+        // mob_scene_free_set_locked). If that leaves none, the scene waits
+        // without one, and mob_scene_finish_removal below hands the pruned set
+        // to a waiting window once it is released and the BEAM has heard its
+        // old window is gone.
         if (!entry) {
-            int set = mob_scene_free_set_locked();
+            int set = mob_scene_free_set_locked(released);
             entry = [MobSceneEntry new];
             entry.sceneId = sceneId;
             entry.tapSet = set;
@@ -1369,17 +1378,20 @@ NSObject *mob_scene_attach(UIWindowScene *scene) {
             }
             [g_scene_entries addObject:entry];
             announce = YES;
-        } else if (entry.tapSet < 0 && mob_scene_assign_set_locked(entry)) {
+        } else if (entry.tapSet < 0 && mob_scene_assign_set_locked(entry, released)) {
             // A window that connected over the limit, re-attaching now that a
             // set is free. The BEAM has never heard of it.
             announce = YES;
         }
         entry.scene = scene;
         entry.attached = YES;
+        hasSet = entry.tapSet >= 0;
     }
 
+    // A scene that waited for a pruned set was announced when
+    // finish_removal promoted it.
     mob_scene_finish_removal(released, discarded);
-    if (announce && entry.tapSet >= 0)
+    if (announce && hasSet)
         mob_tell_scenes(replacedId ? MOB_SCENE_REPLACED : MOB_SCENE_CONNECTED, sceneId, replacedId,
                         entry.tapSet == 0);
     return entry.model;
