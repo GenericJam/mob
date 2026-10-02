@@ -8,7 +8,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.9.10] - 2026-10-02
 
 ### Added
 - **Every screen socket carries the window's size class** (MOB-204, mob side of
