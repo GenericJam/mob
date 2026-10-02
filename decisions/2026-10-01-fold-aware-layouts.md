@@ -64,7 +64,7 @@ sources. Each correction is noted where it matters.
    it.** 111461: "The inner display doesn't honor your supported interface
    orientations. As with Idiom, avoid checking interface orientation for
    layout decisions. Use size classes instead." The documentation article
-   adds: "Don't use `userInterfaceIdiom` or `UIInterfaceOrientation` for
+   adds: "Don’t use `userInterfaceIdiom` or `UIInterfaceOrientation` for
    layout decisions." What 111461 *does* say will be deprecated is
    referencing the **main screen** (`UIScreen.main`), "ambiguous and will be
    deprecated in a future release". MOB-208's ticket text says Apple
@@ -72,9 +72,10 @@ sources. Each correction is noted where it matters.
 2. **Size classes on Duo.** 111461: on the outer display, compact horizontal
    with regular vertical in portrait, and compact in both in landscape, like
    other iPhones. The inner display is regular in both. Duo is "still an
-   iPhone app" (111461), so there is no new idiom. No source states a
-   `UIDeviceFamily` value for Duo; that it is plain iPhone family 1 is an
-   inference, unverified until a 27.1 SDK or a built Duo app can be checked.
+   iPhone app" (111461). Apple names no new idiom; that the idiom stays
+   `.phone` is an inference. Likewise no source states a `UIDeviceFamily`
+   value for Duo, and plain iPhone family 1 is an inference. Both stay
+   unverified until a 27.1 SDK or a built Duo app can be checked.
    The HIG says: "A compact width layout for the outer display and a regular
    width layout for the inner display give you the fundamentals for every
    pose."
@@ -89,8 +90,8 @@ sources. Each correction is noted where it matters.
    inactive regions for decisions such as an even number of grid columns.
    The API is `GeometryProxy.reservedRegions(kind:options:...)` in SwiftUI
    and `UIView.reservedRegions(kind:options:)` in UIKit, new in iOS 27.1.
-   The HIG lists them "in addition to standard considerations for safe
-   areas". They are not part of the safe area.
+   The HIG introduces them with "In addition to standard considerations for
+   safe areas". They are not part of the safe area.
 4. **`ArrangementView` / `UIArrangementViewController`** is a container for
    a primary and a secondary view, with a *split* style and an *overlay*
    style (111463, documentation article, HIG). It takes the size classes,
@@ -133,10 +134,12 @@ sources. Each correction is noted where it matters.
    this machine** declares `View.sceneAccessory(content:)`,
    `SceneAccessoryContent` and `onAvailabilityChange(perform:)` as
    `@available(iOS 27.0, *)`, and UIKit's `UISceneAccessory` as
-   `API_AVAILABLE(ios(27.0))`. The only constructor in its UIKit header is
-   `externalNonInteractive(sceneConfiguration:)`, for non-interactive
-   content "when an external display is connected", and it takes a
-   `UISceneConfiguration`. The header's own description: "the app must
+   `API_AVAILABLE(ios(27.0))`. Its UIKit header offers one kind of
+   accessory: external and non-interactive, created through two factory
+   overloads of `externalNonInteractive(sceneConfiguration:)` (with and
+   without `userInfo`). It is presented, for example, "when an external
+   display is connected", and it takes a `UISceneConfiguration`. The
+   header's own description: "the app must
    remain fully functional without them." `CameraCaptureAccessory` is
    **absent** from the 27.0 SDK. It is expected to be 27.1 API, but its
    availability annotation has not been seen.
@@ -156,9 +159,9 @@ sources. Each correction is noted where it matters.
    bars and toolbars lay out vertically on the side. Apple attributes this
    to SDK linkage and names no plist opt-in for it. Whether 27.1 adds any
    plist metadata is unverified. "iPhone Duo will continue to honor the
-   `UIRequiresFullScreen` key, but your app will still resize when someone
-   opens or closes" it. 111464: "All apps participate in multitasking on
-   iPhone Duo."
+   UIRequiresFullScreen key, but your app will still resize when someone
+   opens or closes their iPhone Duo." 111464: "All apps participate in
+   multitasking on iPhone Duo."
 10. **Safe areas are asymmetric** (111461): "avoid assuming that insets on
     opposite sides are equal." Vertical bars can sit on the left in
     landscape and in Split View.
@@ -279,12 +282,13 @@ MOB-202 adds a `:reserved_regions` assign and a
   "four numbers" into something every existing screen would mis-read. It
   would also make the non-Duo case confusing: a screen could not tell "no
   fold here" from "a fold of width zero". Apple keeps the two concepts
-  separate too ("in addition to standard considerations for safe areas",
-  HIG).
+  separate too: the HIG introduces reserved regions with "In addition to
+  standard considerations for safe areas".
 - **Shape.** A list of maps,
   `%{kind: :division | :occlusion, frame: {x, y, w, h}, active: boolean()}`,
-  in window coordinates (points, origin top-left), the space
-  `Mob.Test.element_frames/1` already reports in. It includes inactive regions with
+  window-relative, in the platform's logical units: points on iOS, dp on
+  Android. That is what `Mob.Test.element_frames/1` already reports, so
+  the two can be compared directly. It includes inactive regions with
   `active: false` (Apple's `includeInactive`), so a screen can make
   structural choices such as even grid columns while the device is flat, as
   Apple suggests (item 3). MOB-202's draft `[{kind, {x, y, w, h}}]` has
@@ -322,10 +326,12 @@ Scope:
 Why automatic:
 
 - **Mob's audience writes "a Column of Text".** If honouring the fold is
-  opt-in, every app that hasn't heard of the fold puts text into the crease
-  on the day Duo ships. Apple's system containers adapt on their own (HIG:
-  "Many system components automatically adapt to reserved regions"), and a
-  mob root container is in the same position for a mob app.
+  opt-in, a custom root written without the fold in mind can put text into
+  the crease on the day Duo ships, unless 27.1 SwiftUI happens to displace
+  plain stacks itself (see the revisit triggers). Apple's system containers
+  adapt on their own (HIG: "Many system components automatically adapt to
+  reserved regions"), and a mob root container is in the same position for
+  a mob app.
 - **Precedent in mob.** The root already respects the top safe-area inset
   without being asked (`MobRootView`, see "What mob has today").
 
@@ -340,7 +346,7 @@ Why not `Scroll`/`List` (amending MOB-202, which proposed the "outermost
 
 Why only direct children, and nothing more ambitious:
 
-- The HIG says to "move only what's necessary" and to "favor small
+- The HIG says "Move only what’s necessary" and to "favor small
   adjustments over rearrangement". Re-flowing a whole screen into two panes
   is what `<Arrangement>` is for. Nested containers and overlays
   (`:anchored` panels) are outside the automatic layer and must use
@@ -377,8 +383,8 @@ to `<Arrangement>` and `:reserved_regions`. That is more honest about the
 cost, because auto-honour can move content the author placed deliberately.
 It was rejected because the failure modes are asymmetric. A wrongly
 honoured fold moves content, and one prop turns that off. A wrongly ignored
-fold puts unreadable, untappable controls in the crease of every naive app,
-and the author doesn't know there is a prop to look for.
+fold can leave controls unreadable and untappable in the crease of a naive
+app, and the author doesn't know there is a prop to look for.
 
 **Misuse to watch for, once it ships:** `respect_fold: false` on an ordinary
 text-and-controls screen, usually copied from a canvas example, will be the
@@ -482,10 +488,11 @@ network stack on a simulator, which is the per-app dist-port problem
 This is MOB-201's recommendation 1, adopted. Mob keeps
 `arm64-apple-ios17.0`. Every 27.1-only symbol (`ReservedRegion`,
 `ArrangementView`/`UIArrangementViewController`,
-`onHingeChange`/`UIHingeInteraction`, and `CameraCaptureAccessory`, whose
-exact annotation is still to be confirmed) is used only
-behind `@available(iOS 27.1, *)` or `if #available(iOS 27.1, *)` at the call
-site. iOS 27.0 API (`sceneAccessory`) gets `27.0`. On older systems each
+`onHingeChange`/`UIHingeInteraction`) is used only behind
+`@available(iOS 27.1, *)` or `if #available(iOS 27.1, *)` at the call
+site. `CameraCaptureAccessory` is absent from 27.0, but its annotation
+hasn't been seen, so MOB-244 uses whatever the 27.1 SDK declares. iOS 27.0
+API (`sceneAccessory`) gets `27.0`. On older systems each
 primitive falls back as described above: `[]` regions, Apple's split rule
 for `<Arrangement>`, no hinge messages, no accessory. MOB-201's option 2, a
 `mob_ios_min: "27.1"` flag that raises the floor per app, was rejected:
@@ -500,8 +507,8 @@ MOB-201 owns the mechanism.
 
 ### 9. Android: a no-op seam now, with a candidate mapping
 
-Mob's Android implementation isn't fold-aware, and none of the devices in
-its verified pool fold. Every primitive above ships on Android anyway, as a
+Mob's Android implementation isn't fold-aware. Every primitive above ships
+on Android anyway, as a
 defined no-op, so a screen written for Duo compiles and runs there
 unchanged.
 
@@ -511,7 +518,7 @@ will be:
 
 | Primitive | Android today | Candidate mapping |
 |---|---|---|
-| `:reserved_regions` | always `[]` | `FoldingFeature.bounds` → `frame`; `isSeparating` → `active` |
+| `:reserved_regions` | always `[]` | `FoldingFeature.bounds` (window pixels) divided by display density → `frame` in dp; `isSeparating` → `active` |
 | `<Arrangement>` | Apple's split/overlay rule, no division | same rule, with a separating `FoldingFeature` band as the division |
 | `{:mob_hinge_change, _}` | never sent | `FoldingFeature.State` gives only `FLAT`/`HALF_OPENED` (→ `:fully_open`/`:partially_open`); the angle would need `Sensor.TYPE_HINGE_ANGLE` |
 | `<SceneAccessory>` | renders nothing; availability never sent | no counterpart identified |
