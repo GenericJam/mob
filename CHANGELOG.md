@@ -30,6 +30,15 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `Info.plist` to stop being letterboxed (the `mob_new` template change,
   MOB-206). See `decisions/2026-10-01-size-class-in-socket-assigns.md` and the
   "Size class" section of `guides/screen_lifecycle.md`.
+- **Tappable canvas** (MOB-224). `<Canvas on_tap={{self(), :board}}>`
+  delivers `{:tap, :board}`, like any other tappable node. A canvas can have
+  both `on_tap` and `on_drag`: on iOS they are one gesture on the canvas, so a
+  stationary touch fires the tap (plus the zero-length drag iOS has always
+  sent) and a moving finger fires only the drag. The canvas still owns its
+  touches, so drawing inside a `:scroll` does not scroll the page and does not
+  fire an ancestor's `on_tap` or swipe. Android needed no change (the generic
+  tap modifier already reaches canvas, and its drag detector consumes the
+  drag). iOS needs `mix mob.deploy --native` to pick this up.
 
 ### Docs
 - **Decision record for fold-aware layouts (iPhone Duo)** (MOB-208):
@@ -57,13 +66,6 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `:native_view`.
 - **`Mob.UI.canvas/1` keeps `:on_tap` and `:on_drag`** (MOB-224). It used to
   drop both, so a canvas built with the helper could not take input.
-
-### Added
-- **Tappable canvas** (MOB-224). `<Canvas on_tap={{self(), :board}}>`
-  delivers `{:tap, :board}`, like any other tappable node. iOS attaches the tap
-  next to the existing `on_drag` recognizer, so a canvas can have both. Android
-  needed no change (the generic tap modifier already reaches canvas). iOS
-  needs `mix mob.deploy --native` to pick this up.
 
 ## [0.9.9] - 2026-10-01
 

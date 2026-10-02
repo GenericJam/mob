@@ -1215,54 +1215,66 @@ private struct MobCanvasView: View {
             width: node.canvasWidth > 0 ? CGFloat(node.canvasWidth) : nil,
             height: node.canvasHeight > 0 ? CGFloat(node.canvasHeight) : nil
         )
-        // on_tap: delivered as {:tap, tag}, same as every other tappable node.
-        // The drag recognizer below is attached with simultaneousGesture so a
-        // canvas with both handlers still gets its tap.
-        .ifLet(node.onTap) { view, tap in
-            view.contentShape(Rectangle()).onTapGesture { tap() }
-        }
 
-        // Finger-drag input: when the node registered an on_drag handle, attach a
-        // continuous drag recognizer (the iOS analog of Android MobCanvas's
-        // detectDragGestures). The Canvas frame is sized to the declared logical
-        // units (points), and draw ops are drawn in that same space, so the
-        // gesture's local-space location is already in canvas coordinates — no
-        // pixel→logical rescale needed (unlike Android, where it is).
-        //
-        // minimumDistance: 0 is intentional: a finger-drawing canvas wants an
-        // immediate response and a stationary tap to register as a single point
-        // (a dot). This is a deliberate divergence from Android's
-        // detectDragGestures, which has a touch-slop threshold, so a bare tap
-        // fires a zero-length began/ended drag on iOS but nothing on Android.
-        if node.onDrag != nil {
-            canvas.simultaneousGesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        // Flip the @State flag only once, on the first sample, so
-                        // a fast drag does not invalidate the view on every move.
-                        let phase: String
-                        if dragging {
-                            phase = "dragging"
-                        } else {
-                            dragging = true
-                            phase = "began"
-                        }
-                        node.onDrag?(
-                            value.translation.width, value.translation.height,
-                            value.location.x, value.location.y, phase
-                        )
-                    }
-                    .onEnded { value in
-                        dragging = false
-                        node.onDrag?(
-                            value.translation.width, value.translation.height,
-                            value.location.x, value.location.y, "ended"
-                        )
-                    }
-            )
+        // Every recognizer here goes through `.gesture`, never
+        // `.simultaneousGesture`: a child's `.gesture` wins over ancestor
+        // recognizers, so drawing on a canvas inside a `:scroll` does not also
+        // scroll the page, and a touch on the canvas does not fire an ancestor's
+        // on_tap / swipe. Android's detectDragGestures consumes the drag the same
+        // way. With both handlers, tap and drag are composed into ONE gesture on
+        // the canvas, so they arbitrate with each other and not with ancestors:
+        // a stationary touch fires on_tap (plus the zero-length drag described
+        // below); once the finger moves, the tap fails and only the drag fires.
+        if let tap = node.onTap, node.onDrag != nil {
+            canvas
+                .contentShape(Rectangle())
+                .gesture(dragGesture.simultaneously(with: TapGesture().onEnded { tap() }))
+        } else if node.onDrag != nil {
+            canvas.gesture(dragGesture)
+        } else if let tap = node.onTap {
+            // on_tap: delivered as {:tap, tag}, same as every other tappable node.
+            canvas.contentShape(Rectangle()).onTapGesture { tap() }
         } else {
             canvas
         }
+    }
+
+    // Finger-drag input for on_drag: a continuous drag recognizer (the iOS
+    // analog of Android MobCanvas's detectDragGestures). The Canvas frame is
+    // sized to the declared logical units (points), and draw ops are drawn in
+    // that same space, so the gesture's local-space location is already in
+    // canvas coordinates — no pixel→logical rescale needed (unlike Android,
+    // where it is).
+    //
+    // minimumDistance: 0 is intentional: a finger-drawing canvas wants an
+    // immediate response and a stationary tap to register as a single point
+    // (a dot). This is a deliberate divergence from Android's
+    // detectDragGestures, which has a touch-slop threshold, so a bare tap
+    // fires a zero-length began/ended drag on iOS but nothing on Android.
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                // Flip the @State flag only once, on the first sample, so
+                // a fast drag does not invalidate the view on every move.
+                let phase: String
+                if dragging {
+                    phase = "dragging"
+                } else {
+                    dragging = true
+                    phase = "began"
+                }
+                node.onDrag?(
+                    value.translation.width, value.translation.height,
+                    value.location.x, value.location.y, phase
+                )
+            }
+            .onEnded { value in
+                dragging = false
+                node.onDrag?(
+                    value.translation.width, value.translation.height,
+                    value.location.x, value.location.y, "ended"
+                )
+            }
     }
 
     private func drawOp(_ op: [String: Any], in ctx: inout GraphicsContext, size: CGSize) {
