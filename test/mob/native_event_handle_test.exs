@@ -154,6 +154,22 @@ defmodule Mob.NativeEventHandleTest do
     end
   end
 
+  test "a connecting iOS scene never takes a set its own attach just pruned" do
+    # mob_scene_attach prunes kept entries whose session is gone, but their
+    # sets are released, and the BEAM told {mob_scene, discarded, Id}, only
+    # after the lock. A scene handed such a set in between would show the gone
+    # window's router's frames (set 0: the still-live unbound primary) and its
+    # taps would go to screens about to stop.
+    [_, attach] = String.split(@ios_source, "NSObject *mob_scene_attach(", parts: 2)
+    [attach, _] = String.split(attach, "\n}\n", parts: 2)
+
+    {prune, _} = :binary.match(attach, "mob_scene_prune_gone_locked(")
+    {search, _} = :binary.match(attach, "mob_scene_free_set_locked(released)")
+    assert prune < search
+    assert attach =~ "mob_scene_assign_set_locked(entry, released)"
+    refute attach =~ "mob_scene_free_set_locked(nil)"
+  end
+
   test "active table, count, and generation commit under one lock" do
     [_, commit] =
       String.split(@android_source, "// Commit the freshly-built tap table:", parts: 2)
