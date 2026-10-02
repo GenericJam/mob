@@ -10,6 +10,27 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **Every screen socket carries the window's size class** (MOB-204, mob side of
+  MOB-165). `assigns.size_class` is `{horizontal, vertical}`, each `:compact`
+  or `:regular`, set before `mount/3`: on iOS the window's
+  `traitCollection`, on Android the activity's `Configuration` width/height in
+  dp with Material's breakpoints (`:regular` from 600dp wide / 480dp tall).
+  When it changes — rotation, iPad Split View / Slide Over / Stage Manager
+  resizes, an Android multi-window resize (iPhone Duo's fold is expected to
+  arrive the same way; unverified until the Xcode 27.1 simulator, MOB-205) —
+  every live screen, including ones under the top of a stack and in parked
+  tabs, gets the new assign and then
+  `handle_info({:mob_size_class_changed, new}, socket)`. A screen with no
+  clause for it is not crashed. New `Mob.SizeClass`, NIF
+  `mob_nif:size_class/0`, and `Mob.ScreenCase.mount_screen/4`
+  (`size_class:`) plus `change_size_class/2` to test layouts per class. Needs
+  a native rebuild (`mix mob.deploy --native`); without one screens hold
+  `{:compact, :regular}`. iPad apps also need `UIDeviceFamily` `[1, 2]` in
+  `Info.plist` to stop being letterboxed (the `mob_new` template change,
+  MOB-206). See `decisions/2026-10-01-size-class-in-socket-assigns.md` and the
+  "Size class" section of `guides/screen_lifecycle.md`.
+
 ### Docs
 - **Decision record for fold-aware layouts (iPhone Duo)** (MOB-208):
   `decisions/2026-10-01-fold-aware-layouts.md`. It fixes the design for the

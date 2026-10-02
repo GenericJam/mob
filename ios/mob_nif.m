@@ -2643,6 +2643,83 @@ static ERL_NIF_TERM nif_safe_area(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
         enif_make_double(env, insets.bottom), enif_make_double(env, insets.left));
 }
 
+// ── size class (MOB-204) ──────────────────────────────────────────────────────
+//
+// The window's traitCollection size classes, as {Horizontal, Vertical} atoms.
+// Read at screen mount (Mob.SizeClass.read/1); changes are pushed by
+// mob_notify_size_class below, so this is not on a per-paint path.
+//
+// Same window and same bounded main-thread wait as nif_safe_area, for the same
+// reason: this also runs from Mob.Screen.Server's init on the boot path, and a
+// main thread that has not reached an idle tick must not hang the BEAM. A
+// timeout, a missing window and an unspecified class all answer `no_window`:
+// none is an answer, and the screen holds a placeholder until the root view
+// reports the real value.
+
+static const char *mob_size_class_name(UIUserInterfaceSizeClass c) {
+    switch (c) {
+    case UIUserInterfaceSizeClassCompact:
+        return "compact";
+    case UIUserInterfaceSizeClassRegular:
+        return "regular";
+    default:
+        return NULL;
+    }
+}
+
+static ERL_NIF_TERM nif_size_class(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    __block UIUserInterfaceSizeClass h = UIUserInterfaceSizeClassUnspecified;
+    __block UIUserInterfaceSizeClass v = UIUserInterfaceSizeClassUnspecified;
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+          if ([scene isKindOfClass:[UIWindowScene class]]) {
+              UIWindow *window = ((UIWindowScene *)scene).windows.firstObject;
+              if (window) {
+                  h = window.traitCollection.horizontalSizeClass;
+                  v = window.traitCollection.verticalSizeClass;
+              }
+              break;
+          }
+      }
+      dispatch_semaphore_signal(done);
+    });
+    dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC));
+    // On a timeout h and v are not read: the block may still run and write
+    // them later, which is harmless because __block storage outlives us.
+    if (dispatch_semaphore_wait(done, deadline) != 0)
+        return enif_make_atom(env, "no_window");
+
+    const char *hn = mob_size_class_name(h);
+    const char *vn = mob_size_class_name(v);
+    if (!hn || !vn)
+        return enif_make_atom(env, "no_window");
+    return enif_make_tuple2(env, enif_make_atom(env, hn), enif_make_atom(env, vn));
+}
+
+// Called from MobRootView.swift when its horizontal/vertical size class pair
+// changes, and once when it first appears. Sends {:mob_size_class, H, V} to
+// the :mob_screen router, which hands it to every live screen. Screens drop a
+// value they already hold, so reporting the same pair twice is harmless.
+void mob_notify_size_class(const char *horizontal, const char *vertical) {
+    if (!horizontal || !vertical)
+        return;
+    // Before the BEAM is up there is no screen to tell; screens mounted later
+    // read the window themselves (nif_size_class). Calling into erts here
+    // would crash (MOB-199).
+    if (!mob_runtime_up())
+        return;
+    ErlNifEnv *env = enif_alloc_env();
+    ErlNifPid pid;
+    if (enif_whereis_pid(env, enif_make_atom(env, "mob_screen"), &pid)) {
+        ERL_NIF_TERM msg =
+            enif_make_tuple3(env, enif_make_atom(env, "mob_size_class"),
+                             enif_make_atom(env, horizontal), enif_make_atom(env, vertical));
+        enif_send(NULL, &pid, env, msg);
+    }
+    enif_free_env(env);
+}
+
 // ── NIF: log/1 ────────────────────────────────────────────────────────────────
 
 static ERL_NIF_TERM nif_log(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
@@ -8750,6 +8827,7 @@ static ErlNifFunc nif_funcs[] = {
     {"clear_taps", 0, nif_clear_taps, 0},
     {"exit_app", 0, nif_exit_app, 0},
     {"safe_area", 0, nif_safe_area, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"size_class", 0, nif_size_class, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"haptic", 1, nif_haptic, 0},
     {"torch", 1, nif_torch, 0},
     {"clipboard_put", 1, nif_clipboard_put, 0},

@@ -126,10 +126,27 @@ defmodule Mob.ScreenCase do
   @doc """
   Mount a screen and return a `View` handle. Calls `Mob.Socket.new/1` then the
   screen's `mount/3`, asserting it returns `{:ok, socket}`.
+
+  The socket carries `:size_class` before `mount/3` runs, as it does on device:
+  `Mob.SizeClass.placeholder/0` (`{:compact, :regular}`, a portrait phone)
+  unless `opts` sets one.
+
+      view = mount_screen(MyApp.HomeScreen, %{}, %{}, size_class: {:regular, :regular})
+
+  ## Options
+
+    * `:size_class` — the window's `{horizontal, vertical}` size class.
   """
-  @spec mount_screen(module(), map(), map()) :: View.t()
-  def mount_screen(module, params \\ %{}, session \\ %{}) when is_atom(module) do
-    socket = Mob.Socket.new(module)
+  @spec mount_screen(module(), map(), map(), keyword()) :: View.t()
+  def mount_screen(module, params \\ %{}, session \\ %{}, opts \\ []) when is_atom(module) do
+    size_class = Keyword.get(opts, :size_class, Mob.SizeClass.placeholder())
+
+    unless Mob.SizeClass.valid?(size_class) do
+      raise ArgumentError,
+            ":size_class must be {h, v} with each :compact or :regular, got: #{inspect(size_class)}"
+    end
+
+    socket = module |> Mob.Socket.new() |> Mob.Socket.assign(:size_class, size_class)
 
     case module.mount(params, session, socket) do
       {:ok, %Mob.Socket{} = socket} ->
@@ -184,6 +201,31 @@ defmodule Mob.ScreenCase do
   def render_info(%View{source: :beam, module: module, socket: socket} = view, message) do
     {:noreply, socket} = module.handle_info(message, socket)
     %{view | socket: socket}
+  end
+
+  @doc """
+  Change the window's size class the way a rotation or a resize does on
+  device, and return the updated `View`: `assigns.size_class` becomes
+  `size_class`, then the screen's
+  `handle_info({:mob_size_class_changed, size_class}, socket)` runs. Changing
+  to the value the screen already holds does nothing, as on device. In-BEAM
+  only; on a device, rotate it (`Mob.Device.lock_orientation/1`).
+
+      view = mount_screen(MyApp.HomeScreen)
+      view = change_size_class(view, {:regular, :compact})
+      assert find(view, :row, id: "two_pane")
+  """
+  @spec change_size_class(View.t(), Mob.SizeClass.t()) :: View.t()
+  def change_size_class(%View{source: :beam, module: module, socket: socket} = view, size_class) do
+    unless Mob.SizeClass.valid?(size_class) do
+      raise ArgumentError,
+            "size class must be {h, v} with each :compact or :regular, got: #{inspect(size_class)}"
+    end
+
+    case Mob.SizeClass.apply_change(module, socket, size_class) do
+      :unchanged -> view
+      {:noreply, socket} -> %{view | socket: socket}
+    end
   end
 
   @doc "The screen's current assigns. Mirrors `Mob.Test.assigns/1` (and uses it on device)."

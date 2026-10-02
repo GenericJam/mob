@@ -177,7 +177,7 @@ defmodule Mob.MixProject do
         Plugins: ["MOB_PLUGINS.md", "MOB_PLUGIN_SECURITY.md", "MOB_STYLES.md", "MOB_FONTS.md"]
       ],
       groups_for_modules: [
-        Core: [Mob, Mob.App, Mob.Screen, Mob.ScreenState, Mob.Socket, Mob.State],
+        Core: [Mob, Mob.App, Mob.Screen, Mob.ScreenState, Mob.SizeClass, Mob.Socket, Mob.State],
         UI: [
           Mob.UI,
           Mob.Style,

@@ -2124,6 +2124,12 @@ pub export fn _mob_bridge_init_activity(env: *jni.JNIEnv, activity: jni.JObject)
     const init = jni.getStaticMethodID(env, Bridge.cls, "init", "(Landroid/app/Activity;)V");
     env.*.CallStaticVoidMethod.?(env, Bridge.cls, init, activity);
     logi_nif("_mob_bridge_init_activity: MobBridge.init called", .{});
+    // A recreated activity (a configuration change the manifest does not
+    // handle, e.g. a multi-window resize across smallestScreenSize) gets no
+    // onConfigurationChanged, but the BEAM and its screens live on. Report
+    // the new window's size class; on first launch the BEAM is not up yet and
+    // this does nothing.
+    notifySizeClass();
 }
 
 // ── Helpers for the feature NIFs below ───────────────────────────────────
@@ -3771,14 +3777,140 @@ fn orientationAtomName(code: c_int) [*:0]const u8 {
     };
 }
 
-/// Called from beam_jni.c's `Java_..._MobBridge_nativeNotifyOrientation` when
-/// MainActivity.onConfigurationChanged sees an orientation flip. `orient` is
-/// one of "portrait" | "landscape_left" | "landscape_right" |
-/// "portrait_upside_down". (Companion hook ships in the mob_new template.)
+/// Called from beam_jni.c's `Java_..._MobBridge_nativeNotifyOrientation` from
+/// MainActivity.onConfigurationChanged — on EVERY configuration change the
+/// activity handles itself (rotation, multi-window resize, ...), not only an
+/// orientation flip. `orient` is one of "portrait" | "landscape_left" |
+/// "landscape_right" | "portrait_upside_down". (Companion hook ships in the
+/// mob_new template.)
+///
+/// Because it is the one hook every generated app already calls on a
+/// configuration change, it also reports the size class (MOB-204).
 pub export fn mob_send_orientation_changed(orient: ?[*:0]const u8) callconv(.c) void {
     const o = orient orelse return;
     g_last_orientation.store(orientationCode(o), .monotonic);
     deviceSendAtomPayload("mob_device", "orientation_changed", o);
+    notifySizeClass();
+}
+
+// ── Size class (MOB-204) ─────────────────────────────────────────────────────
+//
+// Android has no OS size class, so it is derived from the activity's
+// Configuration.screenWidthDp / screenHeightDp with the Material
+// window-size-class breakpoints: horizontal is regular from 600dp wide,
+// vertical from 480dp tall (Material's medium and expanded both map to
+// regular). Those are the numbers Android's own w600dp / h480dp resource
+// qualifiers select on.
+//
+// Configuration rather than WindowMetrics or Compose's WindowSizeClass (see
+// decisions/2026-10-01-size-class-in-socket-assigns.md): it is a field read,
+// so this needs no hop to the UI thread; it is already updated when
+// onConfigurationChanged runs, on every supported API level (MobBridge's
+// pre-API-30 screenInfo path measures the decor view, which has not been
+// re-laid out yet at that point); and it needs no Kotlin, so apps generated
+// before this change get it from a native rebuild.
+
+const size_class_regular_width_dp: jni.JInt = 600;
+const size_class_regular_height_dp: jni.JInt = 480;
+
+const SizeClass = struct { h: [*:0]const u8, v: [*:0]const u8 };
+
+fn sizeClassAxis(dp: jni.JInt, regular_from: jni.JInt) [*:0]const u8 {
+    return if (dp >= regular_from) "regular" else "compact";
+}
+
+/// The current activity's size class, or null when there is no activity yet or
+/// its configuration does not say (screenWidthDp is 0, "undefined").
+fn readSizeClass(jenv: *jni.JNIEnv) ?SizeClass {
+    const activity = g_activity;
+    if (activity == null) return null;
+
+    const activity_cls = jni.getObjectClass(jenv, activity);
+    defer jni.deleteLocalRef(jenv, activity_cls);
+    const get_resources = jni.getMethodID(jenv, activity_cls, "getResources", "()Landroid/content/res/Resources;");
+    if (get_resources == null) {
+        jni.exceptionClear(jenv);
+        return null;
+    }
+    const resources = jni.callObjectMethod(jenv, activity, get_resources);
+    if (resources == null) {
+        jni.exceptionClear(jenv);
+        return null;
+    }
+    defer jni.deleteLocalRef(jenv, resources);
+
+    const resources_cls = jni.getObjectClass(jenv, resources);
+    defer jni.deleteLocalRef(jenv, resources_cls);
+    const get_config = jni.getMethodID(jenv, resources_cls, "getConfiguration", "()Landroid/content/res/Configuration;");
+    if (get_config == null) {
+        jni.exceptionClear(jenv);
+        return null;
+    }
+    const config = jni.callObjectMethod(jenv, resources, get_config);
+    if (config == null) {
+        jni.exceptionClear(jenv);
+        return null;
+    }
+    defer jni.deleteLocalRef(jenv, config);
+
+    const config_cls = jni.getObjectClass(jenv, config);
+    defer jni.deleteLocalRef(jenv, config_cls);
+    const width_fid = jni.getFieldID(jenv, config_cls, "screenWidthDp", "I");
+    const height_fid = jni.getFieldID(jenv, config_cls, "screenHeightDp", "I");
+    if (width_fid == null or height_fid == null) {
+        jni.exceptionClear(jenv);
+        return null;
+    }
+    const width_dp = jni.getIntField(jenv, config, width_fid);
+    const height_dp = jni.getIntField(jenv, config, height_fid);
+    if (width_dp <= 0 or height_dp <= 0) return null;
+
+    return .{
+        .h = sizeClassAxis(width_dp, size_class_regular_width_dp),
+        .v = sizeClassAxis(height_dp, size_class_regular_height_dp),
+    };
+}
+
+/// size_class/0 — {Horizontal, Vertical} atoms, or `no_window` before an
+/// activity is attached. Read at screen mount; changes arrive through
+/// notifySizeClass. A field read, not a UI-thread round trip, so it returns
+/// promptly and runs on a normal scheduler (iOS's waits on the main thread).
+export fn nif_size_class(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "no_window");
+    defer detachIfAttached(attached);
+    const sc = readSizeClass(jenv) orelse return erts.atom(env, "no_window");
+    return erts.makeTuple(env, .{ erts.enif_make_atom(env, sc.h), erts.enif_make_atom(env, sc.v) });
+}
+
+/// Send {:mob_size_class, H, V} to the :mob_screen router, which hands it to
+/// every live screen. Sent on every configuration change and on every activity
+/// (re)creation; screens drop a value they already hold, so a change that did
+/// not move the class costs one message. Before the BEAM has loaded mob_nif
+/// there is no router to tell, and screens mounted later read it themselves.
+fn notifySizeClass() void {
+    if (!g_nif_loaded.load(.acquire)) return;
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return;
+    defer detachIfAttached(attached);
+    const sc = readSizeClass(jenv) orelse return;
+
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    var router: erts.ErlNifPid = undefined;
+    if (!whereisRouter(env, &router)) return;
+    const msg = erts.makeTuple(env, .{
+        erts.atom(env, "mob_size_class"),
+        erts.enif_make_atom(env, sc.h),
+        erts.enif_make_atom(env, sc.v),
+    });
+    _ = erts.enif_send(null, &router, env, msg);
 }
 
 // ── Network connectivity ─────────────────────────────────────────────────────
@@ -5130,6 +5262,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "clear_taps", .arity = 0, .fptr = nif_clear_taps, .flags = 0 },
     .{ .name = "exit_app", .arity = 0, .fptr = nif_exit_app, .flags = 0 },
     .{ .name = "safe_area", .arity = 0, .fptr = nif_safe_area, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
+    .{ .name = "size_class", .arity = 0, .fptr = nif_size_class, .flags = 0 },
     .{ .name = "haptic", .arity = 1, .fptr = nif_haptic, .flags = 0 },
     .{ .name = "torch", .arity = 1, .fptr = nif_torch, .flags = 0 },
     .{ .name = "clipboard_put", .arity = 1, .fptr = nif_clipboard_put, .flags = 0 },

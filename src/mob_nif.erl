@@ -12,6 +12,7 @@
     clear_taps/0,
     exit_app/0,
     safe_area/0,
+    size_class/0,
     %% Device utilities (no permission required)
     haptic/1,
     torch/1,
@@ -145,6 +146,7 @@
     clear_taps/0,
     exit_app/0,
     safe_area/0,
+    size_class/0,
     haptic/1,
     torch/1,
     clipboard_put/1,
@@ -268,6 +270,10 @@ register_tap(_Pid) -> erlang:nif_error(not_loaded).
 clear_taps() -> erlang:nif_error(not_loaded).
 exit_app() -> erlang:nif_error(not_loaded).
 safe_area() -> erlang:nif_error(not_loaded).
+%% {Horizontal, Vertical}, each compact | regular, for the app's window, or
+%% no_window when there is none yet (iOS before a scene connects; Android
+%% before an activity is attached). See Mob.SizeClass.
+size_class() -> erlang:nif_error(not_loaded).
 haptic(_Type) -> erlang:nif_error(not_loaded).
 torch(_State) -> erlang:nif_error(not_loaded).
 clipboard_put(_Text) -> erlang:nif_error(not_loaded).

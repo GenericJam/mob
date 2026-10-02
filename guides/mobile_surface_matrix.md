@@ -102,6 +102,7 @@ and orthogonal — composition over a fat component library.
 | Color scheme (light/dark) | ✅ | ✓ | ✓ | `Mob.Theme.color_scheme/0` + `Mob.Theme.Adaptive` (auto-watch) |
 | Safe area insets | ✅ | ✓ | ✓ | `Mob.Device.safe_area/0` |
 | Screen dimensions / pixel ratio | ✅ | ✓ | ✓ | `Mob.Device.screen_info/0` |
+| Window size class (compact/regular) | ✅ | ✓ | ✓ | `assigns.size_class` + `handle_info({:mob_size_class_changed, new}, socket)` — iOS trait collection; Android `Configuration` dp with Material breakpoints. See `Mob.SizeClass` |
 | Locale / language | 🟡 | 🟡 | 🟡 | Derivable from system; no first-class API |
 | Time zone | 🟡 | 🟡 | 🟡 | Use Erlang's `:calendar` directly |
 | Network info (cell vs wifi, type) | ❌ | — | — | Plugin candidate (NetInfo equivalent) |

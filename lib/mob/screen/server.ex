@@ -42,6 +42,7 @@ defmodule Mob.Screen.Server do
   use GenServer
 
   require Logger
+  require Mob.SizeClass
 
   @state_sync_interval_ms 30_000
 
@@ -208,6 +209,7 @@ defmodule Mob.Screen.Server do
         socket
         |> Mob.Socket.assign(:safe_area, insets)
         |> Mob.Socket.put_mob(:safe_area_confirmed, status == :confirmed)
+        |> Mob.Socket.assign(:size_class, initial_size_class(render_mode, nif))
       end)
 
     case module.mount(Keyword.get(opts, :params, %{}), %{}, socket) do
@@ -437,6 +439,22 @@ defmodule Mob.Screen.Server do
     socket = Mob.Socket.put_mob(state.socket, :safe_area_confirmed, false)
     state = %{state | socket: socket}
     {:noreply, %{state | socket: do_paint(state, :none, :async, nil, false)}}
+  end
+
+  # The window's size class changed (MOB-204). Native reports it to the router,
+  # which sends it to every live screen, not only the visible one: a screen
+  # popped back to, or a parked tab switched to, must already hold the class of
+  # the window it reappears in, and nothing else would tell it.
+  #
+  # The rest — assign first, drop a repeat, tolerate a screen with no clause —
+  # is `Mob.SizeClass.apply_change/3`, shared with `Mob.ScreenCase` so a test
+  # sees exactly what a device does.
+  defp do_handle_info({:mob_size_class, h, v}, state)
+       when Mob.SizeClass.class?(h) and Mob.SizeClass.class?(v) do
+    case Mob.SizeClass.apply_change(state.module, state.socket, {h, v}) do
+      :unchanged -> {:noreply, state}
+      {:noreply, socket} -> after_forward(socket, state)
+    end
   end
 
   # Periodic state sync — intercepted before the user's handle_info so the
@@ -751,6 +769,11 @@ defmodule Mob.Screen.Server do
   defp initial_safe_area(:render, nif), do: read_safe_area(nif)
   defp initial_safe_area(_mode, _nif), do: {@zero_insets, :placeholder}
 
+  # Off device (`:no_render`) there is no window to ask; tests that care set
+  # the value with `Mob.ScreenCase` or send `{:mob_size_class, h, v}`.
+  defp initial_size_class(:render, nif), do: Mob.SizeClass.read(nif)
+  defp initial_size_class(_mode, _nif), do: Mob.SizeClass.placeholder()
+
   defp read_safe_area(nif) do
     case nif.safe_area() do
       {t, r, b, l} ->
@@ -796,9 +819,31 @@ defmodule Mob.Screen.Server do
         {:ok, stored_vsn, raw} ->
           restored = module.load_state(stored_vsn, raw)
 
-          socket
-          |> Mob.Socket.assign(restored)
-          |> Mob.Socket.assign(:safe_area, socket.assigns.safe_area)
+          live = socket.assigns.size_class
+
+          restored_socket =
+            socket
+            |> Mob.Socket.assign(restored)
+            |> Mob.Socket.assign(:safe_area, socket.assigns.safe_area)
+
+          # The dump was taken in whatever window the app last ran in, and
+          # assigns derived from that class (columns, panes) came back with it.
+          # When the dump recorded that class, keep it so a difference is a
+          # real change and the screen re-derives through its usual
+          # handle_info clause. When it did not (a custom dump_state/1, or a
+          # dump from before MOB-204), the earlier window is unknown, so the
+          # screen is told the live class unconditionally.
+          # The merged socket always holds a class (mount assigned the live
+          # one), so ask the dump itself whether it recorded its window's.
+          if Mob.SizeClass.valid?(restored |> Map.new() |> Map.get(:size_class)) do
+            case Mob.SizeClass.apply_change(module, restored_socket, live) do
+              :unchanged -> restored_socket
+              {:noreply, changed} -> changed
+            end
+          else
+            {:noreply, changed} = Mob.SizeClass.deliver(module, restored_socket, live)
+            changed
+          end
 
         :not_found ->
           socket
