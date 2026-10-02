@@ -152,9 +152,11 @@ sources. Each correction is noted where it matters.
    `UIWindowSceneActivationAction` and `UIWindowSceneActivationInteraction`
    as `API_AVAILABLE(ios(15.0))`. MOB-245 calls `UIWindowSceneActivation` a
    27.1 API; it is not. The new part is that iPhone now allows it.
-9. **SDK behaviour** (111461). Apps not rebuilt still run on Duo,
-   letterboxed beside the status bar and camera. An app built with the iOS 27
-   SDK extends to the left of the status bar on the inner display. One built
+9. **SDK behaviour** (111461). Apps not rebuilt for iOS 27 still run on
+   Duo. Closed, they use the space to the left of the status bar and
+   camera; open, they get "a familiar size and aspect ratio". An app built
+   with the iOS 27 SDK extends to the left of the status bar on the inner
+   display. One built
    with the iOS 27.1 SDK reaches the screen edge, and its standard navigation
    bars and toolbars lay out vertically on the side. Apple attributes this
    to SDK linkage and names no plist opt-in for it. Whether 27.1 adds any
@@ -206,9 +208,15 @@ concluding anything.
 
 The layout signal is the `:size_class` assign that MOB-204 is adding: a
 `{horizontal, vertical}` tuple of `:compact | :regular`, sent to screens on
-change as `{:mob_size_class_changed, new}`. Duo, iPad, Split View, Slide Over
-and rotation all reach a screen through this one signal. Mob adds no `:fold`,
-`:pose` or `:duo?` assign, and no Duo-specific idiom.
+change as `{:mob_size_class_changed, new}`. It is the signal for choosing
+the *layout mode* (compact or regular). Duo's fold, iPad, Split View, Slide
+Over and rotation reach a screen through it **only when they cross a
+size-class boundary**. Rotating the open inner display, which stays
+`{:regular, :regular}`, sends nothing. Apple names scene geometry alongside
+size classes (111464). Geometry-sensitive layout below the size-class
+level belongs to containers that consume it, such as `<Arrangement>`
+(aspect ratio, divisions), and never to interface orientation. Mob adds no
+`:fold`, `:pose` or `:duo?` assign, and no Duo-specific idiom.
 
 **Do not add an orientation check to a layout path "for symmetry"** with
 size class. On the inner display it is simply wrong: the system ignores
@@ -429,8 +437,8 @@ whose screens each render one tree into one window today.
   `onAvailabilityChange`.
 - **One element, an explicit kind.** Apple has two different accessories
   (item 7):
-  - The Duo **camera-capture** accessory (`CameraCaptureAccessory`), a
-    SwiftUI modifier on the camera UI.
+  - The Duo **camera-capture** accessory: `CameraCaptureAccessory`, supplied
+    as content to the `.sceneAccessory` modifier on the camera UI.
   - The generic **external-display** accessory (`UISceneAccessory`), which
     is non-interactive and backed by a `UISceneConfiguration`, so it is a
     scene the system connects.
