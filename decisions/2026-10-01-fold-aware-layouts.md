@@ -97,7 +97,7 @@ sources. Each correction is noted where it matters.
    style (111463, documentation article, HIG). It takes the size classes,
    the aspect ratio and any active division as inputs, and decides whether
    each view is shown and where. Split places the views side by side when
-   the container is wider than it is tall, and stacked otherwise. Its axes
+   the container is wider than it is tall, and stacked when it is taller. Its axes
    can be restricted, and when it cannot split along its primary axis it
    shows only the primary view. Overlay layers primary over secondary when
    there is no active division, and puts them on either side of the fold
@@ -249,8 +249,8 @@ host needs it.
   owning screen's pid, like taps anywhere else. MOB-203's draft API
   (`primary=`/`secondary=` props, `mode=`) is replaced by this.
 - **Placement rules are checked, not just documented.** MOB-203 should
-  reject an `<Arrangement>` inside a `Scroll` or `List` at render time; all
-  three Apple sources agree on that (item 4). The navigation rules follow
+  reject an `<Arrangement>` inside a `Scroll` or `List` at render time; the
+  documentation article and 111463 both say so (item 4). The navigation rules follow
   from mob's structure. Mob's navigation (stacks, and `Mob.App.tab_bar/1`)
   is declared at the app level, outside any screen's render tree. So an
   `<Arrangement>` always sits *inside* navigation and never wraps it. That
