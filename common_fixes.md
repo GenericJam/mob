@@ -1156,3 +1156,36 @@ real JSON over real TLS.
 **Trade-off** — ~33 MB APK size for the bundled `beam.smp`. Pure-Mix
 deps don't need any of this; if your app never runs rebar3 deps at
 runtime, skip the whole bundling and avoid the cost.
+
+## Content painted into the crease on iPhone Duo (`respect_fold` misuse)
+
+**Symptom**: On iPhone Duo, with the device partially folded, text or
+controls sit in the fold band of the inner display, where they are hard to
+read and hard to tap. The same screen looks fine closed (outer display) and
+fully open.
+
+**Cause, in order of likelihood** (the design is in
+`decisions/2026-10-01-fold-aware-layouts.md`):
+
+1. **`respect_fold: false` on an ordinary screen.** The opt-out exists for
+   screens that deliberately paint across the crease: games, canvases,
+   full-bleed media and camera viewfinders. Copied onto a text-and-controls
+   root, it switches off the automatic fold-honour. Remove it.
+2. **The root is a `Scroll` or `List`.** These are not fold-honoured, by
+   design: Apple's guidance is that scrolling content doesn't displace
+   (Tech Talk 111463). Scrolled content crossing the fold is expected. A
+   fixed control that must stay clear belongs outside the scroll, or should
+   be placed using `assigns.reserved_regions`.
+3. **A nested or overlaid element placed by hand.** Auto-honour only keeps
+   the root's direct children off the division. Anything deeper, or drawn as
+   an overlay (`:anchored` panels, absolute offsets), has to consult
+   `:reserved_regions` itself, or the two views should be an `<Arrangement>`.
+
+**Diagnosis**: `Mob.Test.assigns(node).reserved_regions` lists the division
+with `active: true` while the device is folded. Compare its `frame` with
+`Mob.Test.element_frames(node)` for the offending element.
+
+**Status (2026-10-01)**: `respect_fold`, `:reserved_regions` and
+`<Arrangement>` land with MOB-202 and MOB-203, which need Xcode 27.1. Until
+then a mob app on Duo has no fold awareness at all, and anything on the inner
+display can cross the fold when the device is partially folded.

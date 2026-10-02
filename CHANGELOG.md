@@ -8,6 +8,24 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Docs
+- **Decision record for fold-aware layouts (iPhone Duo)** (MOB-208):
+  `decisions/2026-10-01-fold-aware-layouts.md`. It fixes the design for the
+  rest of MOB-200 before the 27.1 work starts: layout keys on `:size_class`,
+  never orientation; `:reserved_regions` stays separate from `:safe_area`;
+  `<Arrangement>` wraps Apple's `ArrangementView`; the fold is honoured
+  automatically at a non-scrolling root, with a `respect_fold: false`
+  opt-out; hinge events are for effects only; scene accessories are an
+  optional companion tree; multi-window is shared with iPad; the iOS 17
+  floor stays, with Duo API behind `@available`. It is checked against
+  Apple's Duo Tech Talks, documentation and HIG, and corrects several ticket
+  claims (e.g. `UIWindowSceneActivationAction` is iOS 15, and the generic
+  `sceneAccessory` API is iOS 27.0, not 27.1). `AGENTS.md` gains a "Device
+  shapes" pointer, and `common_fixes.md` an entry on content painted into
+  the crease.
+
 ## [0.9.9] - 2026-10-01
 
 ### Upgrading
