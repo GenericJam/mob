@@ -243,10 +243,18 @@ defmodule Mob.Renderer do
 
   Callers never construct the tuple; `Mob.Socket` validates the public
   `:push | :pop | :reset` vocabulary.
+
+  `scene` is the window scene a router bound to one renders into (MOB-245):
+  the frame is built with `clear_taps/1` and carries `"scene"` on the JSON
+  root, so native builds, commits and shows it in that scene's own tap set
+  and view model. `nil`, the default, is the unbound path every
+  single-window app takes: `clear_taps/0` and no key, which native shows in
+  its default scene. See
+  `decisions/2026-10-02-one-router-per-window-scene.md`.
   """
-  @spec render(map(), atom(), module() | atom(), atom() | {atom(), :replace}) ::
+  @spec render(map(), atom(), module() | atom(), atom() | {atom(), :replace}, String.t() | nil) ::
           {:ok, :json_tree} | {:error, term()}
-  def render(tree, platform, nif \\ @default_nif, transition \\ :none) do
+  def render(tree, platform, nif \\ @default_nif, transition \\ :none, scene \\ nil) do
     theme = Theme.current()
 
     ctx = %{
@@ -274,7 +282,7 @@ defmodule Mob.Renderer do
         anim -> {anim, false}
       end
 
-    nif.clear_taps()
+    if scene, do: nif.clear_taps(scene), else: nif.clear_taps()
     nif.set_transition(animation)
 
     prepared = Mob.RenderStats.time(:prepare_us, fn -> prepare(tree, nif, platform, ctx) end)
@@ -283,6 +291,7 @@ defmodule Mob.Renderer do
     # read named keys and ignore the rest, so this is additive on the wire:
     # a host that does not know it behaves exactly as it did.
     prepared = if replaces_stack?, do: Map.put(prepared, "replaces_stack", true), else: prepared
+    prepared = if scene, do: Map.put(prepared, "scene", scene), else: prepared
 
     json =
       Mob.RenderStats.time(:encode_us, fn ->

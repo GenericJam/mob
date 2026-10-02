@@ -9,10 +9,14 @@
     set_root/1,
     set_theme/1,
     register_tap/1,
-    clear_taps/0,
+    clear_taps/0, clear_taps/1,
     exit_app/0,
-    safe_area/0,
-    size_class/0,
+    safe_area/0, safe_area/1,
+    size_class/0, size_class/1,
+    %% Window scenes (MOB-245; iOS only)
+    scenes/0,
+    scene_request/0,
+    scene_multiple_supported/0,
     %% Device utilities (no permission required)
     haptic/1,
     torch/1,
@@ -62,8 +66,8 @@
     storage_save_to_media_store/2,
     storage_external_files_dir/1,
     %% Alerts / overlays
-    alert_show/3,
-    action_sheet_show/2,
+    alert_show/3, alert_show/4,
+    action_sheet_show/2, action_sheet_show/3,
     toast_show/2,
     %% WebView
     webview_eval_js/1,
@@ -144,9 +148,15 @@
     set_theme/1,
     register_tap/1,
     clear_taps/0,
+    clear_taps/1,
     exit_app/0,
     safe_area/0,
+    safe_area/1,
     size_class/0,
+    size_class/1,
+    scenes/0,
+    scene_request/0,
+    scene_multiple_supported/0,
     haptic/1,
     torch/1,
     clipboard_put/1,
@@ -220,7 +230,9 @@
     storage_external_files_dir/1,
     %% Alerts / overlays
     alert_show/3,
+    alert_show/4,
     action_sheet_show/2,
+    action_sheet_show/3,
     toast_show/2,
     %% WebView
     webview_eval_js/1,
@@ -268,12 +280,29 @@ set_root(_Json) -> erlang:nif_error(not_loaded).
 set_theme(_Json) -> erlang:nif_error(not_loaded).
 register_tap(_Pid) -> erlang:nif_error(not_loaded).
 clear_taps() -> erlang:nif_error(not_loaded).
+%% clear_taps(SceneId) — start building the next frame for the window scene
+%% SceneId (a UISceneSession persistentIdentifier binary). Mob.Renderer calls it
+%% instead of clear_taps/0 for a router bound to a scene; see
+%% decisions/2026-10-02-one-router-per-window-scene.md.
+clear_taps(_SceneId) -> erlang:nif_error(not_loaded).
 exit_app() -> erlang:nif_error(not_loaded).
 safe_area() -> erlang:nif_error(not_loaded).
+%% safe_area(SceneId) — as safe_area/0, for that scene's window.
+safe_area(_SceneId) -> erlang:nif_error(not_loaded).
 %% {Horizontal, Vertical}, each compact | regular, for the app's window, or
 %% no_window when there is none yet (iOS before a scene connects; Android
 %% before an activity is attached). See Mob.SizeClass.
 size_class() -> erlang:nif_error(not_loaded).
+%% size_class(SceneId) — as size_class/0, for that scene's window.
+size_class(_SceneId) -> erlang:nif_error(not_loaded).
+%% [{SceneId, IsDefault}] for every attached window scene, oldest first. See
+%% Mob.Scenes.
+scenes() -> erlang:nif_error(not_loaded).
+%% Ask the OS for a new window scene. ok | {error, unsupported}; an async
+%% refusal arrives at the caller as {mob_scene, request_failed, Reason}.
+scene_request() -> erlang:nif_error(not_loaded).
+%% Whether this app and device can show more than one window scene.
+scene_multiple_supported() -> erlang:nif_error(not_loaded).
 haptic(_Type) -> erlang:nif_error(not_loaded).
 torch(_State) -> erlang:nif_error(not_loaded).
 clipboard_put(_Text) -> erlang:nif_error(not_loaded).
@@ -396,7 +425,9 @@ storage_save_to_photo_library(_Path) -> erlang:nif_error(not_loaded).
 storage_save_to_media_store(_Path, _Type) -> erlang:nif_error(not_loaded).
 storage_external_files_dir(_Type) -> erlang:nif_error(not_loaded).
 alert_show(_Title, _Message, _ButtonsJson) -> erlang:nif_error(not_loaded).
+alert_show(_SceneId, _Title, _Message, _ButtonsJson) -> erlang:nif_error(not_loaded).
 action_sheet_show(_Title, _ButtonsJson) -> erlang:nif_error(not_loaded).
+action_sheet_show(_SceneId, _Title, _ButtonsJson) -> erlang:nif_error(not_loaded).
 toast_show(_Message, _Duration) -> erlang:nif_error(not_loaded).
 webview_eval_js(_Code) -> erlang:nif_error(not_loaded).
 webview_post_message(_Json) -> erlang:nif_error(not_loaded).

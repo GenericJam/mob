@@ -43,7 +43,7 @@ defmodule Mob.NativeEventHandleTest do
     [ios_register, _] = String.split(ios_register, "// ── NIF: clear_taps/0", parts: 2)
 
     {ios_grow, _} = :binary.match(ios_register, "mob_tap_grow_locked(")
-    {ios_cache, _} = :binary.match(ios_register, "TapHandle *build = tap_tables[")
+    {ios_cache, _} = :binary.match(ios_register, "TapHandle *build = ts->tables[")
     assert ios_grow < ios_cache
 
     [_, android_register] = String.split(@android_source, "export fn nif_register_tap", parts: 2)
@@ -60,15 +60,15 @@ defmodule Mob.NativeEventHandleTest do
     # 256 that was merely wrong; with two heap allocations of possibly different
     # sizes an unbounded loop reads and then writes past the end of the smaller.
     assert @ios_source =~
-             "int committed = tap_build_count < build_cap ? tap_build_count : build_cap"
+             "int committed = ts->build_count < build_cap ? ts->build_count : build_cap"
 
-    assert @ios_source =~ "tap_handle_next = committed;"
+    assert @ios_source =~ "ts->handle_next = committed;"
     assert @android_source =~ "const committed = if (wanted < build_cap) wanted else build_cap"
     assert @android_source =~ "tap_active_count = @intCast(committed);"
 
     # And a second set_root commits an empty table rather than re-committing.
     [_, ios_set_root] = String.split(@ios_source, "static ERL_NIF_TERM nif_set_root", parts: 2)
-    assert String.contains?(ios_set_root, "tap_build_count = 0;")
+    assert String.contains?(ios_set_root, "ts->build_count = 0;")
   end
 
   test "Android event handles carry the render generation" do
@@ -83,10 +83,29 @@ defmodule Mob.NativeEventHandleTest do
   end
 
   test "iOS event handles carry the render generation" do
-    assert @ios_source =~ "static uint32_t tap_table_generations[2]"
-    assert @ios_source =~ "static uint32_t tap_build_generation = 0"
-    assert @ios_source =~ "tap_build_generation = mob_next_handle_generation"
-    assert @ios_source =~ "mob_encode_event_handle(tap_build_generation, slot)"
+    assert @ios_source =~ "uint32_t generations[2];"
+    assert @ios_source =~ "uint32_t build_generation;"
+    assert @ios_source =~ "ts->build_generation = mob_next_handle_generation"
+    assert @ios_source =~ "mob_encode_event_handle(ts->build_generation, slot)"
+  end
+
+  test "iOS event blocks resolve against the window scene's own tap set" do
+    # Each window scene has its own tap set (MOB-245), and a handle only means
+    # something in the set it was registered in. Event blocks therefore hold a
+    # MobEventRef that captures the set the tree was deserialised for. A block
+    # built from a bare `int handle` still compiles — the int widens silently
+    # to MobEventRef with set 0 — and routes every event of a second window to
+    # whatever occupies that slot in the first.
+    [_, deserialise] = String.split(@ios_source, "static MobNode *mob_node_from_dict(", parts: 2)
+    [deserialise, _] = String.split(deserialise, "\n}\n", parts: 2)
+
+    refute deserialise =~ ~r/\bint handle = \[/
+    assert deserialise =~ "MobEventRef handle = mob_event_ref([onTap intValue]);"
+
+    [_, set_root] = String.split(@ios_source, "static ERL_NIF_TERM nif_set_root", parts: 2)
+    {pick, _} = :binary.match(set_root, "g_node_tap_set = set;")
+    {build, _} = :binary.match(set_root, "mob_node_from_dict(")
+    assert pick < build, "the set must be chosen before the tree's blocks capture it"
   end
 
   test "active table, count, and generation commit under one lock" do
@@ -165,7 +184,7 @@ defmodule Mob.NativeEventHandleTest do
     [_, ios_clear] = String.split(@ios_source, "static ERL_NIF_TERM nif_clear_taps", parts: 2)
     [ios_clear, _] = String.split(ios_clear, "return enif_make_atom(env, \"ok\");", parts: 2)
 
-    assert ios_clear =~ "tap_table_generations[1 - tap_active] = 0"
+    assert ios_clear =~ "ts->generations[1 - ts->active] = 0"
   end
 
   test "tap registrations allocate their tag environment before publishing the slot" do
@@ -182,7 +201,7 @@ defmodule Mob.NativeEventHandleTest do
     [ios_register, _] = String.split(ios_register, "// ── NIF: clear_taps/0", parts: 2)
 
     {ios_alloc, _} = :binary.match(ios_register, "enif_alloc_env()")
-    {ios_publish, _} = :binary.match(ios_register, "tap_build_count++")
+    {ios_publish, _} = :binary.match(ios_register, "ts->build_count++")
     assert ios_alloc < ios_publish
   end
 
@@ -231,9 +250,11 @@ defmodule Mob.NativeEventHandleTest do
     # handle's tap_build_generation against the PREVIOUS frame's generation, so
     # every lookup returned NULL and every config was dropped, silently, on
     # every frame (MOB-134).
-    assert @ios_source =~ "static TapHandle *mob_resolve_build_tap_locked(int handle)"
-    assert @ios_source =~ "generation != tap_build_generation || slot >= tap_build_count"
-    assert @ios_source =~ "TapHandle *tap = mob_resolve_build_tap_locked(handle);"
+    assert @ios_source =~
+             "static TapHandle *mob_resolve_build_tap_locked(MobTapSet *ts, int handle)"
+
+    assert @ios_source =~ "generation != ts->build_generation || slot >= ts->build_count"
+    assert @ios_source =~ "TapHandle *tap = mob_resolve_build_tap_locked(ts, handle);"
   end
 
   test "a configured throttle of 0 is distinguishable from an unconfigured slot" do

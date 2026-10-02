@@ -56,13 +56,25 @@ defmodule Mob.Screen.Server do
   """
   @type render_ref :: reference()
 
-  defstruct [:module, :socket, :render_mode, :ref, :owner, :nif, persist_on_terminate: true]
+  defstruct [
+    :module,
+    :socket,
+    :render_mode,
+    :ref,
+    :owner,
+    :nif,
+    :scene,
+    persist_on_terminate: true
+  ]
 
   @doc """
   Start a screen linked to the calling process.
 
   `:owner` receives nav actions and the exit signal. `:ref` identifies this
   screen to `Mob.Sender` and is unique per screen — see `t:render_ref/0`.
+  `:scene` is the window scene of a router bound to one (MOB-245), or `nil`:
+  safe area and size class are read from that scene's window, and
+  `socket.__mob__.scene` carries it for APIs that present UI (`Mob.Alert`).
 
   `Mob.Router` links *and* traps exits. Linking alone would make the owner die
   with any screen it stopped or that crashed; trapping alone would leave every
@@ -199,17 +211,19 @@ defmodule Mob.Screen.Server do
     # Injectable for the same reason Mob.Renderer and Mob.Sender take it as a
     # parameter: without it nothing can exercise the render path off-device.
     nif = Keyword.get(opts, :nif, :mob_nif)
+    scene = Keyword.get(opts, :scene)
 
     socket =
       module
       |> Mob.Socket.new(platform: platform)
+      |> Mob.Socket.put_mob(:scene, scene)
       |> then(fn socket ->
-        {insets, status} = initial_safe_area(render_mode, nif)
+        {insets, status} = initial_safe_area(render_mode, nif, scene)
 
         socket
         |> Mob.Socket.assign(:safe_area, insets)
         |> Mob.Socket.put_mob(:safe_area_confirmed, status == :confirmed)
-        |> Mob.Socket.assign(:size_class, initial_size_class(render_mode, nif))
+        |> Mob.Socket.assign(:size_class, initial_size_class(render_mode, nif, scene))
       end)
 
     case module.mount(Keyword.get(opts, :params, %{}), %{}, socket) do
@@ -231,7 +245,8 @@ defmodule Mob.Screen.Server do
            render_mode: render_mode,
            ref: Keyword.get(opts, :ref, :__mob_single__),
            owner: Keyword.fetch!(opts, :owner),
-           nif: nif
+           nif: nif,
+           scene: scene
          }}
 
       {:error, reason} ->
@@ -439,6 +454,30 @@ defmodule Mob.Screen.Server do
     socket = Mob.Socket.put_mob(state.socket, :safe_area_confirmed, false)
     state = %{state | socket: socket}
     {:noreply, %{state | socket: do_paint(state, :none, :async, nil, false)}}
+  end
+
+  # The router adopted another window scene (MOB-245): the last one went away
+  # and iPadOS connected a new session instead of the old one. Everything read
+  # from the old window is stale: reads go to the new one from here on, the
+  # insets are re-read on the next paint and the size class is re-read now.
+  # No paint of its own: the router repaints whichever screen is current right
+  # after telling its screens. Internal, like {:mob_window, :connected}: the
+  # user's handle_info never sees it.
+  defp do_handle_info({:mob_scene, :bound, scene}, state) do
+    socket =
+      state.socket
+      |> Mob.Socket.put_mob(:scene, scene)
+      |> Mob.Socket.put_mob(:safe_area_confirmed, false)
+
+    state = %{state | scene: scene, socket: socket}
+
+    with :render <- state.render_mode,
+         size_class = Mob.SizeClass.read(state.nif, scene),
+         {:noreply, socket} <- Mob.SizeClass.apply_change(state.module, state.socket, size_class) do
+      after_forward(socket, state)
+    else
+      _no_window_or_unchanged -> {:noreply, state}
+    end
   end
 
   # The window's size class changed (MOB-204). Native reports it to the router,
@@ -766,16 +805,19 @@ defmodule Mob.Screen.Server do
   # icon. `ensure_safe_area/3` used to stop asking as soon as the key existed,
   # so a placeholder taken then left the root screen laid out under the notch
   # and home indicator for the rest of its life.
-  defp initial_safe_area(:render, nif), do: read_safe_area(nif)
-  defp initial_safe_area(_mode, _nif), do: {@zero_insets, :placeholder}
+  defp initial_safe_area(:render, nif, scene), do: read_safe_area(nif, scene)
+  defp initial_safe_area(_mode, _nif, _scene), do: {@zero_insets, :placeholder}
 
   # Off device (`:no_render`) there is no window to ask; tests that care set
   # the value with `Mob.ScreenCase` or send `{:mob_size_class, h, v}`.
-  defp initial_size_class(:render, nif), do: Mob.SizeClass.read(nif)
-  defp initial_size_class(_mode, _nif), do: Mob.SizeClass.placeholder()
+  defp initial_size_class(:render, nif, scene), do: Mob.SizeClass.read(nif, scene)
+  defp initial_size_class(_mode, _nif, _scene), do: Mob.SizeClass.placeholder()
 
-  defp read_safe_area(nif) do
-    case nif.safe_area() do
+  # A bound screen (MOB-245) reads its own window scene's insets.
+  defp read_safe_area(nif, scene) do
+    answer = if scene, do: nif.safe_area(scene), else: nif.safe_area()
+
+    case answer do
       {t, r, b, l} ->
         {%{top: t, right: r, bottom: b, left: l}, :confirmed}
 
@@ -805,7 +847,7 @@ defmodule Mob.Screen.Server do
         socket
 
       true ->
-        {insets, status} = read_safe_area(nif)
+        {insets, status} = read_safe_area(nif, socket.__mob__[:scene])
 
         socket
         |> Mob.Socket.assign(:safe_area, insets)

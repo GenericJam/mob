@@ -11,6 +11,21 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 ## [Unreleased]
 
 ### Added
+- **Several windows of one app on iPad, one BEAM (MOB-245, iPad half).** Each
+  `UIWindowScene` gets its own `Mob.Router`, navigation and screens; the app's
+  root router keeps `:mob_screen` and renders to native's default scene, so a
+  single-window app runs the same path as before. New `Mob.Scenes` (scene
+  registry and lifecycle), `Mob.Scene` (`request_new/0`, `supported?/0`,
+  `of/1`), `Mob.Test.screens/1`, `scene:` on every `Mob.Test` helper that
+  addresses the current screen, and `Mob.Test.MultipleScenesError` when
+  several windows are live and no `scene:` is given. Native: a tap set and
+  view model per scene, scene-routed back gesture, size class and alert
+  results, scene-aware `safe_area/1`, `size_class/1`, `alert_show/4`,
+  `action_sheet_show/3`, `clear_taps/1`, `scenes/0`, `scene_request/0`,
+  `scene_multiple_supported/0`. Opt in with `config :mob_dev,
+  multi_window: true` (mob_dev stamps `UIApplicationSupportsMultipleScenes`).
+  Needs a native rebuild. Not yet run on a device. See
+  `decisions/2026-10-02-one-router-per-window-scene.md`.
 - **Every screen socket carries the window's size class** (MOB-204, mob side of
   MOB-165). `assigns.size_class` is `{horizontal, vertical}`, each `:compact`
   or `:regular`, set before `mount/3`: on iOS the window's
