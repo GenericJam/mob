@@ -42,6 +42,25 @@ query helpers (`assigns/1`, `tree/1`, `assert_renderable/2`, `navigated_to/1`)
 work against live hardware behind a `@tag :on_device`. See `Mob.ScreenCase`
 for the full API.
 
+### Testing layouts by size class
+
+`mount_screen/4` mounts in `{:compact, :regular}` (a portrait phone) unless you
+pass `size_class:`, and `change_size_class/2` changes it the way a rotation or
+an iPad resize does on device — the assign first, then
+`handle_info({:mob_size_class_changed, new}, socket)`:
+
+```elixir
+test "a regular-width window shows both panes" do
+  view = mount_screen(MyApp.MailScreen, %{}, %{}, size_class: {:regular, :regular})
+  assert find(view, :row, id: "two_pane")
+
+  view = change_size_class(view, {:compact, :regular})
+  assert find(view, :column, id: "one_pane")
+end
+```
+
+See [Size class](screen_lifecycle.md#size-class).
+
 ## Unit testing with a real screen process
 
 When you want the actual GenServer semantics (messages through a mailbox,
@@ -116,7 +135,7 @@ After `mix mob.connect`, `Mob.Test` gives you a remote view into the running app
 node = :"my_app_ios@127.0.0.1"
 
 Mob.Test.screen(node)    #=> MyApp.HomeScreen
-Mob.Test.assigns(node)   #=> %{count: 3, safe_area: %{top: 62.0, ...}}
+Mob.Test.assigns(node)   #=> %{count: 3, safe_area: %{top: 62.0, ...}, size_class: {:compact, :regular}}
 Mob.Test.tree(node)      #=> %{type: :column, props: %{...}, children: [...]}
 Mob.Test.find(node, "Increment")
 #=> [{[0, 1], %{"type" => "button", "props" => %{"text" => "Increment", ...}}}]

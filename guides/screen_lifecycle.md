@@ -227,6 +227,51 @@ def render(assigns) do
 end
 ```
 
+## Size class
+
+The socket always has a `:size_class` assign too, `{horizontal, vertical}`,
+each `:compact` or `:regular`:
+
+```elixir
+assigns.size_class
+#=> {:compact, :regular}   # an iPhone in portrait
+```
+
+Lay out by size class, not by orientation or screen dimensions. An iPad in
+Slide Over is a phone-shaped window on a tablet, and a foldable changes class
+when it opens. On iOS the value is the window's trait collection; on Android it
+is derived from the window's width and height in dp with Material's
+breakpoints (`:regular` from 600dp wide / 480dp tall). `Mob.SizeClass` lists
+typical values — note that smaller iPhones are `{:compact, :compact}` in
+landscape; only the large ones (Plus, Pro Max, XR/11-class, 414pt wide or
+more) reach `{:regular, :compact}`.
+
+When the window changes class — rotation, iPad Split View, Slide Over or Stage
+Manager resizes, an Android multi-window resize — every live screen, including
+ones under the top of a stack, gets the new value in the assign and then:
+
+```elixir
+def handle_info({:mob_size_class_changed, {h, _v}}, socket) do
+  # assigns.size_class already holds the new value
+  {:noreply, Mob.Socket.assign(socket, :columns, if(h == :regular, do: 2, else: 1))}
+end
+```
+
+The clause is optional: a screen that only reads `assigns.size_class` in
+`render/1` is repainted with the new value without one, and a screen whose
+`handle_info/2` has no clause for the message is not crashed by it.
+
+Before iOS has a window (a prewarmed or background launch), and on a build
+whose native layer predates size classes, the assign holds `{:compact,
+:regular}`; the real value arrives as an ordinary change once the window
+appears. Real values need a native rebuild (`mix mob.deploy --native`). On
+iPad the app only gets a full-size window if its `Info.plist` declares iPad
+support (`UIDeviceFamily` `[1, 2]`); without it iOS runs it letterboxed in an
+iPhone-sized window that never changes class.
+
+Under `Mob.ScreenCase`, `mount_screen/4` takes `size_class:` and
+`change_size_class/2` simulates a change; see the [testing guide](testing.md).
+
 ## Crashes and restarts
 
 A crash in a screen callback kills that screen's process only. The router

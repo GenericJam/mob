@@ -2714,6 +2714,11 @@ private struct MobImage: View {
 public struct MobRootView: View {
     @ObservedObject var model = MobViewModel.shared
     @Environment(\.colorScheme) private var colorScheme
+    // The hosting window's trait size classes (MOB-204). Read as one pair so a
+    // rotation, which flips both axes in one trait update, is reported once
+    // with its final value rather than as two half-changed intermediates.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     // ── Two-slot screen presentation (MOB-129) ──────────────────────────────
     //
     // The root used to be one view carrying `.id(currentNavVersion)`, which
@@ -2852,6 +2857,14 @@ public struct MobRootView: View {
         // so this fires reliably without polling.
         .onChange(of: colorScheme) { _, newScheme in
             mob_notify_color_scheme(newScheme == .dark ? "dark" : "light")
+        }
+        // Report the size class when the root first appears and on every
+        // change. The first report is what corrects a screen that mounted
+        // before the window existed (prewarmed launch) and so holds the
+        // placeholder; the BEAM drops a value a screen already holds.
+        .onChange(of: MobSizeClassPair(horizontalSizeClass, verticalSizeClass), initial: true) {
+            _, pair in
+            pair.notify()
         }
     }
 
@@ -2998,6 +3011,32 @@ public struct MobRootView: View {
             return .easeInOut(duration: 0.25)
         default:
             return nil
+        }
+    }
+}
+
+/// The root's size classes as one equatable value, so `onChange` sees a single
+/// transition per trait update. Unspecified on either axis is not reported:
+/// the BEAM keeps what it has until the platform gives a real answer.
+private struct MobSizeClassPair: Equatable {
+    let horizontal: UserInterfaceSizeClass?
+    let vertical: UserInterfaceSizeClass?
+
+    init(_ horizontal: UserInterfaceSizeClass?, _ vertical: UserInterfaceSizeClass?) {
+        self.horizontal = horizontal
+        self.vertical = vertical
+    }
+
+    func notify() {
+        guard let h = Self.name(horizontal), let v = Self.name(vertical) else { return }
+        mob_notify_size_class(h, v)
+    }
+
+    private static func name(_ sizeClass: UserInterfaceSizeClass?) -> String? {
+        switch sizeClass {
+        case .compact: return "compact"
+        case .regular: return "regular"
+        default: return nil
         }
     }
 }

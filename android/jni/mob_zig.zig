@@ -388,13 +388,13 @@ pub const JNINativeInterface = extern struct {
     // 95: GetFieldID — we use this
     GetFieldID: ?*const fn (env: *JNIEnv, cls: JClass, name: [*:0]const u8, sig: [*:0]const u8) callconv(.c) JFieldID,
 
-    // 96-104: GetXxxField — we use GetObjectField
+    // 96-104: GetXxxField — we use GetObjectField and GetIntField
     GetObjectField: ?*const fn (env: *JNIEnv, obj: JObject, fid: JFieldID) callconv(.c) JObject,
     GetBooleanField: ?*anyopaque,
     GetByteField: ?*anyopaque,
     GetCharField: ?*anyopaque,
     GetShortField: ?*anyopaque,
-    GetIntField: ?*anyopaque,
+    GetIntField: ?*const fn (env: *JNIEnv, obj: JObject, fid: JFieldID) callconv(.c) JInt,
     GetLongField: ?*anyopaque,
     GetFloatField: ?*anyopaque,
     GetDoubleField: ?*anyopaque,
@@ -590,6 +590,10 @@ pub inline fn callBooleanMethod(env: *JNIEnv, obj: JObject, mid: JMethodID) JBoo
 
 pub inline fn getObjectField(env: *JNIEnv, obj: JObject, fid: JFieldID) JObject {
     return env.*.GetObjectField.?(env, obj, fid);
+}
+
+pub inline fn getIntField(env: *JNIEnv, obj: JObject, fid: JFieldID) JInt {
+    return env.*.GetIntField.?(env, obj, fid);
 }
 
 pub inline fn getStringUTFChars(env: *JNIEnv, str: JString) ?[*:0]const u8 {

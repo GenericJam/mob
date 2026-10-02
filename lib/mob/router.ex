@@ -420,6 +420,15 @@ defmodule Mob.Router do
     end
   end
 
+  # The window's size class changed (MOB-204). Every live screen gets it —
+  # current, history and parked tabs — because each holds `:size_class` in its
+  # own socket and the screen the user returns to must already have the class
+  # of the window it reappears in. A screen holding the value already drops it.
+  def handle_info({:mob_size_class, _h, _v} = message, state) do
+    Enum.each(all_entries(state), &send(&1.pid, message))
+    {:noreply, state}
+  end
+
   # Anything else addressed to :mob_screen — device events, notifications,
   # plugin messages — belongs to the screen the user is looking at.
   def handle_info(message, state) do

@@ -24,6 +24,12 @@ void mob_send_component_event(int handle, const char *event, const char *payload
 // `scheme` is "light" or "dark".
 void mob_notify_color_scheme(const char *scheme);
 
+// Called from MobRootView.swift when its horizontal/vertical size class pair
+// first appears and whenever it changes (rotation, Split View, Slide Over,
+// Stage Manager). Each is "compact" or "regular". Sends {:mob_size_class, H, V}
+// to the :mob_screen router. Implemented in mob_nif.m.
+void mob_notify_size_class(const char *horizontal, const char *vertical);
+
 // Called from MobFrameTracker (SwiftUI) as a tagged element lays out, recording
 // its on-screen frame (logical points) keyed by the element's :id. Read back via
 // the element_frames NIF so an agent can locate/drive elements without a
