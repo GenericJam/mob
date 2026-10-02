@@ -319,8 +319,7 @@ defmodule Mob.Scenes do
   defp promote(state, previous \\ nil) do
     case ordered(state) do
       [{_scene, router} | _] ->
-        if previous && Process.whereis(:mob_screen) == previous,
-          do: Process.unregister(:mob_screen)
+        release_name(previous)
 
         try do
           Process.register(router, :mob_screen)
@@ -337,6 +336,15 @@ defmodule Mob.Scenes do
       [] ->
         state
     end
+  end
+
+  defp release_name(nil), do: :ok
+
+  defp release_name(previous) do
+    if Process.whereis(:mob_screen) == previous, do: Process.unregister(:mob_screen)
+  rescue
+    # `previous` exited between the check and the unregister: the name is free.
+    ArgumentError -> :ok
   end
 
   defp router_down(state, router, reason) do
