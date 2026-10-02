@@ -3,7 +3,7 @@
 Canonical release process for the Mob repos (`mob`, `mob_dev`,
 `mob_new`). `mob_dev` and `mob_new` reference this file rather than
 duplicating it; each adds a short per-repo notes section in its own
-CLAUDE.md.
+AGENTS.md.
 
 ## Trigger model
 
@@ -106,7 +106,7 @@ to — not because the changes look small, not because each PR was
 already reviewed on its way in.
 
 This is a *different* gate from the per-commit adversarial review in
-`CLAUDE.md`, and neither substitutes for the other. That one asks
+`AGENTS.md`, and neither substitutes for the other. That one asks
 whether a change is correct; this one asks whether the accumulated
 diff is coherent and safe to ship.
 

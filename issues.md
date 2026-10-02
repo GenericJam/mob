@@ -1393,7 +1393,7 @@ Android device (or emulator):
 
 Plus the matching `[info] [<name>-nif] call 1 returned: ...`
 Logger line visible in `adb logcat` (or via dist to a Mac-side
-IEx — see CLAUDE.md for `mix mob.connect` setup).
+IEx — see AGENTS.md for `mix mob.connect` setup).
 
 `moto e` and the `sdk_gphone64_arm64` emulators are typically
 connected in this workspace. Prefer the physical `moto e` because
@@ -1582,7 +1582,7 @@ after `mix mob.add_nif greet_c --type c --demo --yes`. No change.
     $ # Drive each demo via dist
     $ # Node name is `test_migration_android_<suffix>@127.0.0.1`;
     $ # `mix mob.devices` lists exact names per attached device.
-    $ # See CLAUDE.md → "Connecting an IEx session to a running mob app"
+    $ # See AGENTS.md → "Connecting an IEx session to a running mob app"
     $ # for the dist setup. mob/lib/mob/test.ex is the harness.
 
 ### Suggested commit shape
@@ -1609,7 +1609,7 @@ One logical PR per layer so each is independently verifiable:
   extend with `android_sdkroot` if needed)
 - **#10** — Android 17 SELinux constraints (open; may or may not
   affect this work)
-- **CLAUDE.md** in mob — Android deploy / multi-device / dist-port
+- **AGENTS.md** in mob — Android deploy / multi-device / dist-port
   story; required reading
 - **mob_dev/AGENTS.md** — TDD discipline, "tests cover everything"
   including build helpers

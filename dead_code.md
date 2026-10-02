@@ -46,7 +46,7 @@ hint: MobDev.Foo.baz/0 is unused
 | `MobDev.OtpTrace.*` | 29 | Probably dispatch-via-`apply` — Pass 5 work |
 | `MobDev.Bench.*` | 14 | Battery bench harness — exposed for diag |
 | `MobDev.SecurityScan.*` | 10 | New module; some hints will resolve as the wiring lands |
-| `MobDev.IconGenerator.*` | 7 | Documented public-seam in CLAUDE.md |
+| `MobDev.IconGenerator.*` | 7 | Documented public-seam in AGENTS.md |
 | `MobDev.NativeBuild.*` | 5 | Mostly should-be-private |
 
 ### `mob` top buckets (`is unused` only — almost all false positives)

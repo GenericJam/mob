@@ -5,7 +5,7 @@ defmodule Mob.DifferentialTest do
 
   # The comparator's whole reason for existing is to catch a divergence class
   # (MOB-147's B-1 kind) the day it lands. Each rule below is paired with a
-  # mutation of the comparator that must fail the test — the CLAUDE.md bar,
+  # mutation of the comparator that must fail the test — the AGENTS.md bar,
   # applied here on purpose: the reviewer keeps finding my tests would still
   # pass with the fix reverted.
 

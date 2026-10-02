@@ -4,7 +4,7 @@ defmodule Mix.Tasks.Erlfmt do
 
   Wraps `erlfmt`'s library API. Exists because the upstream `erlfmt` Hex package
   ships an escript build but no `mix` task; the project's pre-commit checklist
-  (`CLAUDE.md`) references `mix erlfmt --check src/` so this task makes that
+  (`AGENTS.md`) references `mix erlfmt --check src/` so this task makes that
   instruction actually work.
 
   ## Usage
