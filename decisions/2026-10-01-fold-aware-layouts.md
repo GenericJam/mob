@@ -72,7 +72,9 @@ sources. Each correction is noted where it matters.
 2. **Size classes on Duo.** 111461: on the outer display, compact horizontal
    with regular vertical in portrait, and compact in both in landscape, like
    other iPhones. The inner display is regular in both. Duo is "still an
-   iPhone app" (111461), so there is no new device family and no new idiom.
+   iPhone app" (111461), so there is no new idiom. No source states a
+   `UIDeviceFamily` value for Duo; that it is plain iPhone family 1 is an
+   inference, unverified until a 27.1 SDK or a built Duo app can be checked.
    The HIG says: "A compact width layout for the outer display and a regular
    width layout for the inner display give you the fundamentals for every
    pose."
@@ -98,9 +100,14 @@ sources. Each correction is noted where it matters.
    can be restricted, and when it cannot split along its primary axis it
    shows only the primary view. Overlay layers primary over secondary when
    there is no active division, and puts them on either side of the fold
-   when there is one. Apple says not to put an arrangement inside a `List`
-   or `ScrollView`, and not to put navigation containers inside an
-   arrangement.
+   when there is one. Where an arrangement may sit is stated three
+   slightly different ways. The documentation article says to avoid placing
+   one "inside a navigation split view, list, scroll view". 111463 says not
+   to put navigation containers such as `NavigationSplitView`s *inside* an
+   arrangement, and not to put an arrangement inside `List`/`ScrollView`.
+   The HIG says to place navigation containers, including navigation split
+   views, "around it rather than within it". 111463's own sample puts an
+   `ArrangementView` inside a `NavigationStack`.
 5. **The hinge is for effects.** 111464: "Hinge data is observed live, and
    is ideal for driving interactions or effects. For layout, use the
    arrangement and region APIs." The APIs are SwiftUI `onHingeChange` and
@@ -126,9 +133,13 @@ sources. Each correction is noted where it matters.
    this machine** declares `View.sceneAccessory(content:)`,
    `SceneAccessoryContent` and `onAvailabilityChange(perform:)` as
    `@available(iOS 27.0, *)`, and UIKit's `UISceneAccessory` as
-   `API_AVAILABLE(ios(27.0))`. The UIKit header's own description: "the app
-   must remain fully functional without them." `CameraCaptureAccessory` is
-   **absent** from the 27.0 SDK, so it is the 27.1-only piece.
+   `API_AVAILABLE(ios(27.0))`. The only constructor in its UIKit header is
+   `externalNonInteractive(sceneConfiguration:)`, for non-interactive
+   content "when an external display is connected", and it takes a
+   `UISceneConfiguration`. The header's own description: "the app must
+   remain fully functional without them." `CameraCaptureAccessory` is
+   **absent** from the 27.0 SDK. It is expected to be 27.1 API, but its
+   availability annotation has not been seen.
 8. **Multiple scenes reuse iPad's API.** 111464: "iPhone Duo is the first
    iPhone to support multiple instances of your app's UI. If your app
    supports this on iPad, it will on iPhone Duo as well." Apple's advice is
@@ -142,10 +153,12 @@ sources. Each correction is noted where it matters.
    letterboxed beside the status bar and camera. An app built with the iOS 27
    SDK extends to the left of the status bar on the inner display. One built
    with the iOS 27.1 SDK reaches the screen edge, and its standard navigation
-   bars and toolbars lay out vertically on the side. No new `Info.plist` key
-   is involved. "iPhone Duo will continue to honor the `UIRequiresFullScreen`
-   key, but your app will still resize when someone opens or closes" it.
-   111464: "All apps participate in multitasking on iPhone Duo."
+   bars and toolbars lay out vertically on the side. Apple attributes this
+   to SDK linkage and names no plist opt-in for it. Whether 27.1 adds any
+   plist metadata is unverified. "iPhone Duo will continue to honor the
+   `UIRequiresFullScreen` key, but your app will still resize when someone
+   opens or closes" it. 111464: "All apps participate in multitasking on
+   iPhone Duo."
 10. **Safe areas are asymmetric** (111461): "avoid assuming that insets on
     opposite sides are equal." Vertical bars can sit on the left in
     landscape and in Split View.
@@ -163,7 +176,9 @@ claims stay unverified until the 27.1 simulator is available.
 your supported interface orientations" and "iPhone Duo respects your
 supported interface orientations, but your app will scale on the inner
 display". The second is probably about the outer display, or about scaling
-instead of rotating. Nothing below depends on which reading is right.
+instead of rotating. Because of this, decision 1 leaves
+`lock_orientation/1` on the inner display as unverified rather than
+concluding anything.
 
 ### What mob has today
 
@@ -196,11 +211,14 @@ and rotation all reach a screen through this one signal. Mob adds no `:fold`,
 size class. On the inner display it is simply wrong: the system ignores
 supported orientations there (source item 1). Orientation remains available
 for what it is actually for, such as camera rotation and sensor fusion.
-`Mob.Device.lock_orientation/1` keeps working on other devices. On Duo's
-inner display it cannot be honoured, given item 1. Whether its geometry
-request is rejected or ignored there has not been observed, which matters
-for MOB-165's existing finding that `lock_orientation/1` returns `:ok` when
-it had no effect.
+`Mob.Device.lock_orientation/1` keeps working on other devices. **What it
+does on Duo's inner display is unverified.** Item 1 says the inner display
+ignores an app's *supported* orientations. But the HIG says a game "can
+choose to lock to either portrait or landscape orientation" on Duo, and
+mob's lock also issues a geometry request (`nif_device_lock_orientation` in
+`ios/mob_nif.m`), which item 1 does not cover. Whatever it does there, it
+is not a layout tool. MOB-165 already found that `lock_orientation/1`
+returns `:ok` when it had no effect, so check it on the inner display.
 
 Screens get the same guidance Apple gives: use the compact layout for the
 outer display and the regular one for the inner, and let the layout stretch
@@ -215,8 +233,9 @@ host needs it.
 
 - **Why a primitive and not a recipe.** A screen could combine
   `:reserved_regions` and a `Row`/`Column` itself. But Apple's arrangement
-  takes size class, aspect ratio and active divisions together, and it is
-  what the system's own split layouts adapt with (item 4). A mob
+  takes size class, aspect ratio and active divisions together (item 4),
+  and Apple recommends it alongside split views and navigation stacks as
+  the system-provided way to handle the fold (documentation article). A mob
   reimplementation would drift from it with every iOS release. The
   wrapper's job is to pass Apple's model through, not to reinvent it.
 - **Shape.** The element takes exactly two children, primary and then
@@ -226,10 +245,16 @@ host needs it.
   `axes: :horizontal | :vertical | :both`. Taps in either child go to the
   owning screen's pid, like taps anywhere else. MOB-203's draft API
   (`primary=`/`secondary=` props, `mode=`) is replaced by this.
-- **Placement rules are checked, not just documented.** An `<Arrangement>`
-  inside a `Scroll` or `List`, or a navigation container inside an
-  `<Arrangement>`, is what Apple says not to do (item 4). MOB-203 should
-  reject that nesting at render time rather than leave it to the platform.
+- **Placement rules are checked, not just documented.** MOB-203 should
+  reject an `<Arrangement>` inside a `Scroll` or `List` at render time; all
+  three Apple sources agree on that (item 4). The navigation rules follow
+  from mob's structure. Mob's navigation (stacks, and `Mob.App.tab_bar/1`)
+  is declared at the app level, outside any screen's render tree. So an
+  `<Arrangement>` always sits *inside* navigation and never wraps it. That
+  is the arrangement 111463's sample uses with `NavigationStack`. Apple's
+  sources disagree about an arrangement inside a *navigation split view*,
+  but mob has no split-view navigation container, so the question doesn't
+  arise.
 - **Fallback where Apple's view doesn't exist**, which means iOS before 27.1
   and Android. On any iOS 27.1 device, folding or not, Apple's view is used
   and decides for itself. The fallback is **Apple's published split rule
@@ -271,18 +296,28 @@ MOB-202 adds a `:reserved_regions` assign and a
   Like safe area, a value read before a window exists must not be trusted
   as final.
 
-### 4. The fold is honoured automatically at the root; `respect_fold: false` opts out
+### 4. The fold is honoured automatically at the root by default; `respect_fold: false` opts out
 
-**Decision: automatic, but narrower than MOB-202 proposed.** When the
-screen's root container is a non-scrolling layout container (`Column`, `Row`,
-`Box`) and there is an active division, the renderer makes sure no direct
-child of that root straddles the division. Inactive divisions (the device
-flat or closed) change nothing. A root `Scroll` or `List` is **not**
-fold-honoured. Occlusions are **not** auto-honoured; they reach screens
-through `:reserved_regions`, the same way safe-area insets do. Setting
-`respect_fold: false` on the root turns auto-honour off for screens that mean
-to paint across the crease, such as games, canvases, full-bleed media and
-camera viewfinders.
+**Decision: the default is on, the lever is `respect_fold: false`, and the
+scope is narrower than MOB-202 proposed. The mechanism is provisional.**
+This record decides the default and the opt-out, not the geometry. MOB-202
+has to specify the geometry, and the 27.1 simulator has to show it working,
+before the default ships.
+
+Scope:
+
+- Only when the screen's root is a non-scrolling layout container
+  (`Column`, `Row`, `Box`), and only for an **active** division. Its goal is
+  that no direct child of that root straddles the division.
+- An inactive division (the device fully open) changes nothing. What the
+  closed device's outer display reports, an inactive division or none at
+  all, is unverified; either way nothing changes.
+- A root `Scroll` or `List` is **not** fold-honoured.
+- Occlusions are **not** auto-honoured; they reach screens through
+  `:reserved_regions`, the same way safe-area insets do.
+- Setting `respect_fold: false` on the root turns auto-honour off for
+  screens that mean to paint across the crease, such as games, canvases,
+  full-bleed media and camera viewfinders.
 
 Why automatic:
 
@@ -303,34 +338,52 @@ Why not `Scroll`/`List` (amending MOB-202, which proposed the "outermost
   interrupt continuity." Auto-honouring a root scroll would contradict
   Apple's guidance.
 
-Why "no child straddles" and not something more ambitious:
+Why only direct children, and nothing more ambitious:
 
 - The HIG says to "move only what's necessary" and to "favor small
   adjustments over rearrangement". Re-flowing a whole screen into two panes
-  is what `<Arrangement>` is for. The automatic layer only promises not to
-  break anything. The exact displacement (which side of the band a child
-  goes to, how spacing is redistributed) belongs to MOB-202. It has to be
-  confirmed on the 27.1 simulator in every pose: book, tent, laptop and
-  rotated.
-- **To verify before implementing:** 27.1 SwiftUI may already displace plain
-  stacks hosted in a `UIHostingController`. Apple says "framework-provided
-  views and containers automatically adjust" but also that custom views need
-  reserved regions, and neither source covers bare `VStack`s. If SwiftUI
-  does displace them, mob's layer must not apply a second time. MOB-202's
-  first sim check should answer this.
+  is what `<Arrangement>` is for. Nested containers and overlays
+  (`:anchored` panels) are outside the automatic layer and must use
+  `:reserved_regions` themselves.
 
-**Alternative recorded and rejected:** opt-in with `respect_fold: true`,
-or no automatic behaviour at all, leaving everything to `<Arrangement>` and
-`:reserved_regions`. That is more honest about the cost, because auto-honour
-can move content the author placed deliberately. It was rejected because the
-failure modes are asymmetric. A wrongly honoured fold shifts a child by the
-width of the band, and one prop fixes it. A wrongly ignored fold puts
-unreadable, untappable controls in the crease of every naive app, and the
-author doesn't know there is a prop to look for.
+**What MOB-202 must specify before the default ships:**
 
-**Misuse to watch for:** `respect_fold: false` on an ordinary text-and-
-controls screen, usually copied from a canvas example, is the usual cause of
-"content painted into the crease". `common_fixes.md` has the entry.
+1. Which region a displaced child moves to. 111463 says the content's
+   purpose decides, and that alerts go to the trailing side in book pose
+   and controls to the bottom when the device stands on a table. A default
+   rule is needed.
+2. A band parallel to the root's main axis, such as a `Column` across a
+   vertical fold. Moving children along the main axis can't clear it.
+3. A child larger than either region (a fixed width or height), which
+   can't avoid the band without being resized.
+4. All of it confirmed on the 27.1 simulator in every pose: book, tent,
+   laptop and rotated.
+
+**Triggers for revisiting this:**
+
+- 27.1 SwiftUI may already displace plain stacks hosted in a
+  `UIHostingController`. Apple says "framework-provided views and
+  containers automatically adjust", but also that custom views need
+  reserved regions, and neither source covers bare `VStack`s. If the
+  simulator shows it does, mob adds no layer of its own, and
+  `respect_fold: false` maps onto whatever opt-out SwiftUI has, or goes
+  away.
+- If MOB-202 cannot make cases 2 and 3 predictable, the default becomes
+  opt-in (the alternative below), and a new record supersedes this one.
+
+**Alternative recorded and rejected for now:** opt-in with
+`respect_fold: true`, or no automatic behaviour at all, leaving everything
+to `<Arrangement>` and `:reserved_regions`. That is more honest about the
+cost, because auto-honour can move content the author placed deliberately.
+It was rejected because the failure modes are asymmetric. A wrongly
+honoured fold moves content, and one prop turns that off. A wrongly ignored
+fold puts unreadable, untappable controls in the crease of every naive app,
+and the author doesn't know there is a prop to look for.
+
+**Misuse to watch for, once it ships:** `respect_fold: false` on an ordinary
+text-and-controls screen, usually copied from a canvas example, will be the
+usual cause of "content painted into the crease". `common_fixes.md` has the
+entry.
 
 ### 5. Hinge events drive effects; layout never reads them
 
@@ -362,31 +415,47 @@ whose screens each render one tree into one window today.
 
 - **Same process, separate tree.** Accessory content is declared inside the
   screen's `render/1`, on the node it belongs to (MOB-244 proposes a
-  `<SceneAccessory>` element). It reads the same assigns, so the inner and
-  outer displays never disagree about state. Availability arrives as
+  `<SceneAccessory>` element). It reads the same assigns, so the main and
+  accessory displays never disagree about state. Availability arrives as
   `{:mob_scene_accessory_available, boolean}`, which is Apple's
   `onAvailabilityChange`.
+- **One element, an explicit kind.** Apple has two different accessories
+  (item 7):
+  - The Duo **camera-capture** accessory (`CameraCaptureAccessory`), a
+    SwiftUI modifier on the camera UI.
+  - The generic **external-display** accessory (`UISceneAccessory`), which
+    is non-interactive and backed by a `UISceneConfiguration`, so it is a
+    scene the system connects.
+
+  `<SceneAccessory>` therefore takes a `kind:`. MOB-244 implements
+  `:camera_capture`, the Duo case. `:external_display` is a recognised
+  future kind. It belongs with MOB-245's scene work because it needs a
+  scene delegate, and it is out of MOB-244's scope.
 - **Optional by contract.** The system decides when an accessory is shown;
   the UIKit header says "the app must remain fully functional without them".
-  A screen must never require its accessory tree in order to work. The
-  accessory renders nowhere on Android, on non-Duo iPhones, and whenever it
-  isn't available.
-- **Not a second window, and not the outer display's only content.** When the
-  device is closed, the main tree runs on the outer display as normal.
-  While it is open, the Duo accessory (`CameraCaptureAccessory`) is the only
-  way onto the outer display. Per item 6 it needs full screen on the inner
-  display and an active camera session, and Apple says to register it on
-  the camera view. In mob terms it attaches to a `:camera_preview` node
-  (`Mob.UI.camera_preview/1`, fed by the `mob_camera` plugin), not to an
-  arbitrary container. MOB-244's "outer display is accessory-only"
-  constraint is corrected to this.
+  A screen must never require its accessory tree in order to work. The tree
+  renders nowhere whenever its kind isn't available, which means always for
+  `:camera_capture` on Android and on iPhones without a second display.
+- **Not an app instance the screen requests, and not the outer display's
+  only content.** When the device is closed, the main tree runs on the outer
+  display as normal. While it is open, `CameraCaptureAccessory` is the only
+  way onto the outer display that Apple describes. Per item 6 it needs full
+  screen on the inner display and an active camera session. Apple registers
+  it "on the same view as your camera UI"; its sample attaches it to the
+  whole `CameraView`, not to a preview leaf. In mob terms
+  `<SceneAccessory kind={:camera_capture}>` attaches to the container that
+  holds the screen's camera UI, typically the parent of a `:camera_preview`
+  node (`Mob.UI.camera_preview/1`, fed by the `mob_camera` plugin), and is
+  visible only while that container is. MOB-244's "outer display is
+  accessory-only" constraint is corrected to this.
 - **Unverified:** whether `CameraCaptureAccessory` content accepts touches.
   27.0's only UIKit accessory is `externalNonInteractive`, and the
   teleprompter demo shows no touch input. MOB-244's "taps in the accessory
   reach the same screen pid" may describe a capability that doesn't exist.
 - **Gating.** The generic `sceneAccessory`/`SceneAccessoryContent` API is
-  iOS 27.0 (item 7) and `CameraCaptureAccessory` is 27.1. Each is gated at
-  its use site with its own `@available` (see 8).
+  iOS 27.0 (item 7). `CameraCaptureAccessory` is expected to be 27.1. Each
+  is gated at its use site with its own `@available` (see 8), and the 27.1
+  annotation is confirmed against the 27.1 SDK when it is installed.
 
 ### 7. Multi-instance is one model, shared with iPad, landed on iPad first
 
@@ -413,7 +482,8 @@ network stack on a simulator, which is the per-app dist-port problem
 This is MOB-201's recommendation 1, adopted. Mob keeps
 `arm64-apple-ios17.0`. Every 27.1-only symbol (`ReservedRegion`,
 `ArrangementView`/`UIArrangementViewController`,
-`onHingeChange`/`UIHingeInteraction`, `CameraCaptureAccessory`) is used only
+`onHingeChange`/`UIHingeInteraction`, and `CameraCaptureAccessory`, whose
+exact annotation is still to be confirmed) is used only
 behind `@available(iOS 27.1, *)` or `if #available(iOS 27.1, *)` at the call
 site. iOS 27.0 API (`sceneAccessory`) gets `27.0`. On older systems each
 primitive falls back as described above: `[]` regions, Apple's split rule
@@ -428,22 +498,40 @@ not make the code compile there. The 27.1 call sites also need a
 compile-time SDK guard so that mob still builds with Xcode 27.0 and 26.x.
 MOB-201 owns the mechanism.
 
-### 9. Android: a no-op seam now, with a mapping that is already known
+### 9. Android: a no-op seam now, with a candidate mapping
 
-The Android devices mob targets don't fold. Every primitive above ships on
-Android anyway, as a defined no-op, so a screen written for Duo compiles and
-runs there unchanged:
+Mob's Android implementation isn't fold-aware, and none of the devices in
+its verified pool fold. Every primitive above ships on Android anyway, as a
+defined no-op, so a screen written for Duo compiles and runs there
+unchanged.
 
-| Primitive | Android today | Future mapping (Jetpack WindowManager) |
+The right-hand column is a **candidate**, read from the Jetpack WindowManager
+reference. It shows that the contract can be filled on Android, not how it
+will be:
+
+| Primitive | Android today | Candidate mapping |
 |---|---|---|
-| `:reserved_regions` | always `[]` | `FoldingFeature.bounds` → `frame`; `isSeparating` → `active`; `OcclusionType.FULL` vs `NONE` refines `kind` |
-| `<Arrangement>` | Apple's split/overlay rule, no division | same rule, with the `FoldingFeature` band as the division |
-| `{:mob_hinge_change, _}` | never sent | `FoldingFeature.State` (`FLAT`/`HALF_OPENED`) for `status`; the angle needs `Sensor.TYPE_HINGE_ANGLE` (not exercised) |
+| `:reserved_regions` | always `[]` | `FoldingFeature.bounds` → `frame`; `isSeparating` → `active` |
+| `<Arrangement>` | Apple's split/overlay rule, no division | same rule, with a separating `FoldingFeature` band as the division |
+| `{:mob_hinge_change, _}` | never sent | `FoldingFeature.State` gives only `FLAT`/`HALF_OPENED` (→ `:fully_open`/`:partially_open`); the angle would need `Sensor.TYPE_HINGE_ANGLE` |
 | `<SceneAccessory>` | renders nothing; availability never sent | no counterpart identified |
-| `:size_class` | per MOB-204 (Compose `WindowSizeClass`) | Compose has three width buckets; MOB-204 decides the mapping onto mob's two values |
+| `:size_class` | per MOB-204 (Compose `WindowSizeClass`) | per MOB-204 |
+
+Open questions for whoever implements it:
+
+- `isSeparating` and `occlusionType` (`NONE`/`FULL`) are independent on
+  Android. A hinge between two panels is both separating and fully
+  occluding, while mob's `kind` is a single value. Either a division
+  carries an `occluding` flag, or one feature becomes two regions.
+- `FoldingFeature.State` has no closed value, only `FLAT` and `HALF_OPENED`.
+  So `:closed` must come from somewhere else (the hinge-angle sensor or
+  display state), or Android never sends it.
+- Android's window size classes have more buckets than iOS's two: compact,
+  medium and expanded, plus large and extra-large behind an opt-in. MOB-204
+  owns the mapping.
 
 The message and assign shapes above are the contract both platforms
-implement. Nothing in them is Apple-specific apart from the names of the
+implement. None of them are specific to Apple beyond the names of the
 source APIs.
 
 ## Consequences
@@ -453,13 +541,13 @@ source APIs.
   `Mob.Device.orientation/0`. The outer display in landscape reads
   `{:compact, :compact}` (111461); the ticket lists only portrait cases.
 - **MOB-206 (template plist, in flight).**
-  - Duo is iPhone family 1 ("still an iPhone app"), so there is no
-    `UIDeviceFamily` value 5 to add; the ticket's "Apple may have added 5"
-    is answered.
-  - The full-screen and vertical-bar behaviour comes from building with the
-    27.1 SDK, not from a plist key (item 9).
-  - A portrait lock in the plist constrains only the outer display; the
-    inner display ignores supported orientations (item 1).
+  - The ticket asks whether Apple added a `UIDeviceFamily` value 5 for Duo.
+    Nothing published says so: Apple calls a Duo app "still an iPhone app"
+    and names no new family. Keep `[1, 2]`, and confirm on the 27.1 SDK.
+  - Apple ties the full-screen and vertical-bar behaviour to building with
+    the 27.1 SDK and names no plist opt-in for it (item 9).
+  - A portrait lock in the plist won't keep the inner display in portrait:
+    the inner display doesn't honour supported orientations (item 1).
   - `UIRequiresFullScreen = true` is still honoured on Duo, but the app
     resizes on open and close anyway, and Apple says all apps take part in
     multitasking (item 9). So the doctor warning for "Duo-hostile" plists
@@ -467,11 +555,16 @@ source APIs.
     keeps an app out of *Split View* on Duo, as it does on iPad, is not
     stated; leave it unverified.
 - **MOB-202, MOB-203, MOB-243, MOB-244 and MOB-245** inherit the shapes and
-  corrections above: the `active` flag and the narrower auto-honour scope;
-  two children, `style`/`axes` and the aspect-ratio fallback; no hinge
-  assign; the accessory bound to `:camera_preview` and optional; the
-  activation API being iOS 15. Each ticket's own acceptance criteria still
-  stand where this record doesn't contradict them.
+  corrections above:
+  - MOB-202: the `active` flag; the narrower, provisional auto-honour and
+    the open cases it must settle.
+  - MOB-203: two children, `style`/`axes`, and the aspect-ratio fallback.
+  - MOB-243: no hinge assign.
+  - MOB-244: a `kind:`, attached to the camera UI container, and optional.
+  - MOB-245: the activation API is iOS 15.
+
+  Each ticket's own acceptance criteria still stand where this record
+  doesn't contradict them.
 - **Safe-area code must treat each side independently.** Duo's insets are
   asymmetric (item 10), and the root ignores the horizontal insets, so a
   screen padding with `assigns.safe_area` must use `left` and `right`
@@ -483,5 +576,9 @@ source APIs.
   `ArrangementView` behaviour when closed (MOB-203); `lock_orientation/1` on
   the inner display; `UIRequiresFullScreen` with Split View; and touch
   input on `CameraCaptureAccessory`. MOB-209 then repeats them on hardware.
+  The MOB-201 slice reports that GitHub's preview `xcode-27` runner image
+  has Xcode 27.1 (27A9269) with the 27.1 SDK, but only the iOS 27.0
+  simulator runtime. If that holds, CI can compile the 27.1 call sites but
+  can't run a Duo simulator. That report wasn't checked here.
 - **Docs.** `AGENTS.md` points to this record under "Device shapes".
   `common_fixes.md` has the "content painted into the crease" entry.

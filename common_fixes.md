@@ -1157,7 +1157,7 @@ real JSON over real TLS.
 deps don't need any of this; if your app never runs rebar3 deps at
 runtime, skip the whole bundling and avoid the cost.
 
-## Content painted into the crease on iPhone Duo (`respect_fold` misuse)
+## Content painted into the crease on iPhone Duo (`respect_fold` misuse; applies once MOB-202 ships)
 
 **Symptom**: On iPhone Duo, with the device partially folded, text or
 controls sit in the fold band of the inner display, where they are hard to
@@ -1186,6 +1186,8 @@ with `active: true` while the device is folded. Compare its `frame` with
 `Mob.Test.element_frames(node)` for the offending element.
 
 **Status (2026-10-01)**: `respect_fold`, `:reserved_regions` and
-`<Arrangement>` land with MOB-202 and MOB-203, which need Xcode 27.1. Until
-then a mob app on Duo has no fold awareness at all, and anything on the inner
-display can cross the fold when the device is partially folded.
+`<Arrangement>` land with MOB-202 and MOB-203, which need Xcode 27.1. The
+automatic default is itself provisional until the 27.1 simulator confirms it
+(decision 4 of the record). Until then a mob app on Duo has no fold awareness
+at all, and anything on the inner display can cross the fold when the device
+is partially folded.

@@ -16,9 +16,11 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   rest of MOB-200 before the 27.1 work starts: layout keys on `:size_class`,
   never orientation; `:reserved_regions` stays separate from `:safe_area`;
   `<Arrangement>` wraps Apple's `ArrangementView`; the fold is honoured
-  automatically at a non-scrolling root, with a `respect_fold: false`
-  opt-out; hinge events are for effects only; scene accessories are an
-  optional companion tree; multi-window is shared with iPad; the iOS 17
+  automatically at a non-scrolling root by default, with a
+  `respect_fold: false` opt-out (the mechanism is provisional until it is
+  checked on the 27.1 simulator); hinge events are for effects only; scene
+  accessories are an optional companion tree with an explicit kind;
+  multi-window is shared with iPad; the iOS 17
   floor stays, with Duo API behind `@available`. It is checked against
   Apple's Duo Tech Talks, documentation and HIG, and corrects several ticket
   claims (e.g. `UIWindowSceneActivationAction` is iOS 15, and the generic
