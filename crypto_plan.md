@@ -304,7 +304,7 @@ gets a new check for `lib/crypto-*/priv/lib`.
 4. `~/code/mob_new/priv/templates/mob.new/ios/build.sh.eex`: remove
    the inline crypto-shim creation block (lines 125-143 of pigeon's
    copy). Bump `mob_new` version + rebuild archive.
-5. `~/code/mob/CLAUDE.md`: drop the "Mob ships an Elixir-side crypto
+5. `~/code/mob/AGENTS.md`: drop the "Mob ships an Elixir-side crypto
    shim for HTTP-only Phoenix on-device" qualifier in the comments.
    Update `build_release.md` step 3b.0 to use `--with-ssl=...`.
 

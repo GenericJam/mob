@@ -349,7 +349,7 @@ ranges.
 
 This migration is multi-month. Multiple agents may work on independent phases
 in parallel. **All work happens in worktrees** (see Worktree section in each
-repo's CLAUDE.md). Coordinate phase ownership via this doc — don't have two
+repo's AGENTS.md). Coordinate phase ownership via this doc — don't have two
 agents on the same phase simultaneously.
 
 ---
@@ -405,7 +405,7 @@ Pythonx work also lives — at that point, serialize behind Pythonx merge.
 
 **Worktree-per-phase**: each phase's work happens in its own worktree to
 allow parallel agents on different phases without stepping on each other. See
-`Worktrees` section in each repo's CLAUDE.md for the convention.
+`Worktrees` section in each repo's AGENTS.md for the convention.
 
 ---
 

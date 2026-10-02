@@ -5538,7 +5538,7 @@ static id find_a11y_at_point_in_current_windows(CGPoint pt, UIWindow *_Nullable 
 // (tracked separately via MobFrameTracker's GeometryReader callback — see
 // mob_register_frame) is already correct by then. Unrelated to the ~500ms
 // settle delay mob_dev waits after activating VoiceOver post-connect
-// (CLAUDE.md) — that's a one-time per-session propagation wait; this is a
+// (AGENTS.md) — that's a one-time per-session propagation wait; this is a
 // per-call retry ceiling, deliberately much shorter.
 static const int kA11yLookupMaxAttempts = 4;
 static const NSTimeInterval kA11yLookupRetryDelay = 0.05;
