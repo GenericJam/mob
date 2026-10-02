@@ -43,6 +43,25 @@ defmodule Mob.ScreenCaseTest do
     end
   end
 
+  # Node types both natives render, built the way an app writes them.
+  defmodule NativeLeavesScreen do
+    use Mob.Screen
+
+    def mount(_params, _session, socket), do: {:ok, socket}
+
+    def render(_assigns) do
+      %{
+        type: :column,
+        props: %{},
+        children: [
+          Mob.UI.canvas(width: 10, height: 10, draw: [], on_tap: {self(), :canvas}),
+          %{type: :icon, props: %{name: "star"}, children: []},
+          Mob.UI.native_view(__MODULE__, id: :chart)
+        ]
+      }
+    end
+  end
+
   # Pushes another screen, both from an explicit event and from a tap message.
   defmodule NavScreen do
     use Mob.Screen
@@ -162,6 +181,10 @@ defmodule Mob.ScreenCaseTest do
 
     test ":extra allows a plugin/custom type through" do
       assert assert_renderable(mount_screen(BadScreen), extra: [:hologram])
+    end
+
+    test "canvas, icon and native_view pass without :extra" do
+      assert %{type: :column} = assert_renderable(mount_screen(NativeLeavesScreen))
     end
 
     test "renderable_types includes core tags and the native_view escape hatch" do

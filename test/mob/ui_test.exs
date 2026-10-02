@@ -82,6 +82,14 @@ defmodule Mob.UITest do
       assert props.draw == ops
     end
 
+    test "keeps on_tap and on_drag handlers so the renderer can register them" do
+      tap = {self(), :canvas_tap}
+      drag = {self(), :canvas_drag, [throttle_ms: 16]}
+      props = UI.canvas(width: 100, height: 100, draw: [], on_tap: tap, on_drag: drag).props
+      assert props.on_tap == tap
+      assert props.on_drag == drag
+    end
+
     test "unrecognized props are omitted" do
       props = UI.canvas(width: 100, height: 100, draw: [], background: "#000").props
       refute Map.has_key?(props, :background)

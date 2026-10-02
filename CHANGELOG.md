@@ -28,6 +28,22 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   shapes" pointer, and `common_fixes.md` an entry on content painted into
   the crease.
 
+### Fixed
+- **`<Icon>` and `<NativeView>` are on the tag whitelists** (MOB-224). Both
+  natives render them, but `~MOB` warned about them and
+  `Mob.ScreenCase.assert_renderable/1` needed `extra: [:icon]`. (`<Canvas>`
+  was already added in MOB-188.) `renderable_types/0` no longer special-cases
+  `:native_view`.
+- **`Mob.UI.canvas/1` keeps `:on_tap` and `:on_drag`** (MOB-224). It used to
+  drop both, so a canvas built with the helper could not take input.
+
+### Added
+- **Tappable canvas** (MOB-224). `<Canvas on_tap={{self(), :board}}>`
+  delivers `{:tap, :board}`, like any other tappable node. iOS attaches the tap
+  next to the existing `on_drag` recognizer, so a canvas can have both. Android
+  needed no change (the generic tap modifier already reaches canvas). iOS
+  needs `mix mob.deploy --native` to pick this up.
+
 ## [0.9.9] - 2026-10-01
 
 ### Upgrading

@@ -86,8 +86,8 @@ defmodule Mob.ScreenCase do
   # Renderable node types, derived at compile time from the same authoritative
   # source the ~MOB sigil validates against (priv/tags/{ios,android}.txt, one
   # PascalCase tag per line, converted to the snake_case `:type` atom the same
-  # way the sigil does). Plus `:native_view`, the runtime-only escape hatch that
-  # plugin / custom components serialize to and which has no template tag.
+  # way the sigil does). `NativeView` is on both lists, so `:native_view` (the
+  # escape hatch plugin / custom components serialize to) is covered too.
   # Same compile-time-read caveat as Mob.Sigil's @known_tags: declare the
   # manifests external resources or a tag addition won't recompile this module.
   @external_resource Application.app_dir(:mob, "priv/tags/ios.txt")
@@ -109,13 +109,14 @@ defmodule Mob.ScreenCase do
                         end
                       end
 
-                      (read.("ios.txt") ++ read.("android.txt") ++ [:native_view])
+                      (read.("ios.txt") ++ read.("android.txt"))
                       |> MapSet.new()
                     )
 
   @doc """
-  The set of node types the native layer can render: the core component tags
-  plus `:native_view`. The contract surface `assert_renderable/2` checks against.
+  The set of node types the native layer can render: the component tags in
+  `priv/tags/{ios,android}.txt`. The contract surface `assert_renderable/2`
+  checks against.
   """
   @spec renderable_types() :: MapSet.t(atom())
   def renderable_types, do: @renderable_types
@@ -311,7 +312,7 @@ defmodule Mob.ScreenCase do
       ExUnit.Assertions.flunk("""
       view tree uses node type(s) the native layer cannot render: #{inspect(offenders)}
 
-      Renderable types come from mob's priv/tags/{ios,android}.txt (plus :native_view).
+      Renderable types come from mob's priv/tags/{ios,android}.txt.
       If one of these is a plugin or custom component, pass it via
       `assert_renderable(view, extra: #{inspect(offenders)})`. Otherwise it is
       likely a typo or a component with no registered native renderer.

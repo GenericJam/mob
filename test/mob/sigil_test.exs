@@ -261,6 +261,17 @@ defmodule Mob.SigilTest do
       assert node.type == :gpu_view
     end
 
+    for tag <- ~w(Canvas Icon NativeView) do
+      test "<#{tag}> is on both whitelists, so the sigil does not warn" do
+        warnings =
+          ExUnit.CaptureIO.capture_io(:stderr, fn ->
+            Code.eval_string("import Mob.Sigil\n~MOB(<#{unquote(tag)} />)")
+          end)
+
+        refute warnings =~ "not in the Mob tag whitelist"
+      end
+    end
+
     test "Sheet preserves a typed content detent expression" do
       detents = [{:content, max_height: 480}]
 

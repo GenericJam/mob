@@ -137,6 +137,10 @@ defmodule Mob.UI do
     * `:height` — canvas height in pt/dp (required)
     * `:draw` — list of op maps (required); construct via `Mob.Canvas.line/5`,
       `Mob.Canvas.circle/4`, etc., or as raw maps with an `:op` key
+    * `:on_tap` — `{pid, tag}`; a tap anywhere on the canvas delivers
+      `{:tap, tag}` to `handle_info/2`
+    * `:on_drag` — `{pid, tag}` or `{pid, tag, throttle_opts}`; finger drags
+      deliver `{:drag, tag, payload}` (see the events guide for the payload)
 
   Color tokens inside draw ops are resolved against the active theme
   by `Mob.Renderer` before serialisation, exactly like top-level color
@@ -162,7 +166,7 @@ defmodule Mob.UI do
   def canvas(%{} = props) do
     %{
       type: :canvas,
-      props: Map.take(props, [:width, :height, :draw]),
+      props: Map.take(props, [:width, :height, :draw, :on_tap, :on_drag]),
       children: []
     }
   end

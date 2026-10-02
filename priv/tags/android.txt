@@ -9,6 +9,7 @@ Button
 Canvas
 Column
 Divider
+Icon
 Image
 LazyList
 List
@@ -27,3 +28,4 @@ Video
 CameraPreview
 WebView
 GpuView
+NativeView

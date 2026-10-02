@@ -571,6 +571,28 @@ def handle_info({:change, :volume_changed, value}, socket) do
 end
 ```
 
+### `:canvas`
+
+A declarative 2D drawing surface (SwiftUI `Canvas` on iOS, Compose `Canvas` on Android). Build the op list with `Mob.Canvas` helpers. Coordinates are canvas-local in pt/dp, top-left origin.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `width` | number | Canvas width in pt/dp |
+| `height` | number | Canvas height in pt/dp |
+| `draw` | list | Draw ops (`Mob.Canvas.line/5`, `circle/4`, …) |
+| `on_tap` | `{pid, tag}` | A tap anywhere on the canvas delivers `{:tap, tag}`. |
+| `on_drag` | `{pid, tag}` / `{pid, tag, throttle_opts}` | Finger drag. Delivers `{:drag, tag, payload}` with canvas-local `x`/`y` (see the [Events guide](events.md)). On iOS a stationary tap also fires a zero-length drag; on Android a drag starts only past touch slop. |
+
+```elixir
+import Mob.Canvas
+
+board_tap = {self(), :board}
+ops = [circle(60, 60, 50, color: :primary, width: 4)]
+~MOB(<Canvas width={120} height={120} draw={ops} on_tap={board_tap} />)
+
+def handle_info({:tap, :board}, socket), do: {:noreply, socket}
+```
+
 ## Overlay components
 
 ### `:sheet`

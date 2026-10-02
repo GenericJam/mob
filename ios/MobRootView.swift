@@ -1215,6 +1215,12 @@ private struct MobCanvasView: View {
             width: node.canvasWidth > 0 ? CGFloat(node.canvasWidth) : nil,
             height: node.canvasHeight > 0 ? CGFloat(node.canvasHeight) : nil
         )
+        // on_tap: delivered as {:tap, tag}, same as every other tappable node.
+        // The drag recognizer below is attached with simultaneousGesture so a
+        // canvas with both handlers still gets its tap.
+        .ifLet(node.onTap) { view, tap in
+            view.contentShape(Rectangle()).onTapGesture { tap() }
+        }
 
         // Finger-drag input: when the node registered an on_drag handle, attach a
         // continuous drag recognizer (the iOS analog of Android MobCanvas's
@@ -1229,7 +1235,7 @@ private struct MobCanvasView: View {
         // detectDragGestures, which has a touch-slop threshold, so a bare tap
         // fires a zero-length began/ended drag on iOS but nothing on Android.
         if node.onDrag != nil {
-            canvas.gesture(
+            canvas.simultaneousGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
                         // Flip the @State flag only once, on the first sample, so
