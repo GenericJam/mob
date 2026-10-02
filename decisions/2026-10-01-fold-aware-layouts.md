@@ -163,7 +163,7 @@ sources. Each correction is noted where it matters.
    plist metadata is unverified. "iPhone Duo will continue to honor the
    UIRequiresFullScreen key, but your app will still resize when someone
    opens or closes their iPhone Duo." 111464: "All apps participate in
-   multitasking on iPhone Duo."
+   multitasking on iPhone Duo" (sentence truncated).
 10. **Safe areas are asymmetric** (111461): "avoid assuming that insets on
     opposite sides are equal." Vertical bars can sit on the left in
     landscape and in Split View.
