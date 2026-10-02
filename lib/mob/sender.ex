@@ -60,6 +60,16 @@ defmodule Mob.Sender do
   `Mob.Test` documents for the synchronous navigation helpers. Note the ordering
   guarantee only covers renders cast by the *calling* process; the BEAM promises
   nothing about the relative order of sends from different processes.
+
+  ## One active screen per window scene
+
+  Every window scene shows its own screen (MOB-245), so "the active screen" is
+  per scene. The top-level `active`, `reserved_transition`, `activation_gate`
+  and `active_screen` fields describe the unbound scene (`nil`): the primary
+  router's, i.e. every single-window app's. `scenes` holds the same four for
+  each scene a router is bound to, keyed by scene id. A flush commits the
+  newest tree of every scene's active screen, each into its own scene. See
+  `decisions/2026-10-02-one-router-per-window-scene.md`.
   """
 
   use GenServer
@@ -89,12 +99,19 @@ defmodule Mob.Sender do
   """
   @type transition :: atom() | {atom(), :replace}
 
+  @typedoc "A window scene id (`UISceneSession.persistentIdentifier`), or `nil` for the unbound scene."
+  @type scene :: String.t() | nil
+
   defstruct active: nil,
             pending: %{},
             reserved_transition: nil,
             activation_gate: nil,
             frames: %{},
-            active_screen: nil
+            active_screen: nil,
+            scenes: %{}
+
+  @slot_keys [:active, :reserved_transition, :activation_gate, :active_screen]
+  @empty_slot %{active: nil, reserved_transition: nil, activation_gate: nil, active_screen: nil}
 
   @doc "Start the sender. Named, so there is exactly one."
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -151,16 +168,37 @@ defmodule Mob.Sender do
   A `:none` transition only activates the screen and creates no reservation.
   """
   @spec activate(screen_ref(), transition()) :: :ok
-  def activate(ref, transition) do
-    if running?(), do: GenServer.call(__MODULE__, {:activate, ref, transition}), else: :ok
+  def activate(ref, transition), do: activate(ref, transition, nil)
+
+  @doc """
+  `activate/2` for the screen a router bound to window scene `scene` shows.
+  `nil` is the unbound scene, i.e. `activate/2`.
+  """
+  @spec activate(screen_ref(), transition(), scene()) :: :ok
+  def activate(ref, transition, scene) do
+    if running?(), do: GenServer.call(__MODULE__, {:activate, ref, transition, scene}), else: :ok
   end
 
   @doc false
   @spec activate_frame(screen_ref(), transition()) :: reference() | nil
-  def activate_frame(ref, transition) do
+  def activate_frame(ref, transition), do: activate_frame(ref, transition, nil)
+
+  @doc false
+  @spec activate_frame(screen_ref(), transition(), scene()) :: reference() | nil
+  def activate_frame(ref, transition, scene) do
     if running?() do
-      GenServer.call(__MODULE__, {:activate_frame, ref, transition})
+      GenServer.call(__MODULE__, {:activate_frame, ref, transition, scene})
     end
+  end
+
+  @doc """
+  Forget window scene `scene`: its pending tree is dropped and nothing is
+  committed to it again until a screen is activated there. `Mob.Scenes` calls
+  this when it stops the router of a scene that went away.
+  """
+  @spec deactivate_scene(String.t()) :: :ok
+  def deactivate_scene(scene) when is_binary(scene) do
+    if running?(), do: GenServer.cast(__MODULE__, {:deactivate_scene, scene}), else: :ok
   end
 
   @doc false
@@ -170,8 +208,14 @@ defmodule Mob.Sender do
   # arrives first. Only the active ref's trees are committed, so one pair is
   # all the sender needs to hold.
   @spec note_active_screen(screen_ref(), module()) :: :ok
-  def note_active_screen(ref, module) do
-    if running?(), do: GenServer.cast(__MODULE__, {:active_screen, ref, module}), else: :ok
+  def note_active_screen(ref, module), do: note_active_screen(ref, module, nil)
+
+  @doc false
+  @spec note_active_screen(screen_ref(), module(), scene()) :: :ok
+  def note_active_screen(ref, module, scene) do
+    if running?(),
+      do: GenServer.cast(__MODULE__, {:active_screen, ref, module, scene}),
+      else: :ok
   end
 
   @doc """
@@ -235,7 +279,12 @@ defmodule Mob.Sender do
   end
 
   @impl GenServer
-  def handle_call({:activate, ref, transition}, _from, state) do
+  # The three-element forms are what a router started before MOB-245 sends
+  # (hot code push); they mean the unbound scene.
+  def handle_call({:activate, ref, transition}, from, state),
+    do: handle_call({:activate, ref, transition, nil}, from, state)
+
+  def handle_call({:activate, ref, transition, scene}, _from, state) do
     reserved_transition = if transition == :none, do: nil, else: {ref, transition}
 
     # An inactive screen may have queued a repaint just before activation.
@@ -243,19 +292,27 @@ defmodule Mob.Sender do
     # frame of the newly active screen; the router requests a fresh paint next.
     pending = discard_pending(state.pending, ref)
 
-    {:reply, :ok,
-     %{state | active: ref, pending: pending, reserved_transition: reserved_transition}}
+    slot = %{slot(state, scene) | active: ref, reserved_transition: reserved_transition}
+    {:reply, :ok, state |> Map.put(:pending, pending) |> put_slot(scene, slot)}
   end
 
-  def handle_call({:activate_frame, ref, transition}, _from, state) do
+  def handle_call({:activate_frame, ref, transition}, from, state),
+    do: handle_call({:activate_frame, ref, transition, nil}, from, state)
+
+  def handle_call({:activate_frame, ref, transition, scene}, _from, state) do
     token = make_ref()
+
+    slot = %{
+      slot(state, scene)
+      | active: ref,
+        reserved_transition: nil,
+        activation_gate: {ref, token, transition}
+    }
 
     state =
       state
-      |> Map.put(:active, ref)
       |> Map.put(:pending, discard_pending(state.pending, ref))
-      |> Map.put(:reserved_transition, nil)
-      |> Map.put(:activation_gate, {ref, token, transition})
+      |> put_slot(scene, slot)
 
     {:reply, token, state}
   end
@@ -273,8 +330,17 @@ defmodule Mob.Sender do
     {:noreply, %{state | active: ref, reserved_transition: nil}}
   end
 
-  def handle_cast({:active_screen, ref, module}, state) do
-    {:noreply, Map.put(state, :active_screen, {ref, module})}
+  def handle_cast({:active_screen, ref, module}, state),
+    do: handle_cast({:active_screen, ref, module, nil}, state)
+
+  def handle_cast({:active_screen, ref, module, scene}, state) do
+    {:noreply, put_slot(state, scene, %{slot(state, scene) | active_screen: {ref, module}})}
+  end
+
+  def handle_cast({:deactivate_scene, scene}, state) do
+    {slot, scenes} = Map.pop(scenes(state), scene)
+    pending = if slot, do: discard_pending(state.pending, slot.active), else: state.pending
+    {:noreply, state |> Map.put(:scenes, scenes) |> Map.put(:pending, pending)}
   end
 
   # Staged, not paired: the screen process casts its stats immediately before the
@@ -291,43 +357,76 @@ defmodule Mob.Sender do
     handle_cast({:render, ref, tree, platform, nif, transition, nil}, state)
   end
 
-  def handle_cast(
-        {:render, ref, tree, platform, nif, transition, activation_token},
-        %{activation_gate: {ref, expected_token, reserved}} = state
-      ) do
+  def handle_cast({:render, ref, tree, platform, nif, transition, activation_token}, state) do
+    scene = scene_of(state, ref)
+    slot = slot(state, scene)
     {frame, frames} = Map.pop(state.frames, ref)
+    state = %{state | frames: frames}
 
-    if activation_token == expected_token do
-      transition = if transition == :none, do: reserved, else: transition
-      pending = put_pending(state.pending, ref, {tree, platform, nif, transition, frame})
-      send(self(), :flush)
-      {:noreply, %{state | pending: pending, activation_gate: nil, frames: frames}}
-    else
-      # This render began before the router activated the screen. The router's
-      # tokened paint follows it from the same screen process, so dropping it
-      # prevents a stale target frame from consuming the navigation boundary.
-      # Its frame goes with it, or it would be resumed against a later tree.
-      Mob.RenderStats.drop_frame(frame)
-      {:noreply, %{state | frames: frames}}
+    case slot.activation_gate do
+      {^ref, ^activation_token, reserved} ->
+        transition = if transition == :none, do: reserved, else: transition
+        pending = put_pending(state.pending, ref, {tree, platform, nif, transition, frame})
+        send(self(), :flush)
+
+        {:noreply,
+         state |> Map.put(:pending, pending) |> put_slot(scene, %{slot | activation_gate: nil})}
+
+      {^ref, _expected_token, _reserved} ->
+        # This render began before the router activated the screen. The router's
+        # tokened paint follows it from the same screen process, so dropping it
+        # prevents a stale target frame from consuming the navigation boundary.
+        # Its frame goes with it, or it would be resumed against a later tree.
+        Mob.RenderStats.drop_frame(frame)
+        {:noreply, state}
+
+      _no_gate_for_this_screen ->
+        # Overwrite rather than append: a newer tree for the same screen
+        # supersedes the one waiting, which is the whole point of queueing
+        # here. The transition is the exception — it describes the navigation
+        # animation for this frame, not the frame's content, so a push
+        # superseded by an ordinary re-render still has to animate as a push or
+        # the transition is silently swallowed.
+        {transition, reserved_transition} =
+          take_transition(state.pending, slot.reserved_transition, ref, transition)
+
+        pending = put_pending(state.pending, ref, {tree, platform, nif, transition, frame})
+        send(self(), :flush)
+
+        {:noreply,
+         state
+         |> Map.put(:pending, pending)
+         |> put_slot(scene, %{slot | reserved_transition: reserved_transition})}
     end
   end
 
-  def handle_cast({:render, ref, tree, platform, nif, transition, _activation_token}, state) do
-    # Overwrite rather than append: a newer tree for the same screen supersedes
-    # the one waiting, which is the whole point of queueing here. The transition
-    # is the exception — it describes the navigation animation for this frame,
-    # not the frame's content, so a push superseded by an ordinary re-render
-    # still has to animate as a push or the transition is silently swallowed.
-    {transition, reserved_transition} =
-      take_transition(state.pending, state.reserved_transition, ref, transition)
+  # ── Scene slots ───────────────────────────────────────────────────────────
 
-    {frame, frames} = Map.pop(state.frames, ref)
-    pending = put_pending(state.pending, ref, {tree, platform, nif, transition, frame})
-    send(self(), :flush)
+  # The unbound scene's slot is the top-level fields, so a single-window app's
+  # state is shaped exactly as before MOB-245. Map.get throughout: a sender
+  # started before a field existed (hot code push) lacks it.
+  defp slot(state, nil), do: Map.new(@slot_keys, &{&1, Map.get(state, &1)})
+  defp slot(state, scene), do: Map.get(scenes(state), scene, @empty_slot)
 
-    {:noreply,
-     %{state | pending: pending, reserved_transition: reserved_transition, frames: frames}}
+  defp put_slot(state, nil, slot), do: Map.merge(state, slot)
+
+  defp put_slot(state, scene, slot),
+    do: Map.put(state, :scenes, Map.put(scenes(state), scene, slot))
+
+  defp scenes(state), do: Map.get(state, :scenes, %{})
+
+  # Which scene a screen ref renders into: the bound scene whose slot names it
+  # (active, gated or holding its reserved transition), else the unbound one.
+  # A screen belongs to one router, and a router to one scene, so at most one
+  # slot can name a ref.
+  defp scene_of(state, ref) do
+    Enum.find_value(scenes(state), fn {scene, slot} -> if names?(slot, ref), do: scene end)
   end
+
+  defp names?(%{active: ref}, ref), do: true
+  defp names?(%{activation_gate: {ref, _token, _transition}}, ref), do: true
+  defp names?(%{reserved_transition: {ref, _transition}}, ref), do: true
+  defp names?(_slot, _ref), do: false
 
   # A superseded tree's frame is real work that was paid for but never shown.
   defp put_pending(pending, ref, payload) do
@@ -366,16 +465,23 @@ defmodule Mob.Sender do
   def handle_info(_message, state), do: {:noreply, state}
 
   defp flush(state) do
-    {committed, rest} = Map.pop(state.pending, state.active)
+    # One commit per scene: the newest tree of the screen active there.
+    actives =
+      [{nil, slot(state, nil)} | Enum.to_list(scenes(state))]
+      |> Enum.reject(fn {_scene, slot} -> is_nil(slot.active) end)
 
-    case committed do
-      {tree, platform, nif, transition, frame} ->
-        Mob.RenderStats.resume_frame(frame)
-        commit({tree, platform, nif, transition}, active_screen(state))
+    rest =
+      Enum.reduce(actives, state.pending, fn {scene, slot}, pending ->
+        case Map.pop(pending, slot.active) do
+          {{tree, platform, nif, transition, frame}, rest} ->
+            Mob.RenderStats.resume_frame(frame)
+            commit({tree, platform, nif, transition}, active_screen(slot), scene)
+            rest
 
-      nil ->
-        :ok
-    end
+          {_nothing_or_pre_reload_shape, rest} ->
+            rest
+        end
+      end)
 
     # Everything else waiting belongs to a screen that is not active. Dropping
     # it is deliberate: by the time such a screen becomes active it will have
@@ -397,13 +503,8 @@ defmodule Mob.Sender do
     %{state | pending: %{}, frames: sweep_stale(state.frames)}
   end
 
-  # Map.get: a sender started before this field existed (hot code push).
-  defp active_screen(%{active: ref} = state) do
-    case Map.get(state, :active_screen) do
-      {^ref, module} -> module
-      _other -> nil
-    end
-  end
+  defp active_screen(%{active: ref, active_screen: {ref, module}}), do: module
+  defp active_screen(_slot), do: nil
 
   # A staged frame is claimed by the render cast that follows it from the same
   # process, so anything still waiting after this long belongs to a screen that
@@ -425,8 +526,14 @@ defmodule Mob.Sender do
     end)
   end
 
-  defp commit({tree, platform, nif, transition}, screen) do
-    result = Mob.Renderer.render(tree, platform, nif, transition)
+  # The unbound scene renders through the four-argument call, exactly as before
+  # scenes existed.
+  defp commit({tree, platform, nif, transition}, screen, scene) do
+    result =
+      if scene,
+        do: Mob.Renderer.render(tree, platform, nif, transition, scene),
+        else: Mob.Renderer.render(tree, platform, nif, transition)
+
     # Here, not in the router: its first paint is a cast, so the root screen's
     # render/1 has not run when the router's init returns. A plugin that ends
     # an update's probation on this hook (mob_deliver) must not hear "stable"

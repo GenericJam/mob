@@ -16,6 +16,11 @@ void mob_init_ui(void);
 // without mob_init_ui; same before-launch-finishes requirement.
 void mob_install_notification_delegate(void);
 
+// What mob_init_ui calls to track window scenes (MOB-245): every UIWindowScene
+// that connects gets its own tap set and view model, and the BEAM hears
+// {:mob_scene, :connected | :disconnected, ...}. Main thread. Idempotent.
+void mob_install_scene_observers(void);
+
 // Call mob_start_beam on a background thread — erl_start never returns.
 // app_module: Erlang module name, e.g. "mob_demo"
 void mob_start_beam(const char *app_module);

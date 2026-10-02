@@ -32,9 +32,22 @@ import QuartzCore
     @Published public var startupPhase: String = "Starting…"
     /// Non-nil when a fatal startup error has occurred; the error screen stalls here.
     @Published public var startupError: String?
+    /// The window scene this model is shown in (MOB-245), set by mob_nif's
+    /// scene registry: its `UISceneSession.persistentIdentifier`. Nil until
+    /// the model meets a scene. Read on the main thread to tag what the window
+    /// reports (back gesture, size class) with the scene it came from.
+    @objc public var sceneId: String?
 
-    override init() {
+    override convenience init() {
+        self.init(watchdog: true)
+    }
+
+    /// `watchdog: false` for a further window's model: the BEAM is already up
+    /// when that window connects, so a slow first frame there is not a stuck
+    /// boot.
+    @objc public init(watchdog: Bool) {
         super.init()
+        guard watchdog else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.bootWatchdogSeconds) { [weak self] in
             guard let self, self.root == nil, self.startupError == nil else { return }
             let info = Bundle.main.infoDictionary
@@ -137,11 +150,26 @@ import QuartzCore
     }
 }
 
+/// Call `body` with `sceneId` as a C string, or with nil, for the C functions
+/// that take a scene id (mob_handle_back, mob_notify_size_class).
+func mobWithSceneId(_ sceneId: String?, _ body: (UnsafePointer<CChar>?) -> Void) {
+    if let sceneId {
+        sceneId.withCString { body($0) }
+    } else {
+        body(nil)
+    }
+}
+
 // UIHostingController subclass that intercepts the left-edge swipe gesture
 // and forwards it to the BEAM as {:mob, :back}.
 // Using UIScreenEdgePanGestureRecognizer rather than a SwiftUI DragGesture
 // because it integrates cleanly with scroll views and doesn't require
 // threading gesture priority through the view tree.
+//
+// Each window scene has its own hosting controller showing its own view model
+// (MOB-245). The SceneDelegate creates the controller before it is in a
+// window, so it starts on the shared model and switches to its scene's model
+// once it knows the scene, before anything is drawn.
 public class MobHostingController: UIHostingController<MobRootView> {
     override public func viewDidLoad() {
         super.viewDidLoad()
@@ -151,9 +179,21 @@ public class MobHostingController: UIHostingController<MobRootView> {
         view.addGestureRecognizer(edgePan)
     }
 
+    // `view.window` is guaranteed here (unlike viewWillAppear), and it runs
+    // before the first frame is drawn, so a second window never shows the
+    // first one's tree.
+    override public func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
+        guard let scene = view.window?.windowScene,
+            let model = mob_scene_attach(scene) as? MobViewModel,
+            model !== rootView.model
+        else { return }
+        rootView = MobRootView(model: model)
+    }
+
     @objc private func handleEdgePan(_ gesture: UIScreenEdgePanGestureRecognizer) {
         if gesture.state == .ended {
-            mob_handle_back()
+            mobWithSceneId(rootView.model.sceneId) { mob_handle_back($0) }
         }
     }
 }

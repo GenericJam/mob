@@ -111,8 +111,9 @@ defmodule Mob.Test.ProcessHelpers do
   Stop a router started with `Mob.Router.start_root/3`, and the globals it
   brought up with it.
 
-  `start_root/3` registers `Mob.Sender` and `Mob.Listener` under global names,
-  and leaving the Listener behind silently changes what the renderer does in
+  `start_root/3` registers `Mob.Sender`, `Mob.Listener` and `Mob.Scenes` under
+  global names (`Mob.Scenes` takes the routers of further window scenes down
+  with it), and leaving the Listener behind silently changes what the renderer does in
   every file that runs afterwards: `Mob.Listener.handler/1` wraps a tap tag into
   `{:mob_route, ...}` only when a listener is running, so `Mob.RendererTest`
   fails asserting on the unwrapped tag it registered — naming a file that has
@@ -124,7 +125,15 @@ defmodule Mob.Test.ProcessHelpers do
   """
   @spec stop_root(pid(), timeout()) :: :ok
   def stop_root(router, timeout \\ 5_000) do
-    stop_all([router, Process.whereis(Mob.Sender), Process.whereis(Mob.Listener)], timeout)
+    stop_all(
+      [
+        router,
+        Process.whereis(Mob.Scenes),
+        Process.whereis(Mob.Sender),
+        Process.whereis(Mob.Listener)
+      ],
+      timeout
+    )
   end
 
   @doc """

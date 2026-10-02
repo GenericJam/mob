@@ -5,9 +5,16 @@
 
 #import "MobNode.h"
 
-// Called from MobHostingController to signal a back gesture to the BEAM.
-// Implemented in mob_nif.m; looks up :mob_screen and sends {:mob, :back}.
-void mob_handle_back(void);
+// Called from MobHostingController to signal a back gesture to the BEAM, with
+// the window scene id it happened in (NULL before the controller knows it).
+// Implemented in mob_nif.m; sends {:mob, :back} to that window's router.
+void mob_handle_back(const char *scene_id);
+
+// Registers window scene `scene` with mob (MOB-245) and returns the
+// MobViewModel its root view shows: the shared one for the default scene, one
+// of its own for every further window. Main thread. Idempotent; implemented in
+// mob_nif.m.
+NSObject *mob_scene_attach(UIWindowScene *scene);
 
 // Called from MobRootView.swift WebView delegate when JS sends a message or a URL is blocked.
 // Implemented in mob_nif.m; looks up :mob_screen and sends the appropriate tuple.
@@ -26,9 +33,10 @@ void mob_notify_color_scheme(const char *scheme);
 
 // Called from MobRootView.swift when its horizontal/vertical size class pair
 // first appears and whenever it changes (rotation, Split View, Slide Over,
-// Stage Manager). Each is "compact" or "regular". Sends {:mob_size_class, H, V}
-// to the :mob_screen router. Implemented in mob_nif.m.
-void mob_notify_size_class(const char *horizontal, const char *vertical);
+// Stage Manager). Each is "compact" or "regular"; `scene_id` is the root
+// view's window scene (NULL before it knows). Sends {:mob_size_class, H, V}
+// to that window's router. Implemented in mob_nif.m.
+void mob_notify_size_class(const char *scene_id, const char *horizontal, const char *vertical);
 
 // Called from MobFrameTracker (SwiftUI) as a tagged element lays out, recording
 // its on-screen frame (logical points) keyed by the element's :id. Read back via
