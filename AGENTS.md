@@ -378,7 +378,7 @@ These are the things we've burned ourselves on. Following them isn't optional.
 
 ## Device shapes
 
-Foldables (iPhone Duo), iPad and Split View: layout keys on `:size_class`, never orientation; the fold is `:reserved_regions`, kept apart from `:safe_area`.
+Foldables (iPhone Duo), iPad and Split View: layout keys on `:size_class` (MOB-204), never orientation; the fold will be `:reserved_regions` (MOB-202, not yet shipped), kept apart from `:safe_area`.
 Read `decisions/2026-10-01-fold-aware-layouts.md` before touching size class, reserved regions, `<Arrangement>`, hinge events, scene accessories or multi-window.
 
 ## Where to look

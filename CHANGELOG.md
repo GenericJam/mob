@@ -22,7 +22,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   accessories are an optional companion tree with an explicit kind;
   multi-window is shared with iPad; the iOS 17
   floor stays, with Duo API behind `@available`. It is checked against
-  Apple's Duo Tech Talks, documentation and HIG, and corrects several ticket
+  three of Apple's Duo Tech Talks (111461, 111463, 111464), the documentation article and the HIG, and corrects several ticket
   claims (e.g. `UIWindowSceneActivationAction` is iOS 15, and the generic
   `sceneAccessory` API is iOS 27.0, not 27.1). `AGENTS.md` gains a "Device
   shapes" pointer, and `common_fixes.md` an entry on content painted into

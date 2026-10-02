@@ -65,10 +65,13 @@ sources. Each correction is noted where it matters.
    orientations. As with Idiom, avoid checking interface orientation for
    layout decisions. Use size classes instead." The documentation article
    adds: "Don’t use `userInterfaceIdiom` or `UIInterfaceOrientation` for
-   layout decisions." What 111461 *does* say will be deprecated is
-   referencing the **main screen** (`UIScreen.main`), "ambiguous and will be
-   deprecated in a future release". MOB-208's ticket text says Apple
-   "deprecates orientation-keyed layout"; that overstates it.
+   layout decisions in your UIKit app." What 111461 *does* say will be
+   deprecated is referencing the **main screen**: "It's ambiguous and will
+   be deprecated in a future release." The talk names no API. The 27.0 SDK
+   already marks `UIScreen.mainScreen` (`UIScreen.main`) `API_DEPRECATED`
+   as of iOS 26.0 (`UIScreen.h`), so which API the talk means is
+   unverified; either way it isn't orientation. MOB-208's ticket text says
+   Apple "deprecates orientation-keyed layout"; that overstates it.
 2. **Size classes on Duo.** 111461: on the outer display, compact horizontal
    with regular vertical in portrait, and compact in both in landscape, like
    other iPhones. The inner display is regular in both. Duo is "still an
