@@ -288,37 +288,36 @@ defmodule Mob.SizeClassTest do
       :ok
     end
 
-    # Run `module` in a regular-width window and stop it. The screen dumps in
-    # its own terminate/2, after the router is gone, so wait for it to exit.
-    defp persist_in_regular_window(module) do
-      {:ok, _} = Nif.start({:regular, :regular})
+    # Run `module` with the NIF answering `size_class`, hand its settled socket
+    # to `fun`, then stop it. The screen dumps in its own terminate/2, after the
+    # router is gone, so wait for it here: ExUnit stops the start_supervised!
+    # Repo before on_exit runs, and a dump into it then crashes the screen.
+    defp run_in_window(module, size_class, fun) do
+      Mob.Test.ProcessHelpers.stop_if_running(Nif)
+      {:ok, _} = Nif.start(size_class)
       {:ok, pid} = Mob.Router.start_root(module, %{}, nif: Nif)
-      assert settle(pid).assigns.columns == 2
+      result = fun.(settle(pid))
 
       screen = Mob.Router.get_screen_pid(pid)
       ref = Process.monitor(screen)
       Mob.Test.ProcessHelpers.stop_root(pid)
       assert_receive {:DOWN, ^ref, :process, ^screen, _}, 2_000
+      result
     end
 
-    test "ends on the live class and re-derives from it" do
-      persist_in_regular_window(Columns)
+    for {module, name} <- [
+          {Columns, "ends on the live class and re-derives from it"},
+          {ColumnsOnlyDump, "re-derives even when its dump did not record a size class"}
+        ] do
+      @module module
+      test name do
+        assert run_in_window(@module, {:regular, :regular}, & &1.assigns.columns) == 2
 
-      Agent.update(Nif, fn _ -> {:compact, :regular} end)
-      socket = settle(start_root(Columns))
+        relaunched = run_in_window(@module, {:compact, :regular}, & &1.assigns)
 
-      assert socket.assigns.size_class == {:compact, :regular}
-      assert socket.assigns.columns == 1, "the value derived in the old window was kept"
-    end
-
-    test "re-derives even when its dump did not record a size class" do
-      persist_in_regular_window(ColumnsOnlyDump)
-
-      Agent.update(Nif, fn _ -> {:compact, :regular} end)
-      socket = settle(start_root(ColumnsOnlyDump))
-
-      assert socket.assigns.size_class == {:compact, :regular}
-      assert socket.assigns.columns == 1, "the value derived in the old window was kept"
+        assert relaunched.size_class == {:compact, :regular}
+        assert relaunched.columns == 1, "the value derived in the old window was kept"
+      end
     end
   end
 end
