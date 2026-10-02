@@ -46,12 +46,15 @@ present before `mount/3`, corrected by native when the window changes.
   tolerated (the top stack frame is the screen's own `handle_info/2` called
   with it); a crash inside a matching clause still crashes the screen.
 - **Persisted screens end on the live value, and re-derive.** `load_state/2`
-  output is merged over the mounted socket, and a dump from an earlier window
-  carries that window's class and whatever the screen derived from it. The
-  persisted class is kept through the merge and the live one is then applied
-  as an ordinary change, so a difference reaches the screen's
-  `{:mob_size_class_changed, _}` clause instead of leaving stale derived
-  assigns.
+  output is merged over the mounted socket, and the dump may carry assigns the
+  screen derived from an earlier window. With the default `dump_state/1` the
+  dump also records that window's class: it is kept through the merge and the
+  live one is then applied as an ordinary change, so a difference reaches the
+  screen's `{:mob_size_class_changed, _}` clause instead of leaving stale
+  derived assigns. A dump without a valid class (a custom `dump_state/1` that
+  drops it, or one written before this change) says nothing about its window,
+  so the screen is told the live class unconditionally
+  (`Mob.SizeClass.deliver/3`).
 - **`Mob.ScreenCase`** mounts with the placeholder or `size_class:` from the
   new `mount_screen/4` opts, and `change_size_class/2` applies a change through
   the same function the screen process uses (`Mob.SizeClass.apply_change/3`),
@@ -106,7 +109,8 @@ and from `_mob_bridge_init_activity`, for a resize that recreates the activity
   `UIDeviceFamily` `[1, 2]` — the template half of MOB-165, landing as MOB-206.
 - The typical values in `Mob.SizeClass`'s docs follow from the platform, not
   from mob: a smaller iPhone in landscape is `{:compact, :compact}`; only the
-  large ones (Plus, Pro Max) reach `{:regular, :compact}`.
+  large ones (Plus, Pro Max, XR/11-class, 414pt wide or more) reach
+  `{:regular, :compact}`.
 - iPhone Duo's fold flips the trait collection, which this already observes;
   verifying that waits on the Xcode 27.1 Duo simulator (MOB-205).
 - Every live screen does a little work per change, even screens under the top

@@ -828,16 +828,21 @@ defmodule Mob.Screen.Server do
 
           # The dump was taken in whatever window the app last ran in, and
           # assigns derived from that class (columns, panes) came back with it.
-          # Keep the persisted class so a difference is a real change, and the
-          # screen re-derives through its usual handle_info clause.
-          restored_socket =
-            if Mob.SizeClass.valid?(restored_socket.assigns[:size_class]),
-              do: restored_socket,
-              else: Mob.Socket.assign(restored_socket, :size_class, live)
-
-          case Mob.SizeClass.apply_change(module, restored_socket, live) do
-            :unchanged -> restored_socket
-            {:noreply, changed} -> changed
+          # When the dump recorded that class, keep it so a difference is a
+          # real change and the screen re-derives through its usual
+          # handle_info clause. When it did not (a custom dump_state/1, or a
+          # dump from before MOB-204), the earlier window is unknown, so the
+          # screen is told the live class unconditionally.
+          # The merged socket always holds a class (mount assigned the live
+          # one), so ask the dump itself whether it recorded its window's.
+          if Mob.SizeClass.valid?(restored |> Map.new() |> Map.get(:size_class)) do
+            case Mob.SizeClass.apply_change(module, restored_socket, live) do
+              :unchanged -> restored_socket
+              {:noreply, changed} -> changed
+            end
+          else
+            {:noreply, changed} = Mob.SizeClass.deliver(module, restored_socket, live)
+            changed
           end
 
         :not_found ->

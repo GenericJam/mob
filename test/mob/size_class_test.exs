@@ -215,4 +215,110 @@ defmodule Mob.SizeClassTest do
       end)
     end
   end
+
+  # ── Restore from a persisted dump ─────────────────────────────────────────
+
+  defmodule Repo do
+    use Ecto.Repo, otp_app: :mob_size_class_test, adapter: Ecto.Adapters.SQLite3
+  end
+
+  @create_table """
+  CREATE TABLE IF NOT EXISTS mob_screen_states (
+    key      TEXT    PRIMARY KEY NOT NULL,
+    vsn      INTEGER NOT NULL DEFAULT 0,
+    data     BLOB    NOT NULL,
+    updated_at INTEGER NOT NULL
+  )
+  """
+
+  # Derives a layout value from the class, the way a real screen picks its
+  # column count. Persisted with the default dump_state/1, so the dump records
+  # the window's class alongside the derived value.
+  defmodule Columns do
+    @moduledoc false
+    use Mob.Screen, vsn: 1
+
+    def mount(_p, _s, socket),
+      do: {:ok, Mob.Socket.assign(socket, :columns, columns(socket.assigns.size_class))}
+
+    def handle_info({:mob_size_class_changed, new}, socket),
+      do: {:noreply, Mob.Socket.assign(socket, :columns, columns(new))}
+
+    def handle_info(_other, socket), do: {:noreply, socket}
+
+    def columns({:regular, _}), do: 2
+    def columns(_compact), do: 1
+
+    def render(assigns), do: %{type: :text, props: %{text: "#{assigns.columns}"}, children: []}
+  end
+
+  # Same screen, but its dump keeps only the derived value: nothing in it says
+  # which window that value was computed for.
+  defmodule ColumnsOnlyDump do
+    @moduledoc false
+    use Mob.Screen, vsn: 1
+
+    def mount(_p, _s, socket),
+      do: {:ok, Mob.Socket.assign(socket, :columns, Columns.columns(socket.assigns.size_class))}
+
+    def dump_state(assigns), do: Map.take(assigns, [:columns])
+
+    def handle_info({:mob_size_class_changed, new}, socket),
+      do: {:noreply, Mob.Socket.assign(socket, :columns, Columns.columns(new))}
+
+    def handle_info(_other, socket), do: {:noreply, socket}
+
+    def render(assigns), do: %{type: :text, props: %{text: "#{assigns.columns}"}, children: []}
+  end
+
+  describe "a persisted screen relaunched in a different window" do
+    setup do
+      db = System.tmp_dir!() <> "/mob_size_class_#{System.unique_integer([:positive])}.db"
+      Application.put_env(:mob_size_class_test, Repo, database: db, pool_size: 1)
+      Application.put_env(:mob, :repo, Repo)
+      start_supervised!(Repo)
+      Repo.query!(@create_table, [])
+
+      on_exit(fn ->
+        Application.delete_env(:mob, :repo)
+        Application.delete_env(:mob_size_class_test, Repo)
+        File.rm(db)
+      end)
+
+      :ok
+    end
+
+    # Run `module` in a regular-width window and stop it. The screen dumps in
+    # its own terminate/2, after the router is gone, so wait for it to exit.
+    defp persist_in_regular_window(module) do
+      {:ok, _} = Nif.start({:regular, :regular})
+      {:ok, pid} = Mob.Router.start_root(module, %{}, nif: Nif)
+      assert settle(pid).assigns.columns == 2
+
+      screen = Mob.Router.get_screen_pid(pid)
+      ref = Process.monitor(screen)
+      Mob.Test.ProcessHelpers.stop_root(pid)
+      assert_receive {:DOWN, ^ref, :process, ^screen, _}, 2_000
+    end
+
+    test "ends on the live class and re-derives from it" do
+      persist_in_regular_window(Columns)
+
+      Agent.update(Nif, fn _ -> {:compact, :regular} end)
+      socket = settle(start_root(Columns))
+
+      assert socket.assigns.size_class == {:compact, :regular}
+      assert socket.assigns.columns == 1, "the value derived in the old window was kept"
+    end
+
+    test "re-derives even when its dump did not record a size class" do
+      persist_in_regular_window(ColumnsOnlyDump)
+
+      Agent.update(Nif, fn _ -> {:compact, :regular} end)
+      socket = settle(start_root(ColumnsOnlyDump))
+
+      assert socket.assigns.size_class == {:compact, :regular}
+      assert socket.assigns.columns == 1, "the value derived in the old window was kept"
+    end
+  end
 end

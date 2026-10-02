@@ -13,7 +13,7 @@ defmodule Mob.SizeClass do
   | Window                                    | Size class              |
   |-------------------------------------------|-------------------------|
   | iPhone, portrait                          | `{:compact, :regular}`  |
-  | Large iPhone (Plus, Pro Max), landscape   | `{:regular, :compact}`  |
+  | Large iPhone (Plus, Pro Max, XR/11-class, 414pt wide or more), landscape | `{:regular, :compact}` |
   | Smaller iPhones, landscape                | `{:compact, :compact}`  |
   | iPad full screen, either orientation      | `{:regular, :regular}`  |
   | iPad Slide Over, narrow Split View        | `{:compact, :regular}`  |
@@ -80,10 +80,11 @@ defmodule Mob.SizeClass do
   # Ask the platform, through `nif` (`:mob_nif` on device, a stub in tests).
   #
   # Anything other than a size class is "no answer yet", never a crash on the
-  # mount path: `:no_window` from iOS before a window exists, `:error` from
-  # Android before an activity is attached, and an exception when the loaded
-  # native library predates `size_class/0` — a hot-pushed mob on an app whose
-  # native layer was not rebuilt — or when a test stub does not define it.
+  # mount path: `:no_window` from iOS before a window exists, or from Android
+  # before an activity is attached or without a JNI env; and an exception when
+  # the loaded native library predates `size_class/0` — a hot-pushed mob on an
+  # app whose native layer was not rebuilt — or when a test stub does not
+  # define it.
   @spec read(module()) :: t()
   def read(nif) do
     case nif.size_class() do
@@ -100,6 +101,16 @@ defmodule Mob.SizeClass do
   # when the socket already holds `new` — native reports on every trait or
   # configuration pass, not only on a change, and a repeat must cost neither a
   # callback nor a paint.
+  @spec apply_change(module(), Mob.Socket.t(), t()) :: {:noreply, Mob.Socket.t()} | :unchanged
+  def apply_change(screen, socket, new) do
+    if socket.assigns[:size_class] == new, do: :unchanged, else: deliver(screen, socket, new)
+  end
+
+  @doc false
+  # `apply_change/3` without the "already holds it" check, for when the
+  # socket's current value says nothing about the window its other assigns
+  # were derived in: a persisted dump that did not record a size class (a
+  # custom `dump_state/1`, or a dump written before MOB-204).
   #
   # The framework sends this unprompted, to every live screen, on every
   # rotation. `use Mob.Screen` injects a catch-all handle_info, but a screen
@@ -109,26 +120,22 @@ defmodule Mob.SizeClass do
   # Only a head mismatch on exactly this message counts — the top frame is the
   # screen's own handle_info/2 called with it. Anything raised from inside a
   # clause's body still propagates.
-  @spec apply_change(module(), Mob.Socket.t(), t()) :: {:noreply, Mob.Socket.t()} | :unchanged
-  def apply_change(screen, socket, new) do
-    if socket.assigns[:size_class] == new do
-      :unchanged
-    else
-      socket = Mob.Socket.assign(socket, :size_class, new)
-      message = {:mob_size_class_changed, new}
+  @spec deliver(module(), Mob.Socket.t(), t()) :: {:noreply, Mob.Socket.t()}
+  def deliver(screen, socket, new) do
+    socket = Mob.Socket.assign(socket, :size_class, new)
+    message = {:mob_size_class_changed, new}
 
-      try do
-        screen.handle_info(message, socket)
-      catch
-        :error, :function_clause ->
-          case __STACKTRACE__ do
-            [{^screen, :handle_info, [^message, _socket], _location} | _] ->
-              {:noreply, socket}
+    try do
+      screen.handle_info(message, socket)
+    catch
+      :error, :function_clause ->
+        case __STACKTRACE__ do
+          [{^screen, :handle_info, [^message, _socket], _location} | _] ->
+            {:noreply, socket}
 
-            stacktrace ->
-              :erlang.raise(:error, :function_clause, stacktrace)
-          end
-      end
+          stacktrace ->
+            :erlang.raise(:error, :function_clause, stacktrace)
+        end
     end
   end
 end
