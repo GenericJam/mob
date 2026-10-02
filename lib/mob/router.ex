@@ -335,18 +335,45 @@ defmodule Mob.Router do
       on_no_live_screen: on_no_live_screen
     }
 
+    if roles.scene do
+      # A further window's router (MOB-245) is started from Mob.Scenes, which
+      # must not wait on the root screen's mount: that mount may call
+      # Mob.Scene.list/0, and every window's events route through Mob.Scenes.
+      # Calls to this router queue behind the continue.
+      {:ok, state, {:continue, {:mount_root, screen_module, params}}}
+    else
+      case mount_root(screen_module, params, state) do
+        {:ok, state} -> {:ok, deliver_stored_notifications(stored_notifications, state)}
+        {:error, reason} -> {:stop, reason}
+      end
+    end
+  end
+
+  @impl GenServer
+  def handle_continue({:mount_root, screen_module, params}, state) do
+    case mount_root(screen_module, params, state) do
+      {:ok, state} ->
+        {:noreply, state}
+
+      {:error, reason} ->
+        Logger.error(
+          "[mob] the screen of window scene #{inspect(state.scene)} (#{inspect(screen_module)}) " <>
+            "failed to start: " <> Mob.CrashReport.format(reason)
+        )
+
+        {:stop, reason, state}
+    end
+  end
+
+  defp mount_root(screen_module, params, state) do
     case start_screen(screen_module, params, state) do
       {:ok, entry, state} ->
         state = make_current(state, entry, :none)
+        if state.render_mode == :render, do: paint(entry, :none, state)
+        {:ok, state}
 
-        if render_mode == :render do
-          paint(entry, :none, state)
-        end
-
-        {:ok, deliver_stored_notifications(stored_notifications, state)}
-
-      {:error, reason} ->
-        {:stop, reason}
+      {:error, _reason} = error ->
+        error
     end
   end
 

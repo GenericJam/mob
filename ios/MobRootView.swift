@@ -2868,6 +2868,10 @@ public struct MobRootView: View {
         .overlayPreferenceValue(MobAnchoredKey.self) { entries in
             MobAnchoredPanelHost(entries: entries)
         }
+        // Only the default scene's window takes part in the element frame
+        // registry (MOB-245). Applied after the anchored-panel overlay so it
+        // reaches a further window's open popover or select panel too.
+        .environment(\.mobTracksFrames, model === MobViewModel.shared)
         .ignoresSafeArea(.container, edges: [.bottom, .horizontal])
         .onChange(of: model.rootVersion) {
             applyRoot(
@@ -2928,7 +2932,6 @@ public struct MobRootView: View {
                 // while parked. Before MOB-129 the outgoing tree was destroyed,
                 // so nothing had to ask.
                 .environment(\.mobScreenIsActive, index == activeSlot)
-                .environment(\.mobTracksFrames, model === MobViewModel.shared)
         }
     }
 

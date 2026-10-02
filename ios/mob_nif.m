@@ -241,6 +241,28 @@ static int mob_tap_grow_locked(MobTapSet *ts, int which, int needed) {
     return 1;
 }
 
+// Hand one slot back: free its tag and reset its throttle state. Shared by
+// clear_taps, which frees the building table for the next frame, and
+// mob_release_tap_set, which frees a closed window's set for the next window.
+// register_tap writes only the routing fields, so whatever this leaves is what
+// the slot's next handler starts with.
+static void mob_tap_slot_free_locked(TapHandle *slot) {
+    if (slot->tag_env) {
+        enif_free_env(slot->tag_env);
+        slot->tag_env = NULL;
+    }
+    slot->throttle_configured = 0;
+    slot->throttle_ms = 0;
+    slot->debounce_ms = 0;
+    slot->delta_threshold = 0;
+    slot->leading = 1;
+    slot->trailing = 1;
+    slot->last_emit_ns = 0;
+    slot->last_x = 0;
+    slot->last_y = 0;
+    slot->seq = 0;
+}
+
 static int mob_encode_event_handle(uint32_t generation, int slot) {
     if (generation == 0 || generation > MAX_EVENT_GENERATION || slot < 0 ||
         slot >= MOB_TAP_SLOT_LIMIT)
@@ -851,17 +873,39 @@ static void mob_send_scrolled_past(MobEventRef handle) {
 // frame with no "scene" key renders into, i.e. the one the unbound primary
 // router shows, so a single-window app runs exactly as before scenes existed.
 //
+// Only application scenes are registered. An AirPlay or cable display
+// connects a UIWindowSceneSessionRoleExternalDisplayNonInteractive scene to
+// every scene-based app; mob provides no content for it (the display
+// mirrors), and registering it would turn a single-window app into a
+// two-scene one.
+//
 // Lifecycle, mirrored by Mob.Scenes on the BEAM side:
 //   * connect, id known  -> re-attached (iPadOS discarded and restored it)
-//   * connect, id new    -> if no scene is attached, it takes over the kept
-//                           entry (and its set and model) if there is one;
-//                           otherwise the lowest free set, with set 0 bringing
-//                           the shared model
+//   * connect, id new    -> if no scene is attached and a kept entry's
+//                           session is gone (iPadOS made a new session instead
+//                           of restoring it), the new scene takes it over, its
+//                           set and model with it (the default one if it is
+//                           among them). A kept entry whose session is still
+//                           open may yet be restored, so it is left alone.
+//                           With nothing to take over, the scene gets the
+//                           lowest free set, set 0 bringing the shared model
 //   * disconnect         -> released if other scenes are attached; kept, with
 //                           its set and model, if it was the last
-// The BEAM hears {mob_scene, connected, Id, IsDefault} and
-// {mob_scene, disconnected, Id} at registered Mob.Scenes; it also asks
-// scenes/0 when it starts, since nothing can be sent before erts is up.
+//   * session gone       -> a kept entry whose session is no longer in
+//                           UIApplication.openSessions (the user closed the
+//                           window in the app switcher) is released; checked on
+//                           every attach and whenever an application scene
+//                           activates
+//   * set freed          -> a window that connected with every set taken
+//                           (MOB_SCENE_LIMIT) gets it; so does such a window
+//                           when it re-attaches
+// The BEAM hears, at registered Mob.Scenes, {mob_scene, connected, Id,
+// IsDefault} for a new or re-attached scene, {mob_scene, replaced, OldId,
+// NewId, IsDefault} for a takeover (OldId's router moves to NewId),
+// {mob_scene, disconnected, Id}, and {mob_scene, discarded, Id} for a released
+// kept entry (its router stops). A window without a set is not announced
+// until it gets one. Mob.Scenes also asks scenes/0 when it starts, since
+// nothing can be sent before erts is up.
 //
 // Entries are written on the main thread and read from NIF threads, under
 // @synchronized(mob_scene_lock()).
@@ -905,6 +949,37 @@ static MobSceneEntry *mob_scene_entry_for_set_locked(int set) {
     return nil;
 }
 
+// Whether `scene` is a window scene mob registers: an application one, not
+// an external display's (see the role note above).
+static BOOL mob_scene_is_application(UIScene *scene) {
+    return [scene isKindOfClass:[UIWindowScene class]] &&
+           [scene.session.role isEqualToString:UIWindowSceneSessionRoleApplication];
+}
+
+// The lowest tap set no entry holds, or -1 when all MOB_SCENE_LIMIT are taken.
+static int mob_scene_free_set_locked(void) {
+    for (int candidate = 0; candidate < MOB_SCENE_LIMIT; candidate++)
+        if (!mob_scene_entry_for_set_locked(candidate))
+            return candidate;
+    return -1;
+}
+
+// Give `entry`, a window that connected with every set taken, the lowest free
+// set, if there is one now. Set 0 brings the shared model, as it does for a new
+// scene; any other keeps the entry's own model, with its error screen cleared.
+static BOOL mob_scene_assign_set_locked(MobSceneEntry *entry) {
+    int set = mob_scene_free_set_locked();
+    if (set < 0)
+        return NO;
+    entry.tapSet = set;
+    if (set == 0)
+        entry.model = MobViewModel.shared;
+    else
+        [entry.model setStartupError:nil];
+    entry.model.sceneId = entry.sceneId;
+    return YES;
+}
+
 static int mob_scene_attached_count(void) {
     int count = 0;
     @synchronized(mob_scene_lock()) {
@@ -934,9 +1009,16 @@ static MobViewModel *mob_scene_model_for_set(int set) {
     }
 }
 
-// Drop every handle a released set holds, so a later scene starts it clean
-// and its tag environments are not leaked. Before nif_load there is neither a
-// mutex nor a handle.
+// Drop every handle a released set holds, so a later scene starts it clean:
+// its tag environments are not leaked and no slot keeps the closed window's
+// throttle state. Before nif_load there is neither a mutex nor a handle.
+//
+// build_generation is deliberately left alone. Zeroing generations[] makes
+// every handle unmatchable until the next window's first set_root, which
+// commits a build_generation past every one the closed window was handed out
+// (clear_taps only ever advances it), so a stale event block from the closed
+// window can't resolve against the reused set, by exact match or by the
+// identity fallback.
 static void mob_release_tap_set(int set) {
     if (!tap_mutex)
         return;
@@ -944,18 +1026,22 @@ static void mob_release_tap_set(int set) {
     MobTapSet *ts = &tap_sets[set];
     for (int which = 0; which < 2; which++) {
         TapHandle *table = ts->tables[which];
-        for (int i = 0; table && i < ts->used[which]; i++) {
-            if (table[i].tag_env) {
-                enif_free_env(table[i].tag_env);
-                table[i].tag_env = NULL;
-            }
-        }
+        for (int i = 0; table && i < ts->used[which]; i++)
+            mob_tap_slot_free_locked(&table[i]);
         ts->used[which] = 0;
         ts->generations[which] = 0;
     }
     ts->handle_next = 0;
     ts->build_count = 0;
     enif_mutex_unlock(tap_mutex);
+}
+
+// Release `set` for the next scene. The shared model outlives its scene; a
+// later default scene must not come up showing this one's last tree.
+static void mob_scene_release_set(int set) {
+    mob_release_tap_set(set);
+    if (set == 0)
+        [MobViewModel.shared setRoot:nil transition:@"none" replacesStack:NO];
 }
 
 static ERL_NIF_TERM mob_make_string(ErlNifEnv *env, NSString *string) {
@@ -968,22 +1054,134 @@ static ERL_NIF_TERM mob_make_string(ErlNifEnv *env, NSString *string) {
     return term;
 }
 
-static void mob_tell_scenes(NSString *sceneId, BOOL connected, BOOL isDefault) {
+typedef enum {
+    MOB_SCENE_CONNECTED,
+    MOB_SCENE_REPLACED,
+    MOB_SCENE_DISCONNECTED,
+    MOB_SCENE_DISCARDED
+} MobSceneChange;
+
+// Tell registered Mob.Scenes about scene `sceneId`. `replacedId` is the id
+// whose kept entry a REPLACED scene took over.
+static void mob_tell_scenes(MobSceneChange change, NSString *sceneId, NSString *replacedId,
+                            BOOL isDefault) {
     if (!mob_runtime_up())
         return;
     ErlNifEnv *env = enif_alloc_env();
     ErlNifPid pid;
     if (enif_whereis_pid(env, enif_make_atom(env, "Elixir.Mob.Scenes"), &pid)) {
+        ERL_NIF_TERM tag = enif_make_atom(env, "mob_scene");
         ERL_NIF_TERM id = mob_make_string(env, sceneId);
-        ERL_NIF_TERM msg = connected
-                               ? enif_make_tuple4(env, enif_make_atom(env, "mob_scene"),
-                                                  enif_make_atom(env, "connected"), id,
-                                                  enif_make_atom(env, isDefault ? "true" : "false"))
-                               : enif_make_tuple3(env, enif_make_atom(env, "mob_scene"),
-                                                  enif_make_atom(env, "disconnected"), id);
+        ERL_NIF_TERM def = enif_make_atom(env, isDefault ? "true" : "false");
+        ERL_NIF_TERM msg;
+        switch (change) {
+        case MOB_SCENE_CONNECTED:
+            msg = enif_make_tuple4(env, tag, enif_make_atom(env, "connected"), id, def);
+            break;
+        case MOB_SCENE_REPLACED:
+            msg = enif_make_tuple5(env, tag, enif_make_atom(env, "replaced"),
+                                   mob_make_string(env, replacedId), id, def);
+            break;
+        case MOB_SCENE_DISCONNECTED:
+            msg = enif_make_tuple3(env, tag, enif_make_atom(env, "disconnected"), id);
+            break;
+        case MOB_SCENE_DISCARDED:
+            msg = enif_make_tuple3(env, tag, enif_make_atom(env, "discarded"), id);
+            break;
+        }
         enif_send(NULL, &pid, env, msg);
     }
     enif_free_env(env);
+}
+
+// Implemented by MobHostingController (Swift): re-read the model the registry
+// holds for its window and show it.
+@protocol MobSceneModelHost
+- (void)mobAdoptSceneModel;
+@end
+
+// Make `scene`'s window show its entry's current model. Only needed when that
+// model changes under a window already on screen; a new window asks
+// mob_scene_attach itself. Main thread.
+static void mob_scene_show_model(UIWindowScene *scene) {
+    for (UIWindow *window in scene.windows) {
+        UIViewController *controller = window.rootViewController;
+        if ([controller respondsToSelector:@selector(mobAdoptSceneModel)])
+            [(id<MobSceneModelHost>)controller mobAdoptSceneModel];
+    }
+}
+
+// The persistentIdentifier of every session iOS still holds for this app,
+// including those whose scene is disconnected. Main thread.
+static NSSet<NSString *> *mob_scene_open_ids(void) {
+    NSMutableSet<NSString *> *openIds = [NSMutableSet set];
+    for (UISceneSession *session in UIApplication.sharedApplication.openSessions)
+        if (session.persistentIdentifier)
+            [openIds addObject:session.persistentIdentifier];
+    return openIds;
+}
+
+// Remove every kept (unattached) entry but `spare` whose session is not in
+// `openIds`: that window is not coming back. Its set goes to `released` and,
+// if the BEAM ever heard of it, its id to `discarded`.
+static void mob_scene_prune_gone_locked(NSSet<NSString *> *openIds, MobSceneEntry *spare,
+                                        NSMutableArray<NSNumber *> *released,
+                                        NSMutableArray<NSString *> *discarded) {
+    for (MobSceneEntry *gone in [g_scene_entries copy]) {
+        if (gone == spare || gone.attached || [openIds containsObject:gone.sceneId])
+            continue;
+        if (gone.tapSet >= 0) {
+            [released addObject:@(gone.tapSet)];
+            [discarded addObject:gone.sceneId];
+        }
+        [g_scene_entries removeObject:gone];
+    }
+}
+
+// Give the first attached window still without a set (it connected with all
+// MOB_SCENE_LIMIT taken) a set that was just released, or nil.
+static MobSceneEntry *mob_scene_promote_over_limit(void) {
+    @synchronized(mob_scene_lock()) {
+        for (MobSceneEntry *entry in g_scene_entries)
+            if (entry.attached && entry.tapSet < 0)
+                return mob_scene_assign_set_locked(entry) ? entry : nil;
+    }
+    return nil;
+}
+
+// Outside the lock, finish removing entries: release their sets, tell the BEAM
+// which kept windows are gone for good, then hand the freed sets to windows
+// waiting for one. Released before they are handed on, so the window that gets
+// one starts on a clean set. Main thread.
+static void mob_scene_finish_removal(NSArray<NSNumber *> *released,
+                                     NSArray<NSString *> *discarded) {
+    for (NSNumber *set in released)
+        mob_scene_release_set(set.intValue);
+    for (NSString *sceneId in discarded)
+        mob_tell_scenes(MOB_SCENE_DISCARDED, sceneId, nil, NO);
+    if (released.count == 0)
+        return;
+    MobSceneEntry *promoted;
+    while ((promoted = mob_scene_promote_over_limit())) {
+        // Set 0 swaps the window's model for the shared one under a window
+        // already on screen.
+        if (promoted.tapSet == 0)
+            mob_scene_show_model(promoted.scene);
+        mob_tell_scenes(MOB_SCENE_CONNECTED, promoted.sceneId, nil, promoted.tapSet == 0);
+    }
+}
+
+// Release kept entries whose session the user has closed since. Run when an
+// application scene activates: closing a window in the app switcher discards
+// its session without connecting or disconnecting anything. Main thread.
+static void mob_scene_prune_discarded(void) {
+    NSSet<NSString *> *openIds = mob_scene_open_ids();
+    NSMutableArray<NSNumber *> *released = [NSMutableArray array];
+    NSMutableArray<NSString *> *discarded = [NSMutableArray array];
+    @synchronized(mob_scene_lock()) {
+        mob_scene_prune_gone_locked(openIds, nil, released, discarded);
+    }
+    mob_scene_finish_removal(released, discarded);
 }
 
 // Attach `scene`, returning the view model its root view shows. Main thread.
@@ -992,12 +1190,15 @@ static void mob_tell_scenes(NSString *sceneId, BOOL connected, BOOL isDefault) {
 // notification, depending on the iOS version), so repeats are no-ops.
 NSObject *mob_scene_attach(UIWindowScene *scene) {
     NSString *sceneId = scene.session.persistentIdentifier;
-    if (!sceneId)
+    if (!sceneId || !mob_scene_is_application(scene))
         return MobViewModel.shared;
 
+    NSSet<NSString *> *openIds = mob_scene_open_ids();
     MobSceneEntry *entry;
+    NSString *replacedId = nil;
     BOOL announce = NO;
     NSMutableArray<NSNumber *> *released = [NSMutableArray array];
+    NSMutableArray<NSString *> *discarded = [NSMutableArray array];
 
     @synchronized(mob_scene_lock()) {
         entry = mob_scene_entry_locked(sceneId);
@@ -1005,27 +1206,35 @@ NSObject *mob_scene_attach(UIWindowScene *scene) {
         for (MobSceneEntry *other in g_scene_entries)
             anyAttached = anyAttached || other.attached;
 
+        // With no scene attached, a new id whose kept entry's session is gone
+        // means iPadOS made this new session instead of restoring that one,
+        // so the new scene takes the entry over and the window comes up on
+        // the same tree with live taps. The lowest set wins, so the default
+        // scene's entry, the primary's window, is the one taken. A kept entry
+        // whose session is still open may yet reconnect (a split of two
+        // windows comes back one window at a time), and taking it over would
+        // show that window's tree in this one.
+        MobSceneEntry *kept = nil;
+        if (!entry && !anyAttached)
+            for (MobSceneEntry *gone in g_scene_entries)
+                if (![openIds containsObject:gone.sceneId] && gone.tapSet >= 0 &&
+                    (!kept || gone.tapSet < kept.tapSet))
+                    kept = gone;
+        // Every other kept entry whose session is gone is released.
+        mob_scene_prune_gone_locked(openIds, entry ?: kept, released, discarded);
+
         if (entry) {
             announce = !entry.attached;
-        } else if (!anyAttached && g_scene_entries.count > 0) {
-            // The last scene went away and iPadOS made a new session instead
-            // of restoring it: the new scene takes over what the old one
-            // showed, so the window comes up on the same tree with live taps.
-            entry = g_scene_entries.firstObject;
-            for (MobSceneEntry *stale in g_scene_entries)
-                if (stale != entry)
-                    [released addObject:@(stale.tapSet)];
-            [g_scene_entries removeAllObjects];
-            [g_scene_entries addObject:entry];
+        } else if (kept) {
+            entry = kept;
+            replacedId = entry.sceneId;
             entry.sceneId = sceneId;
             entry.model.sceneId = sceneId;
             announce = YES;
-        } else {
-            int set = -1;
-            for (int candidate = 0; candidate < MOB_SCENE_LIMIT && set < 0; candidate++)
-                if (!mob_scene_entry_for_set_locked(candidate))
-                    set = candidate;
+        }
 
+        if (!entry) {
+            int set = mob_scene_free_set_locked();
             entry = [MobSceneEntry new];
             entry.sceneId = sceneId;
             entry.tapSet = set;
@@ -1039,29 +1248,35 @@ NSObject *mob_scene_attach(UIWindowScene *scene) {
             }
             [g_scene_entries addObject:entry];
             announce = YES;
+        } else if (entry.tapSet < 0 && mob_scene_assign_set_locked(entry)) {
+            // A window that connected over the limit, re-attaching now that a
+            // set is free. The BEAM has never heard of it.
+            announce = YES;
         }
         entry.scene = scene;
         entry.attached = YES;
     }
 
-    for (NSNumber *set in released)
-        if (set.intValue >= 0)
-            mob_release_tap_set(set.intValue);
+    mob_scene_finish_removal(released, discarded);
     if (announce && entry.tapSet >= 0)
-        mob_tell_scenes(sceneId, YES, entry.tapSet == 0);
+        mob_tell_scenes(replacedId ? MOB_SCENE_REPLACED : MOB_SCENE_CONNECTED, sceneId, replacedId,
+                        entry.tapSet == 0);
     return entry.model;
 }
 
 static void mob_scene_detach(UIWindowScene *scene) {
+    if (!mob_scene_is_application(scene))
+        return;
     NSString *sceneId = scene.session.persistentIdentifier;
     int released = -1;
-    BOOL known = NO;
+    BOOL announced = NO;
 
     @synchronized(mob_scene_lock()) {
         MobSceneEntry *entry = mob_scene_entry_locked(sceneId);
         if (!entry || !entry.attached)
             return;
-        known = YES;
+        // A window without a set was never announced.
+        announced = entry.tapSet >= 0;
         BOOL othersAttached = NO;
         for (MobSceneEntry *other in g_scene_entries)
             othersAttached = othersAttached || (other != entry && other.attached);
@@ -1074,15 +1289,9 @@ static void mob_scene_detach(UIWindowScene *scene) {
         }
     }
 
-    if (released >= 0) {
-        mob_release_tap_set(released);
-        // The shared model outlives its scene; a later default scene must not
-        // come up showing this one's last tree.
-        if (released == 0)
-            [MobViewModel.shared setRoot:nil transition:@"none" replacesStack:NO];
-    }
-    if (known)
-        mob_tell_scenes(sceneId, NO, NO);
+    if (announced)
+        mob_tell_scenes(MOB_SCENE_DISCONNECTED, sceneId, nil, NO);
+    mob_scene_finish_removal(released >= 0 ? @[ @(released) ] : @[], @[]);
 }
 
 void mob_install_scene_observers(void) {
@@ -1093,26 +1302,33 @@ void mob_install_scene_observers(void) {
                           object:nil
                            queue:NSOperationQueue.mainQueue
                       usingBlock:^(NSNotification *note) {
-                        if ([note.object isKindOfClass:[UIWindowScene class]])
+                        if (mob_scene_is_application(note.object))
                             mob_scene_attach((UIWindowScene *)note.object);
                       }];
       [center addObserverForName:UISceneDidDisconnectNotification
                           object:nil
                            queue:NSOperationQueue.mainQueue
                       usingBlock:^(NSNotification *note) {
-                        if ([note.object isKindOfClass:[UIWindowScene class]])
+                        if (mob_scene_is_application(note.object))
                             mob_scene_detach((UIWindowScene *)note.object);
+                      }];
+      [center addObserverForName:UISceneDidActivateNotification
+                          object:nil
+                           queue:NSOperationQueue.mainQueue
+                      usingBlock:^(NSNotification *note) {
+                        if (mob_scene_is_application(note.object))
+                            mob_scene_prune_discarded();
                       }];
       // A scene that connected before this ran (mob_init_ui reached from a
       // scene delegate rather than from launch).
       for (UIScene *scene in UIApplication.sharedApplication.connectedScenes)
-          if ([scene isKindOfClass:[UIWindowScene class]])
+          if (mob_scene_is_application(scene))
               mob_scene_attach((UIWindowScene *)scene);
     });
 }
 
 // The window scene frames with no "scene" key are shown in: the default
-// scene's, else the first window scene. Main thread.
+// scene's, else the first application window scene. Main thread.
 static UIWindowScene *mob_default_window_scene(void) {
     @synchronized(mob_scene_lock()) {
         MobSceneEntry *entry = mob_scene_entry_for_set_locked(0);
@@ -1120,7 +1336,7 @@ static UIWindowScene *mob_default_window_scene(void) {
             return entry.scene;
     }
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes)
-        if ([scene isKindOfClass:[UIWindowScene class]])
+        if (mob_scene_is_application(scene))
             return (UIWindowScene *)scene;
     return nil;
 }
@@ -3533,23 +3749,8 @@ static ERL_NIF_TERM nif_clear_taps(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
     // frame. The freshly built table is swapped in at set_root.
     TapHandle *build = ts->tables[1 - ts->active];
     int used = ts->used[1 - ts->active];
-    for (int i = 0; i < used; i++) {
-        if (build[i].tag_env) {
-            enif_free_env(build[i].tag_env);
-            build[i].tag_env = NULL;
-        }
-        // Reset throttle state — slots get reused across renders.
-        build[i].throttle_configured = 0;
-        build[i].throttle_ms = 0;
-        build[i].debounce_ms = 0;
-        build[i].delta_threshold = 0;
-        build[i].leading = 1;
-        build[i].trailing = 1;
-        build[i].last_emit_ns = 0;
-        build[i].last_x = 0;
-        build[i].last_y = 0;
-        build[i].seq = 0;
-    }
+    for (int i = 0; i < used; i++)
+        mob_tap_slot_free_locked(&build[i]);
     ts->used[1 - ts->active] = 0;
     // Reset here, not only in set_root. set_root reports and clears the count,
     // but a frame that overflows and then never reaches set_root would otherwise

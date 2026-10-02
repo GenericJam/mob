@@ -23,12 +23,18 @@ defmodule Mob.Scene do
   ## Opening a window
 
   The user can always open one from the app switcher or by dragging. To offer
-  a button, show it only where it can work:
+  a button, show it only where it can work. `supported?/0` asks the main
+  thread, and the answer never changes while the app runs, so read it once in
+  `mount/3`, not in `render/1`:
+
+      def mount(_params, _session, socket) do
+        {:ok, Mob.Socket.assign(socket, :multi_window, Mob.Scene.supported?())}
+      end
 
       def render(assigns) do
         ~MOB\"\"\"
         <Column>
-          <Button :if={Mob.Scene.supported?()} text="New window" on_tap={{self(), :new_window}} />
+          <Button :if={@multi_window} text="New window" on_tap={{self(), :new_window}} />
         </Column>
         \"\"\"
       end
@@ -90,7 +96,8 @@ defmodule Mob.Scene do
   @doc """
   Whether this app can show more than one window here: the app opted in and
   the device supports it. Use it to decide whether to offer a "New window"
-  button. Always `false` on Android.
+  button. Always `false` on Android. A synchronous main-thread round trip
+  whose answer is fixed for the life of the app: call it from `mount/3`.
   """
   @spec supported?() :: boolean()
   def supported? do

@@ -184,7 +184,15 @@ public class MobHostingController: UIHostingController<MobRootView> {
     // first one's tree.
     override public func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
-        guard let scene = view.window?.windowScene,
+        mobAdoptSceneModel()
+    }
+
+    /// Show the model mob_nif's scene registry holds for this window. Also
+    /// called by mob_nif (`mob_scene_show_model`) when a window that opened
+    /// with every tap set taken is later given set 0, which brings the shared
+    /// model with it.
+    @objc func mobAdoptSceneModel() {
+        guard let scene = viewIfLoaded?.window?.windowScene,
             let model = mob_scene_attach(scene) as? MobViewModel,
             model !== rootView.model
         else { return }

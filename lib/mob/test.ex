@@ -466,7 +466,13 @@ defmodule Mob.Test do
       Mob.Test.navigate(node, MyApp.SettingsScreen)
   """
   @spec navigate(node(), module() | atom(), map(), [{:scene, Mob.Scene.id()}]) :: :ok
-  def navigate(node, dest, params \\ %{}, opts \\ []),
+  def navigate(node, dest, params \\ %{}, opts \\ [])
+
+  # navigate(node, dest, scene: id): options in the params position.
+  def navigate(node, dest, [{:scene, _scene} | _] = opts, []),
+    do: navigate(node, dest, %{}, opts)
+
+  def navigate(node, dest, params, opts),
     do: nav(node, {:push, dest, params}, opts, "navigate/3")
 
   @doc """

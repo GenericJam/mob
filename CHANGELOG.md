@@ -22,10 +22,16 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   view model per scene, scene-routed back gesture, size class and alert
   results, scene-aware `safe_area/1`, `size_class/1`, `alert_show/4`,
   `action_sheet_show/3`, `clear_taps/1`, `scenes/0`, `scene_request/0`,
-  `scene_multiple_supported/0`. Opt in with `config :mob_dev,
-  multi_window: true` (mob_dev stamps `UIApplicationSupportsMultipleScenes`).
-  Needs a native rebuild. Not yet run on a device. See
-  `decisions/2026-10-02-one-router-per-window-scene.md`.
+  `scene_multiple_supported/0`. Only application-role window scenes count,
+  so an AirPlay or cable display is not a second window. A further window's
+  router mounts its root screen after starting, so a `mount/3` may call
+  `Mob.Scene.list/0`; `:mob_screen` moves to a remaining window before the
+  closing primary stops; a new session takes over a kept window only when
+  that window's session is gone (`{:mob_scene, :replaced, ...}`), and a kept
+  window whose session is discarded stops (`{:mob_scene, :discarded, id}`).
+  Opt in with `config :mob_dev, multi_window: true` (mob_dev#114 stamps
+  `UIApplicationSupportsMultipleScenes`). Needs a native rebuild. Not yet run
+  on a device. See `decisions/2026-10-02-one-router-per-window-scene.md`.
 - **Every screen socket carries the window's size class** (MOB-204, mob side of
   MOB-165). `assigns.size_class` is `{horizontal, vertical}`, each `:compact`
   or `:regular`, set before `mount/3`: on iOS the window's

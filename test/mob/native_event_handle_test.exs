@@ -108,6 +108,52 @@ defmodule Mob.NativeEventHandleTest do
     assert pick < build, "the set must be chosen before the tree's blocks capture it"
   end
 
+  test "a released window's tap set resets every slot the way clear_taps does" do
+    # A window that closes hands its tap set to the next window that opens.
+    # clear_taps only resets the `used` slots, and releasing a set zeroes
+    # `used`, so whatever release leaves in a slot is what the next window's
+    # handler there starts with: a closed window's `throttle: 500` or
+    # `leading: false` on a drag handler that configured nothing.
+    [_, helper] = String.split(@ios_source, "static void mob_tap_slot_free_locked(", parts: 2)
+    [helper, _] = String.split(helper, "\n}\n", parts: 2)
+
+    for field <-
+          ~w(tag_env throttle_configured throttle_ms debounce_ms delta_threshold leading trailing
+             last_emit_ns last_x last_y seq) do
+      assert helper =~ "slot->#{field} =", "mob_tap_slot_free_locked must reset #{field}"
+    end
+
+    for fun <- ["static void mob_release_tap_set(", "static ERL_NIF_TERM nif_clear_taps("] do
+      [_, body] = String.split(@ios_source, fun, parts: 2)
+      [body, _] = String.split(body, "\n}\n", parts: 2)
+      assert body =~ "mob_tap_slot_free_locked(&", "#{fun} must free slots with the shared reset"
+    end
+  end
+
+  test "only application window scenes enter the iOS scene registry" do
+    # An AirPlay or cable display connects an
+    # ExternalDisplayNonInteractive window scene to every scene-based app.
+    # Registered, it becomes a second scene with its own tap set, and a
+    # single-window app starts routing window events through Mob.Scenes.
+    assert @ios_source =~ "isEqualToString:UIWindowSceneSessionRoleApplication]"
+
+    [_, section] = String.split(@ios_source, "// ── Window scenes (MOB-245)", parts: 2)
+    [section, _] = String.split(section, "// ── Back gesture sender", parts: 2)
+    [_, after_helper] = String.split(section, "static BOOL mob_scene_is_application(", parts: 2)
+    [_, after_helper] = String.split(after_helper, "\n}\n", parts: 2)
+
+    refute after_helper =~ "isKindOfClass:[UIWindowScene class]",
+           "test window scenes with mob_scene_is_application, which also checks the role"
+
+    for fun <- ["NSObject *mob_scene_attach(", "static void mob_scene_detach("] do
+      [_, body] = String.split(section, fun, parts: 2)
+      [body, _] = String.split(body, "\n}\n", parts: 2)
+
+      assert body =~ "mob_scene_is_application(scene)",
+             "#{fun} must ignore non-application scenes"
+    end
+  end
+
   test "active table, count, and generation commit under one lock" do
     [_, commit] =
       String.split(@android_source, "// Commit the freshly-built tap table:", parts: 2)
