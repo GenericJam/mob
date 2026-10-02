@@ -320,8 +320,9 @@ defmodule Mob.Router do
 
     # Links native stored the same way (Mob.Link): the one that launched the
     # app, and any that arrived during boot. Taken now and delivered from init
-    # after the root screen mounts, for the same reasons.
-    stored_links = if render_mode == :render, do: take_stored_links(nif), else: []
+    # after the root screen mounts, for the same reasons. Like notifications,
+    # only the app's root router takes them, not a further window's (MOB-245).
+    stored_links = if primary?, do: take_stored_links(nif), else: []
 
     # Seed the stacks this app declared. The screen we are about to mount
     # becomes the active stack's current screen; every other declared stack
@@ -340,19 +341,48 @@ defmodule Mob.Router do
       on_no_live_screen: on_no_live_screen
     }
 
+    if roles.scene do
+      # A further window's router (MOB-245) is started from Mob.Scenes, which
+      # must not wait on the root screen's mount: that mount may call
+      # Mob.Scene.list/0, and every window's events route through Mob.Scenes.
+      # Calls to this router queue behind the continue.
+      {:ok, state, {:continue, {:mount_root, screen_module, params}}}
+    else
+      case mount_root(screen_module, params, state) do
+        {:ok, state} ->
+          state = deliver_stored_notifications(stored_notifications, state)
+          {:ok, deliver_links(stored_links, :launch, state)}
+
+        {:error, reason} -> {:stop, reason}
+      end
+    end
+  end
+
+  @impl GenServer
+  def handle_continue({:mount_root, screen_module, params}, state) do
+    case mount_root(screen_module, params, state) do
+      {:ok, state} ->
+        {:noreply, state}
+
+      {:error, reason} ->
+        Logger.error(
+          "[mob] the screen of window scene #{inspect(state.scene)} (#{inspect(screen_module)}) " <>
+            "failed to start: " <> Mob.CrashReport.format(reason)
+        )
+
+        {:stop, reason, state}
+    end
+  end
+
+  defp mount_root(screen_module, params, state) do
     case start_screen(screen_module, params, state) do
       {:ok, entry, state} ->
         state = make_current(state, entry, :none)
+        if state.render_mode == :render, do: paint(entry, :none, state)
+        {:ok, state}
 
-        if render_mode == :render do
-          paint(entry, :none, state)
-        end
-
-        state = deliver_stored_notifications(stored_notifications, state)
-        {:ok, deliver_links(stored_links, :launch, state)}
-
-      {:error, reason} ->
-        {:stop, reason}
+      {:error, _reason} = error ->
+        error
     end
   end
 

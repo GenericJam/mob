@@ -69,15 +69,22 @@ stall the other. The cost is a registry, which is item 3.
 - **Native reports scenes**: `{:mob_scene, :connected, id, default?}` and
   `{:mob_scene, :disconnected, id}`, from `UISceneWillConnectNotification` /
   `UISceneDidDisconnectNotification` observers mob installs itself (no
-  template change needed). Native can't reach the BEAM before it is up, so
-  `Mob.Scenes` also pulls `mob_nif:scenes/0` when it starts; both paths are
-  idempotent.
+  template change needed). Only application-role window scenes count: an
+  external display's scene is not a window of the app. Native can't reach the
+  BEAM before it is up, so `Mob.Scenes` also pulls `mob_nif:scenes/0` when it
+  starts; both paths are idempotent, and a scene already recorded is not
+  announced to its router again.
 - **A connecting scene** that already has a router is told the window is back
   (`{:mob_window, :connected}`). Otherwise, if it is native's *default* scene
-  and the primary is unbound, it is the primary's window. Otherwise a router
-  whose scene has gone (kept because it was the last, item 6) adopts it.
-  Otherwise `Mob.Scenes` starts a new router, bound to the id, from the
-  primary's root module and params.
+  and the primary is unbound, it is the primary's window. Otherwise
+  `Mob.Scenes` starts a new router, bound to the id, from the primary's root
+  module and params. The router mounts its root screen after it has started
+  (`handle_continue`), so `Mob.Scenes` never waits on an app's `mount/3`: a
+  mount may call `Mob.Scene.list/0`, and every window's events pass through
+  `Mob.Scenes`.
+- **A session replacing the kept one** (item 6) arrives as `{:mob_scene,
+  :replaced, old_id, new_id, default?}` and moves the old id's router to the
+  new id. A plain `connected` for an unknown id never adopts a kept router.
 - **`Mob.Scenes.list/0`** and **`screens/0`** answer which scenes exist and
   what each shows.
 
@@ -107,8 +114,10 @@ navigating at once each keep their transition.
 `:mob_screen` stays registered to the primary router, so native callers,
 `Mob.Test` and plugins keep working unchanged in a single-scene app. When the
 primary's window closes for good while other windows remain, `Mob.Scenes`
-stops the primary and registers `:mob_screen` to the oldest remaining
-router.
+first makes sure every remaining window has a router, registers
+`:mob_screen` to the oldest remaining one (which then drains notifications
+native stored meanwhile) and only then stops the primary: as soon as native
+sees one scene attached it sends that window's events to `:mob_screen`.
 
 Native routes the events that belong to a window by the window they came
 from:
@@ -144,17 +153,30 @@ iPadOS disconnects a scene both when the user closes a window and when it
 discards a background one to reclaim memory; the app cannot tell which at
 that point. When a scene disconnects:
 
-- If other scenes remain, its router is stopped. Its screens terminate
-  normally, so persisted screens dump their state. If the scene comes back
-  (same id), `Mob.Scenes` starts a fresh router for it from the root
-  template: navigation inside a discarded secondary window is not restored.
-- If it was the last scene, its router is kept, bound and alive, so a
+- If other scenes remain attached, its router is stopped. Its screens
+  terminate normally, so persisted screens dump their state. If the scene
+  comes back (same id), `Mob.Scenes` starts a fresh router for it from the
+  root template: navigation inside a discarded secondary window is not
+  restored.
+- If no other scene is attached (decided by attached scenes, as native does,
+  not by how many routers exist), its router is kept, bound and alive, so a
   reconnect of the same id shows the same screens with their assigns, as a
-  single-window app does today. If a different id connects instead (iPadOS
-  made a new session), the kept router adopts it.
+  single-window app does today.
+- If a different id connects while no scene is attached, native hands it the
+  kept entry's tap set and model only when the kept entry's session is gone
+  from `UIApplication.openSessions` (the user really discarded it), and says
+  so with `replaced`; the kept router then shows the new id. Otherwise the
+  kept session may still come back (iPadOS restoring a split of discarded
+  windows in any order), so the new id gets a fresh set and router, and the
+  kept ones wait for their own id.
+- A kept entry whose session native finds gone from `openSessions` (checked
+  whenever a scene attaches or activates) is dropped natively and reported as
+  `{:mob_scene, :discarded, id}`; its router stops, unless it is the app's
+  only router, and `:mob_screen` moves on as above if it held it.
 
 Native mirrors this: a disconnecting scene with others still attached
-releases its tap set and model; the last one keeps them.
+releases its tap set (every per-slot field reset) and model; the last one
+keeps them.
 
 ### 7. `Mob.Test` addresses a scene with `scene:`
 

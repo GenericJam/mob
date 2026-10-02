@@ -17,13 +17,19 @@ defmodule Mob.Scenes do
       is up, so this process also asks `mob_nif:scenes/0` when it starts.
     * **A connecting scene** that a router already shows is told its window is
       back. Native's default scene goes to the unbound primary. Otherwise a
-      router whose scene has gone adopts it, and failing that a new router is
-      started for it, bound to its id, from the primary's root module and
-      params.
-    * **A disconnecting scene** has its router stopped, unless it is the last
-      router: that one is kept, so the window comes back as it was. When the
-      primary's window goes and others remain, `:mob_screen` moves to the
-      oldest remaining router.
+      new router is started for it, bound to its id, from the primary's root
+      module and params.
+    * **A disconnecting scene** has its router stopped, unless it was the last
+      attached scene: that router is kept, so the window comes back as it
+      was. When the primary's window goes and others remain, `:mob_screen`
+      moves to the oldest remaining router before the primary stops.
+    * **A new session replacing the kept one** (iPadOS made a new session
+      after the user discarded the last window's) arrives as `{:mob_scene,
+      :replaced, old_id, new_id, default?}`: native hands the new scene the old
+      one's tap set and model, and the old id's router moves to the new id.
+    * **A kept scene native discards** (its session is gone, e.g. removed in
+      the app switcher) arrives as `{:mob_scene, :discarded, id}`: its router
+      stops, unless it is the app's only one.
     * **Window events** native can attribute to a scene — the back gesture,
       size class changes, alert results — arrive as `{:mob_scene_event, id,
       message}` while more than one scene is attached, and are forwarded to
@@ -148,6 +154,15 @@ defmodule Mob.Scenes do
     {:noreply, disconnected(state, scene)}
   end
 
+  def handle_info({:mob_scene, :replaced, old, new, default?}, state)
+      when is_binary(old) and is_binary(new) do
+    {:noreply, replaced(state, old, new, default? == true)}
+  end
+
+  def handle_info({:mob_scene, :discarded, scene}, state) when is_binary(scene) do
+    {:noreply, discarded(state, scene)}
+  end
+
   def handle_info({:mob_scene_event, scene, message}, state) do
     case router_for(state, scene) || Process.whereis(:mob_screen) do
       nil -> :ok
@@ -200,10 +215,9 @@ defmodule Mob.Scenes do
         if already?, do: state, else: tell_window_connected(state, router)
 
       default? and unbound_primary?(state) ->
-        tell_window_connected(state, state.primary)
-
-      orphan = orphan(state) ->
-        bind(state, orphan, scene)
+        # A repeat (the pull that follows register_primary) is not news: the
+        # primary read its window when it mounted.
+        if already?, do: state, else: tell_window_connected(state, state.primary)
 
       state.template != nil ->
         start_router(state, scene)
@@ -219,6 +233,24 @@ defmodule Mob.Scenes do
     state
   end
 
+  # Native gave `new` the tap set and model `old` had; whatever showed `old`
+  # now shows `new`.
+  defp replaced(state, old, new, default?) do
+    case router_for(state, old) do
+      nil ->
+        connected(%{state | scenes: List.delete(state.scenes, old)}, new, default?)
+
+      router ->
+        scenes = state.scenes |> List.delete(old) |> List.delete(new)
+        state = %{state | scenes: scenes ++ [new]}
+        state = if default? or state.default == old, do: %{state | default: new}, else: state
+
+        if Map.fetch!(state.routers, router).bound,
+          do: bind(state, router, new),
+          else: tell_window_connected(state, router)
+    end
+  end
+
   defp disconnected(state, scene) do
     state = %{state | scenes: List.delete(state.scenes, scene)}
 
@@ -226,12 +258,29 @@ defmodule Mob.Scenes do
       nil ->
         state
 
-      router when map_size(state.routers) > 1 ->
-        stop_router(state, router, scene)
+      # The last window, by what native has attached (native decides "last"
+      # the same way): kept, bound and alive, so a reconnect of the same id
+      # shows the same screens, and a session replacing it adopts this router
+      # (replaced/4).
+      _last_router when state.scenes == [] ->
+        state
 
-      _last_router ->
-        # Kept, bound and alive: a reconnect of the same id shows the same
-        # screens, and a new id adopts this router (orphan/1).
+      router ->
+        stop_router(state, router, scene)
+    end
+  end
+
+  # Native dropped a kept scene whose session iPadOS discarded (the user
+  # removed it in the app switcher): it can't come back, so neither can what
+  # its router shows. The app's only router stays, whatever native says.
+  defp discarded(state, scene) do
+    case router_for(state, scene) do
+      router when router != nil and map_size(state.routers) > 1 ->
+        if scene in state.scenes,
+          do: state,
+          else: stop_router(state, router, scene)
+
+      _none_or_only ->
         state
     end
   end
@@ -240,14 +289,19 @@ defmodule Mob.Scenes do
     {info, routers} = Map.pop(state.routers, router)
     Process.demonitor(info.monitor, [:flush])
     state = %{state | routers: routers}
-    primary? = router == state.primary
+    state = if state.default == scene, do: %{state | default: nil}, else: state
+
+    # The remaining windows are served, and `:mob_screen` names one of them,
+    # before the old router stops: once native sees one scene attached it
+    # sends that window's events to `:mob_screen`.
+    state =
+      if router == state.primary,
+        do: %{state | primary: nil} |> start_missing() |> promote(router),
+        else: state
 
     stop_process(router)
     if info.bound, do: Mob.Sender.deactivate_scene(scene)
-
-    state = if primary?, do: %{state | primary: nil}, else: state
-    state = if state.default == scene, do: %{state | default: nil}, else: state
-    if primary?, do: promote(state), else: state
+    state
   end
 
   defp stop_process(router) do
@@ -260,12 +314,18 @@ defmodule Mob.Scenes do
   end
 
   # `:mob_screen` must name a live router while any exists: native's
-  # single-scene paths, notifications and Mob.Test all address it.
-  defp promote(state) do
+  # single-scene paths, notifications and Mob.Test all address it. `previous`
+  # is the router giving it up (still alive when its window closed), or nil.
+  defp promote(state, previous \\ nil) do
     case ordered(state) do
       [{_scene, router} | _] ->
+        if previous && Process.whereis(:mob_screen) == previous,
+          do: Process.unregister(:mob_screen)
+
         try do
           Process.register(router, :mob_screen)
+          # Notifications native stored while the name was moving.
+          send(router, :mob_notification_stored)
         rescue
           # Something else registered it, or the router just died (its :DOWN
           # is queued and promotes again).
@@ -353,11 +413,7 @@ defmodule Mob.Scenes do
 
   defp start_missing(state) do
     Enum.reduce(state.scenes, state, fn scene, acc ->
-      cond do
-        router_for(acc, scene) -> acc
-        orphan = orphan(acc) -> bind(acc, orphan, scene)
-        true -> start_router(acc, scene)
-      end
+      if router_for(acc, scene), do: acc, else: start_router(acc, scene)
     end)
   end
 
@@ -397,15 +453,6 @@ defmodule Mob.Scenes do
       scene != nil and scene == state.default and unbound_primary?(state) -> state.primary
       true -> nil
     end
-  end
-
-  # A bound router whose scene is no longer attached: kept because it was the
-  # last (disconnected/2), free to show whatever connects next.
-  defp orphan(state) do
-    Enum.find_value(state.routers, fn
-      {router, %{bound: true, scene: scene}} -> if scene not in state.scenes, do: router
-      _unbound -> nil
-    end)
   end
 
   defp scene_of(state, %{bound: false}), do: state.default

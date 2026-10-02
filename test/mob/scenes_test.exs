@@ -14,8 +14,11 @@ defmodule Mob.ScenesTest do
   defmodule HomeScreen do
     use Mob.Screen
 
-    def mount(params, _session, socket),
-      do: {:ok, Mob.Socket.assign(socket, test: params[:test], n: 0)}
+    def mount(params, _session, socket) do
+      # A root screen that looks at the other windows while it mounts.
+      if params[:list_scenes], do: send(params[:test], {:scenes_seen, Mob.Scene.list()})
+      {:ok, Mob.Socket.assign(socket, test: params[:test], n: 0)}
+    end
 
     def render(assigns),
       do: %{type: :text, props: %{text: "home #{assigns.n}", on_tap: {self(), :n}}, children: []}
@@ -34,6 +37,10 @@ defmodule Mob.ScenesTest do
     end
 
     def handle_info(_other, socket), do: {:noreply, socket}
+
+    # What :mob_screen names while this screen's router is shutting down.
+    def terminate(_reason, socket),
+      do: send(socket.assigns.test, {:terminating, self(), Process.whereis(:mob_screen)})
   end
 
   defmodule DetailScreen do
@@ -65,7 +72,12 @@ defmodule Mob.ScenesTest do
 
     def platform, do: :ios
     def scenes, do: state().scenes
-    def take_launch_notification, do: :none
+
+    def take_launch_notification do
+      send(state().test, {:took_stored, self()})
+      :none
+    end
+
     def webview_can_go_back, do: false
     def exit_app, do: :ok
     def safe_area, do: {10.0, 0.0, 0.0, 0.0}
@@ -97,14 +109,58 @@ defmodule Mob.ScenesTest do
     :ok
   end
 
+  # Further windows' routers are Mob.Scenes' children and go down with it,
+  # but only after it has gone: waited for, so a router still holding
+  # :mob_screen can't race the next test's root registering it. Runs before
+  # the primary is stopped, or Mob.Scenes would start the default window a
+  # router of its own as the primary goes.
+  defp stop_scene_routers do
+    children =
+      with scenes when is_pid(scenes) <- Process.whereis(Mob.Scenes),
+           {:links, links} <- Process.info(scenes, :links) do
+        Enum.filter(links, &is_pid/1)
+      else
+        _gone -> []
+      end
+
+    refs = Enum.map(children, &Process.monitor/1)
+    ProcessHelpers.stop_if_running(Mob.Scenes)
+
+    for ref <- refs do
+      receive do
+        {:DOWN, ^ref, :process, _pid, _reason} -> :ok
+      after
+        5_000 -> raise "a window scene's router outlived Mob.Scenes"
+      end
+    end
+
+    # The test process exits before on_exit runs, taking the primary with it,
+    # and Mob.Scenes may have started (and handed :mob_screen to) a router
+    # after the links above were read.
+    case Process.whereis(:mob_screen) do
+      nil -> :ok
+      holder -> ProcessHelpers.stop_pid(holder)
+    end
+  end
+
   # The app's root, as on_start starts it, with native already reporting
   # `scenes` (oldest first; the first one is native's default).
-  defp boot(scenes) do
+  defp boot(scenes, params \\ %{}) do
     Nif.configure(self(), Enum.with_index(scenes, fn id, i -> {id, i == 0} end))
-    {:ok, primary} = Mob.Router.start_root(HomeScreen, %{test: self()}, nif: Nif)
+    {:ok, primary} = Mob.Router.start_root(HomeScreen, Map.put(params, :test, self()), nif: Nif)
     on_exit(fn -> ProcessHelpers.stop_root(primary) end)
+    # Registered after, so it runs before (on_exit runs in reverse).
+    on_exit(&stop_scene_routers/0)
     settle()
     primary
+  end
+
+  defp flush_took_stored do
+    receive do
+      {:took_stored, _} -> flush_took_stored()
+    after
+      0 -> :ok
+    end
   end
 
   # Mob.Scenes has handled everything sent to it, every router it knows has
@@ -154,6 +210,28 @@ defmodule Mob.ScenesTest do
       assert_received {:frame, :default, nil, _root}
     end
 
+    test "the scene native reported at boot is not news to the primary" do
+      Nif.configure(self(), [{"A", true}])
+      Mob.Scenes.ensure_started(nif: Nif)
+
+      # Standing in for the primary router, which read its window as it mounted.
+      Mob.Scenes.register_primary(self(), HomeScreen, %{test: self()}, Nif)
+
+      assert Mob.Scenes.list() == [{"A", self()}]
+      refute_received {:mob_window, :connected}
+    end
+
+    test "a later window's root screen can ask Mob.Scene.list/0 while it mounts" do
+      primary = boot(["A"], %{list_scenes: true})
+      assert_received {:scenes_seen, _}
+
+      connect("B")
+
+      # Mob.Scenes does not wait on the mount, so the call is answered.
+      assert_receive {:scenes_seen, [{"A", ^primary} | _]}
+      assert module("B") == HomeScreen
+    end
+
     test "a scene that connects later gets its own router on the root screen, bound to its id" do
       primary = boot(["A"])
       flush_frames()
@@ -194,6 +272,16 @@ defmodule Mob.ScenesTest do
       connect("B")
 
       :ok = Mob.Test.navigate(node(), DetailScreen, %{}, scene: "B")
+
+      assert module("B") == DetailScreen
+      assert module("A") == HomeScreen
+    end
+
+    test "navigate/3 takes scene: in the params position" do
+      boot(["A"])
+      connect("B")
+
+      :ok = Mob.Test.navigate(node(), DetailScreen, scene: "B")
 
       assert module("B") == DetailScreen
       assert module("A") == HomeScreen
@@ -270,11 +358,18 @@ defmodule Mob.ScenesTest do
       primary = boot(["A"])
       connect("B")
       second = router("B")
+      primary_screen = Mob.Router.get_screen_pid(primary)
       ref = Process.monitor(primary)
+      flush_took_stored()
 
       disconnect("A")
 
       assert_receive {:DOWN, ^ref, :process, ^primary, _}
+      # Moved before the old primary stopped, so the surviving window's events
+      # never reach a dying router or no one.
+      assert_receive {:terminating, ^primary_screen, ^second}
+      # And the new holder took what native stored while the name moved.
+      assert_received {:took_stored, ^second}
       assert Process.whereis(:mob_screen) == second
       assert Mob.Test.screens(node()) == [{"B", HomeScreen, Mob.Router.get_screen_pid(second)}]
       assert Mob.Test.screen(node()) == HomeScreen
@@ -292,7 +387,7 @@ defmodule Mob.ScenesTest do
       assert Mob.Test.screen(node()) == DetailScreen
     end
 
-    test "a new session after the last window went away adopts the kept router" do
+    test "a session replacing the last window's adopts its kept router" do
       boot(["A"])
       connect("B")
       second = router("B")
@@ -300,11 +395,51 @@ defmodule Mob.ScenesTest do
       disconnect("B")
       flush_frames()
 
-      connect("C", true)
+      send(Mob.Scenes, {:mob_scene, :replaced, "B", "C", false})
+      settle()
 
       assert Mob.Scenes.list() == [{"C", second}]
       assert_received {:frame, "C", "C", _root}
       assert Mob.Scene.of(socket("C")) == "C"
+    end
+
+    test "a new session while the kept one may still come back gets its own router" do
+      boot(["A"])
+      connect("B")
+      second = router("B")
+      disconnect("A")
+      disconnect("B")
+
+      connect("C")
+
+      assert router("C") != second
+      assert router("B") == second
+    end
+
+    test "a kept window native discards stops its router; :mob_screen moves on" do
+      primary = boot(["A"])
+      disconnect("A")
+      connect("C")
+      third = router("C")
+      ref = Process.monitor(primary)
+
+      send(Mob.Scenes, {:mob_scene, :discarded, "A"})
+      settle()
+
+      assert_receive {:DOWN, ^ref, :process, ^primary, _}
+      assert Process.whereis(:mob_screen) == third
+      assert Mob.Scenes.list() == [{"C", third}]
+    end
+
+    test "the app's only router survives a discard" do
+      primary = boot(["A"])
+      disconnect("A")
+
+      send(Mob.Scenes, {:mob_scene, :discarded, "A"})
+      settle()
+
+      assert Process.alive?(primary)
+      assert Process.whereis(:mob_screen) == primary
     end
   end
 
