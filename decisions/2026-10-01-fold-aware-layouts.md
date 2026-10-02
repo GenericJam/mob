@@ -262,8 +262,10 @@ host needs it.
   and Android. On any iOS 27.1 device, folding or not, Apple's view is used
   and decides for itself. The fallback is **Apple's published split rule
   with no division**: side by side when the arrangement's frame is wider
-  than it is tall, stacked otherwise, restricted by `axes`, and only the
-  primary view when the permitted axis isn't available. Overlay falls back
+  than it is tall, stacked when it is taller, restricted by `axes`, and only
+  the primary view when the permitted axis isn't available. Apple doesn't
+  say what happens to a square frame; MOB-203 picks a tie-break and
+  records it. Overlay falls back
   to primary over secondary. MOB-203 proposed "a Column on phones, a Row on
   tablets in landscape" instead, which is a device-class rule that would
   make the same screen behave differently on an Android tablet and an iPad.
@@ -294,7 +296,7 @@ MOB-202 adds a `:reserved_regions` assign and a
   Apple suggests (item 3). MOB-202's draft `[{kind, {x, y, w, h}}]` has
   nowhere to put the active flag; this shape replaces it.
 - **Always present.** The assign is `[]` on every device without reserved
-  regions, which today means every device mob runs on. This follows the
+  regions. Until MOB-202 ships, every platform implementation returns `[]`. This follows the
   `:safe_area` rule that a documented assign is never missing
   (`decisions/2026-09-10-a-safe-area-read-with-no-window-is-not-an-answer.md`).
   Like safe area, a value read before a window exists must not be trusted
@@ -486,13 +488,14 @@ network stack on a simulator, which is the per-app dist-port problem
 ### 8. Deployment target: keep the iOS 17 floor; gate Duo API at each use site
 
 This is MOB-201's recommendation 1, adopted. Mob keeps
-`arm64-apple-ios17.0`. Every 27.1-only symbol (`ReservedRegion`,
-`ArrangementView`/`UIArrangementViewController`,
-`onHingeChange`/`UIHingeInteraction`) is used only behind
-`@available(iOS 27.1, *)` or `if #available(iOS 27.1, *)` at the call
-site. `CameraCaptureAccessory` is absent from 27.0, but its annotation
-hasn't been seen, so MOB-244 uses whatever the 27.1 SDK declares. iOS 27.0
-API (`sceneAccessory`) gets `27.0`. On older systems each
+`arm64-apple-ios17.0`. Every Duo symbol missing from the 27.0 SDK is used
+only behind an `@available`/`#available` gate at its call site, never by
+raising the floor. Apple places `ReservedRegion` and
+`ArrangementView`/`UIArrangementViewController` in iOS 27.1, so they get
+`@available(iOS 27.1, *)`. For `onHingeChange`/`UIHingeInteraction`
+(MOB-243) and `CameraCaptureAccessory` (MOB-244), the 27.0 SDK shows only
+that they are absent; their tickets use whatever version the 27.1 SDK
+declares. iOS 27.0 API (`sceneAccessory`) gets `27.0`. On older systems each
 primitive falls back as described above: `[]` regions, Apple's split rule
 for `<Arrangement>`, no hinge messages, no accessory. MOB-201's option 2, a
 `mob_ios_min: "27.1"` flag that raises the floor per app, was rejected:
