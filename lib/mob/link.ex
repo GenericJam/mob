@@ -39,7 +39,10 @@ defmodule Mob.Link do
   A custom scheme is declared at build time: `config :mob_dev, url_schemes:
   ["myapp"]` in `mob.exs` makes the native build (mob_dev 0.7.12 or later) add
   an intent filter to the Android main activity and a `CFBundleURLTypes` entry
-  to the iOS bundle. A change needs a native rebuild.
+  to the iOS bundle. A change needs a native rebuild. On Android the main
+  activity must be `android:launchMode="singleTask"`, or a link opened from
+  another app's task starts a second activity there; the build refuses
+  `url_schemes` without it.
 
   Native code hands each URL to mob with `mob_deliver_link(const char *url)`
   (`mob_beam.h`, both platforms): the generated Android `MainActivity`

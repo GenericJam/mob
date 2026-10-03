@@ -365,6 +365,16 @@ A change needs a native rebuild (`mix mob.deploy --native`).
 config :mob_dev, url_schemes: ["myapp"]
 ```
 
+On Android, `MainActivity` must also be `android:launchMode="singleTask"` in
+`android/app/src/main/AndroidManifest.xml`; the build refuses `url_schemes`
+without it. With the template's `singleTop`, a link opened from another app's
+task (a QR scanner, a browser that doesn't ask for a new task) starts a
+second `MainActivity` in that task, and two activities then drive one BEAM's
+UI; `singleTask` hands the link to the existing one's `onNewIntent`. The cost,
+and the reason it isn't the default: reopening the app from its launcher icon
+then finishes any activity stacked above `MainActivity` (a file picker, a
+share target, an in-app scanner), whose result comes back cancelled.
+
 Each URL arrives as `{:link, link}`, at the screen showing (full shape:
 `Mob.Link`). `source` is `:launch` when the link arrived before the app had
 finished starting: it opened the app, or came in while the app was starting,
@@ -444,13 +454,8 @@ Java_com_example_myapp_MobBridge_nativeDeliverLink(JNIEnv* env, jclass cls, jstr
 }
 ```
 
-Make `MainActivity` `android:launchMode="singleTask"` in
-`AndroidManifest.xml`. With `singleTop` (the older template's value), a link
-opened from another app's task (a scanner app, a browser that doesn't ask for
-a new task) starts a second `MainActivity` in that task, and two activities
-then drive one BEAM's UI; `singleTask` hands it to the existing one's
-`onNewIntent`. Remove an intent filter you declared by hand for a scheme
-that's now in `url_schemes`.
+Remove an intent filter you declared by hand for a scheme that's now in
+`url_schemes`, and make `MainActivity` `singleTask` (above).
 
 iOS, in `AppDelegate.m`'s `SceneDelegate` (a scene-based app never gets
 `application:openURL:options:`):

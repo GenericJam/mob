@@ -61,9 +61,13 @@ the link that launched the app.
   through `MobBridge.nativeDeliverLink` and a `beam_jni.c` stub. `onCreate`
   forwards inside the notification tap's guard (not re-created from saved
   state, not relaunched from Recents), since both replay the launching intent;
-  `onNewIntent` forwards the rest. The template's `MainActivity` is
-  `singleTask`, so a link opened from another app's task reaches the one
-  instance (mob_new's AGENTS.md has the trade-off).
+  `onNewIntent` forwards the rest. An app with `url_schemes` makes its
+  `MainActivity` `singleTask` (mob_dev refuses the setting otherwise), so a
+  link opened from another app's task reaches the one instance instead of
+  starting a second `MainActivity` there. The template stays `singleTop`:
+  `singleTask` also finishes the activities above `MainActivity` whenever the
+  app is reopened from its launcher icon, a cost an app without links
+  shouldn't pay (mob_new's `decisions/` has the record).
 - iOS `SceneDelegate` forwards `connectionOptions.URLContexts` in
   `scene:willConnectToSession:options:` and the contexts of
   `scene:openURLContexts:`, skipping file URLs: those are documents, which

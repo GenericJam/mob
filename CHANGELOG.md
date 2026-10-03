@@ -25,8 +25,9 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `MobBridge.nativeDeliverLink` and `beam_jni.c`) and `SceneDelegate` (URL
   contexts); older apps port it from the "Deep links" section of
   `guides/device_capabilities.md`. The schemes come from
-  `config :mob_dev, url_schemes: [...]` in `mob.exs` (mob_dev 0.7.12). Needs a
-  native rebuild. See `decisions/2026-10-03-deep-link-delivery.md`.
+  `config :mob_dev, url_schemes: [...]` in `mob.exs` (mob_dev 0.7.12), which
+  also requires the Android `MainActivity` to be `singleTask`. Needs a native
+  rebuild. See `decisions/2026-10-03-deep-link-delivery.md`.
 
 ### Changed
 - The native FIFO that keeps a notification for the router until it starts is
