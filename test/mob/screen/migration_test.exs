@@ -21,6 +21,7 @@ defmodule Mob.Screen.MigrationTest do
     def platform, do: :android
     def safe_area, do: {0.0, 0.0, 0.0, 0.0}
     def take_launch_notification, do: :none
+    def take_launch_link, do: :none
     def clear_taps, do: :ok
     def set_transition(_), do: :ok
     def register_tap(_), do: 0

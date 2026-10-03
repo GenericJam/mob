@@ -120,6 +120,7 @@ defmodule Mob.Screen.CrashRedactionTest do
     def safe_area, do: {0.0, 0.0, 0.0, 0.0}
     def platform, do: :ios
     def take_launch_notification, do: :none
+    def take_launch_link, do: :none
     def unquote(:"$handle_undefined_function")(_f, _a), do: :ok
   end
 

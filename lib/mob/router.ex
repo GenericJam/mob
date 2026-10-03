@@ -258,6 +258,11 @@ defmodule Mob.Router do
     stored_notifications =
       if render_mode == :render, do: take_stored_notifications(nif), else: []
 
+    # Links native stored the same way (Mob.Link): the one that launched the
+    # app, and any that arrived during boot. Taken now and delivered from init
+    # after the root screen mounts, for the same reasons.
+    stored_links = if render_mode == :render, do: take_stored_links(nif), else: []
+
     # Seed the stacks this app declared. The screen we are about to mount
     # becomes the active stack's current screen; every other declared stack
     # stays unmounted until first visited.
@@ -282,7 +287,8 @@ defmodule Mob.Router do
           paint(entry, :none, state)
         end
 
-        {:ok, deliver_stored_notifications(stored_notifications, state)}
+        state = deliver_stored_notifications(stored_notifications, state)
+        {:ok, deliver_links(stored_links, :launch, state)}
 
       {:error, reason} ->
         {:stop, reason}
@@ -394,6 +400,20 @@ defmodule Mob.Router do
   # here covers a store that landed after init's take.
   def handle_info(:mob_notification_stored, state) do
     {:noreply, deliver_stored_notifications(take_stored_notifications(state.nif), state)}
+  end
+
+  # A link the app was opened with while this process ran (Mob.Link). As with
+  # notifications, anything native stored first goes first; a stored link
+  # arrived while the app was starting, so it is a :launch one.
+  def handle_info({:mob_link, url}, state) when is_binary(url) do
+    state = deliver_links(take_stored_links(state.nif), :launch, state)
+    {:noreply, deliver_link(url, :running, state)}
+  end
+
+  # Native stored a link and then found this process registered; see
+  # :mob_notification_stored.
+  def handle_info(:mob_link_stored, state) do
+    {:noreply, deliver_links(take_stored_links(state.nif), :launch, state)}
   end
 
   # System back gesture (Android hardware/swipe, iOS edge-pan). Handled here so
@@ -1201,5 +1221,32 @@ defmodule Mob.Router do
     else
       handle_info(message, state)
     end
+  end
+
+  # Same FIFO shape as the notification store, one URL per take.
+  defp take_stored_links(nif) do
+    case nif.take_launch_link() do
+      :none -> []
+      url when is_binary(url) -> [url | take_stored_links(nif)]
+    end
+  end
+
+  defp deliver_links(urls, source, state),
+    do: Enum.reduce(urls, state, &deliver_link(&1, source, &2))
+
+  # Unlike a stored notification's target, the registration is this boot's:
+  # Mob.Link.register/1 is Elixir-side, so even the link that launched the app
+  # goes to a process registered before the root screen mounted.
+  defp deliver_link(url, source, state) do
+    message = {:link, %{url: url, source: source}}
+    handler = Mob.Link.registered()
+
+    if is_pid(handler) and handler != self() and Process.alive?(handler) do
+      send(handler, message)
+    else
+      send(state.current.pid, message)
+    end
+
+    state
   end
 end

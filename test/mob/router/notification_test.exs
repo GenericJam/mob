@@ -50,6 +50,7 @@ defmodule Mob.Router.NotificationTest do
       end
     end
 
+    def take_launch_link, do: :none
     def platform, do: :android
     def safe_area, do: {0.0, 0.0, 0.0, 0.0}
     def clear_taps, do: :ok

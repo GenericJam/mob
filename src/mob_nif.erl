@@ -49,8 +49,9 @@
     motion_start/2,
     motion_stop/0,
     %% QR / barcode scanner
-    %% Notifications
+    %% Notifications and deep links (Mob.Link)
     take_launch_notification/0,
+    take_launch_link/0,
     take_opened_document/0,
     %% Post-mortem — iOS MetricKit ingest (drain-on-demand)
     post_mortem_ios_drain/0,
@@ -172,6 +173,7 @@
     motion_start/2,
     motion_stop/0,
     take_launch_notification/0,
+    take_launch_link/0,
     take_opened_document/0,
     battery_level/0,
     device_set_dispatcher/1,
@@ -299,6 +301,9 @@ tts_stop() -> erlang:nif_error(not_loaded).
 motion_start(_Sensors, _Interval) -> erlang:nif_error(not_loaded).
 motion_stop() -> erlang:nif_error(not_loaded).
 take_launch_notification() -> erlang:nif_error(not_loaded).
+%% take_launch_link/0 — pop the oldest URL native stored for the router
+%% (Mob.Link) while it was not registered: a binary, or none.
+take_launch_link() -> erlang:nif_error(not_loaded).
 take_opened_document() -> erlang:nif_error(not_loaded).
 %% post_mortem_ios_drain/0 — copy and clear the in-memory MetricKit payload
 %% queue. iOS attaches a MXMetricManagerSubscriber lazily on the first call

@@ -198,6 +198,11 @@ Mob.Test.send_message(node, {:motion, %{ax: 0.1, ay: 9.8, az: 0.0, gx: 0.0, gy: 
 Mob.Test.send_message(node, {:notification, %{id: "n1", title: "Hi", body: "Hello", data: %{}, source: :push, presentation: :tap, action: "default"}})
 Mob.Test.send_message(node, {:push_token, :ios, "abc123"})
 
+# Deep links (Mob.Link). This goes to the screen showing; to exercise the real
+# path (a registered process, the cold-launch hold), open the URL on the device:
+# adb shell am start -a android.intent.action.VIEW -d 'myapp://thread?id=42'
+Mob.Test.send_message(node, {:link, %{url: "myapp://thread?id=42", source: :running}})
+
 # Biometric / Scanner
 Mob.Test.send_message(node, {:biometric, :success})
 Mob.Test.send_message(node, {:scan, :result, %{type: :qr, value: "https://example.com"}})

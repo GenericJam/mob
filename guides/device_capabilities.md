@@ -352,6 +352,120 @@ end
 
 To send from your server, add [`mob_push`](https://hexdocs.pm/mob_push) to your server dependencies.
 
+## Deep links
+
+An app can be opened by a URL with its own scheme: a link tapped in another
+app, a QR code read by the camera or a scanner app. Declare the schemes in
+`mob.exs`; the native build (mob_dev 0.7.12 or later) adds an intent filter to
+the Android main activity and a `CFBundleURLTypes` entry to the iOS bundle.
+A change needs a native rebuild (`mix mob.deploy --native`).
+
+```elixir
+# mob.exs
+config :mob_dev, url_schemes: ["myapp"]
+```
+
+Each URL arrives as `{:link, link}`, at the screen showing (full shape:
+`Mob.Link`). `source` is `:launch` when the link opened the app (it waits until
+the root screen has mounted, and arrives once) and `:running` when the app was
+already running.
+
+```elixir
+def handle_info({:link, %{url: url}}, socket) do
+  case URI.parse(url) do
+    %URI{scheme: "myapp", host: "thread", query: query} when is_binary(query) ->
+      %{"id" => id} = URI.decode_query(query)
+      {:noreply, Mob.Socket.push_screen(socket, MyApp.ThreadScreen, %{id: id})}
+
+    _ ->
+      {:noreply, socket}
+  end
+end
+```
+
+Any app on the device can open a link with anything in it, so treat it as
+untrusted input. To handle links in one place rather than in whichever screen
+is showing, register a process (it can be registered before the root screen
+starts, so it also gets the link that launched the app):
+
+```elixir
+# In the init/1 of a GenServer your app starts from on_start/0:
+Mob.Link.register(self())
+```
+
+Try it without a QR code:
+
+```bash
+adb shell am start -a android.intent.action.VIEW -d 'myapp://thread?id=42'
+xcrun simctl openurl booted 'myapp://thread?id=42'
+```
+
+### Apps generated before mob_new 0.6.4
+
+The native files that forward the URL are app-owned, so an older app adds the
+calls itself. Android, in `MainActivity.kt`:
+
+```kotlin
+// onCreate, inside the same guard as the notification tap, so re-creation
+// from saved state and relaunch from Recents don't replay the link:
+if (savedInstanceState == null &&
+    (intent.flags and android.content.Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0
+) {
+    deliverNotificationTap(intent)
+    deliverLink(intent)
+}
+
+override fun onNewIntent(intent: android.content.Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    deliverNotificationTap(intent)
+    deliverLink(intent)
+}
+
+private fun deliverLink(intent: android.content.Intent?) {
+    if (intent?.action != android.content.Intent.ACTION_VIEW) return
+    val uri = intent.data ?: return
+    if (uri.scheme == "content" || uri.scheme == "file") return
+    MobBridge.nativeDeliverLink(uri.toString())
+}
+```
+
+`MobBridge.kt` declares `@JvmStatic external fun nativeDeliverLink(url: String)`
+beside `nativeDeliverNotification`, and `beam_jni.c` forwards it:
+
+```c
+JNIEXPORT void JNICALL
+Java_com_example_myapp_MobBridge_nativeDeliverLink(JNIEnv* env, jclass cls, jstring url) {
+    const char* cu = (*env)->GetStringUTFChars(env, url, NULL);
+    mob_deliver_link(cu);
+    (*env)->ReleaseStringUTFChars(env, url, cu);
+}
+```
+
+Make `MainActivity` `android:launchMode="singleTask"` in
+`AndroidManifest.xml`. With `singleTop` (the older template's value), a link
+opened from another app's task (a scanner app, a browser that doesn't ask for
+a new task) starts a second `MainActivity` in that task, and two activities
+then drive one BEAM's UI; `singleTask` hands it to the existing one's
+`onNewIntent`. Remove an intent filter you declared by hand for a scheme
+that's now in `url_schemes`.
+
+iOS, in `AppDelegate.m`'s `SceneDelegate` (a scene-based app never gets
+`application:openURL:options:`):
+
+```objc
+// at the end of scene:willConnectToSession:options:
+for (UIOpenURLContext *ctx in connectionOptions.URLContexts) {
+    if (!ctx.URL.isFileURL) mob_deliver_link(ctx.URL.absoluteString.UTF8String);
+}
+
+- (void)scene:(UIScene*)scene openURLContexts:(NSSet<UIOpenURLContext*>*)URLContexts {
+    for (UIOpenURLContext *ctx in URLContexts) {
+        if (!ctx.URL.isFileURL) mob_deliver_link(ctx.URL.absoluteString.UTF8String);
+    }
+}
+```
+
 ## Storage
 
 App-local file storage using named locations instead of raw paths. No permission needed.
