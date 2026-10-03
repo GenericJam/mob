@@ -426,7 +426,8 @@ override fun onNewIntent(intent: android.content.Intent) {
 private fun deliverLink(intent: android.content.Intent?) {
     if (intent?.action != android.content.Intent.ACTION_VIEW) return
     val uri = intent.data ?: return
-    if (uri.scheme == "content" || uri.scheme == "file") return
+    val scheme = uri.scheme
+    if ("content".equals(scheme, ignoreCase = true) || "file".equals(scheme, ignoreCase = true)) return
     MobBridge.nativeDeliverLink(uri.toString())
 }
 ```
