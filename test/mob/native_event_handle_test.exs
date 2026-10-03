@@ -201,6 +201,27 @@ defmodule Mob.NativeEventHandleTest do
     assert ios_dismiss =~ "mob_send_identity_event(handle, \"dismiss\")"
   end
 
+  test "taps and press pairs survive a re-render between down and up" do
+    # MOB-380: on_press_in almost always re-renders before the finger lifts,
+    # and a strict lookup then dropped the node's tap as stale.
+    [_, android_tap] = String.split(@android_source, "pub export fn mob_send_tap(", parts: 2)
+    [android_tap, _] = String.split(android_tap, "}", parts: 2)
+    assert android_tap =~ "sendIdentityEvent(handle, \"tap\")"
+
+    [_, ios_tap] = String.split(@ios_source, "static void mob_send_tap(", parts: 2)
+    [ios_tap, _] = String.split(ios_tap, "}", parts: 2)
+    assert ios_tap =~ "mob_snap_change_tap(handle, msg_env, &snap)"
+
+    # press_out's routing is copied at touch-down and sent from that copy.
+    [_, begin] = String.split(@android_source, "pub export fn mob_press_begin(", parts: 2)
+    [begin, _] = String.split(begin, "pub export fn mob_press_end(", parts: 2)
+    assert begin =~ "snapChangeTap(out_handle, keep)"
+    assert begin =~ "snapChangeTap(in_handle, env)"
+    {snap_out, _} = :binary.match(begin, "snapChangeTap(out_handle, keep)")
+    {send_in, _} = :binary.match(begin, "erts.enif_send(null, &pid, env, msg)")
+    assert snap_out < send_in
+  end
+
   test "iOS copies every routed tag while holding the registry lock" do
     [_, snap] = String.split(@ios_source, "static int mob_snap_tap", parts: 2)
     [snap, _] = String.split(snap, "static int mob_snap_change_tap", parts: 2)

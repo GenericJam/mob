@@ -87,6 +87,15 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy, nullable) void (^onSwipeUp)(void);
 @property(nonatomic, copy, nullable) void (^onSwipeDown)(void);
 
+// Press observation (MOB-380): on_press_in / on_press_out. Set by mob_nif.m when
+// either prop is registered; SwiftUI calls it at touch-down. It sends press_in
+// and returns the one-shot block that sends the paired press_out, to be called
+// once at lift, cancel or teardown. Returns nil when there is nothing to send at
+// release (press_in could not be delivered, or no on_press_out), so a press_out
+// never goes out without its press_in. The pairing lives native-side; see
+// mob_begin_press in mob_nif.m for why it can't be two independent callbacks.
+@property(nonatomic, copy, nullable) void (^_Nullable (^onPress)(void))(void);
+
 // ── Batch 5 Tier 1: high-frequency scroll/drag/pinch/rotate/pointer ──
 // These callbacks are wired by mob_nif.m. Throttling and delta-thresholding
 // happen native-side BEFORE invocation — by the time these fire, the BEAM

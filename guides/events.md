@@ -70,6 +70,19 @@ def handle_info({:long_press, :show_menu}, socket), do: ...
 def handle_info({:swipe, :any_swipe, direction}, socket), do: ...   # :left | :right | :up | :down
 ```
 
+Press and release, for anything held (hold-to-talk, push-to-record):
+
+```elixir
+box(on_press_in: {self(), :mic}, on_press_out: {self(), :mic})
+
+def handle_info({:press_in, :mic}, socket), do: ...   # finger down
+def handle_info({:press_out, :mic}, socket), do: ...  # lifted or cancelled; always follows press_in
+```
+
+They observe without consuming, on any node type, and a quick tap delivers
+`press_in`, `press_out`, then `tap`. See the components guide,
+"Press and release".
+
 ### Scroll — three tiers
 
 **Tier 1 — raw deltas** (rarely needed; throttle defaults to 30 Hz):

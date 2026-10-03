@@ -40,6 +40,25 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `config :mob_dev, url_schemes: [...]` in `mob.exs` (mob_dev 0.7.12), which
   also requires the Android `MainActivity` to be `singleTask`. Needs a native
   rebuild. See `decisions/2026-10-03-deep-link-delivery.md`.
+- **`on_press_in` / `on_press_out` on any node** (MOB-380): `{:press_in, tag}`
+  when a finger goes down on the node, `{:press_out, tag}` when it lifts or the
+  touch is cancelled. Always paired, even across the re-render a press usually
+  causes: native resolves both handles at touch-down and keeps press_out's
+  routing until the lift. They observe without consuming, so `on_tap`,
+  `on_long_press` and an ancestor's scrolling keep working on the same node,
+  `button` included. iOS (SwiftUI) and Android (Compose; the observer lives in
+  the generated bridge, so it needs `mob_new` 0.6.5 or newer). For
+  hold-to-talk and anything else keyed on a held finger.
+- **`Mob.Test` can hold a press** (MOB-380). `press_down_xy/4`,
+  `press_move_xy/3`, `press_up_xy/3` and `hold_xy/4` put a real finger on an
+  Android app's window and keep it there across calls, so a Compose
+  `detectTapGestures` `onPress` sits in `tryAwaitRelease()` while the test
+  reads state (`adb input swipe x y x y 3000` does not produce that on every
+  device). A held press auto-cancels after `:max_hold_ms` (30 s); other
+  synthetic gestures refuse while it is down. New NIFs
+  `mob_nif:press_down_xy/3`, `press_move_xy/2`, `press_up_xy/2`, reported by
+  `capabilities/1`; iOS answers `{:error, :not_supported}`. By-tag
+  `press_in/2`, `press_out/2` and `hold/3` drive a screen on every platform.
 
 ### Changed
 - The native FIFO that keeps a notification for the router until it starts is
@@ -50,6 +69,15 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `mob_set_launch_notification`) now holds the lock once on Android, as iOS
   already did, and a failed binary allocation stores the entry rather than
   sending an unchecked one.
+
+### Fixed
+- **A tap no longer gets lost when its node re-renders mid-tap** (MOB-380).
+  A tap's native handle was looked up strictly against the newest committed
+  tree, so when a render landed between the finger's down and up (which
+  `on_press_in` makes routine, and any render in flight can cause) the tap
+  was dropped as stale. Taps now resolve like change events: accepted when the
+  slot still holds the same pid and tag, which makes the `{:tap, tag}` the one
+  the node declared. iOS and Android.
 
 ## [0.9.10] - 2026-10-02
 

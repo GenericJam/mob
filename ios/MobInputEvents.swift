@@ -125,6 +125,155 @@ struct MobContinuousInputModifier: ViewModifier {
     }
 }
 
+// Press observation (MOB-380): on_press_in at touch-down, on_press_out when
+// that finger lifts or the touch is cancelled. Observes without consuming:
+// on_tap, on_long_press, a Button's own action and an enclosing ScrollView's
+// pan keep working on the same node. Only attached to nodes with a press prop.
+//
+// The pairing itself lives native-side (MobNode.onPress / mob_begin_press):
+// `begin` sends press_in and hands back the one-shot release that sends the
+// matching press_out. This side only has to call that release exactly once
+// per touch, whichever way the touch ends, and the view leaving the tree
+// mid-press (onDisappear) counts as an end.
+//
+// iOS 18+: a UIKit recognizer that never recognizes (MobPressRecognizer).
+// A SwiftUI `DragGesture(minimumDistance: 0)`, even as a simultaneousGesture,
+// stops an enclosing ScrollView from scrolling when the drag starts on the
+// node (seen on the iOS 26 simulator), and inside a ScrollView its callbacks
+// for a quick tap arrive a frame after the tap's own action. The recognizer
+// sees the real touch-down, can't win against anything, and is ended by
+// UIKit's own reset on lift, cancel or failure.
+// iOS 17 has no UIGestureRecognizerRepresentable, so it keeps the DragGesture
+// (a GestureState reset covers cancellation). Unverified there: no iOS 17
+// runtime was available, so whether it blocks scrolling on 17 is unknown.
+struct MobPressModifier: ViewModifier {
+    let begin: () -> (() -> Void)?
+
+    @GestureState private var pressing = false
+    // Plain class in @State: survives node rebuilds without publishing a view
+    // invalidation per touch (same reasoning as MobContinuousInputModifier).
+    @State private var press = MobPressSession()
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content
+                .contentShape(Rectangle())
+                .gesture(MobPressObserverGesture(session: press, begin: begin))
+                .onDisappear { press.end() }
+        } else {
+            content
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 0)
+                        .updating($pressing) { _, state, _ in state = true }
+                        .onChanged { _ in press.start(begin) }
+                        .onEnded { _ in press.end() }
+                )
+                .onChange(of: pressing) { _, isPressing in
+                    if !isPressing { press.end() }
+                }
+                .onDisappear { press.end() }
+        }
+    }
+}
+
+/// One touch's press, at most one at a time. Main thread only.
+final class MobPressSession {
+    private var active = false
+    private var release: (() -> Void)?
+
+    func start(_ begin: () -> (() -> Void)?) {
+        guard !active else { return }
+        active = true
+        release = begin()
+    }
+
+    func end() {
+        guard active else { return }
+        active = false
+        let pending = release
+        release = nil
+        pending?()
+    }
+}
+
+@available(iOS 18.0, *)
+struct MobPressObserverGesture: UIGestureRecognizerRepresentable {
+    let session: MobPressSession
+    let begin: () -> (() -> Void)?
+
+    func makeUIGestureRecognizer(context: Context) -> MobPressRecognizer {
+        let recognizer = MobPressRecognizer()
+        recognizer.delegate = context.coordinator
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: MobPressRecognizer, context: Context) {
+        // The latest render's node: its handles are the current generation.
+        recognizer.session = session
+        recognizer.begin = begin
+    }
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+    }
+}
+
+/// Observes the first finger on its view and never recognizes, so it never
+/// cancels, delays or excludes another recognizer or the view's own touches.
+final class MobPressRecognizer: UIGestureRecognizer {
+    var session: MobPressSession?
+    var begin: (() -> (() -> Void)?)?
+    private weak var finger: UITouch?
+
+    init() {
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        guard finger == nil, let touch = touches.first, let begin else { return }
+        finger = touch
+        session?.start(begin)
+    }
+
+    // Ending here, not only in reset(), puts press_out ahead of a tap that the
+    // same lift completes: reset() runs after the whole touch event has been
+    // delivered, by which time the tap's action has already been sent.
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        finish(touches)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        finish(touches)
+    }
+
+    private func finish(_ touches: Set<UITouch>) {
+        guard let finger, touches.contains(finger) else { return }
+        session?.end()
+        state = .failed
+    }
+
+    // UIKit calls this after .failed, and also when it abandons the recognizer
+    // for any other reason, so a press that didn't end above still ends here.
+    override func reset() {
+        super.reset()
+        finger = nil
+        session?.end()
+    }
+}
+
 extension MobNode {
     /// `resolvedFont` for the UIKit field (`caret: "end"`, `on_compose`,
     /// single-line `max_length`), from the same props. A custom font is

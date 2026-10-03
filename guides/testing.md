@@ -150,6 +150,35 @@ Mob.Test.tap(node, :increment)
 
 The tag atom comes from `on_tap: {self(), :increment}` in the screen's `render/1`. Fire-and-forget — does not block. Follow with `settle/2` (below) before reading the native side.
 
+### Press and hold
+
+Two levels, for `on_press_in` / `on_press_out` (hold-to-talk and the like):
+
+```elixir
+# By tag, any platform: sends {:press_in, :mic}, waits, sends {:press_out, :mic}.
+Mob.Test.hold(node, :mic, 1_500)
+Mob.Test.press_in(node, :mic)   # or the halves, with checks in between
+Mob.Test.press_out(node, :mic)
+
+# A real held touch (Android): the app's window gets ACTION_DOWN, then nothing
+# until you lift. Compose detectors (detectTapGestures' onPress /
+# tryAwaitRelease, long-press timeouts) see a finger that is genuinely down.
+:ok = Mob.Test.press_down_xy(node, 40.0, 700.0)
+Mob.Test.assigns(node).listening        #=> true, while the finger is still down
+:ok = Mob.Test.press_move_xy(node, 40.0, 600.0)   # optional: slide it
+:ok = Mob.Test.press_up_xy(node, 40.0, 600.0)
+
+:ok = Mob.Test.hold_xy(node, 40.0, 700.0, 1_500)  # down, 1.5 s, up
+```
+
+Find coordinates with `Mob.Test.element_frames/1` (nodes with an `:id`). A
+held press auto-cancels after `max_hold_ms:` (default 30 s), so a crashed test
+can't leave a finger on the glass. `adb shell input swipe x y x y 3000` is
+not a substitute: on some devices it never reaches Compose as a held press.
+iOS has no in-process touch injection that reaches SwiftUI, so the `_xy`
+functions return `{:error, :not_supported}` there; use the by-tag functions, or
+a real touch through the simulator (mobile-mcp / agent-device).
+
 ### Navigation
 
 Navigation functions are **synchronous** — they block until the navigation and re-render are complete, so it is safe to read state immediately after:

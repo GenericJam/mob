@@ -433,12 +433,21 @@ static void mob_note_ui_event(void) {
 }
 
 // Called from node onTap blocks — routes tap to BEAM via enif_send.
+//
+// Identity-tolerant (mob_snap_change_tap: same slot, PID and tag across
+// renders), not generation-strict (MOB-380). A screen that re-renders on
+// press_in commits the new table on the BEAM thread before the main thread
+// applies the new tree, so the lift that completes the tap fires the old
+// node's handle; a strict check dropped those taps (measured on Android, 1-6 of
+// 20). The identity check still rejects a handle whose slot now means another
+// handler, which is what the strict rule exists to prevent. Other gestures stay
+// strict.
 static void mob_send_tap(int handle) {
     ErlNifEnv *msg_env = enif_alloc_env();
     if (!msg_env)
         return;
     TapSnap snap;
-    if (!mob_snap_tap(handle, msg_env, &snap)) {
+    if (!mob_snap_change_tap(handle, msg_env, &snap)) {
         enif_free_env(msg_env);
         return;
     }
@@ -575,6 +584,103 @@ static void mob_send_swipe_with_direction(int handle, const char *direction) {
                                         enif_make_atom(msg_env, direction));
     enif_send(NULL, &snap.pid, msg_env, msg);
     enif_free_env(msg_env);
+}
+
+// ── Press observation (MOB-380) ─────────────────────────────────────────────
+// press_in / press_out bracket one touch, and a hold-to-talk screen stops
+// recording on press_out: a lost press_out leaves the microphone on. So unlike
+// the gesture senders above, the two are resolved together, at touch-down, and
+// are deliberately not generation-strict:
+//
+// * Both handles resolve with mob_snap_change_tap (same slot, PID and tag
+//   across renders), the allowance change events get. press_in usually makes
+//   the screen re-render, and set_root commits the new table on the BEAM
+//   thread before the main thread has the new tree; a strict check drops an
+//   event fired in that window, which for press_in is a press that never
+//   happened and for press_out is a press that never ends.
+// * press_out's PID and tag are snapshotted BEFORE press_in is sent, and if
+//   either fails to resolve nothing is sent. The release block then sends from
+//   the snapshot, so no later render, slot reshuffle or the node leaving the
+//   tree can drop it: press_out goes to exactly the registration that was live
+//   when press_in went out. That is not the stale-tree hazard the strict rule
+//   guards against, which is an old handle resolving to a slot that now means
+//   something else.
+
+@interface MobPendingPressOut : NSObject {
+  @public
+    ErlNifEnv *env; // owns `tag`; NULL once sent
+    ErlNifPid pid;
+    ERL_NIF_TERM tag;
+}
+@end
+
+@implementation MobPendingPressOut
+- (void)dealloc {
+    // The release block was dropped without being called: free, don't send.
+    // The Swift side calls it on lift, cancel and disappear, so this is only
+    // reached if SwiftUI discards the view's state without any of those.
+    if (env)
+        enif_free_env(env);
+}
+@end
+
+// Main thread only (the release block's caller), which is what makes the
+// one-shot check-and-clear of `env` safe without a lock.
+static void mob_send_pending_press_out(MobPendingPressOut *pending) {
+    ErlNifEnv *env = pending->env;
+    if (!env)
+        return;
+    pending->env = NULL;
+    mob_note_ui_event();
+    ERL_NIF_TERM msg = enif_make_tuple2(env, enif_make_atom(env, "press_out"), pending->tag);
+    enif_send(NULL, &pending->pid, env, msg);
+    enif_free_env(env);
+}
+
+// Returns 1 if {press_in, tag} was sent.
+static int mob_send_press_in(int handle) {
+    ErlNifEnv *msg_env = enif_alloc_env();
+    if (!msg_env)
+        return 0;
+    TapSnap snap;
+    if (!mob_snap_change_tap(handle, msg_env, &snap)) {
+        enif_free_env(msg_env);
+        return 0;
+    }
+    mob_note_ui_event();
+    ERL_NIF_TERM msg = enif_make_tuple2(msg_env, enif_make_atom(msg_env, "press_in"), snap.tag);
+    enif_send(NULL, &snap.pid, msg_env, msg);
+    enif_free_env(msg_env);
+    return 1;
+}
+
+// in_handle / out_handle are 0 when the node has no such prop (a real handle
+// is never 0: its generation bits are non-zero). Returns the release block, or
+// nil when there is nothing to send at release.
+static void (^mob_begin_press(int in_handle, int out_handle))(void) {
+    MobPendingPressOut *pending = nil;
+    if (out_handle != 0) {
+        ErlNifEnv *env = enif_alloc_env();
+        if (!env)
+            return nil;
+        TapSnap snap;
+        if (!mob_snap_change_tap(out_handle, env, &snap)) {
+            enif_free_env(env);
+            return nil;
+        }
+        pending = [MobPendingPressOut new];
+        pending->env = env;
+        pending->pid = snap.pid;
+        pending->tag = snap.tag;
+    }
+    // `pending` is released (and its env freed) on this early return.
+    if (in_handle != 0 && !mob_send_press_in(in_handle))
+        return nil;
+    if (!pending)
+        return nil;
+    return ^{
+      mob_send_pending_press_out(pending);
+    };
 }
 
 // ── Batch 5 Tier 1: high-frequency scroll/drag/pinch/rotate senders ─────────
@@ -974,6 +1080,8 @@ typedef NS_ENUM(NSUInteger, MobPropKey) {
     MOB_PROP_on_long_press,
     MOB_PROP_on_pinch,
     MOB_PROP_on_pointer_move,
+    MOB_PROP_on_press_in,
+    MOB_PROP_on_press_out,
     MOB_PROP_on_rotate,
     MOB_PROP_on_scroll,
     MOB_PROP_on_scroll_began,
@@ -1109,6 +1217,8 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
           [MOB_PROP_on_long_press] = @"on_long_press",
           [MOB_PROP_on_pinch] = @"on_pinch",
           [MOB_PROP_on_pointer_move] = @"on_pointer_move",
+          [MOB_PROP_on_press_in] = @"on_press_in",
+          [MOB_PROP_on_press_out] = @"on_press_out",
           [MOB_PROP_on_rotate] = @"on_rotate",
           [MOB_PROP_on_scroll] = @"on_scroll",
           [MOB_PROP_on_scroll_began] = @"on_scroll_began",
@@ -1508,6 +1618,18 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             int handle = [onLongPress intValue];
             node.onLongPress = ^{
               mob_send_long_press(handle);
+            };
+        }
+
+        id onPressIn = pv[MOB_PROP_on_press_in];
+        id onPressOut = pv[MOB_PROP_on_press_out];
+        BOOL hasPressIn = onPressIn && [onPressIn isKindOfClass:[NSNumber class]];
+        BOOL hasPressOut = onPressOut && [onPressOut isKindOfClass:[NSNumber class]];
+        if (hasPressIn || hasPressOut) {
+            int inHandle = hasPressIn ? [onPressIn intValue] : 0;
+            int outHandle = hasPressOut ? [onPressOut intValue] : 0;
+            node.onPress = ^void(^_Nullable(void))(void) {
+                return mob_begin_press(inHandle, outHandle);
             };
         }
 
@@ -6883,6 +7005,54 @@ static ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TE
 #endif
 }
 
+// ─── press_down_xy/3, press_move_xy/2, press_up_xy/2 — split touch (MOB-380) ──
+//
+// A finger that goes down, optionally moves, and lifts in separate calls, so a
+// test can hold a node (on_press_in / on_press_out) for as long as it likes and
+// assert in between. Android injects real in-process MotionEvents. iOS does
+// not implement split touch injection (yet): the simulator branches above fire
+// gestures by forcing UIKit recognizer states or accessibility actions, not by
+// delivering a held touch stream. So these return {error, not_supported}
+// rather than pretending to have held anything.
+// Mob.Test.press_in/2, press_out/2 and hold/3 cover iOS at the tag level, and
+// capabilities/0 reports these three as false so an agent can tell up front.
+//
+// Arguments are still validated, so a malformed call is badarg on both
+// platforms rather than only on the one that implements it.
+//
+// Returns: {error, not_supported} | badarg
+
+static ERL_NIF_TERM mob_press_not_supported(ErlNifEnv *env) {
+    return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                            enif_make_atom(env, "not_supported"));
+}
+
+static ERL_NIF_TERM nif_press_down_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    double x, y;
+    int max_hold_ms;
+    if (!enif_get_double(env, argv[0], &x) || !enif_get_double(env, argv[1], &y) ||
+        !enif_get_int(env, argv[2], &max_hold_ms))
+        return enif_make_badarg(env);
+    return mob_press_not_supported(env);
+}
+
+static ERL_NIF_TERM nif_press_move_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    double x, y;
+    if (!enif_get_double(env, argv[0], &x) || !enif_get_double(env, argv[1], &y))
+        return enif_make_badarg(env);
+    return mob_press_not_supported(env);
+}
+
+static ERL_NIF_TERM nif_press_up_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    double x, y;
+    if (!enif_get_double(env, argv[0], &x) || !enif_get_double(env, argv[1], &y))
+        return enif_make_badarg(env);
+    return mob_press_not_supported(env);
+}
+
 // ─── type_text/1 — type into whatever UITextField/UITextView has focus ────────
 //
 // Finds the current first responder in the view hierarchy and calls insertText:
@@ -7592,6 +7762,11 @@ static ERL_NIF_TERM nif_capabilities(ErlNifEnv *env, int argc, const ERL_NIF_TER
         {"tap_xy", harness},
         {"tap_by_label", harness},
         {"long_press_xy", harness},
+        // Split press injection is Android-only (MOB-380): on iOS these exist
+        // in debug builds but always return {error, not_supported}.
+        {"press_down_xy", 0},
+        {"press_move_xy", 0},
+        {"press_up_xy", 0},
         {"swipe_xy", harness},
         {"type_text", harness},
         {"delete_backward", harness},
@@ -8811,6 +8986,10 @@ static ErlNifFunc nif_funcs[] = {
     {"key_press", 1, nif_key_press, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"clear_text", 0, nif_clear_text, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"long_press_xy", 3, nif_long_press_xy, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    // Validate and return {error, not_supported}; nothing waits, so not dirty.
+    {"press_down_xy", 3, nif_press_down_xy, 0},
+    {"press_move_xy", 2, nif_press_move_xy, 0},
+    {"press_up_xy", 2, nif_press_up_xy, 0},
     {"swipe_xy", 4, nif_swipe_xy, ERL_NIF_DIRTY_JOB_IO_BOUND},
 #endif
     {"capabilities", 0, nif_capabilities, 0},

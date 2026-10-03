@@ -106,6 +106,9 @@
     clear_text/0,
     long_press_xy/3,
     swipe_xy/4,
+    press_down_xy/3,
+    press_move_xy/2,
+    press_up_xy/2,
     %% Test harness — in-process visual capture and scroll control
     %% (remote-driving: agent gets pixels + deterministic scroll over dist,
     %% no adb/xcrun). See Mob.Test.screenshot/2, scroll_info/2, scroll_to/3.
@@ -204,6 +207,9 @@
     clear_text/0,
     long_press_xy/3,
     swipe_xy/4,
+    press_down_xy/3,
+    press_move_xy/2,
+    press_up_xy/2,
     screenshot/3,
     sample_region/4,
     scroll_info/1,
@@ -365,6 +371,12 @@ key_press(_Key) -> erlang:nif_error(not_loaded).
 clear_text() -> erlang:nif_error(not_loaded).
 long_press_xy(_X, _Y, _Ms) -> erlang:nif_error(not_loaded).
 swipe_xy(_X1, _Y1, _X2, _Y2) -> erlang:nif_error(not_loaded).
+%% Held press (MOB-380): a finger that stays down across calls. Android
+%% dispatches in-process MotionEvents; iOS returns {error, not_supported}.
+%% press_down_xy(X, Y, MaxHoldMs) -> ok | {error, Reason}
+press_down_xy(_X, _Y, _MaxHoldMs) -> erlang:nif_error(not_loaded).
+press_move_xy(_X, _Y) -> erlang:nif_error(not_loaded).
+press_up_xy(_X, _Y) -> erlang:nif_error(not_loaded).
 %% In-process visual capture + scroll control (see Mob.Test).
 %% screenshot(Format, Quality, Scale) -> Binary (PNG/JPEG bytes) | {error, Reason}
 %%   Format :: png | jpeg, Quality :: 0..100 (jpeg), Scale :: float

@@ -120,6 +120,7 @@ defmodule Mob.Test do
   |------------------------------|---------------|---------------|-----------------|
   | `screen/1`, `assigns/1`      | ✅            | ✅            | ✅              |
   | `tap/2` (by tag)             | ✅            | ✅            | ✅              |
+  | `press_in/2`, `press_out/2`, `hold/3` (by tag) | ✅ | ✅    | ✅              |
   | `back/1`, `pop/1`, `navigate`| ✅            | ✅            | ✅              |
   | `send_message/2`             | ✅            | ✅            | ✅              |
   | `screen_info/1`              | ✅            | ✅            | ✅              |
@@ -134,6 +135,7 @@ defmodule Mob.Test do
   | `adjust_slider/4`            | ⚠️ AX active§ | ⚠️ AX active§ | ❌ ui_tree_unavailable |
   | `tap_xy/3`                   | ⚠️ AX-activatable only¶ | ❌ no_effect¶ | ✅ ⊕  |
   | `long_press_xy/4`            | ⚠️ acceptance only✱| ⚠️ acceptance only✱| ✅ ⊕  |
+  | `press_down_xy/4`, `press_move_xy/3`, `press_up_xy/3`, `hold_xy/4` | ❌ not_supported | ❌ not_supported | ✅ ⊕ |
   | `swipe/5`                    | ⚠️ scroll only| ⚠️ acceptance only✱| ✅ ⊕      |
   | `type_text/2`                | ⚠️ acceptance only✱| ⚠️ acceptance only✱| ✅ ASCII only⊕ |
   | `delete_backward/1`          | ⚠️ acceptance only✱| ⚠️ acceptance only✱| ✅ ⊕   |
@@ -186,6 +188,11 @@ defmodule Mob.Test do
     `mob` it runs. `MobBridge.kt` is generated once and never re-rendered, so
     an existing app needs regenerating. `capabilities/1` answers this for the
     build in front of you; the table cannot.
+
+    The held press (`press_down_xy/4` and friends) and the `on_press_in` /
+    `on_press_out` props need a bridge from `mob_new` 0.6.5 or newer
+    (MOB-380): an older app answers `{:error, :not_loaded}` here and never
+    fires the props.
 
     Four more consequences worth knowing before you rely on it:
 
@@ -543,7 +550,10 @@ defmodule Mob.Test do
     :scroll_to,
     :sample_region,
     :screenshot,
-    :native_stats
+    :native_stats,
+    :press_down_xy,
+    :press_move_xy,
+    :press_up_xy
   ]
 
   @doc false
@@ -1292,6 +1302,136 @@ defmodule Mob.Test do
   def swipe(node, x1, y1, x2, y2) do
     :rpc.call(node, :mob_nif, :swipe_xy, [x1 * 1.0, y1 * 1.0, x2 * 1.0, y2 * 1.0])
   end
+
+  # ── Press and hold (MOB-380) ──────────────────────────────────────────────────
+
+  @doc """
+  Send `{:press_in, tag}` to the current screen, as a finger landing on a node
+  with `on_press_in: {pid, tag}` would. Works on every platform; no touch is
+  involved, so it tests the screen's handling, not the native detector. Pair
+  it with `press_out/2`, or use `hold/3`.
+
+      Mob.Test.press_in(node, :mic)
+  """
+  @spec press_in(node(), term()) :: :ok
+  def press_in(node, tag) do
+    :rpc.call(node, Process, :send, [:mob_screen, {:press_in, tag}, []])
+    :ok
+  end
+
+  @doc "Send `{:press_out, tag}` to the current screen. See `press_in/2`."
+  @spec press_out(node(), term()) :: :ok
+  def press_out(node, tag) do
+    :rpc.call(node, Process, :send, [:mob_screen, {:press_out, tag}, []])
+    :ok
+  end
+
+  @doc """
+  `press_in/2`, wait `duration_ms`, `press_out/2`: a hold, by tag, on every
+  platform. Blocks the caller for the duration.
+
+      Mob.Test.hold(node, :mic, 1_500)
+  """
+  @spec hold(node(), term(), non_neg_integer()) :: :ok
+  def hold(node, tag, duration_ms) when is_integer(duration_ms) and duration_ms >= 0 do
+    press_in(node, tag)
+    Process.sleep(duration_ms)
+    press_out(node, tag)
+  end
+
+  @default_max_hold_ms 30_000
+
+  @doc """
+  Put a finger down at (x, y) dp and leave it there until `press_up_xy/3`.
+
+  A genuine held touch, not a message: on Android the app's own window gets an
+  in-process `ACTION_DOWN`, so `on_press_in` fires through the native detector,
+  and a Compose `detectTapGestures` `onPress` is still waiting in
+  `tryAwaitRelease()` while you look at the app (`assigns/1`, `screenshot/2`,
+  logs). Between down and up you can read state, move the finger with
+  `press_move_xy/3`, or send messages; other synthetic gestures (`tap_xy/3`,
+  `swipe/5`, `long_press_xy/4`) refuse while the finger is down, since their
+  own touch would restart the gesture under it.
+
+  Options:
+
+    * `:max_hold_ms` (default #{@default_max_hold_ms}): the finger is
+      cancelled, not released, after this long, so a test that crashes
+      between down and up does not leave the app believing a finger is on the
+      glass for the rest of the session.
+
+  Returns `:ok`, or `{:error, reason}`: `:already_pressed` (one held press at
+  a time), `:dispatch_failed` (nothing in the window took the touch),
+  `:no_window`, `:timeout` (the UI thread didn't answer within 2 s, e.g.
+  another synthetic gesture still running), `:not_loaded` (an app whose generated `MobBridge.kt` predates
+  the held-press methods — see the `⊕` note above; `capabilities/1` tells you),
+  `:not_supported` (iOS: no in-process touch injection reaches SwiftUI; drive
+  the screen with `press_in/2` / `hold/3`, or a real touch through the
+  simulator).
+
+      :ok = Mob.Test.press_down_xy(node, 40.0, 700.0)
+      Mob.Test.assigns(node).listening  #=> true
+      :ok = Mob.Test.press_up_xy(node, 40.0, 700.0)
+  """
+  @spec press_down_xy(node(), number(), number(), keyword()) :: :ok | {:error, term()}
+  def press_down_xy(node, x, y, opts \\ []) do
+    max_hold_ms = Keyword.get(opts, :max_hold_ms, @default_max_hold_ms)
+
+    node
+    |> :rpc.call(:mob_nif, :press_down_xy, [x * 1.0, y * 1.0, max_hold_ms])
+    |> harness_result()
+  end
+
+  @doc """
+  Move the finger held by `press_down_xy/4` to (x, y) dp, over a few real
+  frames so touch slop can be crossed. `{:error, :not_pressed}` when no finger
+  is down.
+  """
+  @spec press_move_xy(node(), number(), number()) :: :ok | {:error, term()}
+  def press_move_xy(node, x, y) do
+    node
+    |> :rpc.call(:mob_nif, :press_move_xy, [x * 1.0, y * 1.0])
+    |> harness_result()
+  end
+
+  @doc """
+  Lift the finger held by `press_down_xy/4` at (x, y) dp (moving it there
+  first if it is elsewhere). `{:error, :not_pressed}` when no finger is down
+  (including after `:max_hold_ms` cancelled it); `{:error, :window_gone}` when
+  the window the press started in has since been detached.
+  """
+  @spec press_up_xy(node(), number(), number()) :: :ok | {:error, term()}
+  def press_up_xy(node, x, y) do
+    node
+    |> :rpc.call(:mob_nif, :press_up_xy, [x * 1.0, y * 1.0])
+    |> harness_result()
+  end
+
+  @doc """
+  Hold a real finger at (x, y) dp for `duration_ms`, then lift it:
+  `press_down_xy/4`, sleep, `press_up_xy/3`. Unlike `long_press_xy/4` each
+  stage reports its own result, and the press stays a press — use this for
+  hold-to-talk and anything else keyed on press in / out.
+
+      :ok = Mob.Test.hold_xy(node, 40.0, 700.0, 1_500)
+  """
+  @spec hold_xy(node(), number(), number(), non_neg_integer()) :: :ok | {:error, term()}
+  def hold_xy(node, x, y, duration_ms) when is_integer(duration_ms) and duration_ms >= 0 do
+    with :ok <- press_down_xy(node, x, y, max_hold_ms: duration_ms + 10_000) do
+      Process.sleep(duration_ms)
+      press_up_xy(node, x, y)
+    end
+  end
+
+  @doc false
+  # An app running a mob without these NIFs answers `undef`; say what that
+  # means rather than handing the caller an RPC exit to decode.
+  @spec harness_result(term()) :: :ok | {:error, term()}
+  def harness_result(:ok), do: :ok
+  def harness_result({:error, _reason} = error), do: error
+  def harness_result({:badrpc, {:EXIT, {:undef, _}}}), do: {:error, :not_loaded}
+  def harness_result({:badrpc, {:EXIT, {:not_loaded, _}}}), do: {:error, :not_loaded}
+  def harness_result({:badrpc, reason}), do: {:error, {:badrpc, reason}}
 
   @doc """
   Find elements in the native accessibility tree whose label or value contains `text`.

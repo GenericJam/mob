@@ -53,6 +53,12 @@ void mob_send_swipe_down(int handle);
 // Direction-aware: emits {:swipe, tag, direction_atom} where direction is
 // "left" | "right" | "up" | "down".
 void mob_send_swipe_with_direction(int handle, const char *direction);
+// on_press_in / on_press_out (MOB-380). Begin resolves both handles at
+// touch-down (-1 for one the node doesn't declare), snapshots press_out's
+// routing, then sends {:press_in, tag}; returns the token for mob_press_end, or
+// -1 when there is no press_out to deliver. End sends {:press_out, tag} once.
+int mob_press_begin(int in_handle, int out_handle);
+void mob_press_end(int token);
 
 // ── Batch 5 Tier 1: high-frequency scroll/drag/pinch/rotate/pointer ─────
 // Throttling and delta-thresholding are applied native-side BEFORE these
