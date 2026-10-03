@@ -31,7 +31,12 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 ### Changed
 - The native FIFO that keeps a notification for the router until it starts is
   now a queue type with one instance per kind (notifications, links), on both
-  platforms. Notification behaviour is unchanged.
+  platforms: `ios/mob_stored_queue.h` (tested by `make -C test/native run`)
+  and `android/jni/mob_stored_queue.zig` (`zig test`). Notification behaviour
+  is unchanged, except that clearing the queue (`NULL` to
+  `mob_set_launch_notification_json`) now holds the lock once on iOS, as
+  Android already did, and a failed binary allocation stores the entry rather
+  than sending an unchecked one.
 
 ## [0.9.10] - 2026-10-02
 

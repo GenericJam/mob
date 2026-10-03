@@ -366,9 +366,10 @@ config :mob_dev, url_schemes: ["myapp"]
 ```
 
 Each URL arrives as `{:link, link}`, at the screen showing (full shape:
-`Mob.Link`). `source` is `:launch` when the link opened the app (it waits until
-the root screen has mounted, and arrives once) and `:running` when the app was
-already running.
+`Mob.Link`). `source` is `:launch` when the link arrived before the app had
+finished starting: it opened the app, or came in while the app was starting,
+and it waited until the root screen had mounted (it arrives once).
+`source` is `:running` when the app was already running.
 
 ```elixir
 def handle_info({:link, %{url: url}}, socket) do

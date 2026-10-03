@@ -29,9 +29,9 @@ a store that misses that drain pokes the router with `:mob_link_stored`. That
 is the mechanism and the reasoning of
 `2026-10-01-notification-delivery-envelope.md`, including "delivered once":
 each take pops one entry under a lock that works before erts does. The FIFO is
-a queue type shared with notifications (`MobStoredQueue` in `ios/mob_nif.m`,
-`StoredQueue` in `android/jni/mob_nif.zig`), one instance per kind, so a full
-notification queue cannot crowd out a link or the reverse.
+a queue type shared with notifications (`ios/mob_stored_queue.h`,
+`android/jni/mob_stored_queue.zig`, each with host tests), one instance per
+kind, so a full notification queue cannot crowd out a link or the reverse.
 
 **Screens receive `{:link, %{url: url, source: source}}`** (`Mob.Link`). The URL
 is passed as the platform gave it. mob doesn't parse it: what a URL means is
@@ -66,8 +66,9 @@ the link that launched the app.
   instance (mob_new's AGENTS.md has the trade-off).
 - iOS `SceneDelegate` forwards `connectionOptions.URLContexts` in
   `scene:willConnectToSession:options:` and the contexts of
-  `scene:openURLContexts:`, skipping file URLs (those go to
-  `mob_handle_opened_url`). A scene-based app never gets
+  `scene:openURLContexts:`, skipping file URLs: those are documents, which
+  an app that declares document types hands to `mob_handle_opened_url`
+  itself (the template declares none). A scene-based app never gets
   `application:openURL:options:`.
 - The scheme itself is declared by mob_dev from `config :mob_dev, url_schemes:`
   in `mob.exs` (mob_dev's `decisions/2026-10-03-url-schemes.md`).
