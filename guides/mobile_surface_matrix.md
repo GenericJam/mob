@@ -253,7 +253,8 @@ and orthogonal — composition over a fat component library.
 | Capability | Status | iOS | Android | Notes |
 |--|--|--|--|--|
 | Clipboard | ✅ | ✓ | ✓ | `Mob.Clipboard.put/1`, `get/0` |
-| Open URL (deep linking, browser) | ✅ | ✓ | ✓ | `Mob.Device.open_url/1` — picks browser, mail, tel, etc. |
+| Open URL (outgoing: browser, mail, tel, another app) | ✅ | ✓ | ✓ | `Mob.Device.open_url/1` — picks browser, mail, tel, etc. |
+| Opened by a URL (incoming deep link, custom scheme) | 🟡 | 🟡 | ✓ | `{:link, %{url: url, source: :launch \| :running}}` (`Mob.Link`), including the link that cold-launches the app, delivered once; `Mob.Link.register/1` routes elsewhere. Schemes from `config :mob_dev, url_schemes: [...]` in `mob.exs` (mob_dev 0.7.12+); Android VIEW intents and iOS scene URL contexts forwarded by mob_new 0.6.4+ templates. iOS not yet run on a simulator or device |
 | Share sheet (text) | ✅ | ✓ | ✓ | `Mob.Share.text/1` |
 | Share sheet (image / file) | ❌ | — | — | Plugin candidate |
 | Document picker | ✅ | ✓ | ✓ | `Mob.Files.pick/1` |
@@ -295,7 +296,7 @@ and orthogonal — composition over a fat component library.
 | Multi-window (iPad) | 🟡 | App runs but no first-class multi-scene API |
 | Split View / Slide Over | 🟡 | Same as multi-window |
 | Picture in Picture (video) | ❌ | Plugin candidate |
-| Universal Links / Custom URL Scheme | 🟡 | Open URL works; route registration is per-app, no unified API |
+| Universal Links / Custom URL Scheme | 🟡 | Custom schemes: `Mob.Link` (see System integration). Universal links need an associated-domains entitlement and arrive as `NSUserActivity`, which the template does not forward |
 | Handoff / NSUserActivity | ❌ | Plugin candidate |
 | Spotlight indexing | ❌ | Plugin candidate |
 | App Shortcuts (Siri integration) | ❌ | Plugin candidate |

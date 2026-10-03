@@ -123,6 +123,13 @@ void mob_deliver_push_token(jlong pid, const char *token);
 // delivered notifications.
 void mob_deliver_notification(jlong pid, const char *json);
 void mob_set_launch_notification(const char *json);
+// Hand mob a URL the app was opened with (Mob.Link): MainActivity's ACTION_VIEW
+// intent data, from onCreate and onNewIntent, via MobBridge.nativeDeliverLink.
+// Delivered as {:link, %{url: url, source: ...}} to the process registered with
+// Mob.Link.register/1, else to the screen showing. Safe before the BEAM is up:
+// the link that launched the app is kept until the root screen has mounted, and
+// delivered once. mob copies the string.
+void mob_deliver_link(const char *url);
 // Store a document ("open with") item JSON ({path,name,mime,size}) handed to us
 // by MainActivity from an ACTION_VIEW / ACTION_SEND intent. Consumed via
 // Mob.Files.take_opened_document/0.

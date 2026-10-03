@@ -56,7 +56,7 @@ defmodule Mob.NifSchedulingCompletenessTest do
     platform post_mortem_android_drain post_mortem_ios_drain register_component register_tap
     request_permission share_text storage_dir storage_external_files_dir
     storage_save_to_media_store storage_save_to_photo_library
-    take_launch_notification take_opened_document toast_show torch tts_speak
+    take_launch_link take_launch_notification take_opened_document toast_show torch tts_speak
     tts_stop vendor_usb_bulk_write vendor_usb_close vendor_usb_list_devices
     vendor_usb_open vendor_usb_request_permission vendor_usb_start_reading
     vendor_usb_stop_reading webview_eval_js webview_go_back webview_post_message

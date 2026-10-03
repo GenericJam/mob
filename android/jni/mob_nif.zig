@@ -41,6 +41,7 @@ const std = @import("std");
 const jni = @import("mob_zig.zig");
 const erts = @import("mob_erts.zig");
 const tap_handle_codec = @import("tap_handle_codec.zig");
+const stored_queue = @import("mob_stored_queue.zig");
 
 // ── Logging tag for NIFs that log to Android logcat ──────────────────────
 
@@ -2604,111 +2605,56 @@ export fn nif_share_text(
     return erts.ok(env);
 }
 
-// ── Notification delivery ────────────────────────────────────────────────
-// Every notification reaches the BEAM as Mob.Notification's JSON envelope,
-// handed to the :mob_screen router, which decodes it once for both platforms
-// and forwards {:notification, map} (decisions/2026-10-01-notification-
-// delivery-envelope.md). When the router can't take it yet — the BEAM not up,
-// as for the tap that cold-launched the app — the envelope waits in a FIFO the
-// router drains when it starts (nif_take_launch_notification, one per call).
-// A FIFO, not one slot: a foreground arrival during boot must not displace the
-// tap that launched the app. Kotlin enters through mob_deliver_notification
-// (MainActivity, and NotificationReceiver for arrivals, in mob_new templates
-// with the matching change) and mob_set_launch_notification (the legacy entry
-// of app-owned activities generated before it).
+// ── Stored for the router ────────────────────────────────────────────────
+// Notifications and opened links both reach the BEAM through the :mob_screen
+// router. When it can't take one yet — the BEAM not up, as for the
+// notification tap or the link that cold-launched the app — it waits in a
+// FIFO (mob_stored_queue.zig) the router drains when it starts, one entry per
+// take. One queue per kind, each drained by its own take NIF.
 
-const stored_notifications_max = 16;
-var g_stored_notifs: [stored_notifications_max]?[*:0]u8 = @splat(null);
-var g_stored_notifs_head: usize = 0;
-var g_stored_notifs_count: usize = 0;
-
-// Guards the FIFO. A spinlock, not an ErlNifMutex: Kotlin stores before the
-// BEAM exists (onCreate), and NotificationReceiver can store while nif_load is
-// still running, so the lock has to work before erts does. It is held for a
-// few loads and stores.
-var g_launch_notif_lock = std.atomic.Value(bool).init(false);
+var g_stored_notifs: stored_queue.StoredQueue = .{};
+var g_stored_links: stored_queue.StoredQueue = .{};
 
 // Set at the end of nif_load: enif_* calls are safe from then on.
 var g_nif_loaded = std.atomic.Value(bool).init(false);
 
-fn lockLaunchSlot() void {
-    while (g_launch_notif_lock.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
-        std.atomic.spinLoopHint();
+// Stores a copy of `s`. `what` names the kind in the drop log.
+fn storeFor(q: *stored_queue.StoredQueue, comptime what: []const u8, s: [*:0]const u8, unless_queued: bool) void {
+    const copy = jni.strdup(s) orelse {
+        loge_nif(what ++ " dropped: out of memory", .{});
+        return;
+    };
+    switch (q.push(copy, unless_queued)) {
+        .stored => return,
+        .already_queued => {},
+        .full => loge_nif(what ++ " dropped: {d} already waiting for the router", .{stored_queue.capacity}),
     }
+    jni.free(@as(?*anyopaque, @ptrCast(copy)));
 }
 
-fn unlockLaunchSlot() void {
-    g_launch_notif_lock.store(false, .release);
+// What a take NIF returns: the oldest entry as a binary, or :none. An entry
+// whose binary can't be allocated is logged and dropped, and the take reports
+// :none; the router's next drain picks up what follows it. Raising instead
+// would take the router, and the app, down from init.
+fn takeStored(q: *stored_queue.StoredQueue, comptime what: []const u8, env: ?*erts.ErlNifEnv) erts.ERL_NIF_TERM {
+    const s = q.pop() orelse return erts.atom(env, "none");
+    defer jni.free(@as(?*anyopaque, @ptrCast(s)));
+    return cstringBinary(env, s) orelse {
+        loge_nif(what ++ " dropped: out of memory", .{});
+        return erts.atom(env, "none");
+    };
 }
 
-// Appends to the FIFO. When it is full (no router has drained it) the newest
-// envelope is dropped, so the launching tap is kept. With `unless_queued`, an
-// envelope equal to one already waiting is not added again.
-fn storeNotification(json: [*:0]const u8, unless_queued: bool) void {
-    const copy = jni.strdup(json) orelse return;
-    lockLaunchSlot();
-    const queued = unless_queued and isQueuedLocked(copy);
-    const stored = !queued and g_stored_notifs_count < stored_notifications_max;
-    if (stored) {
-        g_stored_notifs[(g_stored_notifs_head + g_stored_notifs_count) % stored_notifications_max] = copy;
-        g_stored_notifs_count += 1;
-    }
-    unlockLaunchSlot();
-    if (!stored) {
-        if (!queued) loge_nif("notification dropped: {d} already waiting for the router", .{stored_notifications_max});
-        jni.free(@as(?*anyopaque, @ptrCast(copy)));
-    }
-}
-
-// Caller holds the lock.
-fn isQueuedLocked(json: [*:0]const u8) bool {
-    var i: usize = 0;
-    while (i < g_stored_notifs_count) : (i += 1) {
-        const waiting = g_stored_notifs[(g_stored_notifs_head + i) % stored_notifications_max] orelse continue;
-        if (std.mem.orderZ(u8, waiting, json) == .eq) return true;
-    }
-    return false;
-}
-
-// Pops the oldest stored envelope; the caller frees it.
-fn popStoredNotification() ?[*:0]u8 {
-    lockLaunchSlot();
-    defer unlockLaunchSlot();
-    if (g_stored_notifs_count == 0) return null;
-    const json = g_stored_notifs[g_stored_notifs_head];
-    g_stored_notifs[g_stored_notifs_head] = null;
-    g_stored_notifs_head = (g_stored_notifs_head + 1) % stored_notifications_max;
-    g_stored_notifs_count -= 1;
-    return json;
-}
-
-fn clearStoredNotifications() void {
-    while (popStoredNotification()) |json| jni.free(@as(?*anyopaque, @ptrCast(json)));
+fn cstringBinary(env: ?*erts.ErlNifEnv, s: [*:0]const u8) ?erts.ERL_NIF_TERM {
+    const len = jni.strlen(s);
+    var bin: erts.ErlNifBinary = undefined;
+    if (erts.enif_alloc_binary(len, &bin) == 0) return null;
+    @memcpy(bin.data[0..len], s[0..len]);
+    return erts.enif_make_binary(env, &bin);
 }
 
 fn whereisRouter(env: ?*erts.ErlNifEnv, router: *erts.ErlNifPid) bool {
     return erts.enif_whereis_pid(env, erts.atom(env, "mob_screen"), router) != 0;
-}
-
-// {:mob_notification, json, target | nil} to the router; false when there is
-// no router to send to.
-fn sendToRouter(json: [*:0]const u8, jtarget: jni.JLong) bool {
-    const env = erts.enif_alloc_env() orelse return false;
-    defer erts.enif_free_env(env);
-    var router: erts.ErlNifPid = undefined;
-    if (!whereisRouter(env, &router)) return false;
-    const len = jni.strlen(json);
-    var jb: erts.ErlNifBinary = undefined;
-    _ = erts.enif_alloc_binary(len, &jb);
-    @memcpy(jb.data[0..len], json[0..len]);
-    // enif_make_pid is a C macro: the pid's term is the pid itself.
-    const target = if (jtarget != 0) pidFromLong(jtarget).pid else erts.atom(env, "nil");
-    const msg = erts.makeTuple(env, .{
-        erts.atom(env, "mob_notification"),
-        erts.enif_make_binary(env, &jb),
-        target,
-    });
-    return erts.enif_send(null, &router, env, msg) != 0;
 }
 
 // The router's pid, if it is registered. Only after nif_load.
@@ -2718,26 +2664,52 @@ fn findRouter(router: *erts.ErlNifPid) bool {
     return whereisRouter(env, router);
 }
 
-fn pokeRouter() void {
+// Called right after storing an entry the router could not take. The router
+// drains in its init, which runs after nif_load and after it registers
+// :mob_screen; a store that misses that drain happened after both, so this
+// check finds the router and tells it to drain again (`stored_atom`, e.g.
+// :mob_notification_stored). Each take pops one entry under the lock, so
+// whichever drain comes first gets it and the other finds nothing: delivered
+// once.
+fn pokeRouter(comptime stored_atom: [:0]const u8) void {
+    if (!g_nif_loaded.load(.acquire)) return;
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
     var router: erts.ErlNifPid = undefined;
-    if (whereisRouter(env, &router)) {
-        _ = erts.enif_send(null, &router, env, erts.atom(env, "mob_notification_stored"));
-    }
+    if (whereisRouter(env, &router)) _ = erts.enif_send(null, &router, env, erts.atom(env, stored_atom));
 }
 
-// Send the envelope to the router, or store it for the router to take. The
-// router drains the FIFO in its init, which runs after nif_load and after it
-// registers :mob_screen. A store that misses that drain happened after both,
-// so the checks after the store see the BEAM loaded and the router registered,
-// and tell it to drain again. Each take pops one envelope under the lock, so
-// whichever drain comes first gets it and the other finds nothing: delivered
-// once. `jtarget` is MobNotifyHub.notifyPid; 0 means none.
+// ── Notification delivery ────────────────────────────────────────────────
+// Every notification reaches the BEAM as Mob.Notification's JSON envelope,
+// handed to the router as {:mob_notification, json, target | nil}; the router
+// decodes it once for both platforms and forwards {:notification, map}
+// (decisions/2026-10-01-notification-delivery-envelope.md). Kotlin enters
+// through mob_deliver_notification (MainActivity, and NotificationReceiver
+// for arrivals, in mob_new templates with the matching change) and
+// mob_set_launch_notification (the legacy entry of app-owned activities
+// generated before it).
+
+// {:mob_notification, json, target | nil} to the router; false when there is
+// no router to send to (or the binary can't be allocated), so the caller
+// stores the envelope instead. Only after nif_load.
+fn sendNotificationToRouter(json: [*:0]const u8, jtarget: jni.JLong) bool {
+    const env = erts.enif_alloc_env() orelse return false;
+    defer erts.enif_free_env(env);
+    var router: erts.ErlNifPid = undefined;
+    if (!whereisRouter(env, &router)) return false;
+    const bin = cstringBinary(env, json) orelse return false;
+    // enif_make_pid is a C macro: the pid's term is the pid itself.
+    const target = if (jtarget != 0) pidFromLong(jtarget).pid else erts.atom(env, "nil");
+    const msg = erts.makeTuple(env, .{ erts.atom(env, "mob_notification"), bin, target });
+    return erts.enif_send(null, &router, env, msg) != 0;
+}
+
+// Send the envelope to the router, or store it for the router to take.
+// `jtarget` is MobNotifyHub.notifyPid; 0 means none.
 fn deliverNotification(json: [*:0]const u8, jtarget: jni.JLong) void {
-    if (g_nif_loaded.load(.acquire) and sendToRouter(json, jtarget)) return;
-    storeNotification(json, false);
-    if (g_nif_loaded.load(.acquire)) pokeRouter();
+    if (g_nif_loaded.load(.acquire) and sendNotificationToRouter(json, jtarget)) return;
+    storeFor(&g_stored_notifs, "notification", json, false);
+    pokeRouter("mob_notification_stored");
 }
 
 // Legacy entry. App-owned MainActivity code generated before mob_new's matching
@@ -2752,14 +2724,18 @@ fn deliverNotification(json: [*:0]const u8, jtarget: jni.JLong) void {
 // store-then-poke closes the window where the router registers and drains
 // between the check and the store.
 pub export fn mob_set_launch_notification(json: ?[*:0]const u8) callconv(.c) void {
-    const j = json orelse return clearStoredNotifications();
+    const j = json orelse {
+        var taken: [stored_queue.capacity][*:0]u8 = undefined;
+        for (g_stored_notifs.takeAll(&taken)) |s| jni.free(@as(?*anyopaque, @ptrCast(s)));
+        return;
+    };
     var router: erts.ErlNifPid = undefined;
     if (g_nif_loaded.load(.acquire) and findRouter(&router)) {
         logi_nif("legacy launch notification dropped: the app is running", .{});
         return;
     }
-    storeNotification(j, true);
-    if (g_nif_loaded.load(.acquire)) pokeRouter();
+    storeFor(&g_stored_notifs, "notification", j, true);
+    pokeRouter("mob_notification_stored");
 }
 
 export fn nif_take_launch_notification(
@@ -2769,13 +2745,44 @@ export fn nif_take_launch_notification(
 ) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
     _ = argv;
-    const json = popStoredNotification() orelse return erts.atom(env, "none");
-    const len = jni.strlen(json);
-    var bin: erts.ErlNifBinary = undefined;
-    _ = erts.enif_alloc_binary(len, &bin);
-    @memcpy(bin.data[0..len], json[0..len]);
-    jni.free(@as(?*anyopaque, @ptrCast(json)));
-    return erts.enif_make_binary(env, &bin);
+    return takeStored(&g_stored_notifs, "notification", env);
+}
+
+// ── Link delivery (Mob.Link) ─────────────────────────────────────────────
+// A URL the app was opened with: MainActivity hands each ACTION_VIEW intent's
+// data to MobBridge.nativeDeliverLink, whose beam_jni.c stub calls
+// mob_deliver_link, from onCreate (the link that launched the app, before the
+// BEAM is up) and onNewIntent. Sent to the router as {:mob_link, url}, or
+// stored until the router takes it once the root screen has mounted
+// (decisions/2026-10-03-deep-link-delivery.md).
+
+// {:mob_link, url} to the router; false when there is no router to send to
+// (or the binary can't be allocated), so the caller stores the URL instead.
+// Only after nif_load.
+fn sendLinkToRouter(url: [*:0]const u8) bool {
+    const env = erts.enif_alloc_env() orelse return false;
+    defer erts.enif_free_env(env);
+    var router: erts.ErlNifPid = undefined;
+    if (!whereisRouter(env, &router)) return false;
+    const bin = cstringBinary(env, url) orelse return false;
+    return erts.enif_send(null, &router, env, erts.makeTuple(env, .{ erts.atom(env, "mob_link"), bin })) != 0;
+}
+
+pub export fn mob_deliver_link(url: ?[*:0]const u8) callconv(.c) void {
+    const u = url orelse return;
+    if (g_nif_loaded.load(.acquire) and sendLinkToRouter(u)) return;
+    storeFor(&g_stored_links, "link", u, false);
+    pokeRouter("mob_link_stored");
+}
+
+export fn nif_take_launch_link(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    return takeStored(&g_stored_links, "link", env);
 }
 
 // ── Opened document ("open with"): a file handed to us by another app ────
@@ -5291,6 +5298,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "motion_start", .arity = 2, .fptr = nif_motion_start, .flags = 0 },
     .{ .name = "motion_stop", .arity = 0, .fptr = nif_motion_stop, .flags = 0 },
     .{ .name = "take_launch_notification", .arity = 0, .fptr = nif_take_launch_notification, .flags = 0 },
+    .{ .name = "take_launch_link", .arity = 0, .fptr = nif_take_launch_link, .flags = 0 },
     .{ .name = "take_opened_document", .arity = 0, .fptr = nif_take_opened_document, .flags = 0 },
     .{ .name = "storage_dir", .arity = 1, .fptr = nif_storage_dir, .flags = 0 },
     .{ .name = "storage_save_to_media_store", .arity = 2, .fptr = nif_storage_save_to_media_store, .flags = 0 },

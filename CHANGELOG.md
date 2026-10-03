@@ -8,6 +8,37 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Deep links: an app opened by a URL gets it on the BEAM** (MOB-379). A
+  screen receives `handle_info({:link, %{url: url, source: source}}, socket)`
+  (`Mob.Link`): `source` is `:launch` for the link that opened the app (held
+  until the root screen has mounted, delivered once) and `:running` for one
+  opened while the app runs. `Mob.Link.register/1` sends links to another
+  process instead, and can be called before the root screen starts so that
+  process also gets the launching link; `unregister/0` undoes it. Native code
+  hands each URL over with `mob_deliver_link(const char *url)`, declared in
+  both `mob_beam.h` files, and the router drains what arrived before it ran
+  with the new NIF `take_launch_link/0`. The forwarding lives in app-owned
+  files: mob_new 0.6.4's `MainActivity` (`ACTION_VIEW` intents, through
+  `MobBridge.nativeDeliverLink` and `beam_jni.c`) and `SceneDelegate` (URL
+  contexts); older apps port it from the "Deep links" section of
+  `guides/device_capabilities.md`. The schemes come from
+  `config :mob_dev, url_schemes: [...]` in `mob.exs` (mob_dev 0.7.12), which
+  also requires the Android `MainActivity` to be `singleTask`. Needs a native
+  rebuild. See `decisions/2026-10-03-deep-link-delivery.md`.
+
+### Changed
+- The native FIFO that keeps a notification for the router until it starts is
+  now a queue type with one instance per kind (notifications, links), on both
+  platforms: `ios/mob_stored_queue.h` (tested by `make -C test/native run`)
+  and `android/jni/mob_stored_queue.zig` (`zig test`). Notification behaviour
+  is unchanged, except that clearing the queue (`NULL` to
+  `mob_set_launch_notification`) now holds the lock once on Android, as iOS
+  already did, and a failed binary allocation stores the entry rather than
+  sending an unchecked one.
+
 ## [0.9.10] - 2026-10-02
 
 ### Added

@@ -41,6 +41,18 @@ void mob_send_push_token(const char *hex_token);
 // any stored, not yet delivered notifications.
 void mob_set_launch_notification_json(const char *json);
 
+// Hand mob a URL the app was opened with (Mob.Link). Call from the scene
+// delegate for each of connectionOptions.URLContexts in
+// scene:willConnectToSession:options: and URLContexts in
+// scene:openURLContexts: (or from application:openURL:options: in an app
+// without scenes), passing the URL's absoluteString. Delivered as
+// handle_info({:link, %{url: url, source: ...}}) to the process registered with
+// Mob.Link.register/1, else to the screen showing; before the BEAM is up (the
+// link that launched the app) it is kept until the root screen has mounted, and
+// delivered once. mob copies the string. File URLs (documents) belong to
+// mob_handle_opened_url instead.
+void mob_deliver_link(const char *url);
+
 // Call from AppDelegate application:openURL:options: (or scene equivalent) when
 // another app hands us a file to open — e.g. a `.livemd` emailed to the user and
 // tapped, routed here because Info.plist declares the document type. Pass the

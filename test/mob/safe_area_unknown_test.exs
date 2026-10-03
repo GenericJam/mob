@@ -57,6 +57,7 @@ defmodule Mob.SafeAreaUnknownTest do
     # makes a typo'd NIF name silently succeed, and produced three
     # "launch notification could not be decoded" errors per run.
     def take_launch_notification, do: :none
+    def take_launch_link, do: :none
     def unquote(:"$handle_undefined_function")(_f, _a), do: :ok
   end
 

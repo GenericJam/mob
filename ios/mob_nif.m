@@ -36,6 +36,7 @@ extern char *dlerror(void) __attribute__((weak));
 // whatever happens to be in the return register.
 #import "MobDemo-Bridging-Header.h"
 #include "erl_nif.h"
+#include "mob_stored_queue.h"
 #import <AVFoundation/AVFoundation.h>
 #import <Accelerate/Accelerate.h>
 #import <CoreMotion/CoreMotion.h>
@@ -3414,23 +3415,76 @@ static UIViewController *mob_root_vc(void) {
     return nil;
 }
 
+// ── Stored for the router ──────────────────────────────────────────────────
+// Notifications and opened links both reach the BEAM through the :mob_screen
+// router. When it can't take one yet — erts not up, as for the notification
+// tap or the link that cold-launched the app — it waits in a FIFO
+// (mob_stored_queue.h) that the router drains when it starts, one entry per
+// take. One queue per kind, each drained by its own take NIF.
+static MobStoredQueue g_stored_notifications = MOB_STORED_QUEUE_INIT;
+static MobStoredQueue g_stored_links = MOB_STORED_QUEUE_INIT;
+
+// `what` names the kind in the drop log.
+static void mob_store_for(MobStoredQueue *q, const char *what, const char *s) {
+    if (!mob_stored_push(q, s))
+        NSLog(@"[Mob] %s dropped: %d already waiting for the router, or out of memory", what,
+              MOB_STORED_MAX);
+}
+
+// NO when the binary can't be allocated.
+static BOOL mob_make_cstring_binary(ErlNifEnv *e, const char *s, ERL_NIF_TERM *out) {
+    ErlNifBinary b;
+    size_t len = strlen(s);
+    if (!enif_alloc_binary(len, &b))
+        return NO;
+    memcpy(b.data, s, len);
+    *out = enif_make_binary(e, &b);
+    return YES;
+}
+
+// What a take NIF returns: the oldest entry as a binary, or :none. An entry
+// whose binary can't be allocated is logged and dropped, and the take reports
+// :none; the router's next drain picks up what follows it. Raising instead
+// would take the router, and the app, down from init.
+static ERL_NIF_TERM mob_stored_take(ErlNifEnv *env, MobStoredQueue *q, const char *what) {
+    char *s = mob_stored_pop(q);
+    if (!s)
+        return enif_make_atom(env, "none");
+    ERL_NIF_TERM bin;
+    BOOL made = mob_make_cstring_binary(env, s, &bin);
+    free(s);
+    if (made)
+        return bin;
+    NSLog(@"[Mob] %s dropped: out of memory", what);
+    return enif_make_atom(env, "none");
+}
+
+static BOOL mob_whereis_router(ErlNifEnv *e, ErlNifPid *router) {
+    return enif_whereis_pid(e, enif_make_atom(e, "mob_screen"), router) ? YES : NO;
+}
+
+// Called right after storing an entry the router could not take. The router
+// drains in its init, which runs after erts is up and after it registers
+// :mob_screen; a store that misses that drain happened after both, so this
+// check finds the router and tells it to drain again (`stored_atom`, e.g.
+// :mob_notification_stored). Each take pops one entry under the lock, so
+// whichever drain comes first gets it and the other finds nothing: delivered
+// once.
+static void mob_poke_router(const char *stored_atom) {
+    if (!mob_runtime_up())
+        return;
+    ErlNifEnv *e = enif_alloc_env();
+    ErlNifPid router;
+    if (mob_whereis_router(e, &router))
+        enif_send(NULL, &router, e, enif_make_atom(e, stored_atom));
+    enif_free_env(e);
+}
+
 // ── Notification delivery ──────────────────────────────────────────────────
 // Every notification reaches the BEAM as Mob.Notification's JSON envelope,
-// handed to the :mob_screen router, which decodes it once for both platforms
-// and forwards {:notification, map} (decisions/2026-10-01-notification-
-// delivery-envelope.md). When the router can't take it yet — erts not up, as
-// for the tap that cold-launched the app — the envelope waits in a FIFO that
-// the router drains when it starts (nif_take_launch_notification, one per
-// call). A FIFO, not one slot: a foreground arrival during boot must not
-// displace the tap that launched the app.
-#define MOB_STORED_NOTIFICATIONS_MAX 16
-static char *g_stored_notifications[MOB_STORED_NOTIFICATIONS_MAX];
-static size_t g_stored_notifications_head = 0;
-static size_t g_stored_notifications_count = 0;
-// Guards the FIFO. Not an ErlNifMutex: the delegate stores before erts exists
-// (the launching tap) and can store while it is still starting (a foreground
-// arrival during boot), so the lock has to work then.
-static os_unfair_lock g_launch_notif_lock = OS_UNFAIR_LOCK_INIT;
+// handed to the router as {:mob_notification, json, target | nil}; the router
+// decodes it once for both platforms and forwards {:notification, map}
+// (decisions/2026-10-01-notification-delivery-envelope.md).
 
 @interface MobNotificationDelegate : NSObject <UNUserNotificationCenterDelegate>
 // Set by mob_notify (main queue only); hasScreenPid is NO until then.
@@ -3458,86 +3512,36 @@ void mob_send_push_token(const char *hex_token) {
     enif_free_env(e);
 }
 
-// {:mob_notification, json, target | nil} to the router. NO when there is no
-// router to send to, so the caller stores the envelope instead.
+// {:mob_notification, json, target | nil} to the router; NO when there is no
+// router to send to (or the binary can't be allocated), so the caller stores
+// the envelope instead.
 static BOOL mob_send_notification_to_router(const char *json, const ErlNifPid *target) {
     if (!mob_runtime_up())
         return NO;
     ErlNifEnv *e = enif_alloc_env();
     ErlNifPid router;
+    ERL_NIF_TERM bin;
     BOOL sent = NO;
-    if (enif_whereis_pid(e, enif_make_atom(e, "mob_screen"), &router)) {
-        size_t len = strlen(json);
-        ErlNifBinary b;
-        enif_alloc_binary(len, &b);
-        memcpy(b.data, json, len);
+    if (mob_whereis_router(e, &router) && mob_make_cstring_binary(e, json, &bin)) {
         ERL_NIF_TERM t = target ? enif_make_pid(e, target) : enif_make_atom(e, "nil");
-        ERL_NIF_TERM msg =
-            enif_make_tuple3(e, enif_make_atom(e, "mob_notification"), enif_make_binary(e, &b), t);
+        ERL_NIF_TERM msg = enif_make_tuple3(e, enif_make_atom(e, "mob_notification"), bin, t);
         sent = enif_send(NULL, &router, e, msg) ? YES : NO;
     }
     enif_free_env(e);
     return sent;
 }
 
-// Appends to the FIFO. When it is full (no router has drained it, e.g. an
-// app that never starts a root screen) the newest envelope is dropped, so the
-// launching tap is kept.
-static void mob_store_notification(const char *json) {
-    char *copy = strdup(json);
-    if (!copy)
-        return;
-    os_unfair_lock_lock(&g_launch_notif_lock);
-    BOOL stored = g_stored_notifications_count < MOB_STORED_NOTIFICATIONS_MAX;
-    if (stored) {
-        size_t tail = (g_stored_notifications_head + g_stored_notifications_count) %
-                      MOB_STORED_NOTIFICATIONS_MAX;
-        g_stored_notifications[tail] = copy;
-        g_stored_notifications_count++;
-    }
-    os_unfair_lock_unlock(&g_launch_notif_lock);
-    if (!stored) {
-        NSLog(@"[Mob] notification dropped: %d already waiting for the router",
-              MOB_STORED_NOTIFICATIONS_MAX);
-        free(copy);
-    }
-}
-
-static void mob_clear_stored_notifications(void) {
-    os_unfair_lock_lock(&g_launch_notif_lock);
-    while (g_stored_notifications_count > 0) {
-        free(g_stored_notifications[g_stored_notifications_head]);
-        g_stored_notifications[g_stored_notifications_head] = NULL;
-        g_stored_notifications_head =
-            (g_stored_notifications_head + 1) % MOB_STORED_NOTIFICATIONS_MAX;
-        g_stored_notifications_count--;
-    }
-    os_unfair_lock_unlock(&g_launch_notif_lock);
-}
-
-// Send the envelope to the router, or store it for the router to take. The
-// router drains the FIFO in its init, which runs after erts is up and after it
-// registers :mob_screen. A store that misses that drain happened after both,
-// so the checks after the store see erts up and the router registered, and
-// tell it to drain again. Each take pops one envelope under the lock, so
-// whichever drain comes first gets it and the other finds nothing: delivered
-// once.
+// Send the envelope to the router, or store it for the router to take.
 static void mob_deliver_notification_json(const char *json, const ErlNifPid *target) {
     if (mob_send_notification_to_router(json, target))
         return;
-    mob_store_notification(json);
-    if (!mob_runtime_up())
-        return;
-    ErlNifEnv *e = enif_alloc_env();
-    ErlNifPid router;
-    if (enif_whereis_pid(e, enif_make_atom(e, "mob_screen"), &router))
-        enif_send(NULL, &router, e, enif_make_atom(e, "mob_notification_stored"));
-    enif_free_env(e);
+    mob_store_for(&g_stored_notifications, "notification", json);
+    mob_poke_router("mob_notification_stored");
 }
 
 void mob_set_launch_notification_json(const char *json) {
     if (!json) {
-        mob_clear_stored_notifications();
+        mob_stored_clear(&g_stored_notifications);
         return;
     }
     mob_deliver_notification_json(json, NULL);
@@ -3545,24 +3549,44 @@ void mob_set_launch_notification_json(const char *json) {
 
 static ERL_NIF_TERM nif_take_launch_notification(ErlNifEnv *env, int argc,
                                                  const ERL_NIF_TERM argv[]) {
-    os_unfair_lock_lock(&g_launch_notif_lock);
-    char *json = NULL;
-    if (g_stored_notifications_count > 0) {
-        json = g_stored_notifications[g_stored_notifications_head];
-        g_stored_notifications[g_stored_notifications_head] = NULL;
-        g_stored_notifications_head =
-            (g_stored_notifications_head + 1) % MOB_STORED_NOTIFICATIONS_MAX;
-        g_stored_notifications_count--;
-    }
-    os_unfair_lock_unlock(&g_launch_notif_lock);
-    if (!json)
-        return enif_make_atom(env, "none");
-    ErlNifBinary bin;
-    size_t len = strlen(json);
-    enif_alloc_binary(len, &bin);
-    memcpy(bin.data, json, len);
-    free(json);
-    return enif_make_binary(env, &bin);
+    return mob_stored_take(env, &g_stored_notifications, "notification");
+}
+
+// ── Link delivery (Mob.Link) ───────────────────────────────────────────────
+// A URL the app was opened with, from the scene delegate's URL contexts. Sent
+// to the router as {:mob_link, url}; one that arrives before the router is
+// registered (the link that launched the app) waits in g_stored_links until
+// the router takes it once the root screen mounts
+// (decisions/2026-10-03-deep-link-delivery.md).
+
+// {:mob_link, url} to the router; NO when there is no router to send to (or
+// the binary can't be allocated), so the caller stores the URL instead.
+static BOOL mob_send_link_to_router(const char *url) {
+    if (!mob_runtime_up())
+        return NO;
+    ErlNifEnv *e = enif_alloc_env();
+    ErlNifPid router;
+    ERL_NIF_TERM bin;
+    BOOL sent = NO;
+    if (mob_whereis_router(e, &router) && mob_make_cstring_binary(e, url, &bin))
+        sent = enif_send(NULL, &router, e, enif_make_tuple2(e, enif_make_atom(e, "mob_link"), bin))
+                   ? YES
+                   : NO;
+    enif_free_env(e);
+    return sent;
+}
+
+void mob_deliver_link(const char *url) {
+    if (!url)
+        return;
+    if (mob_send_link_to_router(url))
+        return;
+    mob_store_for(&g_stored_links, "link", url);
+    mob_poke_router("mob_link_stored");
+}
+
+static ERL_NIF_TERM nif_take_launch_link(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    return mob_stored_take(env, &g_stored_links, "link");
 }
 
 // ── Opened-document ("open with") ──────────────────────────────────────────
@@ -8853,6 +8877,7 @@ static ErlNifFunc nif_funcs[] = {
     {"motion_start", 2, nif_motion_start, 0},
     {"motion_stop", 0, nif_motion_stop, 0},
     {"take_launch_notification", 0, nif_take_launch_notification, 0},
+    {"take_launch_link", 0, nif_take_launch_link, 0},
     {"take_opened_document", 0, nif_take_opened_document, 0},
     {"storage_dir", 1, nif_storage_dir, 0},
     {"storage_save_to_photo_library", 1, nif_storage_save_to_photo_library, 0},
