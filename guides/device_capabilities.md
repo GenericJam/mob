@@ -371,9 +371,10 @@ without it. With the template's `singleTop`, a link opened from another app's
 task (a QR scanner, a browser that doesn't ask for a new task) starts a
 second `MainActivity` in that task, and two activities then drive one BEAM's
 UI; `singleTask` hands the link to the existing one's `onNewIntent`. The cost,
-and the reason it isn't the default: reopening the app from its launcher icon
-then finishes any activity stacked above `MainActivity` (a file picker, a
-share target, an in-app scanner), whose result comes back cancelled.
+and the reason it isn't the default: reopening the app from its launcher icon,
+or a link reaching the running app, then finishes any activity stacked above
+`MainActivity` (a file picker, a share target, an in-app scanner), whose
+result comes back cancelled.
 
 Each URL arrives as `{:link, link}`, at the screen showing (full shape:
 `Mob.Link`). `source` is `:launch` when the link arrived before the app had
