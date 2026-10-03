@@ -25,7 +25,10 @@ defmodule Mob.NativeAlertActionTest do
     refute @alert =~ "const char *act_c = [action UTF8String]"
     refute @action_sheet =~ "const char *act_c = [action UTF8String]"
 
-    assert @alert =~ "mob_deliver_alert_action([action UTF8String]);"
-    assert @action_sheet =~ "mob_deliver_alert_action([action UTF8String]);"
+    # The scene the alert was shown in rides along (MOB-245): the result goes
+    # back to that window's router.
+    delivery = ~r/mob_deliver_alert_action\(sceneId,\s+\[action UTF8String\]\);/
+    assert @alert =~ delivery
+    assert @action_sheet =~ delivery
   end
 end

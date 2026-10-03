@@ -28,8 +28,8 @@ defmodule Mob.NifSchedulingCompletenessTest do
     audio_output_level ax_action ax_action_at_xy battery_level clear_text
     clipboard_get color_scheme delete_backward device_battery_state
     device_foreground device_orientation key_press long_press_xy resolve_ipv4
-    safe_area screen_info scroll_info scroll_to set_theme size_class swipe_xy tap
-    tap_xy
+    safe_area scene_multiple_supported scene_request screen_info scroll_info scroll_to
+    set_theme size_class swipe_xy tap tap_xy
     type_text webview_can_go_back
   )
 
@@ -54,7 +54,7 @@ defmodule Mob.NifSchedulingCompletenessTest do
     device_set_dispatcher device_thermal_state exit_app files_pick haptic log
     motion_start motion_stop native_stats_enable open_settings open_url
     platform post_mortem_android_drain post_mortem_ios_drain register_component register_tap
-    request_permission share_text storage_dir storage_external_files_dir
+    request_permission scenes share_text storage_dir storage_external_files_dir
     storage_save_to_media_store storage_save_to_photo_library
     take_launch_notification take_opened_document toast_show torch tts_speak
     tts_stop vendor_usb_bulk_write vendor_usb_close vendor_usb_list_devices

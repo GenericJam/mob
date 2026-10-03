@@ -114,28 +114,72 @@ typedef struct {
 } TapHandle;
 
 // Double-buffered tap registry (see android/jni/mob_nif.zig for full rationale).
-// `tap_handles`/`tap_handle_next` point at the ACTIVE table + its committed
-// count — readers (mob_send_*) keep using them unchanged. A render builds into
-// the INACTIVE table via register_tap (tap_build_count) and set_root swaps it in
-// atomically under tap_mutex, so a concurrent high-frequency send (drag/scroll)
-// never observes a half-rebuilt table.
-static TapHandle *tap_tables[2] = {NULL, NULL};
-static int tap_table_capacity[2] = {0, 0};
-static int tap_active = 0;
-static TapHandle *tap_handles = NULL; // active table (readers use this)
-static int tap_handle_next = 0;       // active committed count (readers' bound)
-static int tap_build_count = 0;       // cursor into the building table
-static uint32_t tap_table_generations[2] = {0, 0};
-// How many slots of each table were actually written, so clear_taps only walks
-// those. Walking the whole table every frame is wasted work at any cap and
-// would scale with the cap if it were ever raised.
-static int tap_table_used[2] = {0, 0};
+// A render builds into a set's INACTIVE table via register_tap (build_count)
+// and set_root swaps it in atomically under tap_mutex, so a concurrent
+// high-frequency send (drag/scroll) never observes a half-rebuilt table.
+//
+// One set per window scene (MOB-245). Each scene shows its own tree, so each
+// needs its own committed table: with one registry a render for one window
+// would retire the handles the other window is still showing. Set 0 belongs to
+// native's default scene, the one the unbound primary router renders into, so
+// a single-window app uses set 0 and nothing else. clear_taps picks the set a
+// frame is built for (clear_taps/0: set 0; clear_taps/1: the scene's), and
+// register_tap and set_root work on that set. The extra set at
+// MOB_TAP_SCRATCH_SET takes frames for a scene that is gone, so they are built
+// and dropped without touching a live table.
+//
+// Native event blocks capture the set they were deserialised for (see
+// MobEventRef), so a handle only ever resolves against its own window's table.
+#define MOB_SCENE_LIMIT 8
+#define MOB_TAP_SCRATCH_SET MOB_SCENE_LIMIT
+
+typedef struct {
+    TapHandle *tables[2];
+    int capacity[2];
+    int active;
+    int handle_next; // active committed count (readers' bound)
+    int build_count; // cursor into the building table
+    uint32_t generations[2];
+    // How many slots of each table were actually written, so clear_taps only
+    // walks those. Walking the whole table every frame is wasted work at any
+    // cap and would scale with the cap if it were ever raised.
+    int used[2];
+    uint32_t build_generation;
+} MobTapSet;
+
+static MobTapSet tap_sets[MOB_SCENE_LIMIT + 1];
+// The set the last clear_taps prepared. Mob.Sender serialises every
+// clear_taps -> register_tap* -> set_root sequence, so one cursor suffices.
+static int tap_build_set = 0;
 // Exhausted registrations in the frame being built. Counted rather than logged
 // per call: a dense screen overflows the pool hundreds of times per frame, and
 // NSLog is a synchronous write to the system log.
 static int tap_exhausted_count = 0;
-static uint32_t tap_build_generation = 0;
 static ErlNifMutex *tap_mutex = NULL;
+
+// An event handle as native event blocks hold it: the tap set in the high 32
+// bits, the BEAM-visible handle ((generation << 12) | slot) in the low 32. The
+// BEAM never sees this form; it only exists so a block built for one window's
+// tree resolves against that window's set.
+typedef int64_t MobEventRef;
+
+// The set the tree being deserialised belongs to. Written by nif_set_root
+// before it calls mob_node_from_dict, on the one thread Mob.Sender renders
+// from, and read only by mob_event_ref during that call.
+static int g_node_tap_set = 0;
+
+static MobEventRef mob_event_ref(int handle) {
+    return ((MobEventRef)g_node_tap_set << 32) | (MobEventRef)(uint32_t)handle;
+}
+
+static MobTapSet *mob_ref_set(MobEventRef ref) {
+    int set = (int)(ref >> 32);
+    return set >= 0 && set <= MOB_SCENE_LIMIT ? &tap_sets[set] : NULL;
+}
+
+static int mob_ref_handle(MobEventRef ref) {
+    return (int)(uint32_t)(ref & 0xffffffffLL);
+}
 
 static uint32_t mob_next_handle_generation(uint32_t generation) {
     return generation == 0 || generation >= MAX_EVENT_GENERATION ? 1 : generation + 1;
@@ -159,45 +203,64 @@ static int mob_generation_within_identity(uint32_t handle_generation,
 }
 
 // Grow one table to hold at least `needed` slots. Caller holds tap_mutex, which
-// is what makes this safe: every reader of tap_handles resolves under the same
-// lock, so no one can be holding a pointer into a table while it moves.
+// is what makes this safe: every reader of a set's tables resolves under the
+// same lock, so no one can be holding a pointer into a table while it moves.
 //
 // Only the table being built is ever grown mid-frame; the active table is left
-// alone until the swap in set_root repoints tap_handles at it.
-static int mob_tap_grow_locked(int which, int needed) {
-    if (needed <= tap_table_capacity[which])
+// alone until the swap in set_root makes it active.
+static int mob_tap_grow_locked(MobTapSet *ts, int which, int needed) {
+    if (needed <= ts->capacity[which])
         return 1;
     if (needed > MOB_TAP_SLOT_LIMIT)
         return 0;
 
-    int cap = tap_table_capacity[which] ? tap_table_capacity[which] : MOB_TAP_INITIAL_CAPACITY;
+    int cap = ts->capacity[which] ? ts->capacity[which] : MOB_TAP_INITIAL_CAPACITY;
     while (cap < needed)
         cap *= 2;
     if (cap > MOB_TAP_SLOT_LIMIT)
         cap = MOB_TAP_SLOT_LIMIT;
 
-    TapHandle *grown = realloc(tap_tables[which], (size_t)cap * sizeof(TapHandle));
+    TapHandle *grown = realloc(ts->tables[which], (size_t)cap * sizeof(TapHandle));
     if (!grown)
         return 0;
     // Zero the new tail: clear_taps and the resolvers both key off tag_env
     // being NULL to decide a slot is free, and realloc leaves it uninitialised.
-    memset(grown + tap_table_capacity[which], 0,
-           (size_t)(cap - tap_table_capacity[which]) * sizeof(TapHandle));
+    memset(grown + ts->capacity[which], 0, (size_t)(cap - ts->capacity[which]) * sizeof(TapHandle));
 
     // …then restore the two fields whose "unset" value is 1, not 0. clear_taps
     // resets leading/trailing to 1 for reused slots, so without this a slot's
     // default would depend on whether it arrived by growth or by reuse. Nobody
     // re-derives that when these finally get a reader.
-    for (int i = tap_table_capacity[which]; i < cap; i++) {
+    for (int i = ts->capacity[which]; i < cap; i++) {
         grown[i].leading = 1;
         grown[i].trailing = 1;
     }
 
-    tap_tables[which] = grown;
-    tap_table_capacity[which] = cap;
-    if (which == tap_active)
-        tap_handles = grown;
+    ts->tables[which] = grown;
+    ts->capacity[which] = cap;
     return 1;
+}
+
+// Hand one slot back: free its tag and reset its throttle state. Shared by
+// clear_taps, which frees the building table for the next frame, and
+// mob_release_tap_set, which frees a closed window's set for the next window.
+// register_tap writes only the routing fields, so whatever this leaves is what
+// the slot's next handler starts with.
+static void mob_tap_slot_free_locked(TapHandle *slot) {
+    if (slot->tag_env) {
+        enif_free_env(slot->tag_env);
+        slot->tag_env = NULL;
+    }
+    slot->throttle_configured = 0;
+    slot->throttle_ms = 0;
+    slot->debounce_ms = 0;
+    slot->delta_threshold = 0;
+    slot->leading = 1;
+    slot->trailing = 1;
+    slot->last_emit_ns = 0;
+    slot->last_x = 0;
+    slot->last_y = 0;
+    slot->seq = 0;
 }
 
 static int mob_encode_event_handle(uint32_t generation, int slot) {
@@ -222,14 +285,15 @@ typedef struct {
     uint64_t seq;
 } TapSnap;
 
-static TapHandle *mob_resolve_active_tap_locked(int handle) {
+static TapHandle *mob_resolve_active_tap_locked(MobTapSet *ts, int handle) {
     uint32_t generation;
     int slot;
-    if (!mob_decode_event_handle(handle, &generation, &slot) ||
-        generation != tap_table_generations[tap_active] || slot >= tap_handle_next ||
-        !tap_handles[slot].tag_env)
+    TapHandle *active = ts ? ts->tables[ts->active] : NULL;
+    if (!active || !mob_decode_event_handle(handle, &generation, &slot) ||
+        generation != ts->generations[ts->active] || slot >= ts->handle_next ||
+        !active[slot].tag_env)
         return NULL;
-    return &tap_handles[slot];
+    return &active[slot];
 }
 
 // Resolve a handle against the table currently being BUILT, not the active one.
@@ -237,25 +301,26 @@ static TapHandle *mob_resolve_active_tap_locked(int handle) {
 // Needed because throttle config arrives during deserialisation. set_root walks
 // the JSON — populating the building table's config as it goes — and only swaps
 // that table in ~50 lines later. The handles in that JSON therefore carry
-// tap_build_generation, while mob_resolve_active_tap_locked compares against
-// tap_table_generations[tap_active], which is still the PREVIOUS frame's
-// generation (nif_clear_taps zeroed the building slot's). Every lookup returned
-// NULL and every `if (tap)` body was skipped, silently, on every frame — so an
-// app's throttle/debounce settings never reached a live slot and only the
-// built-in defaults ever applied (MOB-134).
-static TapHandle *mob_resolve_build_tap_locked(int handle) {
+// the set's build_generation, while mob_resolve_active_tap_locked compares
+// against the active table's generation, which is still the PREVIOUS frame's
+// (nif_clear_taps zeroed the building slot's). Every lookup returned NULL and
+// every `if (tap)` body was skipped, silently, on every frame — so an app's
+// throttle/debounce settings never reached a live slot and only the built-in
+// defaults ever applied (MOB-134).
+static TapHandle *mob_resolve_build_tap_locked(MobTapSet *ts, int handle) {
     uint32_t generation;
     int slot;
-    TapHandle *build = tap_tables[1 - tap_active];
+    TapHandle *build = ts ? ts->tables[1 - ts->active] : NULL;
     if (!build || !mob_decode_event_handle(handle, &generation, &slot) ||
-        generation != tap_build_generation || slot >= tap_build_count || !build[slot].tag_env)
+        generation != ts->build_generation || slot >= ts->build_count || !build[slot].tag_env)
         return NULL;
     return &build[slot];
 }
 
-static int mob_snap_tap(int handle, ErlNifEnv *msg_env, TapSnap *snap) {
+static int mob_snap_tap(MobEventRef ref, ErlNifEnv *msg_env, TapSnap *snap) {
+    int handle = mob_ref_handle(ref);
     enif_mutex_lock(tap_mutex);
-    TapHandle *active = mob_resolve_active_tap_locked(handle);
+    TapHandle *active = mob_resolve_active_tap_locked(mob_ref_set(ref), handle);
     if (!active) {
         enif_mutex_unlock(tap_mutex);
         LOGD(@"rejected stale event handle %d", handle);
@@ -268,21 +333,24 @@ static int mob_snap_tap(int handle, ErlNifEnv *msg_env, TapSnap *snap) {
     return 1;
 }
 
-static int mob_snap_change_tap(int handle, ErlNifEnv *msg_env, TapSnap *snap) {
+static int mob_snap_change_tap(MobEventRef ref, ErlNifEnv *msg_env, TapSnap *snap) {
+    int handle = mob_ref_handle(ref);
+    MobTapSet *ts = mob_ref_set(ref);
     enif_mutex_lock(tap_mutex);
-    TapHandle *active = mob_resolve_active_tap_locked(handle);
+    TapHandle *active = mob_resolve_active_tap_locked(ts, handle);
     if (!active) {
         uint32_t generation;
         int slot;
-        if (!mob_decode_event_handle(handle, &generation, &slot)) {
+        if (!ts || !mob_decode_event_handle(handle, &generation, &slot)) {
             enif_mutex_unlock(tap_mutex);
             LOGD(@"rejected stale event handle %d", handle);
             return 0;
         }
-        active = slot >= 0 && slot < tap_handle_next ? &tap_handles[slot] : NULL;
+        TapHandle *table = ts->tables[ts->active];
+        active = table && slot >= 0 && slot < ts->handle_next ? &table[slot] : NULL;
         if (!active || !active->tag_env ||
             !mob_generation_within_identity(generation, active->identity_start_generation,
-                                            tap_table_generations[tap_active])) {
+                                            ts->generations[ts->active])) {
             enif_mutex_unlock(tap_mutex);
             LOGD(@"rejected stale event handle %d", handle);
             return 0;
@@ -305,15 +373,17 @@ static uint64_t mob_now_ns(void) {
 
 // Set throttle config for a handle. Called from the prop deserialiser when
 // it sees a *_config sibling prop. Idempotent — safe to call multiple times.
-static void mob_set_throttle_config(int handle, int throttle_ms, int debounce_ms,
+static void mob_set_throttle_config(MobEventRef ref, int throttle_ms, int debounce_ms,
                                     double delta_threshold, int leading, int trailing) {
+    int handle = mob_ref_handle(ref);
+    MobTapSet *ts = mob_ref_set(ref);
     enif_mutex_lock(tap_mutex);
     // Building table first: the only caller is the set_root prop deserialiser,
     // which runs before the swap. The active-table fallback keeps any future
     // caller outside a build working.
-    TapHandle *tap = mob_resolve_build_tap_locked(handle);
+    TapHandle *tap = mob_resolve_build_tap_locked(ts, handle);
     if (!tap)
-        tap = mob_resolve_active_tap_locked(handle);
+        tap = mob_resolve_active_tap_locked(ts, handle);
     if (tap) {
         tap->throttle_configured = 1;
         tap->throttle_ms = throttle_ms;
@@ -331,10 +401,10 @@ static void mob_set_throttle_config(int handle, int throttle_ms, int debounce_ms
 // Defaults (when throttle/delta unset on a handle): use reasonable per-event
 // fallbacks so widgets that opt in without explicit config still get sane
 // gating.
-static int mob_throttle_check(int handle, double x, double y, int default_throttle_ms,
+static int mob_throttle_check(MobEventRef ref, double x, double y, int default_throttle_ms,
                               double default_delta) {
     enif_mutex_lock(tap_mutex);
-    TapHandle *h = mob_resolve_active_tap_locked(handle);
+    TapHandle *h = mob_resolve_active_tap_locked(mob_ref_set(ref), mob_ref_handle(ref));
     if (!h) {
         enif_mutex_unlock(tap_mutex);
         return 0;
@@ -374,9 +444,9 @@ static int mob_throttle_check(int handle, double x, double y, int default_thrott
 }
 
 // Read current seq + ts for a handle (for envelope construction).
-static void mob_handle_meta(int handle, uint64_t *seq_out, uint64_t *ts_out) {
+static void mob_handle_meta(MobEventRef ref, uint64_t *seq_out, uint64_t *ts_out) {
     enif_mutex_lock(tap_mutex);
-    TapHandle *tap = mob_resolve_active_tap_locked(handle);
+    TapHandle *tap = mob_resolve_active_tap_locked(mob_ref_set(ref), mob_ref_handle(ref));
     if (tap) {
         *seq_out = tap->seq;
         *ts_out = mob_now_ns() / 1000000ULL; // ms since boot
@@ -432,7 +502,7 @@ static void mob_note_ui_event(void) {
 }
 
 // Called from node onTap blocks — routes tap to BEAM via enif_send.
-static void mob_send_tap(int handle) {
+static void mob_send_tap(MobEventRef handle) {
     ErlNifEnv *msg_env = enif_alloc_env();
     if (!msg_env)
         return;
@@ -451,7 +521,7 @@ static void mob_send_tap(int handle) {
 // ── Focus / blur / submit senders ────────────────────────────────────────────
 // Called from MobTextField SwiftUI view when focus state changes or return key tapped.
 
-static void mob_send_event(int handle, const char *atom) {
+static void mob_send_event(MobEventRef handle, const char *atom) {
     ErlNifEnv *msg_env = enif_alloc_env();
     if (!msg_env)
         return;
@@ -467,7 +537,7 @@ static void mob_send_event(int handle, const char *atom) {
     enif_free_env(msg_env);
 }
 
-static void mob_send_identity_event(int handle, const char *atom) {
+static void mob_send_identity_event(MobEventRef handle, const char *atom) {
     ErlNifEnv *msg_env = enif_alloc_env();
     if (!msg_env)
         return;
@@ -483,26 +553,26 @@ static void mob_send_identity_event(int handle, const char *atom) {
     enif_free_env(msg_env);
 }
 
-static void mob_send_focus(int handle) {
+static void mob_send_focus(MobEventRef handle) {
     mob_send_event(handle, "focus");
 }
-static void mob_send_blur(int handle) {
+static void mob_send_blur(MobEventRef handle) {
     mob_send_event(handle, "blur");
 }
-static void mob_send_submit(int handle) {
+static void mob_send_submit(MobEventRef handle) {
     mob_send_event(handle, "submit");
 }
-static void mob_send_select(int handle) {
+static void mob_send_select(MobEventRef handle) {
     mob_send_event(handle, "select");
 }
-static void mob_send_dismiss(int handle) {
+static void mob_send_dismiss(MobEventRef handle) {
     mob_send_identity_event(handle, "dismiss");
 }
 
 // IME composition. Sends {compose, tag, %{text: ..., phase: ...}} where
 // phase is one of began/updating/committed/cancelled. Called from the
 // text-input layer when marked-text state changes.
-static void mob_send_compose(int handle, const char *text, const char *phase) {
+static void mob_send_compose(MobEventRef handle, const char *text, const char *phase) {
     ErlNifEnv *msg_env = enif_alloc_env();
     if (!msg_env)
         return;
@@ -540,27 +610,27 @@ static void mob_send_compose(int handle, const char *text, const char *phase) {
 // Each fires {atom, tag} just like tap. SwiftUI converts gesture recognizers
 // into onLongPress/onDoubleTap/onSwipe* callbacks on the MobNode.
 
-static void mob_send_long_press(int handle) {
+static void mob_send_long_press(MobEventRef handle) {
     mob_send_event(handle, "long_press");
 }
-static void mob_send_double_tap(int handle) {
+static void mob_send_double_tap(MobEventRef handle) {
     mob_send_event(handle, "double_tap");
 }
-static void mob_send_swipe_left(int handle) {
+static void mob_send_swipe_left(MobEventRef handle) {
     mob_send_event(handle, "swipe_left");
 }
-static void mob_send_swipe_right(int handle) {
+static void mob_send_swipe_right(MobEventRef handle) {
     mob_send_event(handle, "swipe_right");
 }
-static void mob_send_swipe_up(int handle) {
+static void mob_send_swipe_up(MobEventRef handle) {
     mob_send_event(handle, "swipe_up");
 }
-static void mob_send_swipe_down(int handle) {
+static void mob_send_swipe_down(MobEventRef handle) {
     mob_send_event(handle, "swipe_down");
 }
 
 // Generic on_swipe with direction: emits {swipe, tag, direction} where direction is an atom.
-static void mob_send_swipe_with_direction(int handle, const char *direction) {
+static void mob_send_swipe_with_direction(MobEventRef handle, const char *direction) {
     ErlNifEnv *msg_env = enif_alloc_env();
     if (!msg_env)
         return;
@@ -612,7 +682,7 @@ static ERL_NIF_TERM mob_build_scroll_payload(ErlNifEnv *env, double x, double y,
 
 // Send a throttled high-frequency event. Phase is one of:
 //   "began" | "dragging" | "decelerating" | "ended"
-static void mob_send_scroll(int handle, double x, double y, double dx, double dy, double vx,
+static void mob_send_scroll(MobEventRef handle, double x, double y, double dx, double dy, double vx,
                             double vy, const char *phase) {
     // Force-emit for began/ended phases regardless of throttle (semantic
     // boundaries are too important to drop).
@@ -639,7 +709,8 @@ static void mob_send_scroll(int handle, double x, double y, double dx, double dy
     enif_free_env(msg_env);
 }
 
-static void mob_send_drag(int handle, double x, double y, double dx, double dy, const char *phase) {
+static void mob_send_drag(MobEventRef handle, double x, double y, double dx, double dy,
+                          const char *phase) {
     int is_phase_boundary = (strcmp(phase, "began") == 0) || (strcmp(phase, "ended") == 0);
     if (!is_phase_boundary && !mob_throttle_check(handle, x, y, 16, 1.0))
         return;
@@ -675,7 +746,7 @@ static void mob_send_drag(int handle, double x, double y, double dx, double dy, 
     enif_free_env(msg_env);
 }
 
-static void mob_send_pinch(int handle, double scale, double velocity, const char *phase) {
+static void mob_send_pinch(MobEventRef handle, double scale, double velocity, const char *phase) {
     int is_phase_boundary = (strcmp(phase, "began") == 0) || (strcmp(phase, "ended") == 0);
     if (!is_phase_boundary && !mob_throttle_check(handle, scale, 0, 16, 0.01))
         return;
@@ -708,7 +779,8 @@ static void mob_send_pinch(int handle, double scale, double velocity, const char
     enif_free_env(msg_env);
 }
 
-static void mob_send_rotate(int handle, double degrees, double velocity, const char *phase) {
+static void mob_send_rotate(MobEventRef handle, double degrees, double velocity,
+                            const char *phase) {
     int is_phase_boundary = (strcmp(phase, "began") == 0) || (strcmp(phase, "ended") == 0);
     if (!is_phase_boundary && !mob_throttle_check(handle, degrees, 0, 16, 1.0))
         return;
@@ -741,7 +813,7 @@ static void mob_send_rotate(int handle, double degrees, double velocity, const c
     enif_free_env(msg_env);
 }
 
-static void mob_send_pointer_move(int handle, double x, double y) {
+static void mob_send_pointer_move(MobEventRef handle, double x, double y) {
     if (!mob_throttle_check(handle, x, y, 33, 4.0))
         return;
 
@@ -776,41 +848,640 @@ static void mob_send_pointer_move(int handle, double x, double y) {
 }
 
 // ── Batch 5 Tier 2 senders — semantic single-fire scroll events ─────────────
-static void mob_send_scroll_began(int handle) {
+static void mob_send_scroll_began(MobEventRef handle) {
     mob_send_event(handle, "scroll_began");
 }
-static void mob_send_scroll_ended(int handle) {
+static void mob_send_scroll_ended(MobEventRef handle) {
     mob_send_event(handle, "scroll_ended");
 }
-static void mob_send_scroll_settled(int handle) {
+static void mob_send_scroll_settled(MobEventRef handle) {
     mob_send_event(handle, "scroll_settled");
 }
-static void mob_send_top_reached(int handle) {
+static void mob_send_top_reached(MobEventRef handle) {
     mob_send_event(handle, "top_reached");
 }
-static void mob_send_scrolled_past(int handle) {
+static void mob_send_scrolled_past(MobEventRef handle) {
     mob_send_event(handle, "scrolled_past");
 }
 
-// ── Back gesture sender ───────────────────────────────────────────────────────
-// Called from MobHostingController when the left-edge-pan gesture fires.
-// Looks up the :mob_screen registered process and sends {:mob, :back}.
-// Non-static so Swift can call it via the bridging header.
+// ── Window scenes (MOB-245) ───────────────────────────────────────────────────
+//
+// One entry per UIWindowScene mob has seen, keyed by the session's
+// persistentIdentifier (the scene id the BEAM sees). Each entry owns a tap set
+// and a MobViewModel. Set 0 and MobViewModel.shared go to native's DEFAULT
+// scene: whichever scene connects while no other is attached. It is the one a
+// frame with no "scene" key renders into, i.e. the one the unbound primary
+// router shows, so a single-window app runs exactly as before scenes existed.
+//
+// Only application scenes are registered. An AirPlay or cable display
+// connects a UIWindowSceneSessionRoleExternalDisplayNonInteractive scene to
+// every scene-based app; mob provides no content for it (the display
+// mirrors), and registering it would turn a single-window app into a
+// two-scene one.
+//
+// Lifecycle, mirrored by Mob.Scenes on the BEAM side:
+//   * connect, id known  -> re-attached (iPadOS discarded and restored it)
+//   * connect, id new    -> if no scene is attached and a kept entry's
+//                           session is gone (iPadOS made a new session instead
+//                           of restoring it), the new scene takes it over, its
+//                           set and model with it (the default one if it is
+//                           among them). A kept entry whose session is still
+//                           open may yet be restored, so it is left alone.
+//                           With nothing to take over, the scene gets the
+//                           lowest free set, set 0 bringing the shared model
+//   * disconnect         -> released if other scenes are attached; kept, with
+//                           its set and model, if it was the last
+//   * session gone       -> a kept entry whose session is no longer in
+//                           UIApplication.openSessions (the user closed the
+//                           window in the app switcher) is released; checked on
+//                           every attach and whenever an application scene
+//                           activates
+//   * set freed          -> a window that connected with every set taken
+//                           (MOB_SCENE_LIMIT) gets it; so does such a window
+//                           when it re-attaches
+// The BEAM hears, at registered Mob.Scenes, {mob_scene, connected, Id,
+// IsDefault} for a new or re-attached scene, {mob_scene, replaced, OldId,
+// NewId, IsDefault} for a takeover (OldId's router moves to NewId),
+// {mob_scene, disconnected, Id}, and {mob_scene, discarded, Id} for a released
+// kept entry (its router stops). A window without a set is not announced
+// until it gets one. Mob.Scenes also asks scenes/0 when it starts, since
+// nothing can be sent before erts is up.
+//
+// Entries are written on the main thread and read from NIF threads, under
+// @synchronized(mob_scene_lock()).
 
-void mob_handle_back(void) {
+@interface MobSceneEntry : NSObject
+@property(nonatomic, copy) NSString *sceneId;
+@property(nonatomic, weak) UIWindowScene *scene;
+@property(nonatomic, strong) MobViewModel *model;
+@property(nonatomic) int tapSet;
+@property(nonatomic) BOOL attached;
+@end
+
+@implementation MobSceneEntry
+@end
+
+static NSMutableArray<MobSceneEntry *> *g_scene_entries = nil; // connection order
+
+static NSObject *mob_scene_lock(void) {
+    static NSObject *lock;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+      lock = [NSObject new];
+      g_scene_entries = [NSMutableArray array];
+    });
+    return lock;
+}
+
+static MobSceneEntry *mob_scene_entry_locked(NSString *sceneId) {
+    if (!sceneId)
+        return nil;
+    for (MobSceneEntry *entry in g_scene_entries)
+        if ([entry.sceneId isEqualToString:sceneId])
+            return entry;
+    return nil;
+}
+
+static MobSceneEntry *mob_scene_entry_for_set_locked(int set) {
+    for (MobSceneEntry *entry in g_scene_entries)
+        if (entry.tapSet == set)
+            return entry;
+    return nil;
+}
+
+// Whether `scene` is a window scene mob registers: an application one, not
+// an external display's (see the role note above).
+static BOOL mob_scene_is_application(UIScene *scene) {
+    return [scene isKindOfClass:[UIWindowScene class]] &&
+           [scene.session.role isEqualToString:UIWindowSceneSessionRoleApplication];
+}
+
+// The lowest tap set no entry holds, or -1 when all MOB_SCENE_LIMIT are taken.
+// `excluded` are sets removed from the registry but not yet released: their
+// tables still hold the gone window's handles, and the BEAM has not yet been
+// told that window is gone, so its router may still render into them.
+static int mob_scene_free_set_locked(NSArray<NSNumber *> *excluded) {
+    for (int candidate = 0; candidate < MOB_SCENE_LIMIT; candidate++)
+        if (!mob_scene_entry_for_set_locked(candidate) && ![excluded containsObject:@(candidate)])
+            return candidate;
+    return -1;
+}
+
+// Give `entry`, a window that connected with every set taken, the lowest free
+// set, if there is one now. Set 0 brings the shared model, as it does for a new
+// scene; any other keeps the entry's own model, with its error screen cleared.
+static BOOL mob_scene_assign_set_locked(MobSceneEntry *entry, NSArray<NSNumber *> *excluded) {
+    int set = mob_scene_free_set_locked(excluded);
+    if (set < 0)
+        return NO;
+    entry.tapSet = set;
+    if (set == 0)
+        entry.model = MobViewModel.shared;
+    else
+        [entry.model setStartupError:nil];
+    entry.model.sceneId = entry.sceneId;
+    return YES;
+}
+
+static int mob_scene_attached_count(void) {
+    int count = 0;
+    @synchronized(mob_scene_lock()) {
+        for (MobSceneEntry *entry in g_scene_entries)
+            if (entry.attached)
+                count++;
+    }
+    return count;
+}
+
+// The tap set of scene `sceneId`, or -1 for a scene native doesn't know (it
+// went away while the BEAM was rendering for it).
+static int mob_scene_tap_set(NSString *sceneId) {
+    @synchronized(mob_scene_lock()) {
+        MobSceneEntry *entry = mob_scene_entry_locked(sceneId);
+        return entry ? entry.tapSet : -1;
+    }
+}
+
+// The view model frames for `set` are shown in; set 0 always has the shared
+// one, even before any scene exists (a prewarmed or background launch).
+static MobViewModel *mob_scene_model_for_set(int set) {
+    if (set == 0)
+        return MobViewModel.shared;
+    @synchronized(mob_scene_lock()) {
+        return mob_scene_entry_for_set_locked(set).model;
+    }
+}
+
+// Drop every handle a released set holds, so a later scene starts it clean:
+// its tag environments are not leaked and no slot keeps the closed window's
+// throttle state. Before nif_load there is neither a mutex nor a handle.
+//
+// build_generation is deliberately left alone. Zeroing generations[] makes
+// every handle unmatchable until the next window's first set_root, which
+// commits a build_generation past every one the closed window was handed out
+// (clear_taps only ever advances it), so a stale event block from the closed
+// window can't resolve against the reused set, by exact match or by the
+// identity fallback.
+static void mob_release_tap_set(int set) {
+    if (!tap_mutex)
+        return;
+    enif_mutex_lock(tap_mutex);
+    MobTapSet *ts = &tap_sets[set];
+    for (int which = 0; which < 2; which++) {
+        TapHandle *table = ts->tables[which];
+        for (int i = 0; table && i < ts->used[which]; i++)
+            mob_tap_slot_free_locked(&table[i]);
+        ts->used[which] = 0;
+        ts->generations[which] = 0;
+    }
+    ts->handle_next = 0;
+    ts->build_count = 0;
+    enif_mutex_unlock(tap_mutex);
+}
+
+// Release `set` for the next scene. The shared model outlives its scene; a
+// later default scene must not come up showing this one's last tree.
+static void mob_scene_release_set(int set) {
+    mob_release_tap_set(set);
+    if (set == 0)
+        [MobViewModel.shared setRoot:nil transition:@"none" replacesStack:NO];
+}
+
+static ERL_NIF_TERM mob_make_string(ErlNifEnv *env, NSString *string) {
+    const char *utf8 = [string UTF8String] ?: "";
+    size_t len = strlen(utf8);
+    ERL_NIF_TERM term;
+    unsigned char *bytes = enif_make_new_binary(env, len, &term);
+    if (bytes && len > 0)
+        memcpy(bytes, utf8, len);
+    return term;
+}
+
+typedef enum {
+    MOB_SCENE_CONNECTED,
+    MOB_SCENE_REPLACED,
+    MOB_SCENE_DISCONNECTED,
+    MOB_SCENE_DISCARDED
+} MobSceneChange;
+
+// Tell registered Mob.Scenes about scene `sceneId`. `replacedId` is the id
+// whose kept entry a REPLACED scene took over.
+static void mob_tell_scenes(MobSceneChange change, NSString *sceneId, NSString *replacedId,
+                            BOOL isDefault) {
+    if (!mob_runtime_up())
+        return;
+    ErlNifEnv *env = enif_alloc_env();
+    ErlNifPid pid;
+    if (enif_whereis_pid(env, enif_make_atom(env, "Elixir.Mob.Scenes"), &pid)) {
+        ERL_NIF_TERM tag = enif_make_atom(env, "mob_scene");
+        ERL_NIF_TERM id = mob_make_string(env, sceneId);
+        ERL_NIF_TERM def = enif_make_atom(env, isDefault ? "true" : "false");
+        ERL_NIF_TERM msg;
+        switch (change) {
+        case MOB_SCENE_CONNECTED:
+            msg = enif_make_tuple4(env, tag, enif_make_atom(env, "connected"), id, def);
+            break;
+        case MOB_SCENE_REPLACED:
+            msg = enif_make_tuple5(env, tag, enif_make_atom(env, "replaced"),
+                                   mob_make_string(env, replacedId), id, def);
+            break;
+        case MOB_SCENE_DISCONNECTED:
+            msg = enif_make_tuple3(env, tag, enif_make_atom(env, "disconnected"), id);
+            break;
+        case MOB_SCENE_DISCARDED:
+            msg = enif_make_tuple3(env, tag, enif_make_atom(env, "discarded"), id);
+            break;
+        }
+        enif_send(NULL, &pid, env, msg);
+    }
+    enif_free_env(env);
+}
+
+// Implemented by MobHostingController (Swift): re-read the model the registry
+// holds for its window and show it.
+@protocol MobSceneModelHost
+- (void)mobAdoptSceneModel;
+@end
+
+// Make `scene`'s window show its entry's current model. Only needed when that
+// model changes under a window already on screen; a new window asks
+// mob_scene_attach itself. Main thread.
+static void mob_scene_show_model(UIWindowScene *scene) {
+    for (UIWindow *window in scene.windows) {
+        UIViewController *controller = window.rootViewController;
+        if ([controller respondsToSelector:@selector(mobAdoptSceneModel)])
+            [(id<MobSceneModelHost>)controller mobAdoptSceneModel];
+    }
+}
+
+// The persistentIdentifier of every session iOS still holds for this app,
+// including those whose scene is disconnected. Main thread.
+static NSSet<NSString *> *mob_scene_open_ids(void) {
+    NSMutableSet<NSString *> *openIds = [NSMutableSet set];
+    for (UISceneSession *session in UIApplication.sharedApplication.openSessions)
+        if (session.persistentIdentifier)
+            [openIds addObject:session.persistentIdentifier];
+    return openIds;
+}
+
+// Remove every kept (unattached) entry but `spare` whose session is not in
+// `openIds`: that window is not coming back. Its set goes to `released` and,
+// if the BEAM ever heard of it, its id to `discarded`.
+static void mob_scene_prune_gone_locked(NSSet<NSString *> *openIds, MobSceneEntry *spare,
+                                        NSMutableArray<NSNumber *> *released,
+                                        NSMutableArray<NSString *> *discarded) {
+    for (MobSceneEntry *gone in [g_scene_entries copy]) {
+        if (gone == spare || gone.attached || [openIds containsObject:gone.sceneId])
+            continue;
+        if (gone.tapSet >= 0) {
+            [released addObject:@(gone.tapSet)];
+            [discarded addObject:gone.sceneId];
+        }
+        [g_scene_entries removeObject:gone];
+    }
+}
+
+// Give the first attached window still without a set (it connected with all
+// MOB_SCENE_LIMIT taken) a set that was just released, or nil.
+static MobSceneEntry *mob_scene_promote_over_limit(void) {
+    @synchronized(mob_scene_lock()) {
+        for (MobSceneEntry *entry in g_scene_entries)
+            if (entry.attached && entry.tapSet < 0)
+                return mob_scene_assign_set_locked(entry, nil) ? entry : nil;
+    }
+    return nil;
+}
+
+// Outside the lock, finish removing entries: release their sets, tell the BEAM
+// which kept windows are gone for good, then hand the freed sets to windows
+// waiting for one. Released before they are handed on, so the window that gets
+// one starts on a clean set. Main thread.
+static void mob_scene_finish_removal(NSArray<NSNumber *> *released,
+                                     NSArray<NSString *> *discarded) {
+    for (NSNumber *set in released)
+        mob_scene_release_set(set.intValue);
+    for (NSString *sceneId in discarded)
+        mob_tell_scenes(MOB_SCENE_DISCARDED, sceneId, nil, NO);
+    if (released.count == 0)
+        return;
+    MobSceneEntry *promoted;
+    while ((promoted = mob_scene_promote_over_limit())) {
+        // Set 0 swaps the window's model for the shared one under a window
+        // already on screen.
+        if (promoted.tapSet == 0)
+            mob_scene_show_model(promoted.scene);
+        mob_tell_scenes(MOB_SCENE_CONNECTED, promoted.sceneId, nil, promoted.tapSet == 0);
+    }
+}
+
+// Release kept entries whose session the user has closed since. Run when an
+// application scene activates: closing a window in the app switcher discards
+// its session without connecting or disconnecting anything. Main thread.
+static void mob_scene_prune_discarded(void) {
+    NSSet<NSString *> *openIds = mob_scene_open_ids();
+    NSMutableArray<NSNumber *> *released = [NSMutableArray array];
+    NSMutableArray<NSString *> *discarded = [NSMutableArray array];
+    @synchronized(mob_scene_lock()) {
+        mob_scene_prune_gone_locked(openIds, nil, released, discarded);
+    }
+    mob_scene_finish_removal(released, discarded);
+}
+
+// Attach `scene`, returning the view model its root view shows. Main thread.
+// Called from the scene-connect observer and from MobHostingController (the
+// generated SceneDelegate builds the hosting controller before or after the
+// notification, depending on the iOS version), so repeats are no-ops.
+NSObject *mob_scene_attach(UIWindowScene *scene) {
+    NSString *sceneId = scene.session.persistentIdentifier;
+    if (!sceneId || !mob_scene_is_application(scene))
+        return MobViewModel.shared;
+
+    NSSet<NSString *> *openIds = mob_scene_open_ids();
+    MobSceneEntry *entry;
+    NSString *replacedId = nil;
+    BOOL announce = NO;
+    BOOL hasSet = NO; // under the lock, i.e. before finish_removal can promote it
+    NSMutableArray<NSNumber *> *released = [NSMutableArray array];
+    NSMutableArray<NSString *> *discarded = [NSMutableArray array];
+
+    @synchronized(mob_scene_lock()) {
+        entry = mob_scene_entry_locked(sceneId);
+        BOOL anyAttached = NO;
+        for (MobSceneEntry *other in g_scene_entries)
+            anyAttached = anyAttached || other.attached;
+
+        // With no scene attached, a new id whose kept entry's session is gone
+        // means iPadOS made this new session instead of restoring that one,
+        // so the new scene takes the entry over and the window comes up on
+        // the same tree with live taps. The lowest set wins, so the default
+        // scene's entry, the primary's window, is the one taken. A kept entry
+        // whose session is still open may yet reconnect (a split of two
+        // windows comes back one window at a time), and taking it over would
+        // show that window's tree in this one.
+        MobSceneEntry *kept = nil;
+        if (!entry && !anyAttached)
+            for (MobSceneEntry *gone in g_scene_entries)
+                if (![openIds containsObject:gone.sceneId] && gone.tapSet >= 0 &&
+                    (!kept || gone.tapSet < kept.tapSet))
+                    kept = gone;
+        // Every other kept entry whose session is gone is released.
+        mob_scene_prune_gone_locked(openIds, entry ?: kept, released, discarded);
+
+        if (entry) {
+            announce = !entry.attached;
+        } else if (kept) {
+            entry = kept;
+            replacedId = entry.sceneId;
+            entry.sceneId = sceneId;
+            entry.model.sceneId = sceneId;
+            announce = YES;
+        }
+
+        // Not from a set this attach just pruned (see
+        // mob_scene_free_set_locked). If that leaves none, the scene waits
+        // without one, and mob_scene_finish_removal below hands the pruned set
+        // to a waiting window once it is released and the BEAM has heard its
+        // old window is gone.
+        if (!entry) {
+            int set = mob_scene_free_set_locked(released);
+            entry = [MobSceneEntry new];
+            entry.sceneId = sceneId;
+            entry.tapSet = set;
+            entry.model =
+                set == 0 ? MobViewModel.shared : [[MobViewModel alloc] initWithWatchdog:NO];
+            entry.model.sceneId = sceneId;
+            if (set < 0) {
+                LOGE(@"scene %@: more than %d windows; this one shows nothing", sceneId,
+                     MOB_SCENE_LIMIT);
+                [entry.model setStartupError:@"This app can't open more windows."];
+            }
+            [g_scene_entries addObject:entry];
+            announce = YES;
+        } else if (entry.tapSet < 0 && mob_scene_assign_set_locked(entry, released)) {
+            // A window that connected over the limit, re-attaching now that a
+            // set is free. The BEAM has never heard of it.
+            announce = YES;
+        }
+        entry.scene = scene;
+        entry.attached = YES;
+        hasSet = entry.tapSet >= 0;
+    }
+
+    // A scene that waited for a pruned set was announced when
+    // finish_removal promoted it.
+    mob_scene_finish_removal(released, discarded);
+    if (announce && hasSet)
+        mob_tell_scenes(replacedId ? MOB_SCENE_REPLACED : MOB_SCENE_CONNECTED, sceneId, replacedId,
+                        entry.tapSet == 0);
+    return entry.model;
+}
+
+static void mob_scene_detach(UIWindowScene *scene) {
+    if (!mob_scene_is_application(scene))
+        return;
+    NSString *sceneId = scene.session.persistentIdentifier;
+    int released = -1;
+    BOOL announced = NO;
+
+    @synchronized(mob_scene_lock()) {
+        MobSceneEntry *entry = mob_scene_entry_locked(sceneId);
+        if (!entry || !entry.attached)
+            return;
+        // A window without a set was never announced.
+        announced = entry.tapSet >= 0;
+        BOOL othersAttached = NO;
+        for (MobSceneEntry *other in g_scene_entries)
+            othersAttached = othersAttached || (other != entry && other.attached);
+
+        if (othersAttached) {
+            released = entry.tapSet;
+            [g_scene_entries removeObject:entry];
+        } else {
+            entry.attached = NO;
+        }
+    }
+
+    if (announced)
+        mob_tell_scenes(MOB_SCENE_DISCONNECTED, sceneId, nil, NO);
+    mob_scene_finish_removal(released >= 0 ? @[ @(released) ] : @[], @[]);
+}
+
+void mob_install_scene_observers(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+      NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+      [center addObserverForName:UISceneWillConnectNotification
+                          object:nil
+                           queue:NSOperationQueue.mainQueue
+                      usingBlock:^(NSNotification *note) {
+                        if (mob_scene_is_application(note.object))
+                            mob_scene_attach((UIWindowScene *)note.object);
+                      }];
+      [center addObserverForName:UISceneDidDisconnectNotification
+                          object:nil
+                           queue:NSOperationQueue.mainQueue
+                      usingBlock:^(NSNotification *note) {
+                        if (mob_scene_is_application(note.object))
+                            mob_scene_detach((UIWindowScene *)note.object);
+                      }];
+      [center addObserverForName:UISceneDidActivateNotification
+                          object:nil
+                           queue:NSOperationQueue.mainQueue
+                      usingBlock:^(NSNotification *note) {
+                        if (mob_scene_is_application(note.object))
+                            mob_scene_prune_discarded();
+                      }];
+      // A scene that connected before this ran (mob_init_ui reached from a
+      // scene delegate rather than from launch).
+      for (UIScene *scene in UIApplication.sharedApplication.connectedScenes)
+          if (mob_scene_is_application(scene))
+              mob_scene_attach((UIWindowScene *)scene);
+    });
+}
+
+// The window scene frames with no "scene" key are shown in: the default
+// scene's, else the first application window scene. Main thread.
+static UIWindowScene *mob_default_window_scene(void) {
+    @synchronized(mob_scene_lock()) {
+        MobSceneEntry *entry = mob_scene_entry_for_set_locked(0);
+        if (entry.attached && entry.scene)
+            return entry.scene;
+    }
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes)
+        if (mob_scene_is_application(scene))
+            return (UIWindowScene *)scene;
+    return nil;
+}
+
+// Scene `sceneId`'s window scene, or the default one for nil. Main thread.
+static UIWindowScene *mob_window_scene_for(NSString *sceneId) {
+    if (!sceneId)
+        return mob_default_window_scene();
+    @synchronized(mob_scene_lock()) {
+        MobSceneEntry *entry = mob_scene_entry_locked(sceneId);
+        return entry.attached ? entry.scene : nil;
+    }
+}
+
+static NSString *mob_scene_id_from_term(ErlNifEnv *env, ERL_NIF_TERM term) {
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, term, &bin) && !enif_inspect_iolist_as_binary(env, term, &bin))
+        return nil;
+    return [[NSString alloc] initWithBytes:bin.data length:bin.size encoding:NSUTF8StringEncoding];
+}
+
+// Deliver a message that belongs to one window — the back gesture, a size
+// class change, an alert result. With one scene attached it goes to
+// :mob_screen, exactly as before multi-window. With several, Mob.Scenes gets
+// {mob_scene_event, SceneId, Msg} and hands Msg to that scene's router.
+static void mob_send_window_message(NSString *sceneId, ErlNifEnv *env, ERL_NIF_TERM msg) {
+    ErlNifPid pid;
+    if (sceneId && mob_scene_attached_count() > 1 &&
+        enif_whereis_pid(env, enif_make_atom(env, "Elixir.Mob.Scenes"), &pid)) {
+        enif_send(NULL, &pid, env,
+                  enif_make_tuple3(env, enif_make_atom(env, "mob_scene_event"),
+                                   mob_make_string(env, sceneId), msg));
+        return;
+    }
+    if (enif_whereis_pid(env, enif_make_atom(env, "mob_screen"), &pid))
+        enif_send(NULL, &pid, env, msg);
+}
+
+// ── Back gesture sender ───────────────────────────────────────────────────────
+// Called from MobHostingController when the left-edge-pan gesture fires, with
+// the id of the scene the gesture happened in (NULL when it isn't known yet).
+// Sends {:mob, :back} to that window's router. Non-static so Swift can call it
+// via the bridging header.
+
+void mob_handle_back(const char *scene_id) {
     // A left-edge swipe during the boot splash lands here before erts is up
     // (the pan recognizer is installed by the root controller the SceneDelegate
     // creates before mob_boot_runtime). No screen to tell yet (MOB-199).
     if (!mob_runtime_up())
         return;
     ErlNifEnv *env = enif_alloc_env();
-    ErlNifPid pid;
-    if (enif_whereis_pid(env, enif_make_atom(env, "mob_screen"), &pid)) {
-        ERL_NIF_TERM msg =
-            enif_make_tuple2(env, enif_make_atom(env, "mob"), enif_make_atom(env, "back"));
-        enif_send(NULL, &pid, env, msg);
-    }
+    ERL_NIF_TERM msg =
+        enif_make_tuple2(env, enif_make_atom(env, "mob"), enif_make_atom(env, "back"));
+    mob_send_window_message(scene_id ? [NSString stringWithUTF8String:scene_id] : nil, env, msg);
     enif_free_env(env);
+}
+
+// ── NIF: scenes/0 ─────────────────────────────────────────────────────────────
+// [{SceneId, IsDefault}] for every attached scene, oldest first. Mob.Scenes
+// asks once when it starts, for the scenes that connected before it existed.
+
+static ERL_NIF_TERM nif_scenes(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    ERL_NIF_TERM list = enif_make_list(env, 0);
+    @synchronized(mob_scene_lock()) {
+        for (MobSceneEntry *entry in [g_scene_entries reverseObjectEnumerator]) {
+            if (!entry.attached || entry.tapSet < 0)
+                continue;
+            ERL_NIF_TERM item =
+                enif_make_tuple2(env, mob_make_string(env, entry.sceneId),
+                                 enif_make_atom(env, entry.tapSet == 0 ? "true" : "false"));
+            list = enif_make_list_cell(env, item, list);
+        }
+    }
+    return list;
+}
+
+// ── NIF: scene_multiple_supported/0 ───────────────────────────────────────────
+// UIApplication.supportsMultipleScenes: the app's Info.plist opts in
+// (mob.exs multi_window: true) and the device can show several windows.
+// Read on the main thread with the same bounded wait as nif_safe_area, so a
+// main thread that has not reached an idle tick can't hang the caller.
+
+static ERL_NIF_TERM nif_scene_multiple_supported(ErlNifEnv *env, int argc,
+                                                 const ERL_NIF_TERM argv[]) {
+    __block BOOL supported = NO;
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+      supported = UIApplication.sharedApplication.supportsMultipleScenes;
+      dispatch_semaphore_signal(done);
+    });
+    dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC));
+    if (dispatch_semaphore_wait(done, deadline) != 0)
+        return enif_make_atom(env, "false");
+    return enif_make_atom(env, supported ? "true" : "false");
+}
+
+// ── NIF: scene_request/0 ──────────────────────────────────────────────────────
+// Ask iOS for a new window of this app (UISceneSessionActivationRequest,
+// iOS 17, the deployment floor). The request is asynchronous: `ok` means it
+// was made, and the new scene then connects like any other. iOS can still
+// refuse it — iPhone Duo's outer display, a system window limit — and then
+// the caller gets {mob_scene, request_failed, Reason}. Without
+// supportsMultipleScenes the request would only fail, so it is refused here.
+
+static ERL_NIF_TERM nif_scene_request(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    ErlNifPid caller;
+    enif_self(env, &caller);
+    __block BOOL requested = NO;
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+      UIApplication *app = UIApplication.sharedApplication;
+      if (app.supportsMultipleScenes) {
+          requested = YES;
+          [app activateSceneSessionForRequest:[UISceneSessionActivationRequest request]
+                                 errorHandler:^(NSError *error) {
+                                   if (!mob_runtime_up())
+                                       return;
+                                   ErlNifEnv *msg_env = enif_alloc_env();
+                                   ERL_NIF_TERM msg = enif_make_tuple3(
+                                       msg_env, enif_make_atom(msg_env, "mob_scene"),
+                                       enif_make_atom(msg_env, "request_failed"),
+                                       mob_make_string(msg_env, error.localizedDescription));
+                                   enif_send(NULL, &caller, msg_env, msg);
+                                   enif_free_env(msg_env);
+                                 }];
+      }
+      dispatch_semaphore_signal(done);
+    });
+    dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC));
+    if (dispatch_semaphore_wait(done, deadline) != 0 || !requested)
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "unsupported"));
+    return enif_make_atom(env, "ok");
 }
 
 // ── Window-connected sender ───────────────────────────────────────────────────
@@ -845,7 +1516,7 @@ void mob_notify_window_connected(void) {
 // ── Change senders ────────────────────────────────────────────────────────────
 // Called from MobNode onChange blocks when an input widget fires.
 
-static void mob_send_change(int handle, ERL_NIF_TERM value_term) {
+static void mob_send_change(MobEventRef handle, ERL_NIF_TERM value_term) {
     ErlNifEnv *msg_env = enif_alloc_env();
     if (!msg_env)
         return;
@@ -862,7 +1533,7 @@ static void mob_send_change(int handle, ERL_NIF_TERM value_term) {
     enif_free_env(msg_env);
 }
 
-static void mob_send_change_str(int handle, const char *utf8) {
+static void mob_send_change_str(MobEventRef handle, const char *utf8) {
     ErlNifEnv *tmp = enif_alloc_env();
     ErlNifBinary bin;
     size_t len = strlen(utf8);
@@ -873,14 +1544,14 @@ static void mob_send_change_str(int handle, const char *utf8) {
     enif_free_env(tmp);
 }
 
-static void mob_send_change_bool(int handle, int bool_val) {
+static void mob_send_change_bool(MobEventRef handle, int bool_val) {
     ErlNifEnv *tmp = enif_alloc_env();
     ERL_NIF_TERM term = enif_make_atom(tmp, bool_val ? "true" : "false");
     mob_send_change(handle, term);
     enif_free_env(tmp);
 }
 
-static void mob_send_change_float(int handle, double value) {
+static void mob_send_change_float(MobEventRef handle, double value) {
     ErlNifEnv *tmp = enif_alloc_env();
     ERL_NIF_TERM term = enif_make_double(tmp, value);
     mob_send_change(handle, term);
@@ -1323,7 +1994,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             node.activeTab = [activeTab description];
         id onTabSelect = pv[MOB_PROP_on_tab_select];
         if (onTabSelect && [onTabSelect isKindOfClass:[NSNumber class]]) {
-            int handle = [onTabSelect intValue];
+            MobEventRef handle = mob_event_ref([onTabSelect intValue]);
             node.onTabSelect = ^(NSString *tabId) {
               mob_send_change_str(handle, [tabId UTF8String]);
             };
@@ -1423,7 +2094,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onTap = pv[MOB_PROP_on_tap];
         if (onTap && [onTap isKindOfClass:[NSNumber class]]) {
-            int handle = [onTap intValue];
+            MobEventRef handle = mob_event_ref([onTap intValue]);
             node.onTap = ^{
               mob_send_tap(handle);
             };
@@ -1462,7 +2133,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onFocus = pv[MOB_PROP_on_focus];
         if (onFocus && [onFocus isKindOfClass:[NSNumber class]]) {
-            int handle = [onFocus intValue];
+            MobEventRef handle = mob_event_ref([onFocus intValue]);
             node.onFocus = ^{
               mob_send_focus(handle);
             };
@@ -1470,7 +2141,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onBlur = pv[MOB_PROP_on_blur];
         if (onBlur && [onBlur isKindOfClass:[NSNumber class]]) {
-            int handle = [onBlur intValue];
+            MobEventRef handle = mob_event_ref([onBlur intValue]);
             node.onBlur = ^{
               mob_send_blur(handle);
             };
@@ -1478,7 +2149,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onSubmit = pv[MOB_PROP_on_submit];
         if (onSubmit && [onSubmit isKindOfClass:[NSNumber class]]) {
-            int handle = [onSubmit intValue];
+            MobEventRef handle = mob_event_ref([onSubmit intValue]);
             node.onSubmit = ^{
               mob_send_submit(handle);
             };
@@ -1486,7 +2157,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onCompose = pv[MOB_PROP_on_compose];
         if (onCompose && [onCompose isKindOfClass:[NSNumber class]]) {
-            int handle = [onCompose intValue];
+            MobEventRef handle = mob_event_ref([onCompose intValue]);
             node.onCompose = ^(NSString *text, NSString *phase) {
               mob_send_compose(handle, text ? [text UTF8String] : "",
                                phase ? [phase UTF8String] : "updating");
@@ -1495,7 +2166,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onSelect = pv[MOB_PROP_on_select];
         if (onSelect && [onSelect isKindOfClass:[NSNumber class]]) {
-            int handle = [onSelect intValue];
+            MobEventRef handle = mob_event_ref([onSelect intValue]);
             node.onSelect = ^{
               mob_send_select(handle);
             };
@@ -1504,7 +2175,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         // ── Gestures (Batch 4) ──
         id onLongPress = pv[MOB_PROP_on_long_press];
         if (onLongPress && [onLongPress isKindOfClass:[NSNumber class]]) {
-            int handle = [onLongPress intValue];
+            MobEventRef handle = mob_event_ref([onLongPress intValue]);
             node.onLongPress = ^{
               mob_send_long_press(handle);
             };
@@ -1512,7 +2183,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onDoubleTap = pv[MOB_PROP_on_double_tap];
         if (onDoubleTap && [onDoubleTap isKindOfClass:[NSNumber class]]) {
-            int handle = [onDoubleTap intValue];
+            MobEventRef handle = mob_event_ref([onDoubleTap intValue]);
             node.onDoubleTap = ^{
               mob_send_double_tap(handle);
             };
@@ -1520,7 +2191,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onSwipe = pv[MOB_PROP_on_swipe];
         if (onSwipe && [onSwipe isKindOfClass:[NSNumber class]]) {
-            int handle = [onSwipe intValue];
+            MobEventRef handle = mob_event_ref([onSwipe intValue]);
             node.onSwipe = ^(NSString *direction) {
               mob_send_swipe_with_direction(handle, [direction UTF8String]);
             };
@@ -1528,7 +2199,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onSwipeLeft = pv[MOB_PROP_on_swipe_left];
         if (onSwipeLeft && [onSwipeLeft isKindOfClass:[NSNumber class]]) {
-            int handle = [onSwipeLeft intValue];
+            MobEventRef handle = mob_event_ref([onSwipeLeft intValue]);
             node.onSwipeLeft = ^{
               mob_send_swipe_left(handle);
             };
@@ -1536,7 +2207,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onSwipeRight = pv[MOB_PROP_on_swipe_right];
         if (onSwipeRight && [onSwipeRight isKindOfClass:[NSNumber class]]) {
-            int handle = [onSwipeRight intValue];
+            MobEventRef handle = mob_event_ref([onSwipeRight intValue]);
             node.onSwipeRight = ^{
               mob_send_swipe_right(handle);
             };
@@ -1544,7 +2215,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onSwipeUp = pv[MOB_PROP_on_swipe_up];
         if (onSwipeUp && [onSwipeUp isKindOfClass:[NSNumber class]]) {
-            int handle = [onSwipeUp intValue];
+            MobEventRef handle = mob_event_ref([onSwipeUp intValue]);
             node.onSwipeUp = ^{
               mob_send_swipe_up(handle);
             };
@@ -1552,7 +2223,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onSwipeDown = pv[MOB_PROP_on_swipe_down];
         if (onSwipeDown && [onSwipeDown isKindOfClass:[NSNumber class]]) {
-            int handle = [onSwipeDown intValue];
+            MobEventRef handle = mob_event_ref([onSwipeDown intValue]);
             node.onSwipeDown = ^{
               mob_send_swipe_down(handle);
             };
@@ -1576,7 +2247,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onScroll = pv[MOB_PROP_on_scroll];
         if ([onScroll isKindOfClass:[NSNumber class]]) {
-            int handle = [onScroll intValue];
+            MobEventRef handle = mob_event_ref([onScroll intValue]);
             MOB_APPLY_THROTTLE(handle, @"scroll_config");
             node.onScroll = ^(CGFloat dx, CGFloat dy, CGFloat x, CGFloat y, CGFloat vx, CGFloat vy,
                               NSString *phase) {
@@ -1587,7 +2258,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onDrag = pv[MOB_PROP_on_drag];
         if ([onDrag isKindOfClass:[NSNumber class]]) {
-            int handle = [onDrag intValue];
+            MobEventRef handle = mob_event_ref([onDrag intValue]);
             MOB_APPLY_THROTTLE(handle, @"drag_config");
             node.onDrag = ^(CGFloat dx, CGFloat dy, CGFloat x, CGFloat y, NSString *phase) {
               mob_send_drag(handle, x, y, dx, dy, phase ? [phase UTF8String] : "dragging");
@@ -1596,7 +2267,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onPinch = pv[MOB_PROP_on_pinch];
         if ([onPinch isKindOfClass:[NSNumber class]]) {
-            int handle = [onPinch intValue];
+            MobEventRef handle = mob_event_ref([onPinch intValue]);
             MOB_APPLY_THROTTLE(handle, @"pinch_config");
             node.onPinch = ^(CGFloat scale, CGFloat velocity, NSString *phase) {
               mob_send_pinch(handle, scale, velocity, phase ? [phase UTF8String] : "dragging");
@@ -1605,7 +2276,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onRotate = pv[MOB_PROP_on_rotate];
         if ([onRotate isKindOfClass:[NSNumber class]]) {
-            int handle = [onRotate intValue];
+            MobEventRef handle = mob_event_ref([onRotate intValue]);
             MOB_APPLY_THROTTLE(handle, @"rotate_config");
             node.onRotate = ^(CGFloat degrees, CGFloat velocity, NSString *phase) {
               mob_send_rotate(handle, degrees, velocity, phase ? [phase UTF8String] : "dragging");
@@ -1614,7 +2285,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onPointerMove = pv[MOB_PROP_on_pointer_move];
         if ([onPointerMove isKindOfClass:[NSNumber class]]) {
-            int handle = [onPointerMove intValue];
+            MobEventRef handle = mob_event_ref([onPointerMove intValue]);
             MOB_APPLY_THROTTLE(handle, @"pointer_config");
             node.onPointerMove = ^(CGFloat x, CGFloat y) {
               mob_send_pointer_move(handle, x, y);
@@ -1626,7 +2297,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         // ── Batch 5 Tier 2: semantic single-fire scroll events ──
         id onScrollBegan = pv[MOB_PROP_on_scroll_began];
         if ([onScrollBegan isKindOfClass:[NSNumber class]]) {
-            int handle = [onScrollBegan intValue];
+            MobEventRef handle = mob_event_ref([onScrollBegan intValue]);
             node.onScrollBegan = ^{
               mob_send_scroll_began(handle);
             };
@@ -1634,7 +2305,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onScrollEnded = pv[MOB_PROP_on_scroll_ended];
         if ([onScrollEnded isKindOfClass:[NSNumber class]]) {
-            int handle = [onScrollEnded intValue];
+            MobEventRef handle = mob_event_ref([onScrollEnded intValue]);
             node.onScrollEnded = ^{
               mob_send_scroll_ended(handle);
             };
@@ -1642,7 +2313,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onScrollSettled = pv[MOB_PROP_on_scroll_settled];
         if ([onScrollSettled isKindOfClass:[NSNumber class]]) {
-            int handle = [onScrollSettled intValue];
+            MobEventRef handle = mob_event_ref([onScrollSettled intValue]);
             node.onScrollSettled = ^{
               mob_send_scroll_settled(handle);
             };
@@ -1650,7 +2321,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onTopReached = pv[MOB_PROP_on_top_reached];
         if ([onTopReached isKindOfClass:[NSNumber class]]) {
-            int handle = [onTopReached intValue];
+            MobEventRef handle = mob_event_ref([onTopReached intValue]);
             node.onTopReached = ^{
               mob_send_top_reached(handle);
             };
@@ -1658,7 +2329,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onScrolledPast = pv[MOB_PROP_on_scrolled_past];
         if ([onScrolledPast isKindOfClass:[NSNumber class]]) {
-            int handle = [onScrolledPast intValue];
+            MobEventRef handle = mob_event_ref([onScrolledPast intValue]);
             node.onScrolledPast = ^{
               mob_send_scrolled_past(handle);
             };
@@ -1834,7 +2505,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
             id onDismiss = pv[MOB_PROP_on_dismiss];
             if (onDismiss && [onDismiss isKindOfClass:[NSNumber class]]) {
-                int handle = [onDismiss intValue];
+                MobEventRef handle = mob_event_ref([onDismiss intValue]);
                 node.onDismiss = ^{
                   mob_send_dismiss(handle);
                 };
@@ -1874,7 +2545,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onEndReached = pv[MOB_PROP_on_end_reached];
         if (onEndReached && [onEndReached isKindOfClass:[NSNumber class]]) {
-            int handle = [onEndReached intValue];
+            MobEventRef handle = mob_event_ref([onEndReached intValue]);
             node.onTap = ^{
               mob_send_tap(handle);
             };
@@ -1885,7 +2556,7 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
 
         id onChange = pv[MOB_PROP_on_change];
         if (onChange && [onChange isKindOfClass:[NSNumber class]]) {
-            int handle = [onChange intValue];
+            MobEventRef handle = mob_event_ref([onChange intValue]);
             switch (node.nodeType) {
             case MobNodeTypeTextField:
                 node.onChangeStr = ^(NSString *v) {
@@ -2607,19 +3278,19 @@ static ERL_NIF_TERM nif_device_keep_awake(ErlNifEnv *env, int argc, const ERL_NI
 // answer", and the caller retries on a later paint instead of caching it. Never
 // blocking forever matters more than either — an app that never boots is a far
 // worse bug than a screen that pads wrongly for one frame.
+//
+// safe_area/1 takes a scene id (MOB-245) and reads that scene's window; a
+// scene native doesn't know answers no_window. safe_area/0 reads the default
+// scene's window, so a second window can't hand the primary router its insets.
 static ERL_NIF_TERM nif_safe_area(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    NSString *sceneId = argc == 1 ? mob_scene_id_from_term(env, argv[0]) : nil;
+    if (argc == 1 && !sceneId)
+        return enif_make_badarg(env);
     __block UIEdgeInsets insets = UIEdgeInsetsZero;
     __block BOOL had_window = NO;
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
     dispatch_async(dispatch_get_main_queue(), ^{
-      UIWindow *window = nil;
-      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-          if ([scene isKindOfClass:[UIWindowScene class]]) {
-              UIWindowScene *ws = (UIWindowScene *)scene;
-              window = ws.windows.firstObject;
-              break;
-          }
-      }
+      UIWindow *window = mob_window_scene_for(sceneId).windows.firstObject;
       if (window) {
           insets = window.safeAreaInsets;
           had_window = YES;
@@ -2667,20 +3338,20 @@ static const char *mob_size_class_name(UIUserInterfaceSizeClass c) {
     }
 }
 
+// size_class/1 takes a scene id and reads that scene's window, like
+// safe_area/1; size_class/0 reads the default scene's.
 static ERL_NIF_TERM nif_size_class(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    NSString *sceneId = argc == 1 ? mob_scene_id_from_term(env, argv[0]) : nil;
+    if (argc == 1 && !sceneId)
+        return enif_make_badarg(env);
     __block UIUserInterfaceSizeClass h = UIUserInterfaceSizeClassUnspecified;
     __block UIUserInterfaceSizeClass v = UIUserInterfaceSizeClassUnspecified;
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
     dispatch_async(dispatch_get_main_queue(), ^{
-      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-          if ([scene isKindOfClass:[UIWindowScene class]]) {
-              UIWindow *window = ((UIWindowScene *)scene).windows.firstObject;
-              if (window) {
-                  h = window.traitCollection.horizontalSizeClass;
-                  v = window.traitCollection.verticalSizeClass;
-              }
-              break;
-          }
+      UIWindow *window = mob_window_scene_for(sceneId).windows.firstObject;
+      if (window) {
+          h = window.traitCollection.horizontalSizeClass;
+          v = window.traitCollection.verticalSizeClass;
       }
       dispatch_semaphore_signal(done);
     });
@@ -2698,10 +3369,11 @@ static ERL_NIF_TERM nif_size_class(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 }
 
 // Called from MobRootView.swift when its horizontal/vertical size class pair
-// changes, and once when it first appears. Sends {:mob_size_class, H, V} to
-// the :mob_screen router, which hands it to every live screen. Screens drop a
-// value they already hold, so reporting the same pair twice is harmless.
-void mob_notify_size_class(const char *horizontal, const char *vertical) {
+// changes, and once when it first appears, with the id of the scene the root
+// view is in (NULL before it knows). Sends {:mob_size_class, H, V} to that
+// window's router, which hands it to every live screen. Screens drop a value
+// they already hold, so reporting the same pair twice is harmless.
+void mob_notify_size_class(const char *scene_id, const char *horizontal, const char *vertical) {
     if (!horizontal || !vertical)
         return;
     // Before the BEAM is up there is no screen to tell; screens mounted later
@@ -2710,13 +3382,10 @@ void mob_notify_size_class(const char *horizontal, const char *vertical) {
     if (!mob_runtime_up())
         return;
     ErlNifEnv *env = enif_alloc_env();
-    ErlNifPid pid;
-    if (enif_whereis_pid(env, enif_make_atom(env, "mob_screen"), &pid)) {
-        ERL_NIF_TERM msg =
-            enif_make_tuple3(env, enif_make_atom(env, "mob_size_class"),
-                             enif_make_atom(env, horizontal), enif_make_atom(env, vertical));
-        enif_send(NULL, &pid, env, msg);
-    }
+    ERL_NIF_TERM msg =
+        enif_make_tuple3(env, enif_make_atom(env, "mob_size_class"),
+                         enif_make_atom(env, horizontal), enif_make_atom(env, vertical));
+    mob_send_window_message(scene_id ? [NSString stringWithUTF8String:scene_id] : nil, env, msg);
     enif_free_env(env);
 }
 
@@ -2844,6 +3513,27 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
         return enif_make_atom(env, "error");
     }
 
+    // Which window this frame is for (MOB-245). A root with no "scene" key
+    // comes from the unbound primary router and goes to the default scene's
+    // set 0, as every frame did before scenes existed. A scene native no
+    // longer knows was built into the scratch set by clear_taps/1 and is
+    // committed there and shown nowhere.
+    id sceneRaw = ((NSDictionary *)json)[@"scene"];
+    NSString *sceneId = [sceneRaw isKindOfClass:[NSString class]] ? sceneRaw : nil;
+    int set = sceneId ? mob_scene_tap_set(sceneId) : 0;
+    if (set < 0)
+        set = MOB_TAP_SCRATCH_SET;
+    if (set != tap_build_set) {
+        // clear_taps prepared another set, so the handles in this tree name
+        // that set's generation. Committing either way would wire the tree to
+        // the wrong table.
+        LOGE(@"set_root: frame for %@ was built for tap set %d, not %d; dropped",
+             sceneId ?: @"the default scene", tap_build_set, set);
+        return enif_make_atom(env, "ok");
+    }
+    MobTapSet *ts = &tap_sets[set];
+
+    g_node_tap_set = set;
     MobNode *node = mob_node_from_dict((NSDictionary *)json);
     if (!node)
         return enif_make_atom(env, "error");
@@ -2863,7 +3553,11 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     // is dispatched to the main thread async — the teardown animation
     // outlives this call). Elements that stay in the tree but stop being
     // laid out are handled separately, via mob_unregister_frame.
-    mob_adopt_frame_ids(mob_collect_frame_ids(node));
+    //
+    // The registry belongs to the default scene (set 0): further windows do
+    // not take part in it (decisions/2026-10-02-one-router-per-window-scene.md).
+    if (set == 0)
+        mob_adopt_frame_ids(mob_collect_frame_ids(node));
 
     // Snapshot and reset the transition
     enif_mutex_lock(tap_mutex);
@@ -2872,33 +3566,34 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     transition[sizeof(transition) - 1] = 0;
     strncpy(g_transition, "none", sizeof(g_transition));
     // Commit the freshly-built tap table: register_tap wrote this frame's
-    // handlers into 1 - tap_active; make that table active now so events for the
-    // new tree resolve against it (readers see a consistent pair under the lock).
-    TapHandle *previous = tap_tables[tap_active];
-    TapHandle *build = tap_tables[1 - tap_active];
+    // handlers into 1 - ts->active; make that table active now so events for
+    // the new tree resolve against it (readers see a consistent pair under the
+    // lock).
+    TapHandle *previous = ts->tables[ts->active];
+    TapHandle *build = ts->tables[1 - ts->active];
 
     // Bound the commit by what the tables can actually hold, not by
-    // tap_build_count alone.
+    // ts->build_count alone.
     //
-    // Only clear_taps resets tap_build_count, so a set_root that arrives without
+    // Only clear_taps resets build_count, so a set_root that arrives without
     // an intervening clear_taps carries the previous frame's count. That used to
     // be merely wrong — both tables were a fixed 256, so the worst case was
     // committing the wrong handlers. Now the two tables are separate heap
     // allocations that can differ in size, and an unbounded loop over a stale
-    // count reads (and, once tap_handle_next is set from it, writes) past the
+    // count reads (and, once handle_next is set from it, writes) past the
     // end of whichever is smaller.
     //
     // Mob.Sender is the single writer today, so this needs two screens racing
     // clear/register/set_root to reach — the race Mob.Sender's own moduledoc
     // describes, whose documented consequence is a mixed-up table. It should
     // stay a correctness bug, not become memory corruption.
-    int build_cap = tap_table_capacity[1 - tap_active];
-    int prev_cap = tap_table_capacity[tap_active];
-    int committed = tap_build_count < build_cap ? tap_build_count : build_cap;
+    int build_cap = ts->capacity[1 - ts->active];
+    int prev_cap = ts->capacity[ts->active];
+    int committed = ts->build_count < build_cap ? ts->build_count : build_cap;
 
     if (build) {
         for (int slot = 0; slot < committed; slot++) {
-            if (previous && slot < tap_handle_next && slot < prev_cap && previous[slot].tag_env &&
+            if (previous && slot < ts->handle_next && slot < prev_cap && previous[slot].tag_env &&
                 previous[slot].pid.pid == build[slot].pid.pid &&
                 enif_compare(previous[slot].tag, build[slot].tag) == 0)
                 build[slot].identity_start_generation = previous[slot].identity_start_generation;
@@ -2911,14 +3606,13 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     int exhausted_this_frame = tap_exhausted_count;
     tap_exhausted_count = 0;
 
-    tap_active = 1 - tap_active;
-    tap_handles = tap_tables[tap_active];
-    tap_handle_next = committed;
-    tap_table_generations[tap_active] = tap_build_generation;
+    ts->active = 1 - ts->active;
+    ts->handle_next = committed;
+    ts->generations[ts->active] = ts->build_generation;
     // Reset here as well as in clear_taps, so a second set_root without an
     // intervening clear_taps commits an empty table rather than re-committing
     // this frame's handlers against whatever the other table now holds.
-    tap_build_count = 0;
+    ts->build_count = 0;
     enif_mutex_unlock(tap_mutex);
 
     // Bump the frame generation on a real navigation, so trackers belonging to
@@ -2934,7 +3628,7 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     // a screen you pop back to would be refused for ever. (`.move` transitions change their global
     // frames continuously, so they keep firing onChange the whole way out; tree membership alone
     // can't reject them when both screens tag the same :id.)
-    if (strcmp(transition, "none") != 0)
+    if (set == 0 && strcmp(transition, "none") != 0)
         mob_bump_frame_generation();
 
     if (exhausted_this_frame > 0) {
@@ -2958,7 +3652,8 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     id replacesRaw = ((NSDictionary *)json)[@"replaces_stack"];
     BOOL replacesStack = [replacesRaw isKindOfClass:[NSNumber class]] && [replacesRaw boolValue];
 
-    [[MobViewModel shared] setRoot:node transition:transitionStr replacesStack:replacesStack];
+    MobViewModel *model = set == MOB_TAP_SCRATCH_SET ? nil : mob_scene_model_for_set(set);
+    [model setRoot:node transition:transitionStr replacesStack:replacesStack];
 
     return enif_make_atom(env, "ok");
 }
@@ -2982,8 +3677,9 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
     }
 
     enif_mutex_lock(tap_mutex);
-    if (tap_build_count >= MOB_TAP_SLOT_LIMIT ||
-        !mob_tap_grow_locked(1 - tap_active, tap_build_count + 1)) {
+    MobTapSet *ts = &tap_sets[tap_build_set];
+    if (ts->build_count >= MOB_TAP_SLOT_LIMIT ||
+        !mob_tap_grow_locked(ts, 1 - ts->active, ts->build_count + 1)) {
         // Counted under the mutex, like the Zig side: set_root reads and resets
         // this under the same lock. Mob.Sender serialises every caller today, so
         // an unguarded read-modify-write would be benign — but nothing else in
@@ -3006,12 +3702,12 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
         // count is reported once per frame from set_root instead.
         return enif_make_int(env, -1);
     }
-    TapHandle *build = tap_tables[1 - tap_active];
-    int slot = tap_build_count;
-    int handle = mob_encode_event_handle(tap_build_generation, slot);
+    TapHandle *build = ts->tables[1 - ts->active];
+    int slot = ts->build_count;
+    int handle = mob_encode_event_handle(ts->build_generation, slot);
     if (handle < 0) {
         enif_mutex_unlock(tap_mutex);
-        LOGE(@"register_tap: invalid generation %u", tap_build_generation);
+        LOGE(@"register_tap: invalid generation %u", ts->build_generation);
         return enif_make_int(env, -1);
     }
     ErlNifEnv *tag_env = enif_alloc_env();
@@ -3023,8 +3719,8 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
     build[slot].pid = pid;
     build[slot].tag_env = tag_env;
     build[slot].tag = enif_make_copy(build[slot].tag_env, tag_term);
-    build[slot].identity_start_generation = tap_build_generation;
-    tap_build_count++;
+    build[slot].identity_start_generation = ts->build_generation;
+    ts->build_count++;
     // The high-water mark has to be raised HERE, not in set_root. clear_taps
     // frees exactly `used` slots, and a frame can register taps and then never
     // reach set_root — Mob.Renderer.render/4 calls clear_taps, then prepare,
@@ -3032,47 +3728,48 @@ static ERL_NIF_TERM nif_register_tap(ErlNifEnv *env, int argc, const ERL_NIF_TER
     // that raises in between. Recording the mark only at set_root left those
     // slots' tag_envs uncleared and unreachable: one leaked ErlNifEnv per tap,
     // per failed frame, forever, on a path deliberately designed to survive.
-    tap_table_used[1 - tap_active] = tap_build_count;
+    ts->used[1 - ts->active] = ts->build_count;
     enif_mutex_unlock(tap_mutex);
 
     return enif_make_int(env, handle);
 }
 
-// ── NIF: clear_taps/0 ─────────────────────────────────────────────────────────
+// ── NIF: clear_taps/0, clear_taps/1 ───────────────────────────────────────────
+// clear_taps/0 starts a frame for the default scene (set 0); clear_taps/1 one
+// for the scene whose id it is given (MOB-245), or for the scratch set when
+// native no longer knows that scene. register_tap and set_root work on the set
+// chosen here.
 
 static ERL_NIF_TERM nif_clear_taps(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    int set = 0;
+    if (argc == 1) {
+        NSString *sceneId = mob_scene_id_from_term(env, argv[0]);
+        if (!sceneId)
+            return enif_make_badarg(env);
+        set = mob_scene_tap_set(sceneId);
+        if (set < 0)
+            set = MOB_TAP_SCRATCH_SET;
+    }
+
     enif_mutex_lock(tap_mutex);
-    tap_build_generation = mob_next_handle_generation(tap_build_generation);
-    tap_table_generations[1 - tap_active] = 0;
+    tap_build_set = set;
+    MobTapSet *ts = &tap_sets[set];
+    ts->build_generation = mob_next_handle_generation(ts->build_generation);
+    ts->generations[1 - ts->active] = 0;
     // Prepare the INACTIVE (building) table for a fresh frame; leave the active
     // table intact so concurrent mob_send_* keep resolving the last committed
     // frame. The freshly built table is swapped in at set_root.
-    TapHandle *build = tap_tables[1 - tap_active];
-    int used = tap_table_used[1 - tap_active];
-    for (int i = 0; i < used; i++) {
-        if (build[i].tag_env) {
-            enif_free_env(build[i].tag_env);
-            build[i].tag_env = NULL;
-        }
-        // Reset throttle state — slots get reused across renders.
-        build[i].throttle_configured = 0;
-        build[i].throttle_ms = 0;
-        build[i].debounce_ms = 0;
-        build[i].delta_threshold = 0;
-        build[i].leading = 1;
-        build[i].trailing = 1;
-        build[i].last_emit_ns = 0;
-        build[i].last_x = 0;
-        build[i].last_y = 0;
-        build[i].seq = 0;
-    }
-    tap_table_used[1 - tap_active] = 0;
+    TapHandle *build = ts->tables[1 - ts->active];
+    int used = ts->used[1 - ts->active];
+    for (int i = 0; i < used; i++)
+        mob_tap_slot_free_locked(&build[i]);
+    ts->used[1 - ts->active] = 0;
     // Reset here, not only in set_root. set_root reports and clears the count,
     // but a frame that overflows and then never reaches set_root would otherwise
     // carry its overflow into the next frame's report — which claims to describe
     // "this frame". clear_taps is the one entry point every frame runs.
     tap_exhausted_count = 0;
-    tap_build_count = 0;
+    ts->build_count = 0;
     enif_mutex_unlock(tap_mutex);
     return enif_make_atom(env, "ok");
 }
@@ -3401,17 +4098,12 @@ static void mob_send3(const ErlNifPid *pid, const char *a1, const char *a2, cons
     enif_free_env(e);
 }
 
-// Return the root view controller of the key window in the first active scene.
+// Return the root view controller of the default scene's key window (the
+// window the primary router shows; MOB-245), else of the first window scene.
 static UIViewController *mob_root_vc(void) {
-    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if ([scene isKindOfClass:[UIWindowScene class]]) {
-            UIWindowScene *ws = (UIWindowScene *)scene;
-            UIWindow *w = ws.keyWindow ?: ws.windows.firstObject;
-            if (w.rootViewController)
-                return w.rootViewController;
-        }
-    }
-    return nil;
+    UIWindowScene *ws = mob_default_window_scene();
+    UIWindow *w = ws.keyWindow ?: ws.windows.firstObject;
+    return w.rootViewController;
 }
 
 // ── Notification delivery ──────────────────────────────────────────────────
@@ -7750,19 +8442,42 @@ AVCaptureSession *g_preview_session __attribute__((weak)) = nil;
 
 // ── Alert delivery (called from UIAlertAction blocks) ────────────────────────
 
-static void mob_deliver_alert_action(const char *action) {
+// `sceneId` is the window the alert was shown in (nil for the default scene's
+// screens): the result goes back to that window's router.
+static void mob_deliver_alert_action(NSString *sceneId, const char *action) {
     ErlNifEnv *env = enif_alloc_env();
-    ErlNifPid pid;
-    if (enif_whereis_pid(env, enif_make_atom(env, "mob_screen"), &pid)) {
-        ERL_NIF_TERM msg =
-            enif_make_tuple2(env, enif_make_atom(env, "alert"), enif_make_atom(env, action));
-        enif_send(NULL, &pid, env, msg);
-    }
+    ERL_NIF_TERM msg =
+        enif_make_tuple2(env, enif_make_atom(env, "alert"), enif_make_atom(env, action));
+    mob_send_window_message(sceneId, env, msg);
     enif_free_env(env);
 }
 
-// Returns the topmost presented view controller in a foreground scene.
+// The topmost presented view controller of one window scene.
+static UIViewController *mob_top_vc_in(UIWindowScene *window_scene) {
+    UIViewController *vc = window_scene.keyWindow.rootViewController;
+    if (!vc) {
+        for (UIWindow *window in window_scene.windows) {
+            if (window.rootViewController) {
+                vc = window.rootViewController;
+                break;
+            }
+        }
+    }
+    while (vc.presentedViewController)
+        vc = vc.presentedViewController;
+    return vc;
+}
+
+// Returns the topmost presented view controller in a foreground scene: the
+// default scene's when it is in the foreground (several windows, MOB-245),
+// else the first foreground scene's.
 static UIViewController *root_vc(void) {
+    UIWindowScene *preferred = mob_default_window_scene();
+    if (preferred.activationState == UISceneActivationStateForegroundActive) {
+        UIViewController *vc = mob_top_vc_in(preferred);
+        if (vc)
+            return vc;
+    }
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if (![scene isKindOfClass:[UIWindowScene class]] ||
             scene.activationState != UISceneActivationStateForegroundActive)
@@ -7790,9 +8505,15 @@ static UIViewController *root_vc(void) {
     return nil;
 }
 
-// ── NIF: alert_show/3 ────────────────────────────────────────────────────────
+// ── NIF: alert_show/3, alert_show/4 ──────────────────────────────────────────
+// alert_show/4 takes the scene id of the screen showing it first (MOB-245): the
+// alert is presented in that window and its result routed back to it.
 
 static ERL_NIF_TERM nif_alert_show(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    NSString *sceneId = argc == 4 ? mob_scene_id_from_term(env, argv[0]) : nil;
+    if (argc == 4 && !sceneId)
+        return enif_make_badarg(env);
+    argv += argc - 3;
     ErlNifBinary title_bin, msg_bin, btns_bin;
     if (!enif_inspect_binary(env, argv[0], &title_bin) &&
         !enif_inspect_iolist_as_binary(env, argv[0], &title_bin))
@@ -7837,19 +8558,25 @@ static ERL_NIF_TERM nif_alert_show(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
           [ac addAction:[UIAlertAction actionWithTitle:label
                                                  style:as
                                                handler:^(UIAlertAction *_) {
-                                                 mob_deliver_alert_action([action UTF8String]);
+                                                 mob_deliver_alert_action(sceneId,
+                                                                          [action UTF8String]);
                                                }]];
       }
-      UIViewController *vc = root_vc();
+      UIViewController *vc = sceneId ? mob_top_vc_in(mob_window_scene_for(sceneId)) : root_vc();
       if (vc)
           [vc presentViewController:ac animated:YES completion:nil];
     });
     return enif_make_atom(env, "ok");
 }
 
-// ── NIF: action_sheet_show/2 ─────────────────────────────────────────────────
+// ── NIF: action_sheet_show/2, action_sheet_show/3 ────────────────────────────
+// action_sheet_show/3 takes a scene id first, like alert_show/4.
 
 static ERL_NIF_TERM nif_action_sheet_show(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    NSString *sceneId = argc == 3 ? mob_scene_id_from_term(env, argv[0]) : nil;
+    if (argc == 3 && !sceneId)
+        return enif_make_badarg(env);
+    argv += argc - 2;
     ErlNifBinary title_bin, btns_bin;
     if (!enif_inspect_binary(env, argv[0], &title_bin) &&
         !enif_inspect_iolist_as_binary(env, argv[0], &title_bin))
@@ -7885,10 +8612,11 @@ static ERL_NIF_TERM nif_action_sheet_show(ErlNifEnv *env, int argc, const ERL_NI
           [ac addAction:[UIAlertAction actionWithTitle:label
                                                  style:as
                                                handler:^(UIAlertAction *_) {
-                                                 mob_deliver_alert_action([action UTF8String]);
+                                                 mob_deliver_alert_action(sceneId,
+                                                                          [action UTF8String]);
                                                }]];
       }
-      UIViewController *vc = root_vc();
+      UIViewController *vc = sceneId ? mob_top_vc_in(mob_window_scene_for(sceneId)) : root_vc();
       if (!vc)
           return;
       // iPad requires a source view for action sheets
@@ -8825,9 +9553,15 @@ static ErlNifFunc nif_funcs[] = {
     {"set_theme", 1, nif_set_theme, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"register_tap", 1, nif_register_tap, 0},
     {"clear_taps", 0, nif_clear_taps, 0},
+    {"clear_taps", 1, nif_clear_taps, 0},
     {"exit_app", 0, nif_exit_app, 0},
     {"safe_area", 0, nif_safe_area, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"safe_area", 1, nif_safe_area, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"size_class", 0, nif_size_class, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"size_class", 1, nif_size_class, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"scenes", 0, nif_scenes, 0},
+    {"scene_request", 0, nif_scene_request, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"scene_multiple_supported", 0, nif_scene_multiple_supported, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"haptic", 1, nif_haptic, 0},
     {"torch", 1, nif_torch, 0},
     {"clipboard_put", 1, nif_clipboard_put, 0},
@@ -8859,7 +9593,9 @@ static ErlNifFunc nif_funcs[] = {
     {"storage_save_to_media_store", 2, nif_storage_save_to_media_store, 0},
     {"storage_external_files_dir", 1, nif_storage_external_files_dir, 0},
     {"alert_show", 3, nif_alert_show, 0},
+    {"alert_show", 4, nif_alert_show, 0},
     {"action_sheet_show", 2, nif_action_sheet_show, 0},
+    {"action_sheet_show", 3, nif_action_sheet_show, 0},
     {"toast_show", 2, nif_toast_show, 0},
     {"webview_eval_js", 1, nif_webview_eval_js, 0},
     {"webview_post_message", 1, nif_webview_post_message, 0},

@@ -131,6 +131,7 @@ void mob_init_ui(void) {
     // No UIViewController reference needed here; the hosting controller is
     // created by MobUIFactory in AppDelegate.m.
     mob_install_notification_delegate();
+    mob_install_scene_observers();
     NSLog(@"[MobBeam] mob_init_ui: SwiftUI mode ready");
 }
 

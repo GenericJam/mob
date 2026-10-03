@@ -85,9 +85,13 @@ defmodule Mob.SizeClass do
   # the loaded native library predates `size_class/0` — a hot-pushed mob on an
   # app whose native layer was not rebuilt — or when a test stub does not
   # define it.
-  @spec read(module()) :: t()
-  def read(nif) do
-    case nif.size_class() do
+  # `scene` is the window scene a bound router's screen lives in (MOB-245); it
+  # reads that window rather than the default one.
+  @spec read(module(), String.t() | nil) :: t()
+  def read(nif, scene \\ nil) do
+    answer = if scene, do: nif.size_class(scene), else: nif.size_class()
+
+    case answer do
       {h, v} = size_class when class?(h) and class?(v) -> size_class
       _no_answer -> @placeholder
     end

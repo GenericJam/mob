@@ -39,6 +39,16 @@ defmodule Mob.Router do
   logical screen.
 
   See `decisions/2026-08-28-screen-processes-and-supervision.md`.
+
+  ## One router per window scene
+
+  An app with several windows (iPad scenes, MOB-245) runs one router per
+  window. The router `start_root/3` starts is the **primary**: it registers
+  `:mob_screen`, is unbound to any scene id and renders to native's default
+  scene, exactly as a single-window app always has. `Mob.Scenes` starts a
+  router per further scene with `start_scene/3`; those are **bound** to their
+  scene id, which their screens render into and read their window from. See
+  `decisions/2026-10-02-one-router-per-window-scene.md`.
   """
 
   use GenServer
@@ -68,9 +78,39 @@ defmodule Mob.Router do
 
     GenServer.start_link(
       __MODULE__,
-      {screen_module, params, :no_render, :android, nif, nil},
+      {screen_module, params, :no_render, :android, nif, nil, %{primary: false, scene: nil}},
       opts
     )
+  end
+
+  @doc """
+  Start the router of a further window scene, bound to scene id `scene`
+  (MOB-245). `Mob.Scenes` calls this when a scene connects that no router
+  shows; apps don't.
+
+  It renders like `start_root/3` but into `scene`, does not register
+  `:mob_screen` and does not end the app when it is left with no live screen:
+  that window keeps its last frame. Takes `:nif`.
+  """
+  @spec start_scene(module(), map(), keyword()) :: GenServer.on_start()
+  def start_scene(screen_module, params, opts) do
+    {scene, opts} = Keyword.pop!(opts, :scene)
+    {nif, opts} = Keyword.pop(opts, :nif, :mob_nif)
+    roles = %{primary: false, scene: scene}
+    init_arg = {screen_module, params, :render, nif.platform(), nif, nil, roles}
+
+    case GenServer.start_link(__MODULE__, init_arg, opts) do
+      {:error, reason} = error ->
+        Logger.error(
+          "[mob] the screen of window scene #{inspect(scene)} (#{inspect(screen_module)}) " <>
+            "failed to start: " <> Mob.CrashReport.format(reason)
+        )
+
+        error
+
+      started ->
+        started
+    end
   end
 
   @doc """
@@ -129,7 +169,10 @@ defmodule Mob.Router do
       Keyword.pop(opts, :on_no_live_screen, default_on_no_live_screen(nif))
 
     platform = nif.platform()
-    init_arg = {screen_module, params, :render, platform, nif, on_no_live_screen}
+
+    init_arg =
+      {screen_module, params, :render, platform, nif, on_no_live_screen,
+       %{primary: true, scene: nil}}
 
     case GenServer.start_link(__MODULE__, init_arg, opts) do
       {:error, reason} = error ->
@@ -232,7 +275,14 @@ defmodule Mob.Router do
   # ── GenServer callbacks ───────────────────────────────────────────────────
 
   @impl GenServer
+  # The six-element form is what a caller compiled before MOB-245 passes (hot
+  # code push): a render-mode router started that way was the app's root.
   def init({screen_module, params, render_mode, platform, nif, on_no_live_screen}) do
+    roles = %{primary: render_mode == :render, scene: nil}
+    init({screen_module, params, render_mode, platform, nif, on_no_live_screen, roles})
+  end
+
+  def init({screen_module, params, render_mode, platform, nif, on_no_live_screen, roles}) do
     # Linked *and* trapping. Linking alone makes the owner die with any screen
     # it stops or that crashes; trapping alone orphans every screen when the
     # owner dies — and an orphaned persisted screen keeps dumping to
@@ -240,13 +290,23 @@ defmodule Mob.Router do
     # owner sees each exit as a message and screens still come down with it.
     Process.flag(:trap_exit, true)
 
+    primary? = render_mode == :render and roles.primary
+
     if render_mode == :render do
-      Process.register(self(), :mob_screen)
+      if primary?, do: Process.register(self(), :mob_screen)
       # Renders are casts, so a missing sender would blank the screen silently.
       Mob.Sender.ensure_started()
       # Started before the first render: that render is what bakes the
       # listener's pid into the native tap handles.
       Mob.Listener.ensure_started()
+    end
+
+    # The app's root: every further window scene starts from the same screen
+    # and params (MOB-245). A cast, so Mob.Scenes can tell this router which
+    # scene it now shows without calling into a process still in init.
+    if primary? do
+      Mob.Scenes.ensure_started()
+      Mob.Scenes.register_primary(self(), screen_module, params, nif)
     end
 
     # Notifications native stored while no router was registered: the tap
@@ -256,7 +316,7 @@ defmodule Mob.Router do
     # mounted, from init itself: a notification sent live while the screen
     # mounts waits in the mailbox, so it still arrives after these.
     stored_notifications =
-      if render_mode == :render, do: take_stored_notifications(nif), else: []
+      if primary?, do: take_stored_notifications(nif), else: []
 
     # Seed the stacks this app declared. The screen we are about to mount
     # becomes the active stack's current screen; every other declared stack
@@ -269,23 +329,51 @@ defmodule Mob.Router do
       render_mode: render_mode,
       platform: platform,
       nif: nif,
+      scene: roles.scene,
       screens: %{},
       restarts: %{},
       on_no_live_screen: on_no_live_screen
     }
 
+    if roles.scene do
+      # A further window's router (MOB-245) is started from Mob.Scenes, which
+      # must not wait on the root screen's mount: that mount may call
+      # Mob.Scene.list/0, and every window's events route through Mob.Scenes.
+      # Calls to this router queue behind the continue.
+      {:ok, state, {:continue, {:mount_root, screen_module, params}}}
+    else
+      case mount_root(screen_module, params, state) do
+        {:ok, state} -> {:ok, deliver_stored_notifications(stored_notifications, state)}
+        {:error, reason} -> {:stop, reason}
+      end
+    end
+  end
+
+  @impl GenServer
+  def handle_continue({:mount_root, screen_module, params}, state) do
+    case mount_root(screen_module, params, state) do
+      {:ok, state} ->
+        {:noreply, state}
+
+      {:error, reason} ->
+        Logger.error(
+          "[mob] the screen of window scene #{inspect(state.scene)} (#{inspect(screen_module)}) " <>
+            "failed to start: " <> Mob.CrashReport.format(reason)
+        )
+
+        {:stop, reason, state}
+    end
+  end
+
+  defp mount_root(screen_module, params, state) do
     case start_screen(screen_module, params, state) do
       {:ok, entry, state} ->
         state = make_current(state, entry, :none)
+        if state.render_mode == :render, do: paint(entry, :none, state)
+        {:ok, state}
 
-        if render_mode == :render do
-          paint(entry, :none, state)
-        end
-
-        {:ok, deliver_stored_notifications(stored_notifications, state)}
-
-      {:error, reason} ->
-        {:stop, reason}
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -429,6 +517,23 @@ defmodule Mob.Router do
     {:noreply, state}
   end
 
+  # Mob.Scenes moved this router to another window scene (MOB-245): the scene
+  # it showed was the last and went away, and iPadOS connected a new session
+  # instead of bringing it back. The screens hear first, so they read the new
+  # window from here on; then the current one is re-activated under the new
+  # scene, which drops the old scene from the sender, and repainted into it.
+  def handle_info({:mob_scene_bind, scene}, state) when is_binary(scene) do
+    old = Map.get(state, :scene)
+    state = Map.put(state, :scene, scene)
+    Enum.each(all_entries(state), &send(&1.pid, {:mob_scene, :bound, scene}))
+
+    if is_binary(old) and old != scene, do: Mob.Sender.deactivate_scene(old)
+
+    state = make_current(state, state.current, :none)
+    paint(state.current, :none, state)
+    {:noreply, state}
+  end
+
   # Anything else addressed to :mob_screen — device events, notifications,
   # plugin messages — belongs to the screen the user is looking at.
   def handle_info(message, state) do
@@ -474,7 +579,9 @@ defmodule Mob.Router do
       render_mode: state.render_mode,
       platform: state.platform,
       nif: state.nif,
-      restore_persisted_state: Keyword.get(screen_opts, :restore_persisted_state, true)
+      restore_persisted_state: Keyword.get(screen_opts, :restore_persisted_state, true),
+      # Map.get: a router started before MOB-245 (hot code push) is unbound.
+      scene: Map.get(state, :scene)
     ]
 
     case Mob.Screen.Server.start_link(opts) do
@@ -490,6 +597,13 @@ defmodule Mob.Router do
   # The single place `current` changes. The sender is told here and nowhere
   # else, so only the screen the user is looking at can commit a frame.
   defp make_current(state, entry, transition) do
+    case Map.get(state, :scene) do
+      nil -> make_current_unbound(state, entry, transition)
+      scene -> make_current_in_scene(state, entry, transition, scene)
+    end
+  end
+
+  defp make_current_unbound(state, entry, transition) do
     # Before activating, from this process, so the sender has it when this
     # screen's first frame commits (:after_first_render names the screen).
     if function_exported?(Mob.Sender, :note_active_screen, 2),
@@ -503,6 +617,15 @@ defmodule Mob.Router do
         nil
       end
 
+    %{state | current: Map.put(entry, :activation_token, activation_token)}
+  end
+
+  # A router bound to a window scene (MOB-245) activates per scene, so its
+  # screen and every other window's are committed side by side. Bound routers
+  # only exist with a sender that knows scenes, so no fallback is needed.
+  defp make_current_in_scene(state, entry, transition, scene) do
+    Mob.Sender.note_active_screen(entry.ref, entry.module, scene)
+    activation_token = Mob.Sender.activate_frame(entry.ref, transition, scene)
     %{state | current: Map.put(entry, :activation_token, activation_token)}
   end
 

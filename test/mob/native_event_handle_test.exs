@@ -43,7 +43,7 @@ defmodule Mob.NativeEventHandleTest do
     [ios_register, _] = String.split(ios_register, "// ── NIF: clear_taps/0", parts: 2)
 
     {ios_grow, _} = :binary.match(ios_register, "mob_tap_grow_locked(")
-    {ios_cache, _} = :binary.match(ios_register, "TapHandle *build = tap_tables[")
+    {ios_cache, _} = :binary.match(ios_register, "TapHandle *build = ts->tables[")
     assert ios_grow < ios_cache
 
     [_, android_register] = String.split(@android_source, "export fn nif_register_tap", parts: 2)
@@ -60,15 +60,15 @@ defmodule Mob.NativeEventHandleTest do
     # 256 that was merely wrong; with two heap allocations of possibly different
     # sizes an unbounded loop reads and then writes past the end of the smaller.
     assert @ios_source =~
-             "int committed = tap_build_count < build_cap ? tap_build_count : build_cap"
+             "int committed = ts->build_count < build_cap ? ts->build_count : build_cap"
 
-    assert @ios_source =~ "tap_handle_next = committed;"
+    assert @ios_source =~ "ts->handle_next = committed;"
     assert @android_source =~ "const committed = if (wanted < build_cap) wanted else build_cap"
     assert @android_source =~ "tap_active_count = @intCast(committed);"
 
     # And a second set_root commits an empty table rather than re-committing.
     [_, ios_set_root] = String.split(@ios_source, "static ERL_NIF_TERM nif_set_root", parts: 2)
-    assert String.contains?(ios_set_root, "tap_build_count = 0;")
+    assert String.contains?(ios_set_root, "ts->build_count = 0;")
   end
 
   test "Android event handles carry the render generation" do
@@ -83,10 +83,91 @@ defmodule Mob.NativeEventHandleTest do
   end
 
   test "iOS event handles carry the render generation" do
-    assert @ios_source =~ "static uint32_t tap_table_generations[2]"
-    assert @ios_source =~ "static uint32_t tap_build_generation = 0"
-    assert @ios_source =~ "tap_build_generation = mob_next_handle_generation"
-    assert @ios_source =~ "mob_encode_event_handle(tap_build_generation, slot)"
+    assert @ios_source =~ "uint32_t generations[2];"
+    assert @ios_source =~ "uint32_t build_generation;"
+    assert @ios_source =~ "ts->build_generation = mob_next_handle_generation"
+    assert @ios_source =~ "mob_encode_event_handle(ts->build_generation, slot)"
+  end
+
+  test "iOS event blocks resolve against the window scene's own tap set" do
+    # Each window scene has its own tap set (MOB-245), and a handle only means
+    # something in the set it was registered in. Event blocks therefore hold a
+    # MobEventRef that captures the set the tree was deserialised for. A block
+    # built from a bare `int handle` still compiles — the int widens silently
+    # to MobEventRef with set 0 — and routes every event of a second window to
+    # whatever occupies that slot in the first.
+    [_, deserialise] = String.split(@ios_source, "static MobNode *mob_node_from_dict(", parts: 2)
+    [deserialise, _] = String.split(deserialise, "\n}\n", parts: 2)
+
+    refute deserialise =~ ~r/\bint handle = \[/
+    assert deserialise =~ "MobEventRef handle = mob_event_ref([onTap intValue]);"
+
+    [_, set_root] = String.split(@ios_source, "static ERL_NIF_TERM nif_set_root", parts: 2)
+    {pick, _} = :binary.match(set_root, "g_node_tap_set = set;")
+    {build, _} = :binary.match(set_root, "mob_node_from_dict(")
+    assert pick < build, "the set must be chosen before the tree's blocks capture it"
+  end
+
+  test "a released window's tap set resets every slot the way clear_taps does" do
+    # A window that closes hands its tap set to the next window that opens.
+    # clear_taps only resets the `used` slots, and releasing a set zeroes
+    # `used`, so whatever release leaves in a slot is what the next window's
+    # handler there starts with: a closed window's `throttle: 500` or
+    # `leading: false` on a drag handler that configured nothing.
+    [_, helper] = String.split(@ios_source, "static void mob_tap_slot_free_locked(", parts: 2)
+    [helper, _] = String.split(helper, "\n}\n", parts: 2)
+
+    for field <-
+          ~w(tag_env throttle_configured throttle_ms debounce_ms delta_threshold leading trailing
+             last_emit_ns last_x last_y seq) do
+      assert helper =~ "slot->#{field} =", "mob_tap_slot_free_locked must reset #{field}"
+    end
+
+    for fun <- ["static void mob_release_tap_set(", "static ERL_NIF_TERM nif_clear_taps("] do
+      [_, body] = String.split(@ios_source, fun, parts: 2)
+      [body, _] = String.split(body, "\n}\n", parts: 2)
+      assert body =~ "mob_tap_slot_free_locked(&", "#{fun} must free slots with the shared reset"
+    end
+  end
+
+  test "only application window scenes enter the iOS scene registry" do
+    # An AirPlay or cable display connects an
+    # ExternalDisplayNonInteractive window scene to every scene-based app.
+    # Registered, it becomes a second scene with its own tap set, and a
+    # single-window app starts routing window events through Mob.Scenes.
+    assert @ios_source =~ "isEqualToString:UIWindowSceneSessionRoleApplication]"
+
+    [_, section] = String.split(@ios_source, "// ── Window scenes (MOB-245)", parts: 2)
+    [section, _] = String.split(section, "// ── Back gesture sender", parts: 2)
+    [_, after_helper] = String.split(section, "static BOOL mob_scene_is_application(", parts: 2)
+    [_, after_helper] = String.split(after_helper, "\n}\n", parts: 2)
+
+    refute after_helper =~ "isKindOfClass:[UIWindowScene class]",
+           "test window scenes with mob_scene_is_application, which also checks the role"
+
+    for fun <- ["NSObject *mob_scene_attach(", "static void mob_scene_detach("] do
+      [_, body] = String.split(section, fun, parts: 2)
+      [body, _] = String.split(body, "\n}\n", parts: 2)
+
+      assert body =~ "mob_scene_is_application(scene)",
+             "#{fun} must ignore non-application scenes"
+    end
+  end
+
+  test "a connecting iOS scene never takes a set its own attach just pruned" do
+    # mob_scene_attach prunes kept entries whose session is gone, but their
+    # sets are released, and the BEAM told {mob_scene, discarded, Id}, only
+    # after the lock. A scene handed such a set in between would show the gone
+    # window's router's frames (set 0: the still-live unbound primary) and its
+    # taps would go to screens about to stop.
+    [_, attach] = String.split(@ios_source, "NSObject *mob_scene_attach(", parts: 2)
+    [attach, _] = String.split(attach, "\n}\n", parts: 2)
+
+    {prune, _} = :binary.match(attach, "mob_scene_prune_gone_locked(")
+    {search, _} = :binary.match(attach, "mob_scene_free_set_locked(released)")
+    assert prune < search
+    assert attach =~ "mob_scene_assign_set_locked(entry, released)"
+    refute attach =~ "mob_scene_free_set_locked(nil)"
   end
 
   test "active table, count, and generation commit under one lock" do
@@ -165,7 +246,7 @@ defmodule Mob.NativeEventHandleTest do
     [_, ios_clear] = String.split(@ios_source, "static ERL_NIF_TERM nif_clear_taps", parts: 2)
     [ios_clear, _] = String.split(ios_clear, "return enif_make_atom(env, \"ok\");", parts: 2)
 
-    assert ios_clear =~ "tap_table_generations[1 - tap_active] = 0"
+    assert ios_clear =~ "ts->generations[1 - ts->active] = 0"
   end
 
   test "tap registrations allocate their tag environment before publishing the slot" do
@@ -182,7 +263,7 @@ defmodule Mob.NativeEventHandleTest do
     [ios_register, _] = String.split(ios_register, "// ── NIF: clear_taps/0", parts: 2)
 
     {ios_alloc, _} = :binary.match(ios_register, "enif_alloc_env()")
-    {ios_publish, _} = :binary.match(ios_register, "tap_build_count++")
+    {ios_publish, _} = :binary.match(ios_register, "ts->build_count++")
     assert ios_alloc < ios_publish
   end
 
@@ -231,9 +312,11 @@ defmodule Mob.NativeEventHandleTest do
     # handle's tap_build_generation against the PREVIOUS frame's generation, so
     # every lookup returned NULL and every config was dropped, silently, on
     # every frame (MOB-134).
-    assert @ios_source =~ "static TapHandle *mob_resolve_build_tap_locked(int handle)"
-    assert @ios_source =~ "generation != tap_build_generation || slot >= tap_build_count"
-    assert @ios_source =~ "TapHandle *tap = mob_resolve_build_tap_locked(handle);"
+    assert @ios_source =~
+             "static TapHandle *mob_resolve_build_tap_locked(MobTapSet *ts, int handle)"
+
+    assert @ios_source =~ "generation != ts->build_generation || slot >= ts->build_count"
+    assert @ios_source =~ "TapHandle *tap = mob_resolve_build_tap_locked(ts, handle);"
   end
 
   test "a configured throttle of 0 is distinguishable from an unconfigured slot" do

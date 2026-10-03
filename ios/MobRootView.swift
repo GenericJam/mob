@@ -869,6 +869,10 @@ private struct MobFrameTracker: ViewModifier {
     // navigation destroyed the outgoing tree, so a tracker only ever existed on
     // the live screen and this question could not arise.
     @Environment(\.mobScreenIsActive) private var isActive
+    // Whether this window takes part in the element frame registry: only the
+    // default scene's does (MOB-245). A second window showing the same screen
+    // carries the same :ids and would overwrite the first window's frames.
+    @Environment(\.mobTracksFrames) private var tracksFrames
 
     func body(content: Content) -> some View {
         // A sheet's own switch-case view is a zero-size anchor used only to
@@ -966,6 +970,7 @@ private struct MobFrameTracker: ViewModifier {
     }
 
     private func record(_ id: String, _ frame: CGRect) {
+        guard tracksFrames else { return }
         // Capture lazily as well as in onAppear: the ordering of onAppear
         // against onChange(initial: true) isn't contractual, and a write
         // stamped 0 is accepted rather than refused as stale.
@@ -2190,10 +2195,21 @@ struct MobScreenIsActiveKey: EnvironmentKey {
     static let defaultValue: Bool = true
 }
 
+/// Whether frame trackers in this tree write to the element frame registry,
+/// which belongs to the default window scene (MOB-245). Set by `MobRootView`.
+struct MobTracksFramesKey: EnvironmentKey {
+    static let defaultValue: Bool = true
+}
+
 extension EnvironmentValues {
     var mobScreenIsActive: Bool {
         get { self[MobScreenIsActiveKey.self] }
         set { self[MobScreenIsActiveKey.self] = newValue }
+    }
+
+    var mobTracksFrames: Bool {
+        get { self[MobTracksFramesKey.self] }
+        set { self[MobTracksFramesKey.self] = newValue }
     }
 }
 
@@ -2730,7 +2746,9 @@ private struct MobImage: View {
 // ── Root view — observed by the hosting controller ─────────────────────────
 
 public struct MobRootView: View {
-    @ObservedObject var model = MobViewModel.shared
+    // The window scene's own view model (MOB-245): `MobViewModel.shared` for
+    // the default scene, a model of its own for every further window.
+    @ObservedObject var model: MobViewModel
     @Environment(\.colorScheme) private var colorScheme
     // The hosting window's trait size classes (MOB-204). Read as one pair so a
     // rotation, which flips both axes in one trait update, is reported once
@@ -2787,7 +2805,9 @@ public struct MobRootView: View {
     /// rather than an unrecognisable full-screen cover.
     private static let sheetHeightCeilingFraction: CGFloat = 0.9
 
-    public init() {}
+    public init(model: MobViewModel = .shared) {
+        self.model = model
+    }
 
     public var body: some View {
         ZStack {
@@ -2860,6 +2880,10 @@ public struct MobRootView: View {
         .overlayPreferenceValue(MobAnchoredKey.self) { entries in
             MobAnchoredPanelHost(entries: entries)
         }
+        // Only the default scene's window takes part in the element frame
+        // registry (MOB-245). Applied after the anchored-panel overlay so it
+        // reaches a further window's open popover or select panel too.
+        .environment(\.mobTracksFrames, model === MobViewModel.shared)
         .ignoresSafeArea(.container, edges: [.bottom, .horizontal])
         .onChange(of: model.rootVersion) {
             applyRoot(
@@ -2882,7 +2906,7 @@ public struct MobRootView: View {
         // placeholder; the BEAM drops a value a screen already holds.
         .onChange(of: MobSizeClassPair(horizontalSizeClass, verticalSizeClass), initial: true) {
             _, pair in
-            pair.notify()
+            pair.notify(sceneId: model.sceneId)
         }
     }
 
@@ -3045,9 +3069,9 @@ private struct MobSizeClassPair: Equatable {
         self.vertical = vertical
     }
 
-    func notify() {
+    func notify(sceneId: String?) {
         guard let h = Self.name(horizontal), let v = Self.name(vertical) else { return }
-        mob_notify_size_class(h, v)
+        mobWithSceneId(sceneId) { mob_notify_size_class($0, h, v) }
     }
 
     private static func name(_ sizeClass: UserInterfaceSizeClass?) -> String? {

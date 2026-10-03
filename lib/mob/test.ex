@@ -16,6 +16,7 @@ defmodule Mob.Test do
       Mob.Test.tree(node)                 #=> %{type: :column, ...}
       Mob.Test.find(node, "Save")         #=> [{[0, 2], %{...}}]
       Mob.Test.inspect(node)              #=> %{screen: ..., assigns: ..., tree: ...}
+      Mob.Test.screens(node)              #=> [{nil, MyApp.HomeScreen, #PID<...>}]
 
       # Interaction
       Mob.Test.tap(node, :increment)      # tap a button by tag
@@ -47,6 +48,23 @@ defmodule Mob.Test do
       Mob.Test.send_message(node, {:camera, :photo, %{path: "/tmp/photo.jpg", width: 1920, height: 1080}})
       Mob.Test.send_message(node, {:location, %{lat: 43.65, lon: -79.38, accuracy: 10.0, altitude: 80.0}})
       Mob.Test.send_message(node, {:notification, %{id: "n1", title: "Hi", body: "Hey", data: %{}, source: :push, presentation: :tap, action: "default"}})
+
+  ## Several windows (`scene:`)
+
+  An iPad app can show several windows of itself (`Mob.Scene`), each with its
+  own navigation and screens. `screens/1` lists them as
+  `{scene_id, screen_module, screen_pid}`. With more than one window live,
+  every helper that addresses "the current screen" — `screen`, `assigns`,
+  `inspect`, `tree`, `find`, `tap`, `back`, `select`, `send_message` and the
+  navigation helpers — needs `scene: scene_id` to say which, and raises
+  `Mob.Test.MultipleScenesError` without it rather than guess:
+
+      [{_, HomeScreen, _}, {second, HomeScreen, _}] = Mob.Test.screens(node)
+      Mob.Test.tap(node, :open_detail, scene: second)
+      Mob.Test.screen(node, scene: second)  #=> MyApp.DetailScreen
+
+  With one window nothing changes: no `scene:` needed. `settle/2` settles
+  every window.
 
   ## Tap vs send_message
 
@@ -254,18 +272,55 @@ defmodule Mob.Test do
 
   # ── Inspection ────────────────────────────────────────────────────────────────
 
-  @doc "Return the current screen module."
-  @spec screen(node()) :: module()
-  def screen(node), do: rpc(node, :get_current_module)
+  @doc """
+  Return the current screen module.
+
+  With several windows live, pass `scene:` (see the moduledoc); without it
+  this raises `Mob.Test.MultipleScenesError`.
+  """
+  @spec screen(node(), [{:scene, Mob.Scene.id()}]) :: module()
+  def screen(node, opts \\ []), do: rpc(node, :get_current_module, opts, "screen/1")
+
+  @doc """
+  What every window shows, as `{scene_id, screen_module, screen_pid}`: the
+  window the app started in first, then one per further window scene
+  (`Mob.Scene`) in the order they connected.
+
+  A single-window app returns one entry. Its scene id is native's id for its
+  window on iOS, and `nil` on Android or before iOS has connected a window.
+  A screen mid-restart is left out.
+
+      Mob.Test.screens(node)
+      #=> [{"8A3F…", MyApp.HomeScreen, #PID<123.456.0>},
+      #=>  {"C01D…", MyApp.DetailScreen, #PID<123.789.0>}]
+  """
+  @spec screens(node()) :: [{Mob.Scene.id(), module(), pid()}]
+  def screens(node) do
+    case :rpc.call(node, Mob.Scenes, :screens, []) do
+      [_ | _] = screens -> screens
+      _none_or_older_mob -> single_screen(node)
+    end
+  end
+
+  # An app running a mob from before MOB-245 has no Mob.Scenes, and one
+  # window: the :mob_screen router's.
+  defp single_screen(node) do
+    with module when is_atom(module) and module != nil <- rpc(node, :get_current_module),
+         pid when is_pid(pid) <- :rpc.call(node, Mob.Screen, :get_screen_pid, [:mob_screen]) do
+      [{nil, module, pid}]
+    else
+      _ -> []
+    end
+  end
 
   @doc """
   Return the current screen's assigns map, or `nil` while that screen is being
   restarted after a crash (MOB-112 — the socket lives in the screen's own
-  process, which is briefly absent).
+  process, which is briefly absent). Takes `scene:`.
   """
-  @spec assigns(node()) :: map() | nil
-  def assigns(node) do
-    case rpc(node, :get_socket) do
+  @spec assigns(node(), [{:scene, Mob.Scene.id()}]) :: map() | nil
+  def assigns(node, opts \\ []) do
+    case rpc(node, :get_socket, opts, "assigns/1") do
       nil -> nil
       socket -> socket.assigns
     end
@@ -274,25 +329,26 @@ defmodule Mob.Test do
   @doc """
   Return a map with `:screen`, `:assigns`, `:nav_history`, and `:tree`
   (the raw render tree from calling `render/1` on the current screen).
+  Takes `scene:`.
   """
-  @spec inspect(node()) :: map()
-  def inspect(node), do: rpc(node, :inspect)
+  @spec inspect(node(), [{:scene, Mob.Scene.id()}]) :: map()
+  def inspect(node, opts \\ []), do: rpc(node, :inspect, opts, "inspect/1")
 
-  @doc "Return the current rendered tree (calls render/1 on the live assigns)."
-  @spec tree(node()) :: map()
-  def tree(node), do: rpc(node, :inspect).tree
+  @doc "Return the current rendered tree (calls render/1 on the live assigns). Takes `scene:`."
+  @spec tree(node(), [{:scene, Mob.Scene.id()}]) :: map()
+  def tree(node, opts \\ []), do: rpc(node, :inspect, opts, "tree/1").tree
 
   @doc """
   Find all nodes in the current tree whose text contains `substring`.
   Returns a list of `{path, node}` tuples where `path` is a list of
-  indices from the root.
+  indices from the root. Takes `scene:`.
 
       Mob.Test.find(node, "Device APIs")
       #=> [{[0, 1, 8], %{"type" => "button", "props" => %{"text" => "Device APIs →", ...}}}]
   """
-  @spec find(node(), String.t()) :: [{list(), map()}]
-  def find(node, substring) do
-    search(tree(node), substring, [])
+  @spec find(node(), String.t(), [{:scene, Mob.Scene.id()}]) :: [{list(), map()}]
+  def find(node, substring, opts \\ []) do
+    search(rpc(node, :inspect, opts, "find/2").tree, substring, [])
   end
 
   # ── Tap ───────────────────────────────────────────────────────────────────────
@@ -313,19 +369,19 @@ defmodule Mob.Test do
 
       Mob.Test.tap(node, :save)
       Mob.Test.tap(node, :open_detail)
+      Mob.Test.tap(node, :open_detail, scene: scene_id)   # several windows
   """
-  @spec tap(node(), atom()) :: :ok
-  def tap(node, tag) do
-    :rpc.call(node, Process, :send, [:mob_screen, {:tap, tag}, []])
-    :ok
+  @spec tap(node(), atom(), [{:scene, Mob.Scene.id()}]) :: :ok
+  def tap(node, tag, opts \\ []) do
+    send_to(node, {:tap, tag}, opts, "tap/2")
   end
 
   @doc """
   Block until the app has finished processing and the current frame is on
-  screen.
+  screen, in every window.
 
-  Drains the navigation owner and the screen process (twice, since an event
-  that navigates hands off to a *different* screen), then waits for
+  Drains each window's navigation owner and its screen process (twice, since
+  an event that navigates hands off to a *different* screen), then waits for
   `Mob.Sender` to commit. All three are needed: the owner forwards the event,
   the screen builds the tree, and the sender commits it — so a drained owner
   mailbox alone does not mean the frame has been rendered.
@@ -348,17 +404,26 @@ defmodule Mob.Test do
     # -> owner -> NEW screen. Draining once settles the screen that is on its
     # way out and returns before the incoming one has rendered, so a
     # tap -> settle -> screenshot would read the stale frame.
-    drain_owner_and_screen(node)
-    drain_owner_and_screen(node)
+    owners = owners(node)
+    Enum.each(owners, &drain_owner_and_screen(node, &1))
+    Enum.each(owners, &drain_owner_and_screen(node, &1))
 
     :rpc.call(node, Mob.Sender, :sync, [timeout])
     :ok
   end
 
-  defp drain_owner_and_screen(node) do
-    :rpc.call(node, :sys, :get_state, [:mob_screen])
+  # Every window's router; just :mob_screen on a mob from before MOB-245.
+  defp owners(node) do
+    case :rpc.call(node, Mob.Scenes, :list, []) do
+      [_ | _] = routers -> Enum.map(routers, &elem(&1, 1))
+      _none_or_older_mob -> [:mob_screen]
+    end
+  end
 
-    case :rpc.call(node, Mob.Screen, :get_screen_pid, [:mob_screen]) do
+  defp drain_owner_and_screen(node, owner) do
+    :rpc.call(node, :sys, :get_state, [owner])
+
+    case :rpc.call(node, Mob.Screen, :get_screen_pid, [owner]) do
       pid when is_pid(pid) -> :rpc.call(node, :sys, :get_state, [pid])
       _ -> :ok
     end
@@ -371,12 +436,11 @@ defmodule Mob.Test do
 
   Fire-and-forget — follow with `settle/2` before reading the native side. The
   framework pops the navigation stack; if already at the root, it exits the app. Prefer `pop/1` when you need to know that navigation
-  has finished before reading state.
+  has finished before reading state. Takes `scene:`.
   """
-  @spec back(node()) :: :ok
-  def back(node) do
-    :rpc.call(node, Process, :send, [:mob_screen, {:mob, :back}, []])
-    :ok
+  @spec back(node(), [{:scene, Mob.Scene.id()}]) :: :ok
+  def back(node, opts \\ []) do
+    send_to(node, {:mob, :back}, opts, "back/1")
   end
 
   # ── Navigation (synchronous) ──────────────────────────────────────────────────
@@ -387,37 +451,44 @@ defmodule Mob.Test do
   Returns `:ok` once the navigation and re-render are complete, so it is safe
   to call `screen/1` or `assigns/1` immediately after.
 
-  No-op (returns `:ok`) if already at the root of the stack.
+  No-op (returns `:ok`) if already at the root of the stack. Takes `scene:`.
   """
-  @spec pop(node()) :: :ok
-  def pop(node), do: nav(node, {:pop})
+  @spec pop(node(), [{:scene, Mob.Scene.id()}]) :: :ok
+  def pop(node, opts \\ []), do: nav(node, {:pop}, opts, "pop/1")
 
   @doc """
   Push a new screen onto the navigation stack. Synchronous.
 
-  `dest` is a screen module or a registered name atom (from `navigation/1`).
-  `params` are passed to the new screen's `mount/3`.
+  `params` are passed to the new screen's `mount/3`. Takes `scene:`.
 
       Mob.Test.navigate(node, MyApp.DetailScreen, %{id: 42})
       Mob.Test.navigate(node, :detail, %{id: 42})
       Mob.Test.navigate(node, MyApp.SettingsScreen)
   """
-  @spec navigate(node(), module() | atom(), map()) :: :ok
-  def navigate(node, dest, params \\ %{}), do: nav(node, {:push, dest, params})
+  @spec navigate(node(), module() | atom(), map(), [{:scene, Mob.Scene.id()}]) :: :ok
+  def navigate(node, dest, params \\ %{}, opts \\ [])
+
+  # navigate(node, dest, scene: id): options in the params position.
+  def navigate(node, dest, [{:scene, _scene} | _] = opts, []),
+    do: navigate(node, dest, %{}, opts)
+
+  def navigate(node, dest, params, opts),
+    do: nav(node, {:push, dest, params}, opts, "navigate/3")
 
   @doc """
   Pop the stack until `dest` is at the top. Synchronous.
 
   `dest` is a screen module or registered name atom. No-op if not in history.
+  Takes `scene:`.
   """
-  @spec pop_to(node(), module() | atom()) :: :ok
-  def pop_to(node, dest), do: nav(node, {:pop_to, dest})
+  @spec pop_to(node(), module() | atom(), [{:scene, Mob.Scene.id()}]) :: :ok
+  def pop_to(node, dest, opts \\ []), do: nav(node, {:pop_to, dest}, opts, "pop_to/2")
 
   @doc """
-  Pop all screens back to the root of the current stack. Synchronous.
+  Pop all screens back to the root of the current stack. Synchronous. Takes `scene:`.
   """
-  @spec pop_to_root(node()) :: :ok
-  def pop_to_root(node), do: nav(node, {:pop_to_root})
+  @spec pop_to_root(node(), [{:scene, Mob.Scene.id()}]) :: :ok
+  def pop_to_root(node, opts \\ []), do: nav(node, {:pop_to_root}, opts, "pop_to_root/1")
 
   @doc """
   Replace the current navigation stack with a new root screen. Synchronous.
@@ -426,23 +497,24 @@ defmodule Mob.Test do
 
   Pass `transition: :push` or `transition: :pop` to drive a directional reset,
   matching `Mob.Socket.reset_to/4`. Pass `scope: :all` to discard every parked
-  stack as well as the active one.
+  stack as well as the active one. Takes `scene:`.
   """
   @spec reset_to(node(), module() | atom(), map(), [
-          {:transition, atom()} | {:scope, :stack | :all}
+          {:transition, atom()} | {:scope, :stack | :all} | {:scene, Mob.Scene.id()}
         ]) :: :ok
   def reset_to(node, dest, params \\ %{}, opts \\ []) do
     transition = Keyword.get(opts, :transition)
+    navigate = &nav(node, &1, opts, "reset_to/4")
 
     case Keyword.get(opts, :scope, :stack) do
       :stack when is_nil(transition) ->
-        nav(node, {:reset, dest, params})
+        navigate.({:reset, dest, params})
 
       :stack ->
-        nav(node, {:reset, dest, params, transition})
+        navigate.({:reset, dest, params, transition})
 
       :all ->
-        nav(node, {:reset, dest, params, transition || :reset, :all})
+        navigate.({:reset, dest, params, transition || :reset, :all})
 
       other ->
         raise ArgumentError,
@@ -561,8 +633,11 @@ defmodule Mob.Test do
   Pass `transition: :push`, `transition: :pop`, or `transition: :reset` to
   exercise the same directional animation as `Mob.Socket.switch_tab/3`.
   `mount_params: %{...}` is passed to a target root only on its first mount.
+  Takes `scene:`.
   """
-  @spec switch_tab(node(), atom(), [{:transition, atom()} | {:mount_params, map()}]) :: :ok
+  @spec switch_tab(node(), atom(), [
+          {:transition, atom()} | {:mount_params, map()} | {:scene, Mob.Scene.id()}
+        ]) :: :ok
   def switch_tab(node, tab, opts \\ []) do
     transition =
       case Keyword.fetch(opts, :transition) do
@@ -570,9 +645,11 @@ defmodule Mob.Test do
         {:ok, value} -> validate_tab_transition!(value)
       end
 
+    navigate = &nav(node, &1, opts, "switch_tab/3")
+
     case Keyword.fetch(opts, :mount_params) do
       {:ok, mount_params} when is_map(mount_params) ->
-        nav(node, {:switch_tab, tab, transition, mount_params})
+        navigate.({:switch_tab, tab, transition, mount_params})
 
       {:ok, mount_params} ->
         raise ArgumentError,
@@ -580,10 +657,10 @@ defmodule Mob.Test do
                 "Expected a map."
 
       :error when transition == :none ->
-        nav(node, {:switch_tab, tab})
+        navigate.({:switch_tab, tab})
 
       :error ->
-        nav(node, {:switch_tab, tab, transition})
+        navigate.({:switch_tab, tab, transition})
     end
   end
 
@@ -608,20 +685,20 @@ defmodule Mob.Test do
   so the screen records a receipt for it (`event: {:select, %Address{widget:
   :list, id: list_id, instance: index}}`) and traces it, as it would a finger.
 
-  Fire-and-forget.
+  Fire-and-forget. Takes `scene:`.
 
       Mob.Test.select(node, :my_list, 0)   # first row
   """
-  @spec select(node(), atom(), non_neg_integer()) :: :ok
-  def select(node, list_id, index) when is_atom(list_id) and is_integer(index) do
-    :rpc.call(node, Process, :send, [:mob_screen, {:tap, {:list, list_id, :select, index}}, []])
-    :ok
+  @spec select(node(), atom(), non_neg_integer(), [{:scene, Mob.Scene.id()}]) :: :ok
+  def select(node, list_id, index, opts \\ []) when is_atom(list_id) and is_integer(index) do
+    send_to(node, {:tap, {:list, list_id, :select, index}}, opts, "select/3")
   end
 
   # ── send_message ──────────────────────────────────────────────────────────────
 
   @doc """
   Send an arbitrary message to the screen's `handle_info/2`. Fire-and-forget.
+  Takes `scene:`.
 
   Use this to simulate results from device APIs without triggering real hardware:
 
@@ -657,10 +734,9 @@ defmodule Mob.Test do
       # Custom
       Mob.Test.send_message(node, {:my_event, %{key: "value"}})
   """
-  @spec send_message(node(), term()) :: :ok
-  def send_message(node, message) do
-    :rpc.call(node, Process, :send, [:mob_screen, message, []])
-    :ok
+  @spec send_message(node(), term(), [{:scene, Mob.Scene.id()}]) :: :ok
+  def send_message(node, message, opts \\ []) do
+    send_to(node, message, opts, "send_message/2")
   end
 
   # ── Native UI — unmodified app test harness ─────────────────────────────────
@@ -1919,13 +1995,55 @@ defmodule Mob.Test do
 
   # ── Internals ─────────────────────────────────────────────────────────────────
 
-  defp nav(node, action) do
-    :rpc.call(node, GenServer, :call, [:mob_screen, {:navigate, action}])
+  defp nav(node, action, opts, caller) do
+    :rpc.call(node, GenServer, :call, [owner(node, opts, caller), {:navigate, action}])
     :ok
   end
 
   defp rpc(node, call) do
     :rpc.call(node, GenServer, :call, [:mob_screen, call])
+  end
+
+  defp rpc(node, call, opts, caller) do
+    :rpc.call(node, GenServer, :call, [owner(node, opts, caller), call])
+  end
+
+  defp send_to(node, message, opts, caller) do
+    :rpc.call(node, Process, :send, [owner(node, opts, caller), message, []])
+    :ok
+  end
+
+  # The navigation owner a helper addresses. `scene:` picks that window's
+  # router. Without it, one window means :mob_screen, as before MOB-245; more
+  # than one is ambiguous, and a guess would turn a wrong target into a silent
+  # no-op, so it raises. A node running a mob from before MOB-245 answers the
+  # Mob.Scenes call with a badrpc and has one window.
+  defp owner(node, opts, caller) do
+    case Keyword.fetch(opts, :scene) do
+      {:ok, scene} ->
+        case :rpc.call(node, Mob.Scenes, :router, [scene]) do
+          router when is_pid(router) ->
+            router
+
+          _none ->
+            raise ArgumentError,
+                  "Mob.Test.#{caller}: no window scene #{Kernel.inspect(scene)} on " <>
+                    "#{Kernel.inspect(node)}. Live scenes: " <>
+                    Kernel.inspect(Enum.map(screens(node), &elem(&1, 0)))
+        end
+
+      :error ->
+        case :rpc.call(node, Mob.Scenes, :list, []) do
+          [_, _ | _] ->
+            raise Mob.Test.MultipleScenesError,
+              node: node,
+              function: caller,
+              screens: screens(node)
+
+          _one_none_or_older_mob ->
+            :mob_screen
+        end
+    end
   end
 
   # Query the iOS simulator accessibility tree via idb.
