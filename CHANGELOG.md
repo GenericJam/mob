@@ -8,7 +8,19 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.9.11] - 2026-10-03
+
+### Upgrading
+- **Deep links need native files that call `mob_deliver_link`** (MOB-379).
+  New projects from mob_new 0.6.4 have them; an existing app ports the
+  `MainActivity` / `MobBridge.kt` / `beam_jni.c` / `SceneDelegate` changes
+  from the "Deep links" section of `guides/device_capabilities.md`, sets
+  `url_schemes` in `mob.exs` (mob_dev 0.7.12) and makes `MainActivity`
+  `singleTask`, then rebuilds with `mix mob.deploy --native`. Apps that
+  don't use deep links need no change.
+- A test double passed as `nif:` to `Mob.Router.start_root/3` (or
+  `Mob.Screen.start_root/3`) needs `take_launch_link/0` returning `:none`,
+  beside `take_launch_notification/0`; the router now calls both at start.
 
 ### Added
 - **Deep links: an app opened by a URL gets it on the BEAM** (MOB-379). A
