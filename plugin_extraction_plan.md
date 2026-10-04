@@ -466,9 +466,10 @@ system handles AI-shaped capabilities cleanly.
   providers (Anthropic, OpenAI, Bedrock, local-via-mob_pythonx).
   Tier-1 (NIF-free; just HTTP + streaming). Becomes the canonical
   way mob apps call cloud LLMs.
-- [ ] `mob_speech` — speech-to-text + text-to-speech. STT via
-  Whisper-on-device (mob_pythonx + Whisper.cpp via NIF, or
-  iOS/Android system APIs). TTS via system APIs. Tier-1/2.
+- [x] `mob_speech` — speech-to-text (shipped 0.1.0): the platform
+  recognizers, plus `mob_whisper` (0.1.0) as an offline whisper.cpp
+  engine. Text-to-speech stays in core as `Mob.Speech`: it needs no
+  permission and no NIF, which is the rule for core vs plugin.
 - [ ] `mob_local_llm` — on-device LLM inference. Backends: llama.cpp
   (via Zig NIF), MLX on iOS (already partially in mob's existing
   ML work). Tier-1.5 (language-pack pattern, since it ships an
