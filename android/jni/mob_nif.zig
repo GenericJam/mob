@@ -5215,7 +5215,7 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
         return -1;
     }
 
-    // tap_mutex + component_mutex are created here (mob_nif_init_state is
+    // tap_mutex, component_mutex and press_mutex are created here (mob_nif_init_state is
     // a Zig-side export, but for the all-Zig finale we just call the
     // initialiser directly — no C boundary to cross).
     if (mob_nif_init_state() != 0) {

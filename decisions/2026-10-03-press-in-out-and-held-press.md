@@ -111,5 +111,8 @@ nothing can look at the app while the finger is down.
   reach SwiftUI on device, so it needs a human finger), any iOS 17 runtime
   (the `DragGesture` fallback; its possible limits are documented in the
   components guide and CHANGELOG), and release (non-debug) builds. The
-  change adds no new linkage on iOS and two optional JNI-looked-up exports on
-  Android, so release packaging is not expected to differ.
+  change adds no new linkage on iOS. On Android it adds three exported C
+  symbols (`mob_press_begin`, `mob_press_end`, `mob_send_press_tap`, linked
+  from the app's `beam_jni.c`) and three bridge methods looked up optionally
+  at load, all in code paths debug and release builds share, so release
+  packaging is not expected to differ.

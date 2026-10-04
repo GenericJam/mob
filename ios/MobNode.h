@@ -91,8 +91,9 @@ NS_ASSUME_NONNULL_BEGIN
 // either prop is registered; SwiftUI calls it at touch-down. It sends press_in
 // and returns the one-shot block that sends the paired press_out, to be called
 // once at lift, cancel or teardown. Returns nil when there is nothing to send at
-// release (press_in could not be delivered, or no on_press_out), so a press_out
-// never goes out without its press_in. The pairing lives native-side; see
+// release (press_in could not be delivered, or no on_press_out). On a node that
+// declares both, a press_out never goes out without its press_in; an
+// on_press_out-only node gets press_out alone. The pairing lives native-side; see
 // mob_begin_press in mob_nif.m for why it can't be two independent callbacks.
 @property(nonatomic, copy, nullable) void (^_Nullable (^onPress)(void))(void);
 
