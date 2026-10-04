@@ -94,3 +94,22 @@ nothing can look at the app while the finger is down.
 - Speech-to-text, the other half of hold-to-talk, is the `mob_speech` plugin,
   not core: privacy-gated capabilities live in plugins
   (plugin_extraction_plan.md, Waves 2 and 6).
+
+## Verification (fidelity ladder) and accepted gaps
+
+- Android emulator (Pixel 8, arm64): press pairs, held press, max-hold
+  cancel, slide-off; 20/20 taps at 300 ms and 80 ms gaps on two press nodes
+  and a plain re-rendering node after plain taps went back to strict.
+- Android physical (Moto G Power 2021, Android 11), debug build, Operator:
+  `Mob.Test.hold_xy` held the mic (a plain box with `on_press_in` /
+  `on_press_out`) for 6 s while the Mac spoke "Please add a unit test for the
+  login screen."; press_in arrived (screen state `:listening` mid-hold),
+  press_out ended it, and the transcript landed in the draft 1.7 s after the
+  lift. A 120 ms hold gave the "too short" hint.
+- iOS 26 simulator: real XCTest touches produced press, release and tap.
+- Accepted for 0.9.12, not run: a physical iPhone (synthetic touches don't
+  reach SwiftUI on device, so it needs a human finger), any iOS 17 runtime
+  (the `DragGesture` fallback; its possible limits are documented in the
+  components guide and CHANGELOG), and release (non-debug) builds. The
+  change adds no new linkage on iOS and two optional JNI-looked-up exports on
+  Android, so release packaging is not expected to differ.
