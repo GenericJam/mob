@@ -187,7 +187,8 @@ first-party plugins' signing key; for any other plugin, run
 `mob_photos`, `mob_biometric`, `mob_scanner` (also needs `mob_camera`),
 `mob_bluetooth`, `mob_video`, `mob_midi`, `mob_touch`, `mob_screencast`,
 `mob_sms`, `mob_background` (keep-alive), `mob_speech` (speech-to-text),
-`mob_whisper` (offline speech-to-text engine), `mob_nx` (ML backends spike).
+`mob_whisper` (offline speech-to-text engine), `mob_sensors` (every phone
+sensor: barometer, proximity, light, steps, ...), `mob_nx` (ML backends spike).
 
 **Component kits:** `mob_mishka` — 73 Mishka Chelekom composites for
 Mob apps (dialogs, tabs, sliders, colour pickers, etc.), with
@@ -257,8 +258,8 @@ The pre-built OTP runtime that ships with each app includes:
 
 Native APIs (above) cover audio, files, clipboard, share, motion
 sensors, and permissions in core, with camera, location, push,
-photos, biometrics, and scanning available as first-party capability
-plugins.
+photos, biometrics, scanning, and the remaining sensors (`mob_sensors`)
+available as first-party capability plugins.
 
 The OTP runtime tarball is ~80 MB compressed; sliced per-arch by
 App Thinning (iOS) and App Bundle (Android) so each user only
