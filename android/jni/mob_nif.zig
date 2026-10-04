@@ -1238,7 +1238,7 @@ var component_handles: [MAX_COMPONENT_HANDLES]ComponentHandle = @splat(std.mem.z
 var component_generations: [MAX_COMPONENT_HANDLES]u32 = @splat(0);
 var component_mutex: ?*erts.ErlNifMutex = null;
 
-/// Initialise both mutexes. Called from mob_nif.c's nif_load BEAM callback
+/// Initialise the mutexes. Called from mob_nif.c's nif_load BEAM callback
 /// — must run once before any sender or NIF that locks them. Returns 0
 /// on success, -1 on failure (matches the C nif_load return convention).
 pub export fn mob_nif_init_state() callconv(.c) c_int {

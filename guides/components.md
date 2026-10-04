@@ -1047,6 +1047,12 @@ they observe without consuming: `on_tap`, `on_long_press` and an ancestor's
 scrolling keep working on the same node. A quick tap delivers
 `{:press_in, tag}`, `{:press_out, tag}`, then `{:tap, tag}`.
 
+On iOS 17 the observer is a SwiftUI `DragGesture` fallback (iOS 18 added the
+UIKit bridge the 18+ path uses), not yet run on an iOS 17 device: there it may
+stop an enclosing ScrollView from scrolling when the drag starts on the node,
+and inside a ScrollView a quick tap's `{:tap, tag}` may arrive before its
+`{:press_in, tag}`. Don't rely on the order of `tap` and `press_in` there.
+
 That is what hold-to-talk, push-to-record, "peek" previews and press-and-hold
 buttons need:
 

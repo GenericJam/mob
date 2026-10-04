@@ -13,9 +13,10 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 ### Added
 - **`on_press_in` / `on_press_out` on any node** (MOB-380): `{:press_in, tag}`
   when a finger goes down on the node, `{:press_out, tag}` when it lifts or the
-  touch is cancelled. Always paired, even across the re-render a press usually
-  causes: native resolves both handles at touch-down and keeps press_out's
-  routing until the lift. They observe without consuming, so `on_tap`,
+  touch is cancelled. On a node that declares both they are always paired,
+  even across the re-render a press usually causes: native resolves both
+  handles at touch-down and keeps press_out's routing until the lift. They
+  observe without consuming, so `on_tap`,
   `on_long_press` and an ancestor's scrolling keep working on the same node,
   `button` included. iOS (SwiftUI) and Android (Compose; the observer lives in
   the generated bridge, so it needs `mob_new` 0.6.5 or newer). For
@@ -23,7 +24,11 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   node that declares either prop goes through the new `mob_send_press_tap`,
   which accepts a handle from the render before when its slot still holds the
   same pid and tag, so the re-render a press causes no longer drops the tap.
-  Plain taps stay generation-strict.
+  Plain taps stay generation-strict. iOS 17 uses a SwiftUI `DragGesture`
+  fallback (no `UIGestureRecognizerRepresentable` there) that hasn't been run
+  on an iOS 17 device: it may stop an enclosing ScrollView from scrolling when
+  the drag starts on the node, and inside a ScrollView a quick tap's `tap` may
+  arrive before its `press_in`. iOS 18+ and Android don't have either issue.
 - **`Mob.Test` can hold a press** (MOB-380). `press_down_xy/4`,
   `press_move_xy/3`, `press_up_xy/3` and `hold_xy/4` put a real finger on an
   Android app's window and keep it there across calls, so a Compose
