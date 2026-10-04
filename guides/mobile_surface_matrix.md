@@ -23,7 +23,7 @@ This doc is hand-maintained from inspection of `lib/mob/` and
 | ❌ | Missing — could be a plugin or future core addition |
 | ⛔ | Out of scope — requires separate deployment target (widgets, Watch app), or fundamentally incompatible with Mob's architecture |
 
-Per-platform columns: `✓` = supported, `—` = not supported, `n/a` = not applicable on that platform.
+Per-platform columns: `✓` = supported, `🟡` = partial or not yet verified on a device, `—` = not supported, `n/a` = not applicable on that platform.
 
 A ✅ capability may live in **core** or in a **first-party plugin**
 (0.7.0 extracted camera, photos, location, notifications, biometrics,
