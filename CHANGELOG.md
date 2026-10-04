@@ -8,7 +8,14 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.9.12] - 2026-10-03
+
+### Upgrading
+- On Android, `on_press_in` / `on_press_out` and `Mob.Test`'s held press live
+  in the app's generated `MobBridge.kt` / `beam_jni.c`: new apps get them from
+  `mob_new` 0.6.5; existing apps port the bridge changes listed in mob_new's
+  0.6.5 CHANGELOG. Without them the props are ignored on Android and
+  `capabilities/1` reports the press NIFs false. iOS needs nothing.
 
 ### Added
 - **`on_press_in` / `on_press_out` on any node** (MOB-380): `{:press_in, tag}`
