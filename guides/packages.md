@@ -42,6 +42,8 @@ distribution — is in mob itself. Everything below is opt-in.
 | [mob_midi](https://hexdocs.pm/mob_midi) | MIDI in + out (over USB, Bluetooth LE MIDI, and app-to-app) | |
 | [mob_touch](https://hexdocs.pm/mob_touch) | Raw touch stream, observe-without-consume | Useful for gesture prototyping / analytics without owning the UI event flow |
 | [mob_screencast](https://hexdocs.pm/mob_screencast) | The device's own screen as an on-device-encoded H264 stream | For remote viewing / WebRTC; `max_size` is Android-only today |
+| [mob_speech](https://hexdocs.pm/mob_speech) | Speech-to-text: `MobSpeech.listen/2`, `stop/1`, `cancel/1`, with `{:speech, :state \| :partial \| :final \| :error, …}` events and a pluggable engine | The default engine is the platform recognizer (Android `SpeechRecognizer`, iOS `SFSpeechRecognizer`); pair with `mob_whisper` for offline recognition. Text-to-speech stays in core (`Mob.Speech`). |
+| [mob_whisper](https://hexdocs.pm/mob_whisper) | Offline speech-to-text on the device: whisper.cpp as a `mob_speech` engine (`engine: MobWhisper`) | No Google/Apple speech service needed. The model (`base_en` default, `tiny_en` option, ~60 MB) downloads once with a SHA-256 check; `MobWhisper.prefetch/0` fetches it ahead of time. Verified on a Moto G 2021; iOS builds but hasn't run on a device. |
 
 ### Messaging + wake
 

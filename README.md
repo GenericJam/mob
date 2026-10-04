@@ -186,7 +186,8 @@ first-party plugins' signing key; for any other plugin, run
 **As first-party plugins:** `mob_camera`, `mob_location`, `mob_notify`,
 `mob_photos`, `mob_biometric`, `mob_scanner` (also needs `mob_camera`),
 `mob_bluetooth`, `mob_video`, `mob_midi`, `mob_touch`, `mob_screencast`,
-`mob_sms`, `mob_background` (keep-alive), `mob_nx` (ML backends spike).
+`mob_sms`, `mob_background` (keep-alive), `mob_speech` (speech-to-text),
+`mob_whisper` (offline speech-to-text engine), `mob_nx` (ML backends spike).
 
 **Component kits:** `mob_mishka` — 73 Mishka Chelekom composites for
 Mob apps (dialogs, tabs, sliders, colour pickers, etc.), with

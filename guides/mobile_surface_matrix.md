@@ -23,7 +23,7 @@ This doc is hand-maintained from inspection of `lib/mob/` and
 | ❌ | Missing — could be a plugin or future core addition |
 | ⛔ | Out of scope — requires separate deployment target (widgets, Watch app), or fundamentally incompatible with Mob's architecture |
 
-Per-platform columns: `✓` = supported, `—` = not supported, `n/a` = not applicable on that platform.
+Per-platform columns: `✓` = supported, `🟡` = partial or not yet verified on a device, `—` = not supported, `n/a` = not applicable on that platform.
 
 A ✅ capability may live in **core** or in a **first-party plugin**
 (0.7.0 extracted camera, photos, location, notifications, biometrics,
@@ -137,7 +137,7 @@ and orthogonal — composition over a fat component library.
 | Audio recording | ✅ | ✓ | ✓ | `Mob.Audio.start_recording/2` |
 | Audio playback | ✅ | ✓ | ✓ | `Mob.Audio.play/3`, stop, volume |
 | Text-to-speech | ✅ | ✓ | ✓ | `Mob.Speech.speak/3` + `stop_speaking/1` (AVSpeechSynthesizer / TextToSpeech) |
-| Speech recognition | ❌ | — | — | Plugin candidate (SFSpeechRecognizer / SpeechRecognizer) |
+| Speech recognition | 🟡 | 🟡 | ✓ | `mob_speech` plugin (`MobSpeech.listen/2`; platform recognizer by default, or offline whisper.cpp via `mob_whisper`). Android verified; iOS builds, not yet run on a device |
 | Voice activity detection | ❌ | — | — | Plugin candidate |
 | Audio effects (reverb, EQ) | ❌ | — | — | Plugin candidate |
 | Camera zoom / focus / exposure | 🟡 | 🟡 | 🟡 | Basic capture works; fine-grained control missing |
@@ -235,7 +235,7 @@ and orthogonal — composition over a fat component library.
 | OCR (text recognition) | ❌ | — | — | Plugin candidate |
 | Face detection | ❌ | — | — | Plugin candidate |
 | Pose detection | ❌ | — | — | Plugin candidate |
-| Speech-to-text | ❌ | — | — | Plugin candidate |
+| Speech-to-text | 🟡 | 🟡 | ✓ | `mob_speech` + `mob_whisper` (on-device whisper.cpp); see Speech recognition above |
 | Translation | ❌ | — | — | Plugin candidate |
 | Smart Reply | ❌ | — | — | Plugin candidate |
 

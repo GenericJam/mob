@@ -8,6 +8,13 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
+## [Unreleased]
+
+### Docs
+- `mob_speech` (speech-to-text) and `mob_whisper` (offline whisper.cpp
+  engine) are listed in the packages guide, README and surface matrix;
+  `Mob.Speech`'s docs point to them for listening.
+
 ## [0.9.12] - 2026-10-03
 
 ### Upgrading
