@@ -24,6 +24,13 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `mob_stored_queue.zig`'s tests use `dupeSentinel`. CI now sets up the
   pinned Zig from `.tool-versions`, compiles `mob_nif.zig` for Android and
   runs every Android Zig test file.
+- **iOS sheet presentation follows the sheet's `:id` (#115).** A sheet that
+  stays in the tree after a drag-dismiss no longer leaves the next sheet at
+  that position unpresented, or swallows its dismiss, when the new sheet has
+  a different `:id`. An explicit `:id` scopes presentation and the
+  exactly-once dismiss to that id; omitting `:id` keeps slot identity. `1`
+  and `"1"` are the same id. Replacing an open sheet does not deliver the
+  predecessor's late `on_dismiss`. Matches Android (mob_new #43).
 - **A task killed from outside right after `start_async/3` reports the real
   reason (MOB-500).** `Mob.Screen.Server` could pass `{:exit, :noproc}` to
   `handle_async/3` when the kill landed before the screen's monitor reached
