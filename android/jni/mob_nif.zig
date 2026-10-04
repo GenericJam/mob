@@ -1373,13 +1373,21 @@ fn sendChange(handle: c_int, value_term: erts.ERL_NIF_TERM) void {
 // ── Tap + change senders ────────────────────────────────────────────────
 
 /// Called from beam_jni.c's `nativeSendTap` JNI stub. Sends `{:tap, tag}`
-/// to the pid registered for `handle`.
-/// Identity-tolerant (MOB-380): a tap whose node re-rendered between the
-/// finger's down and up — which on_press_in all but guarantees, and any other
-/// render in flight can cause — still resolves when the slot holds the same
-/// pid and tag, so the {:tap, tag} delivered is the one the node declared.
-/// Strict lookup dropped those taps ("rejected stale event handle").
+/// to the pid registered for `handle`. Generation-strict: a handle from an
+/// earlier render is dropped, so a positional tag (Mob.List's
+/// `{:select, id, index}`) never reaches a row that moved under it.
 pub export fn mob_send_tap(handle: c_int) callconv(.c) void {
+    sendEvent(handle, "tap");
+}
+
+/// Called from beam_jni.c's `nativeSendPressTap` JNI stub, which the bridge
+/// uses instead of `nativeSendTap` for a node that also declares on_press_in
+/// or on_press_out (MOB-380). Such a node re-renders between the finger's
+/// down and up (press_in usually changes the screen), so its lift fires a
+/// handle from the previous render. Identity-tolerant, like change events:
+/// it still resolves when the slot holds the same pid and tag. Plain taps
+/// stay on the strict `mob_send_tap`.
+pub export fn mob_send_press_tap(handle: c_int) callconv(.c) void {
     sendIdentityEvent(handle, "tap");
 }
 

@@ -201,16 +201,44 @@ defmodule Mob.NativeEventHandleTest do
     assert ios_dismiss =~ "mob_send_identity_event(handle, \"dismiss\")"
   end
 
-  test "taps and press pairs survive a re-render between down and up" do
-    # MOB-380: on_press_in almost always re-renders before the finger lifts,
-    # and a strict lookup then dropped the node's tap as stale.
+  test "plain taps stay strict; press-node taps and press pairs survive a re-render" do
+    # A plain tap resolves generation-strictly: a stale positional tag such as
+    # Mob.List's {:select, id, index} must be dropped, not routed to whatever
+    # row now sits in that slot.
     [_, android_tap] = String.split(@android_source, "pub export fn mob_send_tap(", parts: 2)
     [android_tap, _] = String.split(android_tap, "}", parts: 2)
-    assert android_tap =~ "sendIdentityEvent(handle, \"tap\")"
+    assert android_tap =~ "sendEvent(handle, \"tap\")"
 
     [_, ios_tap] = String.split(@ios_source, "static void mob_send_tap(", parts: 2)
     [ios_tap, _] = String.split(ios_tap, "}", parts: 2)
-    assert ios_tap =~ "mob_snap_change_tap(handle, msg_env, &snap)"
+    assert ios_tap =~ "mob_send_tap_with(handle, NO)"
+
+    # MOB-380: on_press_in almost always re-renders before the finger lifts, so
+    # the tap of a node that observes press in/out resolves by identity.
+    [_, android_press_tap] =
+      String.split(@android_source, "pub export fn mob_send_press_tap(", parts: 2)
+
+    [android_press_tap, _] = String.split(android_press_tap, "}", parts: 2)
+    assert android_press_tap =~ "sendIdentityEvent(handle, \"tap\")"
+
+    [_, ios_press_tap] = String.split(@ios_source, "static void mob_send_press_tap(", parts: 2)
+    [ios_press_tap, _] = String.split(ios_press_tap, "}", parts: 2)
+    assert ios_press_tap =~ "mob_send_tap_with(handle, YES)"
+
+    [_, ios_with] = String.split(@ios_source, "static void mob_send_tap_with(", parts: 2)
+    [ios_with, _] = String.split(ios_with, "static void mob_send_tap(", parts: 2)
+    assert ios_with =~ "identity_tolerant ? mob_snap_change_tap(handle, msg_env, &snap)"
+    assert ios_with =~ ": mob_snap_tap(handle, msg_env, &snap)"
+
+    # iOS picks the tolerant sender only for a node declaring press in/out.
+    [_, ios_on_tap] = String.split(@ios_source, "id onTap = pv[MOB_PROP_on_tap];", parts: 2)
+
+    [ios_on_tap, _] =
+      String.split(ios_on_tap, "id placeholder = pv[MOB_PROP_placeholder];", parts: 2)
+
+    assert ios_on_tap =~ "pv[MOB_PROP_on_press_in]"
+    assert ios_on_tap =~ "pv[MOB_PROP_on_press_out]"
+    assert ios_on_tap =~ "mob_send_press_tap(handle)"
 
     # press_out's routing is copied at touch-down and sent from that copy.
     [_, begin] = String.split(@android_source, "pub export fn mob_press_begin(", parts: 2)

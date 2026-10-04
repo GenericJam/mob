@@ -16,6 +16,12 @@ void mob_ui_cache_class(JNIEnv *env, const char *bridge_class);
 // Called from the app's Java_..._MobBridge_nativeSendTap JNI stub.
 void mob_send_tap(int handle);
 
+// Send a tap from a node that also declares on_press_in / on_press_out
+// (MOB-380). Identity-tolerant: a handle from the previous render still
+// resolves when its slot holds the same pid and tag (press_in usually
+// re-renders before the lift). Called from Java_..._MobBridge_nativeSendPressTap.
+void mob_send_press_tap(int handle);
+
 // Send a {:dismiss, tag} event — the shape Mob.UI.sheet/2 documents for
 // :on_dismiss, matching iOS. Called from the app's
 // Java_..._MobBridge_nativeSendDismiss JNI stub.

@@ -50,13 +50,19 @@ nothing can look at the app while the finger is down.
    gestures stay generation-strict" (AGENTS.md pre-empt rule 3): the pair is
    one gesture whose second half must survive renders.
 
-   **Taps became identity-tolerant too.** On the emulator, 1–6 of 20
-   `tap_xy` taps on a box whose `on_press_in` changed its label were lost
+   **A press node's tap is identity-tolerant too.** On the emulator, 1–6 of
+   20 `tap_xy` taps on a box whose `on_press_in` changed its label were lost
    (logcat: "rejected stale event handle"): the tap's handle belonged to the
-   tree before the press's render. `mob_send_tap` now resolves like a change
-   event. That is safe for the reason identity matching exists: the slot still
-   holds the same pid and tag, so the `{:tap, tag}` delivered is exactly the
-   message the tapped node declared. The other gestures stay strict.
+   tree before the press's render. For a node that declares `on_press_in` or
+   `on_press_out`, the tap goes through `mob_send_press_tap`, which resolves
+   like a change event: the slot still holds the same pid and tag, so the
+   `{:tap, tag}` delivered is the message the tapped node declared. The
+   bridge (Android `RenderNodeInner`, iOS's `on_tap` deserialiser) picks it.
+   Plain taps keep the strict `mob_send_tap`: a first cut made every tap
+   tolerant, and review found that a stale positional tag such as Mob.List's
+   `{:select, id, index}` would then select whichever row the list had moved
+   into that index, where the strict lookup drops it. The other gestures stay
+   strict.
 
 4. **A held press in `Mob.Test` (Android): `press_down_xy/4`,
    `press_move_xy/3`, `press_up_xy/3`, `hold_xy/4`.** The app's own

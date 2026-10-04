@@ -433,21 +433,17 @@ static void mob_note_ui_event(void) {
 }
 
 // Called from node onTap blocks — routes tap to BEAM via enif_send.
-//
-// Identity-tolerant (mob_snap_change_tap: same slot, PID and tag across
-// renders), not generation-strict (MOB-380). A screen that re-renders on
-// press_in commits the new table on the BEAM thread before the main thread
-// applies the new tree, so the lift that completes the tap fires the old
-// node's handle; a strict check dropped those taps (measured on Android, 1-6 of
-// 20). The identity check still rejects a handle whose slot now means another
-// handler, which is what the strict rule exists to prevent. Other gestures stay
-// strict.
-static void mob_send_tap(int handle) {
+// Generation-strict: a handle from an earlier render is dropped, so a
+// positional tag (Mob.List's {:select, id, index}) never reaches a row that
+// moved under it.
+static void mob_send_tap_with(int handle, BOOL identity_tolerant) {
     ErlNifEnv *msg_env = enif_alloc_env();
     if (!msg_env)
         return;
     TapSnap snap;
-    if (!mob_snap_change_tap(handle, msg_env, &snap)) {
+    int ok = identity_tolerant ? mob_snap_change_tap(handle, msg_env, &snap)
+                               : mob_snap_tap(handle, msg_env, &snap);
+    if (!ok) {
         enif_free_env(msg_env);
         return;
     }
@@ -456,6 +452,21 @@ static void mob_send_tap(int handle) {
     ERL_NIF_TERM msg = enif_make_tuple2(msg_env, enif_make_atom(msg_env, "tap"), snap.tag);
     enif_send(NULL, &snap.pid, msg_env, msg);
     enif_free_env(msg_env);
+}
+
+static void mob_send_tap(int handle) {
+    mob_send_tap_with(handle, NO);
+}
+
+// The tap of a node that also declares on_press_in / on_press_out (MOB-380).
+// Identity-tolerant (mob_snap_change_tap: same slot, PID and tag across
+// renders): press_in usually re-renders the screen, and set_root commits the
+// new table on the BEAM thread before the main thread applies the new tree, so
+// the lift that completes the tap fires the old node's handle; a strict check
+// dropped those taps (measured on Android, 1-6 of 20). The identity check still
+// rejects a handle whose slot now means another handler. Plain taps stay strict.
+static void mob_send_press_tap(int handle) {
+    mob_send_tap_with(handle, YES);
 }
 
 // ── Focus / blur / submit senders ────────────────────────────────────────────
@@ -1535,9 +1546,19 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         id onTap = pv[MOB_PROP_on_tap];
         if (onTap && [onTap isKindOfClass:[NSNumber class]]) {
             int handle = [onTap intValue];
-            node.onTap = ^{
-              mob_send_tap(handle);
-            };
+            // A node that observes press in/out re-renders mid-touch, so its
+            // tap resolves identity-tolerantly; every other tap stays strict.
+            BOOL pressNode = [pv[MOB_PROP_on_press_in] isKindOfClass:[NSNumber class]] ||
+                             [pv[MOB_PROP_on_press_out] isKindOfClass:[NSNumber class]];
+            if (pressNode) {
+                node.onTap = ^{
+                  mob_send_press_tap(handle);
+                };
+            } else {
+                node.onTap = ^{
+                  mob_send_tap(handle);
+                };
+            }
         }
 
         id placeholder = pv[MOB_PROP_placeholder];

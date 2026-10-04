@@ -19,7 +19,11 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `on_long_press` and an ancestor's scrolling keep working on the same node,
   `button` included. iOS (SwiftUI) and Android (Compose; the observer lives in
   the generated bridge, so it needs `mob_new` 0.6.5 or newer). For
-  hold-to-talk and anything else keyed on a held finger.
+  hold-to-talk and anything else keyed on a held finger. The `on_tap` of a
+  node that declares either prop goes through the new `mob_send_press_tap`,
+  which accepts a handle from the render before when its slot still holds the
+  same pid and tag, so the re-render a press causes no longer drops the tap.
+  Plain taps stay generation-strict.
 - **`Mob.Test` can hold a press** (MOB-380). `press_down_xy/4`,
   `press_move_xy/3`, `press_up_xy/3` and `hold_xy/4` put a real finger on an
   Android app's window and keep it there across calls, so a Compose
@@ -30,15 +34,6 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `mob_nif:press_down_xy/3`, `press_move_xy/2`, `press_up_xy/2`, reported by
   `capabilities/1`; iOS answers `{:error, :not_supported}`. By-tag
   `press_in/2`, `press_out/2` and `hold/3` drive a screen on every platform.
-
-### Fixed
-- **A tap no longer gets lost when its node re-renders mid-tap** (MOB-380).
-  A tap's native handle was looked up strictly against the newest committed
-  tree, so when a render landed between the finger's down and up (which
-  `on_press_in` makes routine, and any render in flight can cause) the tap
-  was dropped as stale. Taps now resolve like change events: accepted when the
-  slot still holds the same pid and tag, which makes the `{:tap, tag}` the one
-  the node declared. iOS and Android.
 
 ## [0.9.11] - 2026-10-03
 
