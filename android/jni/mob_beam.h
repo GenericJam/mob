@@ -16,6 +16,12 @@ void mob_ui_cache_class(JNIEnv *env, const char *bridge_class);
 // Called from the app's Java_..._MobBridge_nativeSendTap JNI stub.
 void mob_send_tap(int handle);
 
+// Send a tap from a node that also declares on_press_in / on_press_out
+// (MOB-380). Identity-tolerant: a handle from the previous render still
+// resolves when its slot holds the same pid and tag (press_in usually
+// re-renders before the lift). Called from Java_..._MobBridge_nativeSendPressTap.
+void mob_send_press_tap(int handle);
+
 // Send a {:dismiss, tag} event — the shape Mob.UI.sheet/2 documents for
 // :on_dismiss, matching iOS. Called from the app's
 // Java_..._MobBridge_nativeSendDismiss JNI stub.
@@ -53,6 +59,12 @@ void mob_send_swipe_down(int handle);
 // Direction-aware: emits {:swipe, tag, direction_atom} where direction is
 // "left" | "right" | "up" | "down".
 void mob_send_swipe_with_direction(int handle, const char *direction);
+// on_press_in / on_press_out (MOB-380). Begin resolves both handles at
+// touch-down (-1 for one the node doesn't declare), snapshots press_out's
+// routing, then sends {:press_in, tag}; returns the token for mob_press_end, or
+// -1 when there is no press_out to deliver. End sends {:press_out, tag} once.
+int mob_press_begin(int in_handle, int out_handle);
+void mob_press_end(int token);
 
 // ── Batch 5 Tier 1: high-frequency scroll/drag/pinch/rotate/pointer ─────
 // Throttling and delta-thresholding are applied native-side BEFORE these

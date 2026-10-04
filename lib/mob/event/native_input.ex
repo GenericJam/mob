@@ -15,7 +15,7 @@ defmodule Mob.Event.NativeInput do
 
   | Kind | Messages | Receipt | Trace |
   |---|---|---|---|
-  | `:discrete` | `:tap` (list-row select included), `:focus`, `:blur`, `:submit`, `:select`, `:dismiss`, `:long_press`, `:double_tap`, `:swipe_left`/`_right`/`_up`/`_down`, `{:swipe, tag, direction}`, `{:change, tag, value}` except a float | yes | yes |
+  | `:discrete` | `:tap` (list-row select included), `:focus`, `:blur`, `:submit`, `:select`, `:dismiss`, `:long_press`, `:double_tap`, `:press_in`, `:press_out`, `:swipe_left`/`_right`/`_up`/`_down`, `{:swipe, tag, direction}`, `{:change, tag, value}` except a float | yes | yes |
   | `:stream` | `:scroll`, `:drag`, `:pinch`, `:rotate`, `:pointer_move`, `:compose`, a float `:change`, and the scroll lifecycle (`:scroll_began`, `:scroll_ended`, `:scroll_settled`, `:top_reached`, `:scrolled_past`) | no | yes |
 
   A stream fires at up to display rate, or several times per gesture. The
@@ -56,6 +56,8 @@ defmodule Mob.Event.NativeInput do
     :dismiss,
     :long_press,
     :double_tap,
+    :press_in,
+    :press_out,
     :swipe_left,
     :swipe_right,
     :swipe_up,

@@ -75,6 +75,7 @@ and orthogonal — composition over a fat component library.
 | Capability | Status | iOS | Android | Notes |
 |--|--|--|--|--|
 | Tap / double-tap / long-press | ✅ | ✓ | ✓ | `on_tap`, `on_double_tap`, `on_long_press` props |
+| Press in / out (hold) | ✅ | ✓ | ✓ | `on_press_in`, `on_press_out` props (MOB-380); `Mob.Test.hold_xy/4` drives a real held touch on Android |
 | Swipe (l/r/u/d) | ✅ | ✓ | ✓ | `on_swipe_left`, etc. |
 | Pan / drag gesture | 🟡 | 🟡 | 🟡 | Tap-based; full pan-responder system (like react-native-gesture-handler) is missing |
 | Pinch / zoom | ❌ | — | — | Plugin candidate; common for image/map views |

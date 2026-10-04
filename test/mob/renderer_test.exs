@@ -349,6 +349,27 @@ defmodule Mob.RendererTest do
       assert is_integer(decoded["props"]["on_double_tap"])
     end
 
+    test "on_press_in / on_press_out register their own handles, carrying the tag" do
+      pid = self()
+
+      tree = %{
+        type: :box,
+        props: %{on_press_in: {pid, :mic}, on_press_out: {pid, :mic_up}},
+        children: []
+      }
+
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      decoded = :json.decode(json)
+      assert is_integer(decoded["props"]["on_press_in"])
+      assert is_integer(decoded["props"]["on_press_out"])
+      assert decoded["props"]["on_press_in"] != decoded["props"]["on_press_out"]
+
+      registered = for {:register_tap, [target]} <- MockNIF.calls(), do: target
+      assert {pid, :mic} in registered
+      assert {pid, :mic_up} in registered
+    end
+
     test "on_swipe and directional swipes are replaced by integer handles" do
       pid = self()
 

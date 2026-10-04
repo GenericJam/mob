@@ -29,7 +29,10 @@ defmodule Mob.InputNifSchedulingTest do
   # three of the Android ones waited on a latch with no timeout at all.
   @blocking_both ~w(screen_info scroll_to clipboard_get webview_can_go_back safe_area)
 
-  @android_only_blocking ~w()
+  # MOB-380's held press: each call waits on the main looper (and on any
+  # gesture holding the gesture mutex). iOS's are stubs that return
+  # :not_supported, so they stay on a normal scheduler there.
+  @android_only_blocking ~w(press_down_xy press_move_xy press_up_xy)
 
   # iOS blocks on these; Android answers them without touching the UI thread,
   # so flagging them there would buy a scheduler hop and nothing.

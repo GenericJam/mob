@@ -292,6 +292,10 @@ pub const BridgeMethods = extern struct {
     render_stats_enable: jni.JMethodID = null,
     long_press_xy: jni.JMethodID = null,
     swipe_xy: jni.JMethodID = null,
+    // MOB-380 held press: pressDownXy(FFJ)I, pressMoveXy(FF)I, pressUpXy(FF)I.
+    press_down_xy: jni.JMethodID = null,
+    press_move_xy: jni.JMethodID = null,
+    press_up_xy: jni.JMethodID = null,
     screenshot: jni.JMethodID = null,
     scroll_info: jni.JMethodID = null,
     scroll_to: jni.JMethodID = null,
@@ -679,7 +683,8 @@ export fn nif_capabilities(
         erts.atom(env, "ax_action"),      erts.atom(env, "element_frames"),
         erts.atom(env, "scroll_info"),    erts.atom(env, "scroll_to"),
         erts.atom(env, "sample_region"),  erts.atom(env, "screenshot"),
-        erts.atom(env, "native_stats"),
+        erts.atom(env, "native_stats"),   erts.atom(env, "press_down_xy"),
+        erts.atom(env, "press_move_xy"),  erts.atom(env, "press_up_xy"),
     };
     const vals = [_]erts.ERL_NIF_TERM{
         boolAtom(env, Bridge.ui_view_tree != null),
@@ -711,6 +716,9 @@ export fn nif_capabilities(
         // for the pair; renderStatsEnable without renderStats would be an app
         // that half-applied a template update.
         boolAtom(env, Bridge.render_stats != null),
+        boolAtom(env, Bridge.press_down_xy != null),
+        boolAtom(env, Bridge.press_move_xy != null),
+        boolAtom(env, Bridge.press_up_xy != null),
     };
     return erts.makeMap(env, &keys, &vals) orelse erts.atom(env, "error");
 }
@@ -1017,6 +1025,90 @@ export fn nif_swipe_xy(
     return if (ok != 0) erts.ok(env) else errorAtom(env, "dispatch_failed");
 }
 
+// ── Held press (MOB-380) ─────────────────────────────────────────────────
+// press_down_xy/3, press_move_xy/2, press_up_xy/2: a finger that stays down
+// across calls. The bridge answers with a code rather than a boolean, since
+// "a press is already held" and "no press is held" are different mistakes
+// from "nothing took the touch". Codes mirror PRESS_* in MobBridge.kt.
+fn pressResult(env: ?*erts.ErlNifEnv, code: jni.JInt) erts.ERL_NIF_TERM {
+    return switch (code) {
+        0 => erts.ok(env),
+        1 => errorAtom(env, "dispatch_failed"),
+        2 => errorAtom(env, "already_pressed"),
+        3 => errorAtom(env, "no_window"),
+        4 => errorAtom(env, "not_pressed"),
+        5 => errorAtom(env, "window_gone"),
+        6 => errorAtom(env, "timeout"),
+        else => errorAtom(env, "unknown"),
+    };
+}
+
+export fn nif_press_down_xy(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.press_down_xy == null) return notLoaded(env);
+    const x = erts.getNumber(env, argv[0]) orelse return erts.badarg(env);
+    const y = erts.getNumber(env, argv[1]) orelse return erts.badarg(env);
+    var max_hold: c_int = 0;
+    if (erts.enif_get_int(env, argv[2], &max_hold) == 0 or max_hold <= 0) return erts.badarg(env);
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const code = jenv.*.CallStaticIntMethod.?(
+        jenv,
+        Bridge.cls,
+        Bridge.press_down_xy,
+        @as(f32, @floatCast(x)),
+        @as(f32, @floatCast(y)),
+        @as(i64, @intCast(max_hold)),
+    );
+    detachIfAttached(attached);
+    return pressResult(env, code);
+}
+
+fn pressAt(
+    env: ?*erts.ErlNifEnv,
+    argv: [*]const erts.ERL_NIF_TERM,
+    method: jni.JMethodID,
+) erts.ERL_NIF_TERM {
+    if (method == null) return notLoaded(env);
+    const x = erts.getNumber(env, argv[0]) orelse return erts.badarg(env);
+    const y = erts.getNumber(env, argv[1]) orelse return erts.badarg(env);
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
+    const code = jenv.*.CallStaticIntMethod.?(
+        jenv,
+        Bridge.cls,
+        method,
+        @as(f32, @floatCast(x)),
+        @as(f32, @floatCast(y)),
+    );
+    detachIfAttached(attached);
+    return pressResult(env, code);
+}
+
+export fn nif_press_move_xy(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    return pressAt(env, argv, Bridge.press_move_xy);
+}
+
+export fn nif_press_up_xy(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    return pressAt(env, argv, Bridge.press_up_xy);
+}
+
 // ── Handle registries (Phase 6b iter 3c) ─────────────────────────────────
 //
 // Two pools of per-widget routing slots. The tap registry is cleared every
@@ -1152,6 +1244,7 @@ var component_mutex: ?*erts.ErlNifMutex = null;
 pub export fn mob_nif_init_state() callconv(.c) c_int {
     tap_mutex = erts.enif_mutex_create("mob_tap_mutex") orelse return -1;
     component_mutex = erts.enif_mutex_create("mob_component_mutex") orelse return -1;
+    press_mutex = erts.enif_mutex_create("mob_press_mutex") orelse return -1;
     return 0;
 }
 
@@ -1280,9 +1373,22 @@ fn sendChange(handle: c_int, value_term: erts.ERL_NIF_TERM) void {
 // ── Tap + change senders ────────────────────────────────────────────────
 
 /// Called from beam_jni.c's `nativeSendTap` JNI stub. Sends `{:tap, tag}`
-/// to the pid registered for `handle`.
+/// to the pid registered for `handle`. Generation-strict: a handle from an
+/// earlier render is dropped, so a positional tag (Mob.List's
+/// `{:select, id, index}`) never reaches a row that moved under it.
 pub export fn mob_send_tap(handle: c_int) callconv(.c) void {
     sendEvent(handle, "tap");
+}
+
+/// Called from beam_jni.c's `nativeSendPressTap` JNI stub, which the bridge
+/// uses instead of `nativeSendTap` for a node that also declares on_press_in
+/// or on_press_out (MOB-380). Such a node re-renders between the finger's
+/// down and up (press_in usually changes the screen), so its lift fires a
+/// handle from the previous render. Identity-tolerant, like change events:
+/// it still resolves when the slot holds the same pid and tag. Plain taps
+/// stay on the strict `mob_send_tap`.
+pub export fn mob_send_press_tap(handle: c_int) callconv(.c) void {
+    sendIdentityEvent(handle, "tap");
 }
 
 /// Called from beam_jni.c's `nativeSendDismiss` JNI stub. Sends
@@ -1387,6 +1493,88 @@ pub export fn mob_send_swipe_up(handle: c_int) callconv(.c) void {
 }
 pub export fn mob_send_swipe_down(handle: c_int) callconv(.c) void {
     sendEvent(handle, "swipe_down");
+}
+
+// ── Press in / out (MOB-380) ─────────────────────────────────────────────
+// A press_out has to reach the screen however many renders happen while the
+// finger is down, and the press itself usually causes one ("listening"). So
+// its routing is resolved at touch-down and kept here until the lift, rather
+// than looked up again from a handle that may be stale by then. Both handles
+// resolve identity-tolerantly, like change events: same slot, pid and tag
+// across renders. Ten slots: one per finger on a different node.
+const MAX_PRESSES: usize = 10;
+const PressSlot = struct {
+    env: ?*erts.ErlNifEnv = null,
+    pid: erts.ErlNifPid = undefined,
+    tag: erts.ERL_NIF_TERM = 0,
+};
+var press_slots: [MAX_PRESSES]PressSlot = @splat(PressSlot{});
+var press_mutex: ?*erts.ErlNifMutex = null;
+
+fn takePress(token: c_int) ?PressSlot {
+    if (token < 0 or token >= MAX_PRESSES) return null;
+    erts.enif_mutex_lock(press_mutex);
+    defer erts.enif_mutex_unlock(press_mutex);
+    const slot = press_slots[@intCast(token)];
+    if (slot.env == null) return null;
+    press_slots[@intCast(token)] = .{};
+    return slot;
+}
+
+/// Called at touch-down with the node's on_press_in and on_press_out handles
+/// (-1 for one it doesn't declare). Snapshots press_out first, then sends
+/// `{:press_in, tag}`; when a declared handle can't be resolved nothing is
+/// sent, so a press_out never arrives without its press_in. Returns the token
+/// for mob_press_end, or -1 when there is no press_out to deliver.
+pub export fn mob_press_begin(in_handle: c_int, out_handle: c_int) callconv(.c) c_int {
+    var token: c_int = -1;
+    if (out_handle >= 0) {
+        const keep = erts.enif_alloc_env() orelse return -1;
+        const snap = snapChangeTap(out_handle, keep) orelse {
+            erts.enif_free_env(keep);
+            return -1;
+        };
+        erts.enif_mutex_lock(press_mutex);
+        for (&press_slots, 0..) |*slot, i| {
+            if (slot.env == null) {
+                slot.* = .{ .env = keep, .pid = snap.pid, .tag = snap.tag };
+                token = @intCast(i);
+                break;
+            }
+        }
+        erts.enif_mutex_unlock(press_mutex);
+        if (token < 0) {
+            erts.enif_free_env(keep);
+            logd_nif("press slots exhausted; dropping press on handle {d}", .{out_handle});
+            return -1;
+        }
+    }
+
+    if (in_handle >= 0) {
+        const env = erts.enif_alloc_env() orelse {
+            if (takePress(token)) |slot| erts.enif_free_env(slot.env);
+            return -1;
+        };
+        defer erts.enif_free_env(env);
+        const snap = snapChangeTap(in_handle, env) orelse {
+            if (takePress(token)) |slot| erts.enif_free_env(slot.env);
+            return -1;
+        };
+        const msg = erts.makeTuple(env, .{ erts.enif_make_atom(env, "press_in"), snap.tag });
+        var pid = snap.pid;
+        _ = erts.enif_send(null, &pid, env, msg);
+    }
+    return token;
+}
+
+/// The finger lifted or the gesture was cancelled: `{:press_out, tag}` from
+/// the touch-down snapshot. A token is delivered at most once.
+pub export fn mob_press_end(token: c_int) callconv(.c) void {
+    const slot = takePress(token) orelse return;
+    defer erts.enif_free_env(slot.env);
+    const msg = erts.makeTuple(slot.env, .{ erts.enif_make_atom(slot.env, "press_out"), slot.tag });
+    var pid = slot.pid;
+    _ = erts.enif_send(null, &pid, slot.env, msg);
 }
 
 pub export fn mob_send_swipe_with_direction(handle: c_int, direction: [*:0]const u8) callconv(.c) void {
@@ -5146,6 +5334,9 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     cacheOptional(jenv, "clearText", "()Z", &Bridge.clear_text);
     cacheOptional(jenv, "longPressXy", "(FFJ)Z", &Bridge.long_press_xy);
     cacheOptional(jenv, "swipeXy", "(FFFF)Z", &Bridge.swipe_xy);
+    cacheOptional(jenv, "pressDownXy", "(FFJ)I", &Bridge.press_down_xy);
+    cacheOptional(jenv, "pressMoveXy", "(FF)I", &Bridge.press_move_xy);
+    cacheOptional(jenv, "pressUpXy", "(FF)I", &Bridge.press_up_xy);
     cacheOptional(jenv, "renderStats", "()Ljava/lang/String;", &Bridge.render_stats);
     cacheOptional(jenv, "renderStatsEnable", "(Z)Z", &Bridge.render_stats_enable);
 
@@ -5251,6 +5442,11 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "clear_text", .arity = 0, .fptr = nif_clear_text, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
     .{ .name = "long_press_xy", .arity = 3, .fptr = nif_long_press_xy, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
     .{ .name = "swipe_xy", .arity = 4, .fptr = nif_swipe_xy, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
+    // A held press dispatches one MotionEvent per call, but each still waits on
+    // the UI thread (and on another gesture holding the gesture mutex).
+    .{ .name = "press_down_xy", .arity = 3, .fptr = nif_press_down_xy, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
+    .{ .name = "press_move_xy", .arity = 2, .fptr = nif_press_move_xy, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
+    .{ .name = "press_up_xy", .arity = 2, .fptr = nif_press_up_xy, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
     .{ .name = "native_stats", .arity = 0, .fptr = nif_native_stats, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },
     .{ .name = "native_stats_enable", .arity = 1, .fptr = nif_native_stats_enable, .flags = 0 },
     .{ .name = "screenshot", .arity = 3, .fptr = nif_screenshot, .flags = erts.ERL_NIF_DIRTY_JOB_CPU_BOUND },

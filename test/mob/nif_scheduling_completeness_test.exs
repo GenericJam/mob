@@ -53,6 +53,7 @@ defmodule Mob.NifSchedulingCompletenessTest do
     device_network_state device_os_version
     device_set_dispatcher device_thermal_state exit_app files_pick haptic log
     motion_start motion_stop native_stats_enable open_settings open_url
+    press_down_xy press_move_xy press_up_xy
     platform post_mortem_android_drain post_mortem_ios_drain register_component register_tap
     request_permission share_text storage_dir storage_external_files_dir
     storage_save_to_media_store storage_save_to_photo_library

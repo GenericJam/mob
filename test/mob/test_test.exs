@@ -524,4 +524,24 @@ defmodule Mob.TestTest do
                M.sample_color(:"nonexistent_mob_node@127.0.0.1", {0.0, 0.0, 10.0, 10.0})
     end
   end
+
+  describe "held press (press_down_xy/4 and friends)" do
+    test "a node whose mob has no press NIFs answers :not_loaded, not an RPC exit" do
+      # This node's :mob_nif never loads its library, exactly like a device
+      # running a mob older than MOB-380.
+      assert {:error, :not_loaded} = M.press_down_xy(node(), 10, 20)
+      assert {:error, :not_loaded} = M.press_move_xy(node(), 10, 20)
+      assert {:error, :not_loaded} = M.press_up_xy(node(), 10, 20)
+    end
+
+    test "hold_xy stops at a failed press_down instead of sleeping and lifting" do
+      {elapsed_us, result} = :timer.tc(fn -> M.hold_xy(node(), 10, 20, 2_000) end)
+      assert result == {:error, :not_loaded}
+      assert elapsed_us < 1_000_000
+    end
+
+    test "an unreachable node surfaces the dist failure" do
+      assert {:error, {:badrpc, _}} = M.press_down_xy(:"nonexistent_mob_node@127.0.0.1", 1, 2)
+    end
+  end
 end

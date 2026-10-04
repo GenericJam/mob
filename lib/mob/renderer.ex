@@ -465,6 +465,17 @@ defmodule Mob.Renderer do
       {:on_double_tap, {pid, tag}} when is_pid(pid) ->
         [{"on_double_tap", register_handler(nif, {pid, tag})}]
 
+      # Press in / out (MOB-380): finger down on the node / that finger lifted
+      # or its gesture was cancelled. Observes without consuming, so on_tap,
+      # long press and scrolling on the same node keep working. Native
+      # snapshots press_out's routing at touch-down, so the pair survives the
+      # re-render a press usually causes.
+      {:on_press_in, {pid, tag}} when is_pid(pid) ->
+        [{"on_press_in", register_handler(nif, {pid, tag})}]
+
+      {:on_press_out, {pid, tag}} when is_pid(pid) ->
+        [{"on_press_out", register_handler(nif, {pid, tag})}]
+
       {:on_swipe, {pid, tag}} when is_pid(pid) ->
         [{"on_swipe", register_handler(nif, {pid, tag})}]
 

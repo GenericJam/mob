@@ -93,6 +93,14 @@ defmodule Mob.Agent.NativeInputReceiptsTest do
     assert Receipt.owner(receipt) == :app_code
   end
 
+  test "a press in and out are each receipted as discrete input on the node", %{screen: screen} do
+    deliver(screen, {:press_in, :mic})
+    assert {:press_in, %Address{screen: Screen, id: :mic}} = recent().event
+
+    deliver(screen, {:press_out, :mic})
+    assert {:press_out, %Address{screen: Screen, id: :mic}} = recent().event
+  end
+
   test "a raising tap handler is recorded on the way out", %{screen: screen} do
     ref = Process.monitor(screen)
 

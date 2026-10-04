@@ -489,6 +489,7 @@ defmodule Mob.RenderStats do
   # of this reported 1 tap on a tree that made 12 calls.
   @handle_props MapSet.new(~w(on_tap on_change on_focus on_blur on_submit on_dismiss on_select
                      on_scroll on_drag on_pinch on_rotate on_long_press on_double_tap
+                     on_press_in on_press_out
                      on_swipe on_swipe_left on_swipe_right on_swipe_up on_swipe_down
                      on_compose on_end_reached on_tab_select on_pointer_move
                      on_scroll_began on_scroll_ended on_scroll_settled on_top_reached
