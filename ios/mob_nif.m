@@ -433,9 +433,8 @@ static void mob_note_ui_event(void) {
 }
 
 // Called from node onTap blocks — routes tap to BEAM via enif_send.
-// Generation-strict: a handle from an earlier render is dropped, so a
-// positional tag (Mob.List's {:select, id, index}) never reaches a row that
-// moved under it.
+// identity_tolerant picks the lookup: NO (mob_send_tap) is generation-strict,
+// YES (mob_send_press_tap) accepts the same slot, PID and tag across renders.
 static void mob_send_tap_with(int handle, BOOL identity_tolerant) {
     ErlNifEnv *msg_env = enif_alloc_env();
     if (!msg_env)
@@ -454,6 +453,9 @@ static void mob_send_tap_with(int handle, BOOL identity_tolerant) {
     enif_free_env(msg_env);
 }
 
+// Generation-strict: a handle from an earlier render is dropped, so a
+// positional tag (Mob.List's {:select, id, index}) never reaches a row that
+// moved under it.
 static void mob_send_tap(int handle) {
     mob_send_tap_with(handle, NO);
 }

@@ -1214,7 +1214,10 @@ defmodule Mob.Test do
     **not working on device** and use `tap/2`. See
     `decisions/2026-08-09-ios-device-tap-injection-has-no-effect.md`.
   - **Android** — not routed through this function; `adb shell input tap` works
-    and is what the tooling uses.
+    and is what the tooling uses. While a `press_down_xy/4` is held, the
+    in-process synthetic gestures (`tap_xy`, `long_press_xy`, `swipe_xy`)
+    refuse and answer `{:error, :dispatch_failed}`: lift it with
+    `press_up_xy/3` first.
 
   ## `:no_effect` in sidecar mode
 
@@ -1432,6 +1435,8 @@ defmodule Mob.Test do
   def harness_result({:badrpc, {:EXIT, {:undef, _}}}), do: {:error, :not_loaded}
   def harness_result({:badrpc, {:EXIT, {:not_loaded, _}}}), do: {:error, :not_loaded}
   def harness_result({:badrpc, reason}), do: {:error, {:badrpc, reason}}
+  # The Android NIFs answer a bare `error` when the thread can't attach to the JVM.
+  def harness_result(:error), do: {:error, :jni_attach_failed}
 
   @doc """
   Find elements in the native accessibility tree whose label or value contains `text`.
