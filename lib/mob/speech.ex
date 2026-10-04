@@ -1,6 +1,8 @@
 defmodule Mob.Speech do
   @moduledoc """
-  Text-to-speech. No permission required on either platform.
+  Text-to-speech. No permission required on either platform. For
+  speech-to-text (listening), use the `mob_speech` plugin, with `mob_whisper`
+  for offline recognition.
 
   ## Usage
 
