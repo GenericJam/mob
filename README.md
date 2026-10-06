@@ -191,9 +191,12 @@ first-party plugins' signing key; for any other plugin, run
 (keep-alive), `mob_speech` (speech-to-text), `mob_whisper` (offline
 speech-to-text engine), `mob_sensors` (every phone sensor: barometer,
 proximity, light, steps, ...), `mob_vision` (on-device OCR),
-`mob_nx_eigen` (CPU Nx backend), `nx_tflite_mob` (TensorFlow Lite with
-vendor accelerators), `mob_scene3d` (Filament 3D scenes), `mob_rapier`
-(3D physics), `mob_deliver` (signed OTA updates + just-in-time screens).
+`mob_nx_eigen` (CPU Nx backend), `mob_scene3d` (Filament 3D scenes),
+`mob_deliver` (signed OTA updates + just-in-time screens).
+
+**Native libraries (static NIFs, not `:plugins`):** `nx_tflite_mob`
+(TensorFlow Lite with vendor accelerators, via `mix mob.enable tflite`),
+`mob_rapier` (3D physics).
 
 **Component kits:** `mob_mishka` — 73 Mishka Chelekom composites for
 Mob apps (dialogs, tabs, sliders, colour pickers, etc.), with

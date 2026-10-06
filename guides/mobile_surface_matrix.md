@@ -204,8 +204,8 @@ and orthogonal — composition over a fat component library.
 | Capability | Status | iOS | Android | Notes |
 |--|--|--|--|--|
 | Foreground service / keep-alive | ✅ | ✓ | ✓ | `MobBackground.keep_alive/0` (mob_background plugin) |
-| Background fetch (silent periodic) | ❌ | — | — | Plugin candidate (iOS Background Tasks framework / Android WorkManager) |
-| Silent push handling | 🟡 | 🟡 | 🟡 | Push arrives but no dedicated "wake-and-handle-then-suspend" lifecycle |
+| Background fetch (silent periodic) | ✅ | ✓ | ✓ | `mob_wake` plugin — `register/3` + `schedule/2` over iOS `BGTaskScheduler` / Android `WorkManager`; the OS decides when it fires |
+| Silent push handling | ✅ | ✓ | ✓ | `mob_wake` plugin — silent APNs / FCM data message wakes a registered handler (`MobWake.wake_payload/2` builds the payload for `mob_push`) |
 | Background URL session | ❌ | — | — | Plugin candidate |
 | Scheduled jobs (periodic / one-shot) | ❌ | — | — | Plugin candidate (WorkManager equivalent) |
 

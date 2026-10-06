@@ -63,14 +63,14 @@ distribution — is in mob itself. Everything below is opt-in.
 |---|---|---|
 | [mob_nx_eigen](https://hexdocs.pm/mob_nx_eigen) | On-device [Nx](https://github.com/elixir-nx/nx) backend backed by [Eigen](https://eigen.tuxfamily.org/) — the header-only C++ linear-algebra library, NEON-vectorised on ARM. Always-available CPU baseline for on-device numerics — needs no GPU, runs anywhere mob runs. | GPU-accelerated backends (`mob_nx_vulkan`, `mob_nx_mlx`, `mob_nx_tflite`) planned to layer on top; NxEigen is the fallback that always works. Spike; API surface still narrow. |
 | [mob_vision](https://hexdocs.pm/mob_vision) | On-device OCR: recognize text in a still image file | iOS `Vision` (`VNRecognizeTextRequest`), Android ML Kit text recognition (bundled Latin model). No network and no runtime permission. Pairs with `mob_camera` / `mob_photos` for the image. Face and pose detection are planned. 0.1.2 on Hex. |
-| [nx_tflite_mob](https://hexdocs.pm/nx_tflite_mob) | TensorFlow Lite from the BEAM with vendor accelerators: Apple Neural Engine on iOS, MediaTek/Qualcomm GPU and NPU HALs on Android | Runs pre-compiled `.tflite` models; it is not an Nx backend. 0.0.4 on Hex. |
+| [nx_tflite_mob](https://hexdocs.pm/nx_tflite_mob) | TensorFlow Lite from the BEAM with vendor accelerators: Apple Neural Engine on iOS, MediaTek/Qualcomm GPU and NPU HALs on Android | Install with `mix mob.enable tflite` (mob_dev), not `config :mob, :plugins`: it adds the dep and registers the static NIF. Runs pre-compiled `.tflite` models; it is not an Nx backend. 0.0.4 on Hex. |
 
 ### 3D + physics
 
 | Package | Gives you | Notes |
 |---|---|---|
 | [mob_scene3d](https://hexdocs.pm/mob_scene3d) | Declarative 3D scenes: one scene IR, diffed and patched over a NIF wire, rendered by Filament | Working on both platforms (Metal on iOS, Vulkan/GLES on Android). 0.1.3 on Hex. |
-| [mob_rapier](https://hexdocs.pm/mob_rapier) | 3D rigid-body physics: [Rapier](https://rapier.rs) as a Rustler NIF, with a named-world registry and face-up decode rules for dice | Physics only; render with `mob_scene3d` or your own view. 0.1.0 on Hex. |
+| [mob_rapier](https://hexdocs.pm/mob_rapier) | 3D rigid-body physics: [Rapier](https://rapier.rs) as a Rustler NIF, with a named-world registry and face-up decode rules for dice | Not activated via `config :mob, :plugins`: register the NIF in `mob.exs` with `config :mob_dev, static_nifs: [%{module: :lab_physics, archs: [:all]}]` and set `config :mob_rapier, :otp_app, :my_app` (see its README). Physics only; render with `mob_scene3d` or your own view. 0.1.0 on Hex. |
 
 ### Delivery
 
