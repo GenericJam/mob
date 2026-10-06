@@ -45,6 +45,8 @@ distribution — is in mob itself. Everything below is opt-in.
 | [mob_screencast](https://hexdocs.pm/mob_screencast) | The device's own screen as an on-device-encoded H264 stream | For remote viewing / WebRTC; `max_size` is Android-only today |
 | [mob_speech](https://hexdocs.pm/mob_speech) | Speech-to-text: `MobSpeech.listen/2`, `stop/1`, `cancel/1`, with `{:speech, :state \| :partial \| :final \| :error, …}` events and a pluggable engine | The default engine is the platform recognizer (Android `SpeechRecognizer`, iOS `SFSpeechRecognizer`); pair with `mob_whisper` for offline recognition. Text-to-speech stays in core (`Mob.Speech`). |
 | [mob_whisper](https://hexdocs.pm/mob_whisper) | Offline speech-to-text on the device: whisper.cpp as a `mob_speech` engine (`engine: MobWhisper`) | No Google/Apple speech service needed. The model (`base_en` default, `tiny_en` option, ~60 MB) downloads once with a SHA-256 check; `MobWhisper.prefetch/0` fetches it ahead of time. Verified on a Moto G 2021; iOS builds but hasn't run on a device. |
+| [mob_nfc](https://hexdocs.pm/mob_nfc) | NFC: read and write NDEF tags, read raw tag UIDs, emulate a tag (Android HCE) | iOS via CoreNFC, Android via `NfcAdapter`. Tag emulation is Android-only. Device-verified on iPhone SE 3rd gen and Moto G Power 5G 2024. 0.1.4 on Hex. |
+| [mob_audio_capture](https://hexdocs.pm/mob_audio_capture) | Global device-audio capture: meters audio that other apps or native players produce (Android `MediaProjection` / `AudioPlaybackCapture`) | A test-environment probe for audio the in-app `Mob.Audio` probes can't reach. Android only; iOS has no API for this and returns `{:error, :unsupported_on_platform}`. 0.1.2 on Hex. |
 
 ### Messaging + wake
 
@@ -60,6 +62,21 @@ distribution — is in mob itself. Everything below is opt-in.
 | Package | Gives you | Notes |
 |---|---|---|
 | [mob_nx_eigen](https://hexdocs.pm/mob_nx_eigen) | On-device [Nx](https://github.com/elixir-nx/nx) backend backed by [Eigen](https://eigen.tuxfamily.org/) — the header-only C++ linear-algebra library, NEON-vectorised on ARM. Always-available CPU baseline for on-device numerics — needs no GPU, runs anywhere mob runs. | GPU-accelerated backends (`mob_nx_vulkan`, `mob_nx_mlx`, `mob_nx_tflite`) planned to layer on top; NxEigen is the fallback that always works. Spike; API surface still narrow. |
+| [mob_vision](https://hexdocs.pm/mob_vision) | On-device OCR: recognize text in a still image file | iOS `Vision` (`VNRecognizeTextRequest`), Android ML Kit text recognition (bundled Latin model). No network and no runtime permission. Pairs with `mob_camera` / `mob_photos` for the image. Face and pose detection are planned. 0.1.2 on Hex. |
+| [nx_tflite_mob](https://hexdocs.pm/nx_tflite_mob) | TensorFlow Lite from the BEAM with vendor accelerators: Apple Neural Engine on iOS, MediaTek/Qualcomm GPU and NPU HALs on Android | Runs pre-compiled `.tflite` models; it is not an Nx backend. 0.0.4 on Hex. |
+
+### 3D + physics
+
+| Package | Gives you | Notes |
+|---|---|---|
+| [mob_scene3d](https://hexdocs.pm/mob_scene3d) | Declarative 3D scenes: one scene IR, diffed and patched over a NIF wire, rendered by Filament | Working on both platforms (Metal on iOS, Vulkan/GLES on Android). 0.1.3 on Hex. |
+| [mob_rapier](https://hexdocs.pm/mob_rapier) | 3D rigid-body physics: [Rapier](https://rapier.rs) as a Rustler NIF, with a named-world registry and face-up decode rules for dice | Physics only; render with `mob_scene3d` or your own view. 0.1.0 on Hex. |
+
+### Delivery
+
+| Package | Gives you | Notes |
+|---|---|---|
+| [mob_deliver](https://hexdocs.pm/mob_deliver) | Content-addressed BEAM delivery: signed over-the-air updates and just-in-time screen delivery | Signature-verified, hot-loaded module by module. Server side is `mob_deliver_server` (below). 0.3.1 on Hex. |
 
 ## Style packages
 
@@ -84,6 +101,7 @@ distribution — is in mob itself. Everything below is opt-in.
 | Package | Gives you |
 |---|---|
 | [mob_push](https://hexdocs.pm/mob_push) | APNs + FCM push sending from your Elixir server (no mob dependency — works for any app) |
+| [mob_deliver_server](https://hexdocs.pm/mob_deliver_server) | Reference server for `mob_deliver`: compiles a Phoenix project's `mobile/` tree into content-addressed BEAMs, signs the manifest, and serves it from a Plug |
 
 ## Choosing plugins for an app
 
