@@ -185,10 +185,18 @@ first-party plugins' signing key; for any other plugin, run
 
 **As first-party plugins:** `mob_camera`, `mob_location`, `mob_notify`,
 `mob_photos`, `mob_biometric`, `mob_scanner` (also needs `mob_camera`),
-`mob_bluetooth`, `mob_video`, `mob_midi`, `mob_touch`, `mob_screencast`,
-`mob_sms`, `mob_background` (keep-alive), `mob_speech` (speech-to-text),
-`mob_whisper` (offline speech-to-text engine), `mob_sensors` (every phone
-sensor: barometer, proximity, light, steps, ...), `mob_nx` (ML backends spike).
+`mob_bluetooth`, `mob_nfc`, `mob_video`, `mob_midi`, `mob_touch`,
+`mob_screencast`, `mob_audio_capture` (device-audio probe, Android),
+`mob_sms`, `mob_wake` (OS-triggered handlers), `mob_background`
+(keep-alive), `mob_speech` (speech-to-text), `mob_whisper` (offline
+speech-to-text engine), `mob_sensors` (every phone sensor: barometer,
+proximity, light, steps, ...), `mob_vision` (on-device OCR),
+`mob_nx_eigen` (CPU Nx backend), `mob_scene3d` (Filament 3D scenes),
+`mob_deliver` (signed OTA updates + just-in-time screens).
+
+**Native libraries (static NIFs, not `:plugins`):** `nx_tflite_mob`
+(TensorFlow Lite with vendor accelerators, via `mix mob.enable tflite`),
+`mob_rapier` (3D physics).
 
 **Component kits:** `mob_mishka` — 73 Mishka Chelekom composites for
 Mob apps (dialogs, tabs, sliders, colour pickers, etc.), with
@@ -198,7 +206,10 @@ vendored shape.
 
 **Styles:** `mob_themes` (five preset looks).
 
-**Server companions:** `mob_push` (APNs + FCM send from Elixir).
+**Framework integrations:** `mob_ash` (screens generated from Ash resources).
+
+**Server companions:** `mob_push` (APNs + FCM send from Elixir),
+`mob_deliver_server` (builds and serves `mob_deliver` bundles).
 
 See the [First-Party Packages catalog](guides/packages.md) for what each
 plugin does, per-platform status, and pairing hints for common shapes

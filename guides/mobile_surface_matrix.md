@@ -149,7 +149,7 @@ and orthogonal — composition over a fat component library.
 |--|--|--|--|--|
 | Bluetooth Classic | ✅ | n/a | ✓ | `MobBluetooth` plugin (extracted; Hfp / Spp sub-modules) — central/host role, Android only |
 | Bluetooth Low Energy (BLE) | 🟡 | ✓ | ✓ | `MobBluetooth.Le` (mob_bluetooth 0.3.0) — GATT **peripheral** role only (advertise + notify + receive writes), iOS + Android; BLE central (scan/connect) is a future addition |
-| NFC | ❌ | — | — | Plugin candidate (Core NFC / Android NFC) |
+| NFC | ✅ | ✓ | ✓ | `mob_nfc` plugin — read/write NDEF tags, raw tag UIDs (CoreNFC / `NfcAdapter`); tag emulation (HCE) is Android-only |
 | WiFi info / scanning | ❌ | — | — | Plugin candidate; OS restrictions apply |
 | USB host | ✅ | n/a | ✓ | `Mob.VendorUsb` — bulk read/write, custom devices |
 | WebSocket client | 🟡 | n/a | n/a | Use Elixir libs directly (e.g. `:gun`) |
@@ -204,8 +204,8 @@ and orthogonal — composition over a fat component library.
 | Capability | Status | iOS | Android | Notes |
 |--|--|--|--|--|
 | Foreground service / keep-alive | ✅ | ✓ | ✓ | `MobBackground.keep_alive/0` (mob_background plugin) |
-| Background fetch (silent periodic) | ❌ | — | — | Plugin candidate (iOS Background Tasks framework / Android WorkManager) |
-| Silent push handling | 🟡 | 🟡 | 🟡 | Push arrives but no dedicated "wake-and-handle-then-suspend" lifecycle |
+| Background fetch (silent periodic) | ✅ | ✓ | ✓ | `mob_wake` plugin — `register/3` + `schedule/2` over iOS `BGTaskScheduler` / Android `WorkManager`; the OS decides when it fires |
+| Silent push handling | ✅ | ✓ | ✓ | `mob_wake` plugin — silent APNs / FCM data message wakes a registered handler (`MobWake.wake_payload/2` builds the payload for `mob_push`) |
 | Background URL session | ❌ | — | — | Plugin candidate |
 | Scheduled jobs (periodic / one-shot) | ❌ | — | — | Plugin candidate (WorkManager equivalent) |
 
@@ -228,12 +228,12 @@ and orthogonal — composition over a fat component library.
 | Capability | Status | iOS | Android | Notes |
 |--|--|--|--|--|
 | QR / barcode scanning | ✅ | ✓ | ✓ | `MobScanner.scan/2` (`mob_scanner` plugin; activate `mob_camera` too — it owns `:camera`) — full-screen scanner with format filtering |
-| TFLite model inference | ✅ | ✓ | ✓ | Via `mix mob.enable tflite` (mob_dev 0.5.7+) — NNAPI/MTK on Android, Core ML delegate on iOS |
-| Nx-based inference | 🟡 | 🟡 | 🟡 | Via `nx_eigen` exploration; not formalised |
-| Apple Vision framework wrappers | ❌ | — | n/a | Plugin candidate (text recognition, face detection, image classification) |
+| TFLite model inference | ✅ | ✓ | ✓ | Via `mix mob.enable tflite` (mob_dev 0.5.7+) — NNAPI/MTK on Android, Core ML delegate on iOS. The `nx_tflite_mob` package runs `.tflite` models with vendor accelerators (Apple Neural Engine, MediaTek/Qualcomm GPU+NPU) |
+| Nx-based inference | 🟡 | 🟡 | 🟡 | `mob_nx_eigen` plugin — Eigen CPU Nx backend; spike, API surface still narrow |
+| Apple Vision framework wrappers | 🟡 | 🟡 | n/a | `mob_vision` wraps `VNRecognizeTextRequest` (text recognition); face detection and image classification are plugin candidates |
 | Apple Foundation Models (LLM) | ❌ | — | n/a | Plugin in flight — see mob PR #8 (DRAFT) |
-| MLKit wrappers (Android) | 🟡 | n/a | 🟡 | Barcode scanning uses it under the hood; other models (text, face, pose) are plugin territory |
-| OCR (text recognition) | ❌ | — | — | Plugin candidate |
+| MLKit wrappers (Android) | 🟡 | n/a | 🟡 | Barcode scanning uses it under the hood; `mob_vision` uses ML Kit text recognition; face and pose models are plugin territory |
+| OCR (text recognition) | 🟡 | 🟡 | 🟡 | `MobVision` (`mob_vision` plugin) — still-image text recognition via iOS Vision / Android ML Kit, no permission needed; no device run recorded yet |
 | Face detection | ❌ | — | — | Plugin candidate |
 | Pose detection | ❌ | — | — | Plugin candidate |
 | Speech-to-text | 🟡 | 🟡 | ✓ | `mob_speech` + `mob_whisper` (on-device whisper.cpp); see Speech recognition above |
