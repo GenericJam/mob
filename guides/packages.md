@@ -36,6 +36,7 @@ distribution — is in mob itself. Everything below is opt-in.
 | [mob_photos](https://hexdocs.pm/mob_photos) | The system photo/video picker | No runtime permission needed (out-of-process picker) |
 | [mob_video](https://hexdocs.pm/mob_video) | On-device video clip / probe / thumbnail / extract-audio | No ffmpeg; uses AVFoundation on iOS and MediaCodec on Android |
 | [mob_location](https://hexdocs.pm/mob_location) | GPS/network location — one-shot + continuous | |
+| [mob_sensors](https://hexdocs.pm/mob_sensors) | Every phone sensor: `MobSensors.list/0`, one-shot `read/2`, streaming `start/2` / `stop/1`, step history `steps/2`. Includes barometer, proximity, light, humidity, temperature, step counter and vendor sensors | Android lists every `SensorManager` sensor. iOS covers CoreMotion, `CMAltimeter`, `CMPedometer` and proximity, with no ambient light. Step sensors need `:activity_recognition`. For accelerometer/gyro/heading in core, see `Mob.Motion` |
 | [mob_biometric](https://hexdocs.pm/mob_biometric) | Face ID / Touch ID / fingerprint auth | iOS + Android both green (Android now via platform BiometricPrompt on ComponentActivity) |
 | [mob_scanner](https://hexdocs.pm/mob_scanner) | QR / barcode scanning (full-screen scanner) | Also activate `mob_camera` (it owns the `:camera` permission) |
 | [mob_bluetooth](https://hexdocs.pm/mob_bluetooth) | Bluetooth discovery + SPP/HFP/HID + BLE (LE advertise/scan/connect) | Verified on both Moto G Power + iPhone |
@@ -100,7 +101,8 @@ Some pairing hints:
   from the library. `mob_video` for on-device editing.
 - **Sensor / peripheral app.** `mob_bluetooth` for BLE + BR/EDR,
   `mob_midi` for musical instruments, `mob_location` for GPS,
-  `mob_touch` if you need the raw touch stream.
+  `mob_sensors` for barometer, proximity, light, steps and every other
+  phone sensor, `mob_touch` if you need the raw touch stream.
 - **Background sync.** `mob_notify` for local reminders, `mob_wake`
   for OS-triggered handlers (scheduler firings + silent-push receive),
   `mob_background` for continuous keep-alive while the app is

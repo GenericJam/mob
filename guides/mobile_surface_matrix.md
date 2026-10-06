@@ -167,10 +167,11 @@ and orthogonal — composition over a fat component library.
 | Accelerometer | ✅ | ✓ | ✓ | `Mob.Motion.start(:accelerometer, ...)` |
 | Gyroscope | ✅ | ✓ | ✓ | `Mob.Motion.start(:gyro, ...)` |
 | Magnetometer | ✅ | ✓ | ✓ | `Mob.Motion.start(:magnetometer, ...)` — µT-calibrated `mag` + fused `heading` (0.7.14); keys present only when `:magnetometer` requested |
-| Barometer | ❌ | — | — | Plugin candidate |
-| Proximity | ❌ | — | — | Plugin candidate |
-| Ambient light | ❌ | — | — | Plugin candidate |
-| Pedometer / step counter | ❌ | — | — | Plugin candidate |
+| Barometer | 🟡 | 🟡 | ✓ | `MobSensors.read/2` / `start/2` with `:pressure` (`mob_sensors` plugin), in hPa. iOS uses `CMAltimeter` (kPa converted to hPa) and hasn't been verified on a device yet |
+| Proximity | 🟡 | 🟡 | ✓ | `:proximity` (`mob_sensors`), in cm. On iOS it's iPhone-only `UIDevice` proximity monitoring: near is `[0.0]`, far is `[5.0]`, and the screen blanks while something is near. Not yet verified on a device |
+| Ambient light | 🟡 | — | ✓ | `:light` (`mob_sensors`), in lux. iOS has no public ambient-light API |
+| Pedometer / step counter | 🟡 | 🟡 | 🟡 | `:step_counter` and `MobSensors.steps/2` (`mob_sensors`); both need `:activity_recognition`. Android counts steps since boot and keeps no history (`steps/2` → `{:error, :history_unavailable}`). iOS uses `CMPedometer`: steps since midnight plus history queries. Not yet verified on hardware |
+| Other sensors (humidity, ambient temperature, gravity, rotation vectors, hinge angle, heart rate, vendor sensors) | 🟡 | — | ✓ | `mob_sensors`: `MobSensors.list/0` returns every Android sensor; vendor sensors are read by their string type |
 | Compass / heading | ✅ | ✓ | ✓ | Fused `heading` (degrees from magnetic north) via `Mob.Motion` `:magnetometer` — same request as above |
 
 ## Location
