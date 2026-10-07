@@ -283,6 +283,11 @@ defmodule Mob.UI do
   Android Material 3 `ModalBottomSheet`) that composes ordinary Mob nodes
   as its content.
 
+  An explicit `:id` scopes presentation and the exactly-once dismiss to
+  that id. Omitting `:id` keeps slot identity. `1` and `"1"` are the same
+  id, because `Mob.Renderer` stringifies a numeric `:id` before either
+  platform sees it.
+
   `children` is one child node or a list of them.
 
   ## Props

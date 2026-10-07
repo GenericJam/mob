@@ -606,6 +606,14 @@ presentation**. Rendering the sheet node presents it, a re-render that still
 includes it updates its content in place, and removing it from the tree
 dismisses it. So sheet visibility is an ordinary assign plus `:if`:
 
+An explicit `:id` scopes presentation and the exactly-once dismiss to that
+id. The same `:id` across a re-render keeps the sheet up. A different `:id`
+at the same position presents on its own, and a late dismiss from the sheet
+it replaced is not delivered. Omitting `:id`, including `id: ""`, keeps slot
+identity, so presentation state follows the node's position in the tree.
+`1` and `"1"` are the same id: `Mob.Renderer` stringifies a numeric `:id`
+before either platform sees it.
+
 ```elixir
 def render(assigns) do
   dismiss = {self(), :sheet_dismissed}

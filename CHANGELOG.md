@@ -10,6 +10,15 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **iOS sheet presentation follows the sheet's `:id`.** A sheet that stays
+  in the tree after a drag-dismiss no longer leaves the next sheet at that
+  position unpresented, or swallows its dismiss, when the new sheet has a
+  different `:id`. An explicit `:id` scopes presentation and the exactly-once
+  dismiss to that id; omitting `:id` keeps slot identity. `1` and `"1"` are
+  the same id. Replacing an open sheet does not deliver the predecessor's
+  late `on_dismiss`.
+
 ### Docs
 - `mob_speech` (speech-to-text) and `mob_whisper` (offline whisper.cpp
   engine) are listed in the packages guide, README and surface matrix;
