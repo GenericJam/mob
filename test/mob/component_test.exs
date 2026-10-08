@@ -145,8 +145,8 @@ defmodule Mob.ComponentTest do
                expanded.children
 
       assert id_string == Atom.to_string(id)
-      assert node.expanded_by == {owner, id, CounterComponent}
       {:ok, component} = Mob.ComponentRegistry.lookup(owner, id, CounterComponent)
+      assert node.__mob_expanded__ == {owner, id, CounterComponent, component}
 
       # The screen that draws the owner's tree.
       screen = spawn(fn -> Process.sleep(:infinity) end)
@@ -157,7 +157,32 @@ defmodule Mob.ComponentTest do
       assert {:ok, ^component} = Mob.ComponentRegistry.lookup(owner, id, CounterComponent)
     end
 
-    test "a marked node its owner doesn't run (forged, or stopped since) is drawn empty" do
+    test "the marker survives a screen's whole expansion (composites, lists, components)" do
+      owner = self()
+      id = :"piped_#{System.unique_integer([:positive])}"
+
+      tree = %{
+        type: :column,
+        props: %{},
+        children: [Mob.UI.native_view(CounterComponent, id: id)]
+      }
+
+      {expanded, _} = Mob.Component.expand(tree, owner, :no_render)
+
+      screen = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(screen, :kill) end)
+
+      {drawn, active} =
+        %{type: :column, props: %{}, children: [expanded]}
+        |> Mob.Composite.expand(screen)
+        |> Mob.List.expand(%{}, screen)
+        |> Mob.Component.expand(screen, :no_render)
+
+      assert drawn.children == [expanded]
+      assert MapSet.size(active) == 0
+    end
+
+    test "a forged marker is drawn empty" do
       screen = self()
       owner = spawn(fn -> Process.sleep(:infinity) end)
       on_exit(fn -> Process.exit(owner, :kill) end)
@@ -166,13 +191,30 @@ defmodule Mob.ComponentTest do
         type: :native_view,
         props: %{module: "Mob_ComponentTest_CounterComponent", id: "x", component_handle: 0},
         children: [],
-        expanded_by: {owner, :x, CounterComponent}
+        __mob_expanded__: {owner, :x, CounterComponent, owner}
       }
 
       assert {%{type: :column, children: []}, active} =
                Mob.Component.expand(forged, screen, :no_render)
 
       assert MapSet.size(active) == 0
+    end
+
+    test "a tree from a component its owner has since replaced is drawn empty; the new one passes" do
+      id = :"replaced_#{System.unique_integer([:positive])}"
+      tree = Mob.UI.native_view(CounterComponent, id: id, initial: 1)
+      screen = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(screen, :kill) end)
+
+      {old, _} = Mob.Component.expand(tree, self(), :no_render)
+      {:ok, first} = Mob.ComponentRegistry.lookup(self(), id, CounterComponent)
+      :ok = Mob.ComponentRegistry.reconcile(self(), MapSet.new())
+      {new, _} = Mob.Component.expand(tree, self(), :no_render)
+      {:ok, second} = Mob.ComponentRegistry.lookup(self(), id, CounterComponent)
+      assert first != second
+
+      assert {%{type: :column, children: []}, _} = Mob.Component.expand(old, screen, :no_render)
+      assert {^new, _} = Mob.Component.expand(new, screen, :no_render)
     end
 
     test "a declaration's own :component_handle prop is just a prop: its component starts" do

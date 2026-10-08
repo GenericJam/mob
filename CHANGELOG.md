@@ -12,17 +12,19 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ### Added
 - **Native views in a tree rendered by another process** (MOB-409).
-  `Mob.Component.expand/3` marks each node it expands with its owner
-  (`expanded_by: {pid, id, module}`, beside `props`, never sent to the
-  native side). A screen drawing a tree another process expanded passes
-  such a node through, without starting the component again, once
-  `Mob.ComponentRegistry` confirms that process runs the component; an
-  unconfirmed one (forged, or stopped since) is drawn as an empty column. A
-  process that renders a subtree for a screen (Operator's front host, which
-  keeps untrusted screen code out of the shell) expands native views
-  itself, owns their components (`Mob.ComponentRegistry.reconcile/2`,
-  repaint on `{:component_changed, id, module}`), and should strip
-  `:expanded_by` nodes from untrusted renders first.
+  `Mob.Component.expand/3` marks each node it expands with the component
+  that drew it (`__mob_expanded__: {owner, id, module, component_pid}`,
+  beside `props`, never sent to the native side). A screen drawing a tree
+  another process expanded passes such a node through, without starting the
+  component again, once `Mob.ComponentRegistry` confirms the owner still
+  runs that very component; an unconfirmed one (forged, or stopped or
+  replaced since) is drawn as an empty column. `Mob.List.expand/3` now
+  keeps a node's other keys. A process that renders a subtree for a screen
+  (Operator's front host, which keeps untrusted screen code out of the
+  shell) expands native views itself, owns their components
+  (`Mob.ComponentRegistry.reconcile/2`, repaint on `{:component_changed,
+  id, module}`), and should strip `:__mob_expanded__` nodes from untrusted
+  renders first.
 
 ## [0.9.13] - 2026-10-07
 
