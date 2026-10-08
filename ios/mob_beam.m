@@ -6,6 +6,7 @@
 #include "mob_beam.h"
 #include "mob_dist_cookie.h"
 #include "mob_dist_port.h"
+#include "mob_init_args.h"
 #import <Foundation/Foundation.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -21,11 +22,12 @@
 // with -Dmain=epmd_ios_main). Only present in device builds; the simulator
 // connects to the Mac's EPMD via the shared network stack.
 //
-// MOB_RELEASE: App Store builds (mix mob.release) drop EPMD entirely so the
-// shipped binary has no distribution surface — Apple is unhappy with apps
-// that listen on arbitrary network ports for remote-code-execution-shaped
-// traffic, and TestFlight review may flag it. The BEAM still boots, the NIF
-// still works, but the app is networkless from a distribution POV.
+// MOB_RELEASE: App Store builds (mix mob.release) drop mob's EPMD and
+// development distribution flags. They have no distribution surface unless
+// the app explicitly supplies -name/-sname through Mob.InitArgs (normally
+// together with its own epmd strategy). Apple may reject arbitrary listeners
+// carrying remote-code-execution-shaped traffic, so apps enabling this must
+// authenticate and encrypt it deliberately.
 #if defined(MOB_BUNDLE_OTP) && !defined(MOB_RELEASE)
 extern int epmd_ios_main(int argc, char **argv);
 static void *epmd_thread(void *arg) {
@@ -58,6 +60,10 @@ static const char *resolve_dist_cookie(const char *beams_dir) {
     return cookie;
 }
 #endif
+
+// The app's Erlang init arguments, from $MOB_DATA_DIR/mob_init_args (MOB-406,
+// see mob_init_args.h). Static: argv points into its buffer.
+static mob_init_args s_init_args;
 
 // Compile-time defaults (simulator). Override via -D flags for device builds.
 //
@@ -247,7 +253,26 @@ void mob_start_beam(const char *app_module) {
     setenv("ERL_CRASH_DUMP", crash_dump, 1);
     setenv("ERL_CRASH_DUMP_SECONDS", "30", 1);
 
+    // The app's init arguments, written by Mob.InitArgs.write/1. Honoured in
+    // release builds too; that is the point (an app choosing its own
+    // -proto_dist needs it in the build it ships).
+    {
+        char init_args_path[1100];
+        if (mob_init_args_load(&s_init_args, docs_dir, init_args_path, sizeof(init_args_path))) {
+            NSLog(@"[MobBeam] loaded %d init args from %s", s_init_args.count, init_args_path);
+            if (s_init_args.truncated)
+                NSLog(@"[MobBeam] %s is over %d bytes or %d args; kept the first %d whole args",
+                      init_args_path, MOB_INIT_ARGS_BUF - 1, MOB_INIT_ARGS_MAX, s_init_args.count);
+        }
+    }
+
 #ifndef MOB_RELEASE
+    // An app that names the node itself owns distribution: mob adds none of its
+    // development dist flags (two -name flags would be ambiguous), and a busy
+    // mob dist port is no reason to stop it booting.
+    const int app_owns_dist = !mob_init_args_add_mob_dist(&s_init_args, 0);
+    if (app_owns_dist)
+        NSLog(@"[MobBeam] app init args set -name/-sname: leaving distribution to the app");
     // Dist port: see mob_dist_port.h. MOB_DIST_PORT (SIMCTL_CHILD_ prefix on a
     // simulator) pins it; otherwise a simulator derives a free one per app and
     // simulator, and a physical device uses 9101. A port that is already taken
@@ -265,7 +290,7 @@ void mob_start_beam(const char *app_module) {
                                                       getenv("SIMULATOR_UDID"), dist_addr);
     if (env_port && env_port[0] && dist.source != MOB_DIST_PORT_FROM_ENV)
         NSLog(@"[MobBeam] ignoring invalid MOB_DIST_PORT=\"%s\"", env_port);
-    if (dist.busy) {
+    if (dist.busy && !app_owns_dist) {
         char msg[640];
         const char *how = dist.source == MOB_DIST_PORT_FROM_ENV
                               ? "Relaunch with another MOB_DIST_PORT (on a simulator: "
@@ -455,7 +480,12 @@ void mob_start_beam(const char *app_module) {
 
     const char **selected_flags = (s_runtime_flag_count > 0) ? s_runtime_flags : s_default_flags;
 
-    static const char *args[128];
+    // beam, the emulator flags (at most 63: mob_beam_flags, else the 12
+    // defaults), 8 for "-- -root R -bindir B -progname erl --", 14 for mob's
+    // dist flags, 12 for "-noshell … -eval E", the app's init args, the NULL.
+    _Static_assert(sizeof(s_runtime_flags) / sizeof(s_runtime_flags[0]) == 64,
+                   "args[] sizing assumes at most 63 runtime flags");
+    static const char *args[1 + 63 + 8 + 14 + 12 + MOB_INIT_ARGS_MAX + 1];
     int ac = 0;
     args[ac++] = "beam";
     for (int i = 0; selected_flags[i]; i++)
@@ -476,23 +506,26 @@ void mob_start_beam(const char *app_module) {
     args[ac++] = "--";
 #ifndef MOB_RELEASE
     // Distribution flags. Omitted for App Store builds — see MOB_RELEASE
-    // notes at the top of this file.
-    const char *dist_cookie = resolve_dist_cookie(beams_dir);
-    args[ac++] = "-name";
-    args[ac++] = node_name;
-    args[ac++] = "-setcookie";
-    args[ac++] = dist_cookie;
-    args[ac++] = "-kernel";
-    args[ac++] = "inet_dist_listen_min";
-    args[ac++] = dist_port_min;
-    args[ac++] = "-kernel";
-    args[ac++] = "inet_dist_listen_max";
-    args[ac++] = dist_port_max;
+    // notes at the top of this file — and when the app's init args name the
+    // node (see app_owns_dist above).
+    if (mob_init_args_add_mob_dist(&s_init_args, 0)) {
+        const char *dist_cookie = resolve_dist_cookie(beams_dir);
+        args[ac++] = "-name";
+        args[ac++] = node_name;
+        args[ac++] = "-setcookie";
+        args[ac++] = dist_cookie;
+        args[ac++] = "-kernel";
+        args[ac++] = "inet_dist_listen_min";
+        args[ac++] = dist_port_min;
+        args[ac++] = "-kernel";
+        args[ac++] = "inet_dist_listen_max";
+        args[ac++] = dist_port_max;
 #ifndef MOB_BUNDLE_OTP
-    args[ac++] = "-kernel";
-    args[ac++] = "inet_dist_use_interface";
-    args[ac++] = "{127,0,0,1}";
+        args[ac++] = "-kernel";
+        args[ac++] = "inet_dist_use_interface";
+        args[ac++] = "{127,0,0,1}";
 #endif
+    }
 #else
     // Mark MOB_RELEASE in env so Mob.Dist.ensure_started/1 short-circuits
     // before trying Node.start (which would fail without -name anyway, but
@@ -513,7 +546,14 @@ void mob_start_beam(const char *app_module) {
     args[ac++] = beams_dir;
     args[ac++] = "-eval";
     args[ac++] = eval_expr;
-    args[ac] = NULL;
+    // After mob's own, so they can't displace them. The shared helper is also
+    // exercised in release mode by test/native/init_args_test.c.
+    ac = mob_init_args_append(&s_init_args, args, ac, (int)(sizeof(args) / sizeof(args[0])));
+    if (ac < 0) {
+        mob_set_startup_error("Too many BEAM init arguments");
+        NSLog(@"[MobBeam] internal argv capacity is too small");
+        return;
+    }
     NSLog(@"[MobBeam] mob_start_beam: starting BEAM module=%s argc=%d", app_module, ac);
     mob_set_startup_phase("Starting BEAM…");
     mob_write_diag(docs_dir, "mob_diag_d_erl_start.txt", "calling erl_start");

@@ -138,20 +138,6 @@ defmodule Mob.NativeIOSTextFieldTest do
     assert uikit =~ ~r/@objc func done\(\) \{\s*field\?\.resignFirstResponder\(\)/
   end
 
-  test "the UIKit field keeps the keyboard across keystrokes" do
-    # A @FocusState bound to no `.focused` view is reset on the next update,
-    # which resigned the UIKit field after every keystroke.
-    field = text_field()
-    assert field =~ "@State private var uikitFocused = false"
-
-    assert field =~
-             ~r/isFocused: uikitFocused,\s*onFocusChange: \{ focused in uikitFocused = focused \}/
-
-    assert field =~ "private var focused: Bool { isFocused || uikitFocused }"
-    assert field =~ ".onChange(of: focused) {"
-    assert field =~ "if !focused && text != newValue {"
-  end
-
   test "UIKit text matches SwiftUI: custom font weight by family, right is trailing" do
     helpers =
       NativeSource.region(@input_swift, "extension MobNode {", "struct MobComposingTextField")

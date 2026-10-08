@@ -4,7 +4,7 @@ defmodule Mob.MixProject do
   def project do
     [
       app: :mob,
-      version: "0.9.12",
+      version: "0.9.13",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -202,7 +202,7 @@ defmodule Mob.MixProject do
         ],
         "Testing & Debugging": [Mob.Test, Mob.ScreenCase, Mob.RenderStats],
         Tooling: [Mob.Formatter],
-        Internals: [Mob.Dist, Mob.NativeLogger, Mob.List, Mob.Sigil]
+        Internals: [Mob.Dist, Mob.InitArgs, Mob.NativeLogger, Mob.List, Mob.Sigil]
       ]
     ]
   end

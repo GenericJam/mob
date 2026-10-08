@@ -275,7 +275,7 @@ Four answers, and three of them are not "the app is fine":
 | probes true/false, `dist_rpc: true` | the real answer |
 | all `:unknown`, `dist_rpc: true` | app predates `capabilities/0` (added 0.7.40) — upgrade `mob` rather than guessing |
 | all `false`, `dist_rpc: true` | `load_nif` failed on the device: every NIF is down, and the fix is a native rebuild, not the bridge |
-| all `false`, `dist_rpc: false` | nothing answered. An iOS **release** build reports exactly this, because it drops `-name` and has no distribution at all — indistinguishable from a bad node name or a dead tunnel, so check which you expect |
+| all `false`, `dist_rpc: false` | nothing answered. An iOS **release** build reports exactly this by default because mob drops its development `-name` and EPMD. An app can explicitly own distribution through `Mob.InitArgs`, so check the app's launch arguments as well as the node name and tunnel |
 
 `capabilities/2` takes a timeout, defaulting to 5s. That matters here because
 this is the first call an agent makes, and a wedged-but-reachable device would

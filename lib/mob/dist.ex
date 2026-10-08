@@ -36,6 +36,29 @@ defmodule Mob.Dist do
   a custom nor a managed cookie the node gets a random one and can't be
   attached until mob_dev restarts it.
 
+  ## App-chosen distribution config (init arguments)
+
+  Flags such as `-proto_dist inet_tls` and `-ssl_dist_optfile <path>` are
+  Erlang *init* arguments. An app sets them for its next launch with
+  `Mob.InitArgs.write/1`; both launchers pass them in development **and
+  release** builds, so a shipped app can carry its own distribution setup.
+
+  - **Android** never starts distribution at boot, init arguments or not: the
+    hwui race above applies to any dist started from argv. Write the transport
+    flags as init arguments, then start the app-owned node with `Node.start/2`
+    after the UI is ready. Do **not** use `ensure_started/1` for a shipped
+    listener: it is specifically the loopback + ADB development link described
+    above and waits for the Mac's forwarded EPMD.
+  - **iOS**: if the init arguments contain `-name` or `-sname`, the launcher
+    leaves out its own development dist flags (`-name`, `-setcookie`, the
+    `inet_dist_*` kernel settings), so the app owns distribution and
+    `mix mob.connect` won't find the node under mob's name. Without either
+    flag, development builds still start mob's own node, now with the app's
+    other init arguments (e.g. `-proto_dist`) applied to it, so mob_dev can
+    only connect with matching settings. Release builds add no dist flags and
+    run no in-process EPMD, so an app naming its node there needs an
+    EPMD-less setup (e.g. `-start_epmd false -erl_epmd_port <port>`).
+
   ## Usage (in your app's start/0)
 
       Mob.Dist.ensure_started(node: :"mob_demo@127.0.0.1")
@@ -86,10 +109,10 @@ defmodule Mob.Dist do
   def ensure_started(opts \\ []) do
     cond do
       release_mode?() ->
-        # App Store / TestFlight build: distribution is disabled at the C
-        # layer (mob_beam.m drops -name/-setcookie when MOB_RELEASE is
-        # defined). Skip Node.start so calling apps don't have to special-case
-        # release vs dev — same call site, no-ops in release.
+        # Mob never enables distribution in App Store / TestFlight builds:
+        # mob_beam.m omits its development -name/-setcookie flags and embedded
+        # EPMD. An app may still opt in explicitly through Mob.InitArgs; this
+        # helper remains a no-op and does not manage that app-owned node.
         :ok
 
       true ->

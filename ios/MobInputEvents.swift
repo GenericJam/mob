@@ -339,7 +339,11 @@ struct MobComposingTextField: UIViewRepresentable {
     let textContentType: UITextContentType?
     @Binding var text: String
     let isFocused: Bool
-    let onFocusChange: (Bool) -> Void
+    let onBeginEditing: () -> Void
+    /// Delivers the final native text and requested terminal events as one
+    /// routing transaction. The NIF snapshots every route before change can
+    /// trigger a repaint.
+    let onFinalize: (String, Bool, Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -440,6 +444,7 @@ struct MobComposingTextField: UIViewRepresentable {
         private var lastMarkedText = ""
         private var textBeforeComposition = ""
         private var lastFullText: String
+        private var finalizedBeforeEnd = false
 
         init(parent: MobComposingTextField) {
             self.parent = parent
@@ -505,15 +510,18 @@ struct MobComposingTextField: UIViewRepresentable {
         }
 
         func textFieldDidBeginEditing(_ textField: UITextField) {
-            if !parent.isFocused { parent.onFocusChange(true) }
+            if !parent.isFocused { parent.onBeginEditing() }
             // The focusing tap placed the caret before this runs; UIKit can
             // also re-place it after, which didChangeSelection catches.
             pinCaret(in: textField)
         }
 
         func textFieldDidEndEditing(_ textField: UITextField) {
-            observeComposition(in: textField)
-            if parent.isFocused { parent.onFocusChange(false) }
+            if finalizedBeforeEnd {
+                finalizedBeforeEnd = false
+            } else {
+                finalize(in: textField, submit: false, blur: true)
+            }
         }
 
         weak var field: UITextField?
@@ -523,11 +531,22 @@ struct MobComposingTextField: UIViewRepresentable {
         }
 
         func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-            parent.node.onSubmit?()
-            guard parent.node.returnKeyStr != "next" else { return false }
+            // A return can retire the field immediately. Snapshot final change,
+            // submit and (when closing) blur before delivering the first one.
+            let closes = parent.node.returnKeyStr != "next"
+            finalize(in: textField, submit: true, blur: closes)
+            guard closes else { return false }
+            finalizedBeforeEnd = true
             textField.resignFirstResponder()
-            parent.onFocusChange(false)
             return true
+        }
+
+        private func finalize(in textField: UITextField, submit: Bool, blur: Bool) {
+            observeComposition(in: textField)
+            let current = textField.text ?? ""
+            lastFullText = current
+            if parent.text != current { parent.text = current }
+            parent.onFinalize(current, submit, blur)
         }
 
         private func observeComposition(in textField: UITextField) {
