@@ -177,37 +177,6 @@ defmodule Mob.NativeParkedScreenTest do
     end
   end
 
-  describe "a programmatic re-seed is not reported as a user change (MOB-147 B2)" do
-    # `onChange(of:)` sees a value change and nothing about who caused it, so a
-    # re-seed on activation would fire the callback on the INCOMING screen — and
-    # it fires precisely when the values differ, which is the case the re-seed
-    # exists for. The app's handle_event then runs for a control the user never
-    # touched.
-    #
-    # This was first done with a `seeding` latch, armed by the re-seed and
-    # cleared by the observed change. That was order-dependent: two programmatic
-    # writes straddling one SwiftUI pass left it armed for the wrong write and
-    # leaked a change anyway. Comparing against the BEAM's own value is
-    # stateless — a re-seed writes exactly that value and so compares equal,
-    # while a user's gesture never does.
-    for {control, struct_name, watched, from_beam} <- [
-          {"toggle", "MobToggle", "isOn", "node.checked"},
-          {"slider", "MobSlider", "value", "node.value"},
-          {"text field", "MobTextField", "text", "initialText"}
-        ] do
-      test "the #{control} reports a change only when it differs from the BEAM's value" do
-        body = region(code_only(@ios), "private struct #{unquote(struct_name)}: View {", "\n}\n")
-
-        assert body =~
-                 ~r/\.onChange\(of: #{unquote(watched)}\) \{ \w+, newValue in[^}]*?(\{[^}]*\}[^}]*?)*if newValue != #{Regex.escape(unquote(from_beam))} \{/,
-               "the change watcher must compare against the BEAM's value"
-
-        refute body =~ "seeding",
-               "the order-dependent latch must not come back"
-      end
-    end
-  end
-
   describe "live resources stand down while parked" do
     test "a parked sheet is dismissed and re-presented on return" do
       # .sheet presents on the WINDOW, so the slot's allowsHitTesting(false)

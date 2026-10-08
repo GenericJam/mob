@@ -2,3 +2,4 @@ frame_registry_test
 dist_port_test
 dist_cookie_test
 stored_queue_test
+init_args_test

@@ -78,20 +78,30 @@ jobs:
             ios/mob_dist_port.h \
             ios/mob_dist_cookie.h \
             ios/mob_stored_queue.h \
+            ios/mob_init_args.h \
             test/native/dist_port_test.c \
             test/native/dist_cookie_test.c \
             test/native/stored_queue_test.c \
+            test/native/init_args_test.c \
             android/jni/mob_beam.h
 
-      - name: Native harness (frame registry MOB-102/MOB-103, dist port MOB-139, dist cookie MOB-348, stored queue MOB-379)
+      - name: Android init-args tokenizer
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0-dev.269+ebff43698
+
+      - name: Android init-args tests
+        run: zig test android/jni/mob_init_args.zig
+
+      - name: Native harness (frame registry MOB-102/MOB-103, dist port MOB-139, dist cookie MOB-348, stored queue MOB-379, init args MOB-406)
         # The frame-registry check is the only automated guard on the
         # element-frame registry's ownership, generation-gating and purge rules.
         # It reproduces the algorithm rather than linking ios/mob_nif.m (which
         # needs UIKit + the swiftc-generated header), so it can drift — running
-        # it in CI is what keeps the copy honest. The dist-port, dist-cookie and
-        # stored-queue checks compile ios/mob_dist_port.h, ios/mob_dist_cookie.h
-        # and ios/mob_stored_queue.h themselves. Same toolchain as the
-        # clang-format step.
+        # it in CI is what keeps the copy honest. The dist-port, dist-cookie,
+        # stored-queue and init-args checks compile ios/mob_dist_port.h,
+        # ios/mob_dist_cookie.h, ios/mob_stored_queue.h and ios/mob_init_args.h
+        # themselves. Same toolchain as the clang-format step.
         run: make -C test/native run
 
       - name: Install swiftlint

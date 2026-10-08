@@ -151,6 +151,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy, nullable) void (^onFocus)(void);
 @property(nonatomic, copy, nullable) void (^onBlur)(void);
 @property(nonatomic, copy, nullable) void (^onSubmit)(void);
+// Sends the field's final change/submit/blur as one native transaction. The
+// NIF snapshots every requested route before delivering the first event, so a
+// change-triggered repaint cannot invalidate submit or blur.
+@property(nonatomic, copy, nullable) void (^onFinalizeText)
+    (NSString *text, BOOL sendChange, BOOL sendSubmit, BOOL sendBlur);
 // IME composition (CJK, Korean, Vietnamese, accent input). Called by
 // the iOS text-input layer when marked-text state changes.
 //   text:  the in-progress (or committed) text

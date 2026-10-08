@@ -22,6 +22,7 @@
 
 const std = @import("std");
 const jni = @import("mob_zig.zig");
+const init_args = @import("mob_init_args.zig");
 const build_options = @import("build_options");
 
 // ── Comptime build flags ──────────────────────────────────────────────────
@@ -90,8 +91,13 @@ var s_files_dir: [512]u8 = @splat(0);
 // In-place tokenised (NULs replace whitespace), pointers indexed into the
 // buffer. Same shape as the C version.
 var s_flags_buf: [512]u8 = @splat(0);
-var s_runtime_flags: [64]?[*:0]const u8 = @splat(null);
+var s_runtime_flags: [MAX_RUNTIME_FLAGS + 1]?[*:0]const u8 = @splat(null);
 var s_runtime_flag_count: usize = 0;
+const MAX_RUNTIME_FLAGS: usize = 63;
+
+// The app's Erlang init arguments, from $MOB_DATA_DIR/mob_init_args (MOB-406,
+// see mob_init_args.zig). Appended after mob's own init args.
+var s_init_args: init_args.InitArgs = .{};
 
 // ── Small helpers ─────────────────────────────────────────────────────────
 
@@ -348,7 +354,7 @@ export fn mob_start_beam(app_module: [*:0]const u8) callconv(.c) void {
             s_flags_buf[n_read] = 0;
             s_runtime_flag_count = 0;
             var p: usize = 0;
-            while (p < n_read and s_runtime_flag_count < 63) {
+            while (p < n_read and s_runtime_flag_count < MAX_RUNTIME_FLAGS) {
                 while (p < n_read and isWhitespace(s_flags_buf[p])) : (p += 1) {}
                 if (p >= n_read or s_flags_buf[p] == 0) break;
                 s_runtime_flags[s_runtime_flag_count] = @ptrCast(&s_flags_buf[p]);
@@ -364,10 +370,33 @@ export fn mob_start_beam(app_module: [*:0]const u8) callconv(.c) void {
         }
     }
 
+    // The app's init arguments: $MOB_DATA_DIR/mob_init_args, written by
+    // Mob.InitArgs.write/1. Honoured in release builds too; that is the point
+    // (an app choosing its own -proto_dist needs it in the build it ships).
+    // They don't start distribution: dist still starts at runtime on Android
+    // (see the cold-start race below and Mob.Dist).
+    {
+        var init_args_path_buf: [640]u8 = undefined;
+        const init_args_path = formatZ(&init_args_path_buf, "{s}/" ++ init_args.file_name, .{jni.asCStr(&s_files_dir)});
+        if (jni.fopen(init_args_path, "r")) |fp| {
+            const n_read = jni.fread(&s_init_args.buf, 1, s_init_args.buf.len, fp);
+            _ = jni.fclose(fp);
+            s_init_args.parse(n_read);
+            logi("mob_start_beam: loaded {d} init args from {s}", .{ s_init_args.count, init_args_path });
+            if (s_init_args.truncated) {
+                loge("mob_start_beam: {s} is over {d} bytes or {d} args; kept the first {d} whole args", .{ init_args_path, init_args.buf_len - 1, init_args.max_args, s_init_args.count });
+            }
+        }
+    }
+
     var boot_path_buf: [580]u8 = undefined;
     const boot_path = formatZ(&boot_path_buf, "{s}/releases/29/start_clean", .{otp_root});
 
-    var args: [128]?[*:0]const u8 = @splat(null);
+    // beam + emulator flags + 8 (-- -root R -bindir B -progname erl --)
+    // + 14 (-noshell -noinput -boot B, 4 × -pa D, -eval E) + app init args
+    // + the NULL terminator.
+    const max_emu_flags: usize = @max(MAX_RUNTIME_FLAGS, default_flags.len);
+    var args: [1 + max_emu_flags + 8 + 14 + init_args.max_args + 1]?[*:0]const u8 = @splat(null);
     var ac: usize = 0;
     args[ac] = "beam";
     ac += 1;
@@ -427,7 +456,7 @@ export fn mob_start_beam(app_module: [*:0]const u8) callconv(.c) void {
     ac += 1;
     args[ac] = eval_expr;
     ac += 1;
-    args[ac] = null;
+    ac = s_init_args.appendTo(&args, ac);
 
     // ── Cold-start race condition fix ────────────────────────────────────────
     //

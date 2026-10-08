@@ -10,6 +10,35 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.13] - 2026-10-07
+
+### Added
+- **App-written Erlang init arguments: `Mob.InitArgs` and
+  `$MOB_DATA_DIR/mob_init_args`** (MOB-406). An app writes init arguments for
+  its next launch (`Mob.InitArgs.write(["-proto_dist", "inet_tls",
+  "-ssl_dist_optfile", path])`) and both native launchers append them after
+  mob's own init arguments, in development **and release** builds. This is
+  what a custom distribution transport (TLS, `-proto_dist`) needs: those are
+  init arguments, which the emulator refuses in the emulator-flag section
+  `mob_beam_flags` feeds (and only `mix mob.deploy` writes `mob_beam_flags`,
+  next to the deployed BEAMs, so a release build doesn't get one).
+  Limits, enforced by `write/1` and by the launchers (which keep whole
+  arguments up to the limit, log, and drop the rest): 1023 bytes, 63
+  arguments. On iOS, init arguments containing `-name`/`-sname` make the
+  launcher leave out mob's own development dist flags; Android still starts
+  distribution at runtime. Needs a native rebuild (`mix mob.deploy --native`).
+  See `decisions/2026-10-06-app-init-args.md`.
+
+### Fixed
+- iOS text fields (UIKit-backed, SwiftUI `TextField` and `SecureField`)
+  deliver their final `on_change`, then `on_submit` and `on_blur`, as one
+  native transaction on Return, Done and focus loss. Every route is captured
+  before the first event, so a repaint triggered by the final change can no
+  longer drop the submit or blur. `on_change` is exactly-once: it no longer
+  depends on the field still being focused, and programmatic value updates
+  are not echoed back. Replacing a focused field no longer loses a
+  still-marked IME composition.
+
 ### Docs
 - `mob_speech` (speech-to-text) and `mob_whisper` (offline whisper.cpp
   engine) are listed in the packages guide, README and surface matrix;

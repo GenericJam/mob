@@ -269,31 +269,32 @@ static int mob_snap_tap(int handle, ErlNifEnv *msg_env, TapSnap *snap) {
     return 1;
 }
 
-static int mob_snap_change_tap(int handle, ErlNifEnv *msg_env, TapSnap *snap) {
-    enif_mutex_lock(tap_mutex);
+static int mob_snap_change_tap_locked(int handle, ErlNifEnv *msg_env, TapSnap *snap) {
     TapHandle *active = mob_resolve_active_tap_locked(handle);
     if (!active) {
         uint32_t generation;
         int slot;
-        if (!mob_decode_event_handle(handle, &generation, &slot)) {
-            enif_mutex_unlock(tap_mutex);
-            LOGD(@"rejected stale event handle %d", handle);
+        if (!mob_decode_event_handle(handle, &generation, &slot))
             return 0;
-        }
         active = slot >= 0 && slot < tap_handle_next ? &tap_handles[slot] : NULL;
         if (!active || !active->tag_env ||
             !mob_generation_within_identity(generation, active->identity_start_generation,
-                                            tap_table_generations[tap_active])) {
-            enif_mutex_unlock(tap_mutex);
-            LOGD(@"rejected stale event handle %d", handle);
+                                            tap_table_generations[tap_active]))
             return 0;
-        }
     }
     snap->pid = active->pid;
     snap->tag = enif_make_copy(msg_env, active->tag);
     snap->seq = active->seq;
-    enif_mutex_unlock(tap_mutex);
     return 1;
+}
+
+static int mob_snap_change_tap(int handle, ErlNifEnv *msg_env, TapSnap *snap) {
+    enif_mutex_lock(tap_mutex);
+    int ok = mob_snap_change_tap_locked(handle, msg_env, snap);
+    enif_mutex_unlock(tap_mutex);
+    if (!ok)
+        LOGD(@"rejected stale event handle %d", handle);
+    return ok;
 }
 
 // Convert mach absolute time to nanoseconds (initialised once).
@@ -1005,6 +1006,61 @@ static void mob_send_change_float(int handle, double value) {
     ERL_NIF_TERM term = enif_make_double(tmp, value);
     mob_send_change(handle, term);
     enif_free_env(tmp);
+}
+
+// A field's final change can synchronously trigger a repaint on the BEAM thread.
+// Snapshot every route under one lock before sending that first message, so
+// submit and blur still target the field that originated this delegate turn
+// even when the repaint removes it.
+static void mob_send_text_final(int change_handle, int submit_handle, int blur_handle,
+                                const char *utf8, BOOL send_change, BOOL send_submit,
+                                BOOL send_blur) {
+    ErlNifEnv *change_env = send_change && change_handle > 0 ? enif_alloc_env() : NULL;
+    ErlNifEnv *submit_env = send_submit && submit_handle > 0 ? enif_alloc_env() : NULL;
+    ErlNifEnv *blur_env = send_blur && blur_handle > 0 ? enif_alloc_env() : NULL;
+
+    TapSnap change_snap;
+    TapSnap submit_snap;
+    TapSnap blur_snap;
+    enif_mutex_lock(tap_mutex);
+    int change_ok =
+        change_env && mob_snap_change_tap_locked(change_handle, change_env, &change_snap);
+    int submit_ok =
+        submit_env && mob_snap_change_tap_locked(submit_handle, submit_env, &submit_snap);
+    int blur_ok = blur_env && mob_snap_change_tap_locked(blur_handle, blur_env, &blur_snap);
+    enif_mutex_unlock(tap_mutex);
+
+    if (change_ok) {
+        size_t len = strlen(utf8);
+        ERL_NIF_TERM value;
+        unsigned char *bytes = enif_make_new_binary(change_env, len, &value);
+        if (len > 0)
+            memcpy(bytes, utf8, len);
+        mob_note_ui_event();
+        ERL_NIF_TERM msg = enif_make_tuple3(change_env, enif_make_atom(change_env, "change"),
+                                            change_snap.tag, value);
+        enif_send(NULL, &change_snap.pid, change_env, msg);
+    }
+    if (change_env)
+        enif_free_env(change_env);
+
+    if (submit_ok) {
+        mob_note_ui_event();
+        ERL_NIF_TERM msg =
+            enif_make_tuple2(submit_env, enif_make_atom(submit_env, "submit"), submit_snap.tag);
+        enif_send(NULL, &submit_snap.pid, submit_env, msg);
+    }
+    if (submit_env)
+        enif_free_env(submit_env);
+
+    if (blur_ok) {
+        mob_note_ui_event();
+        ERL_NIF_TERM msg =
+            enif_make_tuple2(blur_env, enif_make_atom(blur_env, "blur"), blur_snap.tag);
+        enif_send(NULL, &blur_snap.pid, blur_env, msg);
+    }
+    if (blur_env)
+        enif_free_env(blur_env);
 }
 
 // ── JSON → MobNode parser ─────────────────────────────────────────────────────
@@ -2050,6 +2106,20 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
                 break;
             default:
                 break;
+            }
+        }
+
+        if (node.nodeType == MobNodeTypeTextField) {
+            int change_handle = [onChange isKindOfClass:[NSNumber class]] ? [onChange intValue] : 0;
+            int submit_handle = [onSubmit isKindOfClass:[NSNumber class]] ? [onSubmit intValue] : 0;
+            int blur_handle = [onBlur isKindOfClass:[NSNumber class]] ? [onBlur intValue] : 0;
+            if (change_handle > 0 || submit_handle > 0 || blur_handle > 0) {
+                node.onFinalizeText =
+                    ^(NSString *text, BOOL send_change, BOOL send_submit, BOOL send_blur) {
+                      mob_send_text_final(change_handle, submit_handle, blur_handle,
+                                          text ? [text UTF8String] : "", send_change, send_submit,
+                                          send_blur);
+                    };
             }
         }
 

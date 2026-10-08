@@ -1805,6 +1805,13 @@ private struct MobTextField: View {
     // reset by SwiftUI on the next update, so routing the UIKit field through
     // `isFocused` resigned the keyboard after every keystroke.
     @State private var uikitFocused = false
+    // Last value delivered to on_change. The UIKit field flushes its final
+    // committed text before blur; this state deduplicates that flush against
+    // ordinary editingChanged callbacks in either order.
+    @State private var lastSentText: String
+    // Return/Done can deliver blur in the same final-event transaction. Skip
+    // the ensuing focus observer so blur remains exactly-once.
+    @State private var finalizedBeforeBlur = false
 
     private var focused: Bool { isFocused || uikitFocused }
 
@@ -1818,6 +1825,7 @@ private struct MobTextField: View {
         self.placeholder = placeholder
         self.initialText = initialText
         _text = State(initialValue: initialText)
+        _lastSentText = State(initialValue: initialText)
     }
 
     private var keyboardType: UIKeyboardType {
@@ -1905,7 +1913,16 @@ private struct MobTextField: View {
                 textContentType: textContentType,
                 text: $text,
                 isFocused: uikitFocused,
-                onFocusChange: { focused in uikitFocused = focused }
+                onBeginEditing: {
+                    uikitFocused = true
+                    node.onFocus?()
+                },
+                onFinalize: { finalText, submit, blur in
+                    let changed = finalText != lastSentText
+                    if changed { lastSentText = finalText }
+                    node.onFinalizeText?(finalText, changed, submit, blur)
+                    uikitFocused = !blur
+                }
             )
         } else if node.isSecure {
             SecureField(text: $text, prompt: prompt) { Text(placeholder) }
@@ -1939,27 +1956,47 @@ private struct MobTextField: View {
             .textContentType(textContentType)
             .submitLabel(submitLabel)
             .onSubmit {
-                node.onSubmit?()
-                // dismiss for terminal actions; "next" intentionally keeps keyboard open
-                if node.returnKeyStr != "next" { dropFocus() }
+                let changed = text != lastSentText
+                if changed { lastSentText = text }
+                let closes = node.returnKeyStr != "next"
+                node.onFinalizeText?(text, changed, true, closes)
+                if closes {
+                    finalizedBeforeBlur = true
+                    dropFocus()
+                }
             }
-            // See MobToggle: compare against the BEAM's value rather than
-            // latching, so a re-seed is silent by construction.
+            // See MobToggle: only focused changes are user edits. Remember the
+            // last delivered value so the UIKit field's final pre-blur flush
+            // is exactly-once even if editingChanged races it.
             .onChange(of: text) { oldValue, newValue in
                 // Multi-line `max_length` (single-line is the UIKit field's):
                 // reject a lengthening user edit, as the UIKit delegate does.
-                // Gated on focus: the re-seeds below write unfocused.
+                // Programmatic re-seeds set lastSentText before writing text,
+                // so deduplication—not current focus—is what distinguishes
+                // them. A final user edit can be observed after focus ends.
                 if node.maxLength > 0, focused,
                    newValue.utf16.count > node.maxLength,
                    newValue.utf16.count > oldValue.utf16.count {
-                    // Re-enters with `oldValue`; reporting it again is harmless.
                     text = oldValue
                     return
                 }
-                if newValue != initialText { node.onChangeStr?(newValue) }
+                if newValue != lastSentText {
+                    lastSentText = newValue
+                    node.onChangeStr?(newValue)
+                }
             }
-            .onChange(of: focused) { _, focused in
-                if focused { node.onFocus?() } else { node.onBlur?() }
+            // SwiftUI-backed fields report focus here. The UIKit-backed field
+            // reports begin/final-text/end from one delegate turn above.
+            .onChange(of: isFocused) { _, focused in
+                if focused {
+                    node.onFocus?()
+                } else if finalizedBeforeBlur {
+                    finalizedBeforeBlur = false
+                } else {
+                    let changed = text != lastSentText
+                    if changed { lastSentText = text }
+                    node.onFinalizeText?(text, changed, false, true)
+                }
             }
             // Sync from parent when the `value:` prop changes externally —
             // but only if the user isn't actively typing (which would yank
@@ -1967,8 +2004,9 @@ private struct MobTextField: View {
             // controlled-input fix for the case where Elixir code updates
             // the bound value via Mob.Socket.assign without user input.
             .onChange(of: initialText) { _, newValue in
-                if !focused && text != newValue {
-                    text = newValue
+                if !focused {
+                    lastSentText = newValue
+                    if text != newValue { text = newValue }
                 }
             }
             // Re-seed when this screen becomes active. The watcher above fires
@@ -1986,6 +2024,7 @@ private struct MobTextField: View {
                     return
                 }
 
+                lastSentText = initialText
                 if text != initialText {
                     text = initialText
                 }

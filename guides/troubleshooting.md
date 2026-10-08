@@ -337,6 +337,14 @@ BEAMs via `:code.load_binary`, then shuts distribution back down. Because the
 phone initiates the outbound connection, no inbound ports need to be open and
 the cookie can be rotated per session via the manifest.
 
+**Your own distribution transport (e.g. TLS):** `-proto_dist`,
+`-ssl_dist_optfile` and similar flags are Erlang init arguments, which
+`mob_beam_flags` (emulator flags, written only by `mix mob.deploy`) can't
+carry. Write them from the app with `Mob.InitArgs.write/1`; the launcher
+passes them at the next launch, in release builds too. On Android still start
+distribution at runtime; on iOS an init argument list with `-name`/`-sname`
+replaces mob's own dist flags. Details in `Mob.Dist` and `Mob.InitArgs`.
+
 ---
 
 ## `mix mob.connect` finds no nodes
