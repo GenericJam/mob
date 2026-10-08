@@ -120,13 +120,9 @@ defmodule Mob.List do
     %{type: :lazy_list, props: list_props, children: children}
   end
 
-  def expand(%{type: type, props: props, children: children}, renderers, pid) do
-    %{
-      type: type,
-      props: props,
-      children: Enum.map(children, &expand(&1, renderers, pid))
-    }
-  end
+  # Other keys of the node (a native view's `:__mob_expanded__`) are kept.
+  def expand(%{type: _, props: _, children: children} = node, renderers, pid),
+    do: %{node | children: Enum.map(children, &expand(&1, renderers, pid))}
 
   def expand(node, _renderers, _pid), do: node
 

@@ -119,6 +119,116 @@ defmodule Mob.ComponentTest do
     end
   end
 
+  describe "Mob.Component.expand/3" do
+    setup do
+      {:ok, _reg} = Mob.Test.ProcessHelpers.ensure_component_registry()
+      :ok
+    end
+
+    test "a tree another process expanded passes through: its component isn't started again" do
+      owner = self()
+      id = :"owned_#{System.unique_integer([:positive])}"
+
+      tree = %{
+        type: :column,
+        props: %{},
+        children: [Mob.UI.native_view(CounterComponent, id: id, initial: 4)]
+      }
+
+      {expanded, active} = Mob.Component.expand(tree, owner, :no_render)
+      assert MapSet.equal?(active, MapSet.new([{id, CounterComponent}]))
+
+      assert [
+               %{type: :native_view, props: %{count: 4, id: id_string, component_handle: _}} =
+                 node
+             ] =
+               expanded.children
+
+      assert id_string == Atom.to_string(id)
+      {:ok, component} = Mob.ComponentRegistry.lookup(owner, id, CounterComponent)
+      assert node.__mob_expanded__ == {owner, id, CounterComponent, component}
+
+      # The screen that draws the owner's tree.
+      screen = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(screen, :kill) end)
+      assert {^expanded, empty} = Mob.Component.expand(expanded, screen, :no_render)
+      assert MapSet.size(empty) == 0
+      assert {:error, :not_found} = Mob.ComponentRegistry.lookup(screen, id, CounterComponent)
+      assert {:ok, ^component} = Mob.ComponentRegistry.lookup(owner, id, CounterComponent)
+    end
+
+    test "the marker survives a screen's whole expansion (composites, lists, components)" do
+      owner = self()
+      id = :"piped_#{System.unique_integer([:positive])}"
+
+      tree = %{
+        type: :column,
+        props: %{},
+        children: [Mob.UI.native_view(CounterComponent, id: id)]
+      }
+
+      {expanded, _} = Mob.Component.expand(tree, owner, :no_render)
+
+      screen = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(screen, :kill) end)
+
+      {drawn, active} =
+        %{type: :column, props: %{}, children: [expanded]}
+        |> Mob.Composite.expand(screen)
+        |> Mob.List.expand(%{}, screen)
+        |> Mob.Component.expand(screen, :no_render)
+
+      assert drawn.children == [expanded]
+      assert MapSet.size(active) == 0
+    end
+
+    test "a forged marker is drawn empty" do
+      screen = self()
+      owner = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(owner, :kill) end)
+
+      forged = %{
+        type: :native_view,
+        props: %{module: "Mob_ComponentTest_CounterComponent", id: "x", component_handle: 0},
+        children: [],
+        __mob_expanded__: {owner, :x, CounterComponent, owner}
+      }
+
+      assert {%{type: :column, children: []}, active} =
+               Mob.Component.expand(forged, screen, :no_render)
+
+      assert MapSet.size(active) == 0
+    end
+
+    test "a tree from a component its owner has since replaced is drawn empty; the new one passes" do
+      id = :"replaced_#{System.unique_integer([:positive])}"
+      tree = Mob.UI.native_view(CounterComponent, id: id, initial: 1)
+      screen = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(screen, :kill) end)
+
+      {old, _} = Mob.Component.expand(tree, self(), :no_render)
+      {:ok, first} = Mob.ComponentRegistry.lookup(self(), id, CounterComponent)
+      :ok = Mob.ComponentRegistry.reconcile(self(), MapSet.new())
+      {new, _} = Mob.Component.expand(tree, self(), :no_render)
+      {:ok, second} = Mob.ComponentRegistry.lookup(self(), id, CounterComponent)
+      assert first != second
+
+      assert {%{type: :column, children: []}, _} = Mob.Component.expand(old, screen, :no_render)
+      assert {^new, _} = Mob.Component.expand(new, screen, :no_render)
+    end
+
+    test "a declaration's own :component_handle prop is just a prop: its component starts" do
+      id = :"declared_#{System.unique_integer([:positive])}"
+      node = Mob.UI.native_view(CounterComponent, id: id, initial: 2, component_handle: nil)
+
+      {expanded, active} = Mob.Component.expand(node, self(), :no_render)
+      assert MapSet.equal?(active, MapSet.new([{id, CounterComponent}]))
+      assert %{props: %{count: 2, id: id_string}} = expanded
+      assert id_string == Atom.to_string(id)
+      assert {:ok, _} = Mob.ComponentRegistry.lookup(self(), id, CounterComponent)
+    end
+  end
+
   # ── Mob.ComponentRegistry ─────────────────────────────────────────────────
 
   describe "Mob.ComponentRegistry" do
