@@ -138,10 +138,14 @@ defmodule Mob.ComponentTest do
       {expanded, active} = Mob.Component.expand(tree, owner, :no_render)
       assert MapSet.equal?(active, MapSet.new([{id, CounterComponent}]))
 
-      assert [%{type: :native_view, props: %{count: 4, id: id_string, component_handle: _}}] =
+      assert [
+               %{type: :native_view, props: %{count: 4, id: id_string, component_handle: _}} =
+                 node
+             ] =
                expanded.children
 
       assert id_string == Atom.to_string(id)
+      assert node.expanded_by == {owner, id, CounterComponent}
       {:ok, component} = Mob.ComponentRegistry.lookup(owner, id, CounterComponent)
 
       # The screen that draws the owner's tree.
@@ -151,6 +155,35 @@ defmodule Mob.ComponentTest do
       assert MapSet.size(empty) == 0
       assert {:error, :not_found} = Mob.ComponentRegistry.lookup(screen, id, CounterComponent)
       assert {:ok, ^component} = Mob.ComponentRegistry.lookup(owner, id, CounterComponent)
+    end
+
+    test "a marked node its owner doesn't run (forged, or stopped since) is drawn empty" do
+      screen = self()
+      owner = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(owner, :kill) end)
+
+      forged = %{
+        type: :native_view,
+        props: %{module: "Mob_ComponentTest_CounterComponent", id: "x", component_handle: 0},
+        children: [],
+        expanded_by: {owner, :x, CounterComponent}
+      }
+
+      assert {%{type: :column, children: []}, active} =
+               Mob.Component.expand(forged, screen, :no_render)
+
+      assert MapSet.size(active) == 0
+    end
+
+    test "a declaration's own :component_handle prop is just a prop: its component starts" do
+      id = :"declared_#{System.unique_integer([:positive])}"
+      node = Mob.UI.native_view(CounterComponent, id: id, initial: 2, component_handle: nil)
+
+      {expanded, active} = Mob.Component.expand(node, self(), :no_render)
+      assert MapSet.equal?(active, MapSet.new([{id, CounterComponent}]))
+      assert %{props: %{count: 2, id: id_string}} = expanded
+      assert id_string == Atom.to_string(id)
+      assert {:ok, _} = Mob.ComponentRegistry.lookup(self(), id, CounterComponent)
     end
   end
 

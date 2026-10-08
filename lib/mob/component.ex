@@ -114,13 +114,20 @@ defmodule Mob.Component do
   `active_keys` is a `MapSet` of `{id, module}` pairs seen in this render —
   used by the screen to stop components that have left the tree.
 
-  A `:native_view` node that is already expanded (its props carry
-  `:component_handle`) passes through untouched and isn't counted as active:
-  another process expanded it and owns its component. That's how a process
-  that renders a subtree for a screen (say, isolating untrusted screen code)
-  uses native views in it: it calls `expand/3` with itself as `screen_pid`,
-  calls `Mob.ComponentRegistry.reconcile/2` the same way, repaints on
+  Every node this expands is marked with its owner: `expanded_by: {screen_pid,
+  id, module}`, a key of the node beside `props` (never sent to the native
+  side). A node another process marked passes through untouched and isn't
+  counted as active, once `Mob.ComponentRegistry` confirms that process runs
+  that component; one it doesn't confirm (forged, or a component its owner
+  has just stopped, in a tree drawn after the owner moved on) is drawn as an
+  empty column. That's how a process that renders a subtree for a screen
+  (say, isolating untrusted screen code) uses native views in it: it calls
+  `expand/3` with itself as `screen_pid`, calls
+  `Mob.ComponentRegistry.reconcile/2` the same way, repaints on
   `{:component_changed, id, module}`, and hands the screen the expanded tree.
+  If that subtree comes from code you don't trust, strip `:expanded_by`
+  nodes from its render before expanding: the check proves a component
+  exists, not that the code may draw it.
   """
   @spec expand(map(), pid(), atom()) :: {map(), MapSet.t()}
   def expand(tree, screen_pid, platform) do
@@ -129,12 +136,17 @@ defmodule Mob.Component do
   end
 
   defp walk(
-         %{type: :native_view, props: %{component_handle: _}} = node,
-         _screen,
+         %{type: :native_view, expanded_by: {owner, id, module}} = node,
+         screen_pid,
          _platform,
          active
-       ),
-       do: {node, active}
+       )
+       when is_pid(owner) and owner != screen_pid do
+    case Mob.ComponentRegistry.lookup(owner, id, module) do
+      {:ok, _component} -> {node, active}
+      {:error, :not_found} -> {%{type: :column, props: %{}, children: []}, active}
+    end
+  end
 
   defp walk(%{type: :native_view, props: props} = node, screen_pid, platform, active) do
     module = props[:module]
@@ -157,7 +169,7 @@ defmodule Mob.Component do
       })
 
     active = MapSet.put(active, {id, module})
-    {%{node | props: enriched}, active}
+    {node |> Map.put(:props, enriched) |> Map.put(:expanded_by, {screen_pid, id, module}), active}
   end
 
   defp walk(%{children: children} = node, screen_pid, platform, active) do
