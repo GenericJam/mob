@@ -119,6 +119,41 @@ defmodule Mob.ComponentTest do
     end
   end
 
+  describe "Mob.Component.expand/3" do
+    setup do
+      {:ok, _reg} = Mob.Test.ProcessHelpers.ensure_component_registry()
+      :ok
+    end
+
+    test "a tree another process expanded passes through: its component isn't started again" do
+      owner = self()
+      id = :"owned_#{System.unique_integer([:positive])}"
+
+      tree = %{
+        type: :column,
+        props: %{},
+        children: [Mob.UI.native_view(CounterComponent, id: id, initial: 4)]
+      }
+
+      {expanded, active} = Mob.Component.expand(tree, owner, :no_render)
+      assert MapSet.equal?(active, MapSet.new([{id, CounterComponent}]))
+
+      assert [%{type: :native_view, props: %{count: 4, id: id_string, component_handle: _}}] =
+               expanded.children
+
+      assert id_string == Atom.to_string(id)
+      {:ok, component} = Mob.ComponentRegistry.lookup(owner, id, CounterComponent)
+
+      # The screen that draws the owner's tree.
+      screen = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(screen, :kill) end)
+      assert {^expanded, empty} = Mob.Component.expand(expanded, screen, :no_render)
+      assert MapSet.size(empty) == 0
+      assert {:error, :not_found} = Mob.ComponentRegistry.lookup(screen, id, CounterComponent)
+      assert {:ok, ^component} = Mob.ComponentRegistry.lookup(owner, id, CounterComponent)
+    end
+  end
+
   # ── Mob.ComponentRegistry ─────────────────────────────────────────────────
 
   describe "Mob.ComponentRegistry" do

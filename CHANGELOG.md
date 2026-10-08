@@ -10,6 +10,17 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **Native views in a tree rendered by another process** (MOB-409).
+  `Mob.Component.expand/3` passes through a `:native_view` node that is
+  already expanded (its props carry `:component_handle`) instead of
+  raising, and doesn't count it as active. A process that renders a subtree
+  for a screen (Operator's front host, which keeps untrusted screen code out
+  of the shell) expands native views itself, owns their components
+  (`Mob.ComponentRegistry.reconcile/2`, repaint on `{:component_changed, id,
+  module}`), and the screen draws the expanded nodes without starting them
+  again.
+
 ## [0.9.13] - 2026-10-07
 
 ### Added

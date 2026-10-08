@@ -113,12 +113,28 @@ defmodule Mob.Component do
   injects the NIF handle. Returns `{expanded_tree, active_keys}` where
   `active_keys` is a `MapSet` of `{id, module}` pairs seen in this render —
   used by the screen to stop components that have left the tree.
+
+  A `:native_view` node that is already expanded (its props carry
+  `:component_handle`) passes through untouched and isn't counted as active:
+  another process expanded it and owns its component. That's how a process
+  that renders a subtree for a screen (say, isolating untrusted screen code)
+  uses native views in it: it calls `expand/3` with itself as `screen_pid`,
+  calls `Mob.ComponentRegistry.reconcile/2` the same way, repaints on
+  `{:component_changed, id, module}`, and hands the screen the expanded tree.
   """
   @spec expand(map(), pid(), atom()) :: {map(), MapSet.t()}
   def expand(tree, screen_pid, platform) do
     active = MapSet.new()
     walk(tree, screen_pid, platform, active)
   end
+
+  defp walk(
+         %{type: :native_view, props: %{component_handle: _}} = node,
+         _screen,
+         _platform,
+         active
+       ),
+       do: {node, active}
 
   defp walk(%{type: :native_view, props: props} = node, screen_pid, platform, active) do
     module = props[:module]
