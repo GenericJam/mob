@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.14] - 2026-10-08
+
 ### Added
 - **Native views in a tree rendered by another process** (MOB-409).
   `Mob.Component.expand/3` marks each node it expands with the component
