@@ -638,6 +638,10 @@ A host can activate any combination of plugins, so mob_dev checks at build time
 that they compose: two plugins may not claim the same screen route, NIF module,
 native view key, migration namespace, supervised worker name, plist key, or
 notification match. A clash is a loud build error, not a silent last-write-wins.
+Two exceptions for plist keys: a usage description (`*UsageDescription`) every
+declaring plugin gives as a string is combined by mob_dev (≥ 0.7.19) so the
+permission prompt gives every reason, and a scalar key the host's own
+`ios/Info.plist` sets is not a clash, since the host's value wins.
 See [`MOB_PLUGINS.md` → Cross-plugin conflict detection](MOB_PLUGINS.md) for the
 full list and the completeness guarantee. Keep your routes/namespaces/worker
 names specific to your plugin (the scaffold's `"<name>_"` defaults do this).
