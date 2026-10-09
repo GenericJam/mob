@@ -82,17 +82,31 @@ int main(void) {
     expect("override: link-local gone", "169.254.1.100", nothing, "127.0.0.1",
            MOB_NODE_HOST_FROM_LOOPBACK);
 
-    // A non-IPv4 entry (no address, or IPv6) is skipped, not misread.
+    // Entries that aren't IPv4 (no address; IPv6) are skipped, not misread. The
+    // IPv6 entry's flowinfo sits where a sockaddr_in keeps its address, set so
+    // that misreading it would yield the LAN address 10.9.9.9.
     {
         const char *ips[] = {"192.168.0.185", NULL};
         struct ifaddrs *l = list_of(ips);
+        struct sockaddr_in6 v6;
+        memset(&v6, 0, sizeof(v6));
+        v6.sin6_family = AF_INET6;
+        v6.sin6_flowinfo = htonl(0x0A090909);
+        inet_pton(AF_INET6, "fe80::1", &v6.sin6_addr);
+        struct ifaddrs six;
+        memset(&six, 0, sizeof(six));
+        six.ifa_addr = (struct sockaddr *)&v6;
+        six.ifa_next = l;
         struct ifaddrs bare;
         memset(&bare, 0, sizeof(bare));
-        bare.ifa_next = l;
+        bare.ifa_next = &six;
         char buf[INET_ADDRSTRLEN];
         CHECK(mob_choose_node_host(NULL, &bare, buf, sizeof(buf)) == MOB_NODE_HOST_FROM_LAN &&
                   strcmp(buf, "192.168.0.185") == 0,
-              "an interface without an address is skipped, got %s", buf);
+              "no-address and IPv6 entries are skipped, got %s", buf);
+        CHECK(mob_choose_node_host("10.9.9.9", &bare, buf, sizeof(buf)) == MOB_NODE_HOST_FROM_LAN &&
+                  strcmp(buf, "192.168.0.185") == 0,
+              "an IPv6 entry is not taken for an own IPv4 address, got %s", buf);
     }
 
     if (failures) {

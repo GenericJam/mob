@@ -203,8 +203,9 @@ ErtsStaticNif erts_static_nif_tab[] = {
 The BEAM on a physical device supports full Erlang distribution — `mix mob.connect`,
 `Mob.Test.*`, hot code push, and direct IEx RPC all work the same as on the simulator.
 
-The node name is determined at startup by walking the device's network interfaces in
-priority order:
+The node name is determined at startup. A launch that sets `MOB_NODE_HOST` to one of
+the device's own IPv4 addresses gets that address (see below); otherwise the device's
+network interfaces are walked in priority order:
 
 | Priority | Connection | Node name | Requires |
 |----------|------------|-----------|----------|
@@ -224,6 +225,14 @@ priority order:
 >
 > **USB only (no WiFi):** the node falls back to the link-local address and
 > `mix mob.connect` finds it the same way — no difference in that workflow.
+>
+> **`mix mob.connect` names the host itself (mob 0.9.16 + mob_dev 0.7.18).** When it
+> relaunches the app it passes `MOB_NODE_HOST` (as `DEVICECTL_CHILD_MOB_NODE_HOST`)
+> set to the address it reaches the phone at, and waits for exactly that node. Over
+> USB that is usually the link-local `169.254.x.x` address, so a phone whose WiFi is
+> on a network the Mac can't route to is still reachable; the trade is that a node
+> launched this way is stranded if the cable is pulled — run `mix mob.connect` again.
+> An address the phone doesn't hold is ignored.
 
 ### The node name is still fixed at app launch
 
