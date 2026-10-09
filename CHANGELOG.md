@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.15] - 2026-10-08
+
 ### Added
 - **Plugin self-test contract** (MOB-411). `Mob.Plugin.SelfTest` is a
   behaviour with one callback, `run(%{platform:, device:}) :: :pass |
