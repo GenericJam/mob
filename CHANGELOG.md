@@ -10,6 +10,18 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **Plugin self-test contract** (MOB-411). `Mob.Plugin.SelfTest` is a
+  behaviour with one callback, `run(%{platform:, device:}) :: :pass |
+  {:fail, reason} | {:skip, :needs_hardware | :needs_user | reason}`. A
+  plugin names its implementation in the manifest as `selftest: Module`;
+  `mix mob.selftest` (mob_dev 0.7.17) and mob_ci call it on the device
+  over distribution for every activated plugin. A pass means the test got
+  a real answer back from the plugin's native code, not that a module
+  loaded. `Mob.Plugin.SelfTest.result?/1` says whether a term is a valid
+  result. See `MOB_PLUGINS.md` ("Self-test") and
+  `decisions/2026-10-08-plugin-self-test-contract.md`.
+
 ## [0.9.14] - 2026-10-08
 
 ### Added
