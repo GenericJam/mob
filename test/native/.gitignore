@@ -3,3 +3,4 @@ dist_port_test
 dist_cookie_test
 stored_queue_test
 init_args_test
+node_host_test

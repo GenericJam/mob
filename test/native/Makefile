@@ -9,7 +9,7 @@ CC      ?= clang
 CFLAGS  ?= -fobjc-arc -Wall -Wextra -Wno-unused-parameter
 LDFLAGS ?= -framework Foundation
 
-BINS := frame_registry_test dist_port_test dist_cookie_test stored_queue_test init_args_test
+BINS := frame_registry_test dist_port_test dist_cookie_test stored_queue_test init_args_test node_host_test
 
 .PHONY: run clean
 run: $(BINS)
@@ -28,6 +28,9 @@ stored_queue_test: stored_queue_test.c ../../ios/mob_stored_queue.h
 	$(CC) -Wall -Wextra -Werror -pthread $< -o $@
 
 init_args_test: init_args_test.c ../../ios/mob_init_args.h
+	$(CC) -Wall -Wextra -Werror $< -o $@
+
+node_host_test: node_host_test.c ../../ios/mob_node_host.h
 	$(CC) -Wall -Wextra -Werror $< -o $@
 
 clean:
