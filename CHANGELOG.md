@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.16] - 2026-10-09
+
 ### Added
 - **`MOB_NODE_HOST`: the host a physical iPhone's node is named after**
   (MOB-428). A device build names its node `<app>_ios@<WiFi IP>` whenever
