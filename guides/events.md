@@ -492,9 +492,11 @@ def handle_async(:page, {:exit, _reason}, socket),
   do: {:noreply, Mob.Socket.assign(socket, :loading, false)}
 ```
 
-`on_end_reached` fires again only after the row count changes, so a failed or
-empty page does not retry when the user scrolls back to the end. Offer a retry
-button for that case (see [`:lazy_list`](components.md#lazy_list)).
+The platforms re-fire `on_end_reached` differently, so the handler ignores a
+tap while a page is loading. On iOS it fires again only after the row count
+changes, so a failed or empty page doesn't retry when the user scrolls back to
+the end; offer a retry button for that case. On Android it fires each time the
+last row comes back into view. See [`:lazy_list`](components.md#lazy_list).
 
 ### Show "back to top" button
 

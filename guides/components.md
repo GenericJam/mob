@@ -414,8 +414,8 @@ A virtualized list that renders rows on demand. Supports `on_end_reached` for pa
 |------|------|-------------|
 | `on_end_reached` | `{pid, tag}` | Fired when the last row appears: `{:tap, tag}` |
 
-`on_end_reached` fires when the final row becomes visible, and is latched on the
-row count so that replacing the list's contents does not re-fire it. That
+On iOS, `on_end_reached` fires when the final row becomes visible, and is
+latched on the row count so that replacing the list's contents does not re-fire it. That
 matters because children key on `:id` (see below): replacing the contents gives
 every row a new identity, which without the latch reads as a fresh arrival at
 the end. A search screen re-queried on each keystroke would otherwise fire one
@@ -431,6 +431,9 @@ does **not** cover, so write the handler to be idempotent:
   then never again;
 * a page load that fails or returns nothing leaves the count unchanged, so
   scrolling away and back will not retry it.
+
+On Android there is no latch: `on_end_reached` fires each time the last row
+comes into view, including after scrolling away and back.
 
 ## Content components
 

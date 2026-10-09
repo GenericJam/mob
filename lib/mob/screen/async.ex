@@ -171,7 +171,10 @@ defmodule Mob.Screen.Async do
   defp discard(socket, name) do
     case entries(socket) do
       %{^name => entry} ->
-        stop(entry, :kill)
+        # Through the runner, which kills the worker with :kill. Killing the
+        # runner instead would leave the worker only a :killed link signal,
+        # which a worker that traps exits survives.
+        stop(entry, {:shutdown, :replaced})
         delete(socket, name)
 
       _ ->

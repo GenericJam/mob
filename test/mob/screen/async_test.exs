@@ -136,6 +136,56 @@ defmodule Mob.Screen.AsyncTest do
       assert assigns(screen).infos == []
     end
 
+    test "replacing kills a worker that traps exits" do
+      {_owner, screen} = start_screen()
+      test = self()
+
+      trapping = fn ->
+        Process.flag(:trap_exit, true)
+        send(test, {:task, self()})
+
+        receive do
+          :never -> :ok
+        end
+      end
+
+      start(screen, :search, trapping)
+      assert_receive {:task, old}
+      ref = Process.monitor(old)
+
+      start(screen, :search, fn -> "new" end)
+
+      assert_receive {:DOWN, ^ref, :process, ^old, :killed}
+      assert_receive {:handle_async, :search, {:ok, "new"}}
+    end
+
+    test "a task killed from outside is reported as {:exit, reason}, with nothing in handle_info" do
+      {_owner, screen} = start_screen()
+      test = self()
+
+      # $callers' head is the process that started the worker: the runner.
+      report_runner = fn ->
+        send(test, {:runner, hd(Process.get(:"$callers"))})
+
+        receive do
+          :never -> :ok
+        end
+      end
+
+      logs =
+        capture_log(fn ->
+          start(screen, :profile, report_runner)
+          assert_receive {:runner, runner}
+
+          Process.exit(runner, :kill)
+
+          assert_receive {:handle_async, :profile, {:exit, :killed}}
+          assert assigns(screen).infos == []
+        end)
+
+      refute logs =~ "linked process"
+    end
+
     test "cancel_async stops the task and reports {:exit, {:shutdown, :cancel}}" do
       {_owner, screen} = start_screen()
 
