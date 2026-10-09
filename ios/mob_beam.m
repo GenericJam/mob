@@ -7,6 +7,7 @@
 #include "mob_dist_cookie.h"
 #include "mob_dist_port.h"
 #include "mob_init_args.h"
+#include "mob_node_host.h"
 #import <Foundation/Foundation.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -150,53 +151,6 @@ static void mob_write_diag(const char *docs_dir, const char *name, const char *i
     }
 }
 
-// Find the device's own USB link-local (169.254.x.x) IP by walking ifaddrs.
-// On simulator there is no such interface; returns NULL so callers fall back to 127.0.0.1.
-static const char *find_link_local_ip(char *buf, size_t len) {
-    struct ifaddrs *ifa_list;
-    if (getifaddrs(&ifa_list) != 0)
-        return NULL;
-    const char *found = NULL;
-    for (struct ifaddrs *ifa = ifa_list; ifa && !found; ifa = ifa->ifa_next) {
-        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET)
-            continue;
-        struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
-        uint32_t addr = ntohl(sa->sin_addr.s_addr);
-        if ((addr >> 16) == 0xA9FE) { // 169.254.0.0/16
-            inet_ntop(AF_INET, &sa->sin_addr, buf, (socklen_t)len);
-            found = buf;
-        }
-    }
-    freeifaddrs(ifa_list);
-    return found;
-}
-
-// Find a routable LAN IP (10.x.x.x, 172.16-31.x.x, 192.168.x.x) for WiFi distribution
-// when no USB link-local interface is present. Returns NULL if none found.
-static const char *find_lan_ip(char *buf, size_t len) {
-    struct ifaddrs *ifa_list;
-    if (getifaddrs(&ifa_list) != 0)
-        return NULL;
-    const char *found = NULL;
-    for (struct ifaddrs *ifa = ifa_list; ifa && !found; ifa = ifa->ifa_next) {
-        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET)
-            continue;
-        struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
-        uint32_t addr = ntohl(sa->sin_addr.s_addr);
-        uint32_t top8 = addr >> 24;
-        uint32_t top16 = addr >> 16;
-        if (top8 == 10 ||                           // 10.0.0.0/8
-            (top16 >= 0xAC10 && top16 <= 0xAC1F) || // 172.16.0.0/12
-            top16 == 0xC0A8 ||                      // 192.168.0.0/16
-            (top16 >= 0x6440 && top16 <= 0x647F)) { // 100.64.0.0/10 (Tailscale)
-            inet_ntop(AF_INET, &sa->sin_addr, buf, (socklen_t)len);
-            found = buf;
-        }
-    }
-    freeifaddrs(ifa_list);
-    return found;
-}
-
 void mob_start_beam(const char *app_module) {
     mob_set_startup_phase("Setting up BEAM environment…");
 
@@ -328,34 +282,50 @@ void mob_start_beam(const char *app_module) {
 
     // Determine node hostname:
     //   MOB_BUNDLE_OTP = physical device build (OTP bundled in .app).
-    //   Priority: WiFi/LAN (10/172/192.168/Tailscale) > USB link-local (169.254.x.x) > 127.0.0.1
+    //   Priority: MOB_NODE_HOST (one of the device's own IPv4s) > WiFi/LAN
+    //   (10/172/192.168/Tailscale) > USB link-local (169.254.x.x) > 127.0.0.1
     //
     //   WiFi is preferred over USB because the node name is fixed at startup.
     //   If USB were preferred, unplugging the cable would strand the node at a
     //   link-local address that is no longer reachable — requiring an app restart
     //   to regain connectivity. With WiFi first, the node stays reachable on the
     //   same IP whether the cable is plugged in or not.
-    //   USB link-local is the fallback for cable-only setups (no WiFi).
+    //   USB link-local is the fallback for cable-only setups (no WiFi). When the
+    //   phone's WiFi is on a network the Mac can't route to, only the cable
+    //   reaches it: mob_dev then relaunches with MOB_NODE_HOST set to the
+    //   link-local address (MOB-428).
     //   127.0.0.1 is last resort; dist only reachable via iproxy in that case.
     //   The in-process EPMD and dist port both bind 0.0.0.0, so the node is
     //   reachable via any interface regardless of which IP was chosen as the name.
     //   That exposure is why development builds use the private cookie above.
     //
     //   Without MOB_BUNDLE_OTP = simulator build. Simulator shares the Mac's network
-    //   stack, including Mac's USB link-local interfaces, so find_link_local_ip()
-    //   would return the Mac's USB IP (wrong). Always use 127.0.0.1 on simulator,
-    //   and listen only there: the Mac's own WiFi address must not reach it.
+    //   stack, including Mac's USB link-local interfaces, so the device's
+    //   link-local lookup would return the Mac's USB IP (wrong). Always use
+    //   127.0.0.1 on simulator, and listen only there: the Mac's own WiFi
+    //   address must not reach it.
 #ifdef MOB_BUNDLE_OTP
-    // Physical device: WiFi/LAN → USB link-local → loopback fallback.
-    // Two physical devices on different LAN IPs already get distinct node
-    // names via the @host_ip part. MOB_NODE_SUFFIX is honored here too,
-    // for scripted scenarios where multiple builds of the same app run on
-    // distinct devices behind one IP (rare, but the override is harmless
-    // when unused).
-    static char lan_ip_buf[64], link_local_buf[64];
-    const char *lan_ip = find_lan_ip(lan_ip_buf, sizeof(lan_ip_buf));
-    const char *ll_ip = lan_ip ? NULL : find_link_local_ip(link_local_buf, sizeof(link_local_buf));
-    const char *host_ip = lan_ip ? lan_ip : (ll_ip ? ll_ip : "127.0.0.1");
+    // Physical device: MOB_NODE_HOST (one of the device's own addresses,
+    // passed by mob_dev when it relaunches over USB) → WiFi/LAN → USB
+    // link-local → loopback; see mob_node_host.h. Two physical devices on
+    // different LAN IPs already get distinct node names via the @host_ip
+    // part. MOB_NODE_SUFFIX is honored here too, for scripted scenarios where
+    // multiple builds of the same app run on distinct devices behind one IP
+    // (rare, but the override is harmless when unused).
+    static char host_ip_buf[INET_ADDRSTRLEN];
+    const char *host_ip = "127.0.0.1";
+    struct ifaddrs *ifa_list = NULL;
+    if (getifaddrs(&ifa_list) == 0) {
+        mob_node_host_source src = mob_choose_node_host(getenv("MOB_NODE_HOST"), ifa_list,
+                                                        host_ip_buf, sizeof(host_ip_buf));
+        freeifaddrs(ifa_list);
+        host_ip = host_ip_buf;
+        NSLog(@"[MobBeam] node host %s (%s)", host_ip,
+              src == MOB_NODE_HOST_FROM_ENV          ? "MOB_NODE_HOST"
+              : src == MOB_NODE_HOST_FROM_LAN        ? "WiFi/LAN"
+              : src == MOB_NODE_HOST_FROM_LINK_LOCAL ? "USB link-local"
+                                                     : "loopback");
+    }
     static char eval_expr[280], node_name[128], beams_dir[512];
     snprintf(eval_expr, sizeof(eval_expr), "%s:start().", app_module);
     const char *phys_suffix = getenv("MOB_NODE_SUFFIX");

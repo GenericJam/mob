@@ -10,6 +10,19 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **`MOB_NODE_HOST`: the host a physical iPhone's node is named after**
+  (MOB-428). A device build names its node `<app>_ios@<WiFi IP>` whenever
+  the phone has WiFi; when that WiFi is a network the Mac can't route to,
+  the only path is the USB cable (the link-local `169.254.x.x` address), and
+  the node, though its EPMD answers over the cable, could never be dialled.
+  `mob_beam.m` now takes `MOB_NODE_HOST` when it is one of the phone's own
+  IPv4 addresses (anything else is ignored) and otherwise keeps WiFi →
+  link-local → loopback. mob_dev 0.7.18's `mix mob.connect` passes the
+  address it reaches the phone at. The choice lives in
+  `ios/mob_node_host.h`, covered by `test/native/node_host_test.c`. See
+  `decisions/2026-10-09-ios-node-host-override.md`.
+
 ## [0.9.15] - 2026-10-08
 
 ### Added
