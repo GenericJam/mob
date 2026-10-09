@@ -233,11 +233,29 @@ defmodule Mob.Screen.AsyncTest do
   end
 
   describe "Mob.Socket.cancel_async/3" do
-    test "rejects :normal, which would not stop the task" do
-      socket = Mob.Socket.new(LoadScreen)
+    test "stops a worker that traps exits whatever the reason, and reports that reason" do
+      test = self()
 
-      assert_raise ArgumentError, ~r/:normal/, fn ->
-        Mob.Socket.cancel_async(socket, :profile, :normal)
+      for reason <- [:kill, :normal] do
+        trapping = fn ->
+          Process.flag(:trap_exit, true)
+          send(test, {:task, self()})
+
+          receive do
+            :never -> :ok
+          end
+        end
+
+        socket = Mob.Socket.start_async(Mob.Socket.new(LoadScreen), :profile, trapping)
+        assert_receive {:task, worker}
+        ref = Process.monitor(worker)
+
+        socket = Mob.Socket.cancel_async(socket, :profile, reason)
+
+        assert_receive {:DOWN, ^ref, :process, ^worker, :killed}
+
+        assert {:deliver, :profile, {:exit, ^reason}, _socket} =
+                 Mob.Screen.Async.await(socket, 100)
       end
     end
 

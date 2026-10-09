@@ -141,7 +141,10 @@ See the [Theming guide](https://hexdocs.pm/mob/theming.html) for details.
 
 ## Device APIs
 
-All async — call the function, handle the result in `handle_info/2`:
+Device APIs report back as messages: call the function, handle the result in
+`handle_info/2`. (To run your own slow work, such as an HTTP call, without
+blocking the screen, use `Mob.Socket.start_async/3` and `handle_async/3`; see
+[Screen Lifecycle](https://hexdocs.pm/mob/screen_lifecycle.html#handle_async-3).)
 
 ```elixir
 # Haptic feedback (core; synchronous — no handle_info needed)
@@ -317,14 +320,24 @@ end
 Full documentation at [hexdocs.pm/mob](https://hexdocs.pm/mob), including:
 
 - [Getting Started](https://hexdocs.pm/mob/getting_started.html)
+- [Coming from Phoenix LiveView](https://hexdocs.pm/mob/coming_from_liveview.html): `assign_async`, streams, events, tests mapped to Mob
 - [Architecture & Prior Art](https://hexdocs.pm/mob/architecture.html) — comparison to LiveView Native, Elixir Desktop, React Native, Flutter, and native development
-- [Screen Lifecycle](https://hexdocs.pm/mob/screen_lifecycle.html)
+- [Screen Lifecycle & Async Loading](https://hexdocs.pm/mob/screen_lifecycle.html)
 - [Components](https://hexdocs.pm/mob/components.html)
+- [Events](https://hexdocs.pm/mob/events.html): taps, input, scroll, pagination
 - [Theming](https://hexdocs.pm/mob/theming.html)
 - [Navigation](https://hexdocs.pm/mob/navigation.html)
 - [Device Capabilities](https://hexdocs.pm/mob/device_capabilities.html)
 - [DNS on iOS](https://hexdocs.pm/mob/dns_on_ios.html) — required reading if your app makes HTTPS calls; the fix for a non-obvious failure mode on iOS and some physical Android devices
 - [Testing](https://hexdocs.pm/mob/testing.html)
+- [LiveView Mode](https://hexdocs.pm/mob/liveview.html): a Phoenix LiveView app in a native WebView
+- [Agentic Coding](https://hexdocs.pm/mob/agentic_coding.html): driving a running app from an AI agent
+
+### For AI agents
+
+- [Usage rules](https://hexdocs.pm/mob/usage-rules.html): the short version, with links to each guide. Also shipped as `deps/mob/usage-rules.md`, alongside `deps/mob/guides/`, for exactly the mob version your app uses.
+- [llms.txt](https://hexdocs.pm/mob/llms.txt): index of every guide and module. Each page is also served as Markdown, e.g. [screen_lifecycle.md](https://hexdocs.pm/mob/screen_lifecycle.md).
+- `mix hex.docs fetch mob` for an offline copy.
 
 ## Development
 

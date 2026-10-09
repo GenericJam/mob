@@ -44,15 +44,13 @@ defmodule Mob.Screen.Async do
 
   @spec cancel(Mob.Socket.t(), term(), term()) :: Mob.Socket.t()
   def cancel(%Mob.Socket{} = socket, name, reason) do
-    if reason == :normal do
-      # A :normal exit signal is ignored by the process it is sent to, so the
-      # task would keep running while handle_async reported it cancelled.
-      raise ArgumentError, "cancel_async/3 cannot cancel with reason :normal"
-    end
-
     case entries(socket) do
       %{^name => entry} ->
-        stop(entry, reason)
+        # The runner gets a signal it can trap whatever `reason` is, so it
+        # always kills the worker: :kill would kill the runner first and leave
+        # a worker that traps exits running, and :normal would be ignored.
+        # `reason` only goes to handle_async.
+        stop(entry, {:shutdown, :cancel})
         # Cancelling is decided here, not by the task's exit: the caller has
         # been told the work is cancelled, so a result must not follow. The
         # runner may still send one after stop/2 returns — Process.exit/2 is

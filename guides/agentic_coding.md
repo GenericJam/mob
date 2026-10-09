@@ -31,34 +31,47 @@ exact state, not infer it from pixels.
 
 **The agent should connect to the running Erlang node and ask it directly.**
 
+### Where an app's agent finds the docs
+
+An agent working on a Mob **app** (not on Mob itself) should read, in this order:
+
+1. `deps/mob/usage-rules.md`: the short rules (screens, async loading, lists,
+   navigation, testing), each linked to its guide.
+2. `deps/mob/guides/*.md`: every guide, for exactly the mob version in
+   `mix.lock`. Both ship in the Hex package from mob 0.9.17 on.
+3. https://hexdocs.pm/mob/llms.txt: the index of guides and modules; every
+   page is also served as Markdown (`https://hexdocs.pm/mob/<page>.md`).
+   `mix hex.docs fetch mob` gives an offline copy.
+4. Module docs from the running code: IEx `h Mob.Socket.start_async`.
+
+Agents that know Phoenix LiveView get the fastest start from
+[Coming from Phoenix LiveView](coming_from_liveview.md).
+
 ### Priming the agent
 
 Before the MCP tools and tunnels, give the agent the mental model of the
-project. Each Mob repo has an `AGENTS.md` at its root — a five-minute
+project. Each Mob repo has an `AGENTS.md` at its root — an
 orientation covering what's where, how to drive a running app, and the
 pre-empt-failure rules that come from this team's hard-earned lessons. The
 file is the standard cross-tool entry point (Cursor, Codex, Aider all read
 it; Claude Code reads it via the `CLAUDE.md` reference).
 
-Point your agent at the relevant `AGENTS.md` for the repo it's working in:
+When working on Mob itself, point your agent at the `AGENTS.md` of the repo it's working in:
 
-- **[`mob/AGENTS.md`](https://github.com/GenericJam/mob/blob/main/AGENTS.md)** —
+- **[`mob/AGENTS.md`](https://github.com/GenericJam/mob/blob/master/AGENTS.md)** —
   runtime library. The "what is Mob", three-repo topology, and the full
   "driving apps from your session" reference (Mob.Test, MCP fallbacks,
   round-trip workflow).
-- **[`mob_dev/AGENTS.md`](https://github.com/GenericJam/mob_dev/blob/main/AGENTS.md)** —
+- **[`mob_dev/AGENTS.md`](https://github.com/GenericJam/mob_dev/blob/master/AGENTS.md)** —
   build/deploy/devices toolkit. TDD policy and the public-but-undocumented
   testing seams.
-- **[`mob_new/AGENTS.md`](https://github.com/GenericJam/mob_new/blob/main/AGENTS.md)** —
+- **[`mob_new/AGENTS.md`](https://github.com/GenericJam/mob_new/blob/master/AGENTS.md)** —
   project generator. Template gotchas and the LiveView phoenix-owned-files
   blocklist.
 
 For multi-repo work, prime with all three. The root `mob/AGENTS.md` is the
 "system view" — the other two link back to it for cross-cutting context.
 
-The files are deliberately short (≤ 200 lines) so agents read them in full
-rather than skimming — that's the difference between a session where the
-agent already knows your conventions and one where it stumbles into them.
 **These docs go stale fast** if the project moves and they don't. The
 top-of-file note in each `AGENTS.md` instructs the agent to update them in
 the same commit as any change that contradicts the guidance — keeping it
