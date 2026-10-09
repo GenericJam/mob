@@ -163,7 +163,7 @@ defmodule Mob.Screen.Server do
 
   @impl GenServer
   def handle_info(message, state) do
-    message |> do_handle_info(state) |> Mob.CrashReport.result()
+    message |> route_info(state) |> Mob.CrashReport.result()
   catch
     kind, reason -> Mob.CrashReport.reraise(kind, reason, __STACKTRACE__)
   end
@@ -413,6 +413,24 @@ defmodule Mob.Screen.Server do
 
   defp do_handle_cast(:__mob_hot_reload__, state) do
     {:noreply, %{state | socket: paint(state, :none)}}
+  end
+
+  # Tasks from Mob.Socket.start_async/3 report through their own message, their
+  # monitor and their link. All three are consumed here, before the clauses
+  # below, so none reaches handle_info/2: a screen traps exits, and every
+  # finished task's link would otherwise arrive there as {:EXIT, pid, :normal}.
+  defp route_info(message, state) do
+    case Mob.Screen.Async.handle_message(message, state.socket) do
+      :unknown ->
+        do_handle_info(message, state)
+
+      {:dropped, socket} ->
+        {:noreply, %{state | socket: socket}}
+
+      {:deliver, name, outcome, socket} ->
+        {:noreply, socket} = state.module.handle_async(name, outcome, socket)
+        after_forward(socket, state)
+    end
   end
 
   # A list row selection arrives as a tap with a structured tag; the user sees

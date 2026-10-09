@@ -28,7 +28,8 @@ defmodule Mob.Socket do
             # both are optional. The render path reads :last_frame every message.
             optional(:safe_area_confirmed) => boolean(),
             optional(:last_frame) => non_neg_integer(),
-            optional(:list_renderers) => map()
+            optional(:list_renderers) => map(),
+            optional(:async) => map()
           }
         }
 
@@ -116,6 +117,59 @@ defmodule Mob.Socket do
       _ -> %{socket | assigns: Map.put(assigns, key, fun.())}
     end
   end
+
+  @doc """
+  Run `fun` in a separate process and deliver its result to the screen's
+  `c:Mob.Screen.handle_async/3`. Mirrors `Phoenix.LiveView.start_async/3`.
+
+  The way to load data without holding up the screen: `mount/3` runs before
+  the screen's first frame, so slow work there delays the screen itself. Assign
+  a placeholder, start the work, and render the placeholder (a spinner, or
+  skeleton boxes) until the result arrives:
+
+      def mount(%{id: id}, _session, socket) do
+        {:ok,
+         socket
+         |> Mob.Socket.assign(:profile, :loading)
+         |> Mob.Socket.start_async(:profile, fn -> MyApp.Api.fetch_profile(id) end)}
+      end
+
+      def handle_async(:profile, {:ok, profile}, socket),
+        do: {:noreply, Mob.Socket.assign(socket, :profile, profile)}
+
+      def handle_async(:profile, {:exit, reason}, socket),
+        do: {:noreply, Mob.Socket.assign(socket, :profile, {:failed, reason})}
+
+  `handle_async/3` receives `{:ok, result}` with whatever `fun` returned, or
+  `{:exit, reason}` if `fun` raised, threw or exited, or the task was cancelled
+  with `cancel_async/3`. A crashing task does not crash the screen. Neither
+  outcome reaches `handle_info/2`.
+
+  `name` is any term. Starting a name whose task is still running replaces it:
+  the older task is killed and only the newest reports, so a search that starts
+  a lookup on every keystroke never renders a stale result.
+
+  The task is linked to the screen, so it stops when the screen does, whether
+  the screen crashes or is popped off the navigation stack. Raises
+  `ArgumentError` if the screen does not define `handle_async/3`.
+  """
+  @spec start_async(t(), term(), (-> term())) :: t()
+  def start_async(%__MODULE__{} = socket, name, fun) when is_function(fun, 0),
+    do: Mob.Screen.Async.start(socket, name, fun)
+
+  @doc """
+  Stop the task `start_async/3` started under `name`. Mirrors
+  `Phoenix.LiveView.cancel_async/3`.
+
+  The screen's `handle_async/3` receives `{:exit, reason}`, even if the task had
+  already finished and its result was waiting to be delivered, unless a
+  `start_async/3` for the same name replaces it first. Does nothing if no task is
+  running under `name`. Raises `ArgumentError` for reason `:normal`, which would
+  not stop the task.
+  """
+  @spec cancel_async(t(), term(), term()) :: t()
+  def cancel_async(%__MODULE__{} = socket, name, reason \\ {:shutdown, :cancel}),
+    do: Mob.Screen.Async.cancel(socket, name, reason)
 
   @doc """
   Store the root view ref returned by the renderer into `__mob__.root_view`.

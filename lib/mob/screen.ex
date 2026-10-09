@@ -68,6 +68,20 @@ defmodule Mob.Screen do
   @callback handle_info(message :: term(), socket :: socket()) ::
               {:noreply, socket()}
 
+  @doc """
+  Receive the outcome of a task started with `Mob.Socket.start_async/3`:
+  `{:ok, result}`, or `{:exit, reason}` when the task crashed or was cancelled.
+
+  Required by any screen that calls `start_async/3`; `use Mob.Screen` defines
+  no default, so a missing clause is an error rather than a silently dropped
+  result.
+  """
+  @callback handle_async(
+              name :: term(),
+              result :: {:ok, term()} | {:exit, term()},
+              socket :: socket()
+            ) :: {:noreply, socket()}
+
   @callback terminate(reason :: term(), socket :: socket()) :: term()
 
   @doc """
@@ -104,7 +118,13 @@ defmodule Mob.Screen do
   """
   @callback screen_key(assigns :: map()) :: String.t()
 
-  @optional_callbacks [handle_event: 3, handle_info: 2, terminate: 2, screen_key: 1]
+  @optional_callbacks [
+    handle_event: 3,
+    handle_info: 2,
+    handle_async: 3,
+    terminate: 2,
+    screen_key: 1
+  ]
 
   defmacro __using__(opts) do
     vsn = Keyword.get(opts, :vsn, 0)

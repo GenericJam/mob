@@ -17,7 +17,7 @@ registrations. Each is opt-in per widget; absence means no event delivery.
 | `on_focus` | `{pid, tag}` | `{:focus, tag}` | text_field |
 | `on_blur` | `{pid, tag}` | `{:blur, tag}` | text_field |
 | `on_submit` | `{pid, tag}` | `{:submit, tag}` | text_field return key |
-| `on_end_reached` | `{pid, tag}` | `{:end_reached, tag}` | scroll position pagination trigger |
+| `on_end_reached` | `{pid, tag}` | `{:tap, tag}` | `:lazy_list` only; pagination trigger when the last row appears |
 | `on_tab_select` | `{pid, tag}` | `{:tab_select, tag, tab_id}` | tab bars |
 
 ### New (Batch 3 / Batch 4 added in this pass)

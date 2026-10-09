@@ -10,6 +10,30 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **Async work in screens, the LiveView way.** `Mob.Socket.start_async/3` runs
+  a function in a task linked to the screen and delivers `{:ok, result}` or
+  `{:exit, reason}` to the new optional `handle_async/3` callback, so a screen
+  can render a loading state (a spinner, or skeleton boxes) and fill it in
+  when the data arrives. A crashing task does not crash the screen, and none of
+  the task's messages (`:DOWN`, the link's `:EXIT`) reach `handle_info/2`.
+  Starting a name that is still running replaces the older task and only the
+  newest reports. `Mob.Socket.cancel_async/3` stops a task and reports
+  `{:exit, reason}`. A screen's tasks stop when the screen does, including a
+  stop with reason `:normal`. `Mob.ScreenCase.render_async/2` awaits them in
+  off-device tests. Mirrors LiveView's `start_async/3`, `handle_async/3`,
+  `cancel_async/3` and `render_async/2`. See `decisions/2026-10-09-screen-async-tasks.md`.
+
+### Fixed
+- **Docs: async loading and pagination examples.** The pull-to-refresh and
+  infinite-scroll patterns in `guides/events.md` started a `Task.async/1` and
+  never handled its reply, so `:loading`/`:refreshing` never cleared; they now
+  use `start_async/3`. The infinite-scroll example used `on_end_reached` on a
+  `<Scroll>` and matched `{:end_reached, tag}`. `on_end_reached` is a
+  `<LazyList>` prop, and it delivers `{:tap, tag}`. `guides/screen_lifecycle.md`
+  documents `handle_async/3` and that slow work in `mount/3` delays the screen's
+  first frame.
+
 ## [0.9.16] - 2026-10-09
 
 ### Added

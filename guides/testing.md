@@ -61,6 +61,26 @@ end
 
 See [Size class](screen_lifecycle.md#size-class).
 
+### Testing async loading
+
+A screen that loads with `Mob.Socket.start_async/3` mounts in its loading
+state. `render_async/2` waits for the screen's tasks, delivers each result to
+`handle_async/3` (including tasks that `handle_async/3` itself starts), and
+returns the updated view. It flunks if they haven't finished within the timeout
+(1000 ms by default):
+
+```elixir
+test "the profile replaces the skeleton once it loads" do
+  view = mount_screen(MyApp.ProfileScreen, %{id: 1})
+  assert assigns(view).profile == :loading
+
+  view = render_async(view)
+  assert text(view) =~ "Ada"
+end
+```
+
+See [`handle_async/3`](screen_lifecycle.md#handle_async-3).
+
 ## Unit testing with a real screen process
 
 When you want the actual GenServer semantics (messages through a mailbox,

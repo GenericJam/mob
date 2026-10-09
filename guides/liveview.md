@@ -11,6 +11,12 @@ speed (~1–5 ms).
 > several HEEx idioms — `@assigns` shorthand and the `:if` / `:for` control
 > attributes — and `Mob.Socket` mirrors `assign/2,3`, `update/3`, and
 > `assign_new/3`. See [Components → Control flow](components.md#control-flow).
+> For async loading, `Mob.Socket.start_async/3` and the screen's
+> `handle_async/3` mirror LiveView's `start_async/3` and `handle_async/3`; see
+> [Screen Lifecycle](screen_lifecycle.md#handle_async-3). There is no `stream`:
+> LiveView needs it because rows cross the network to the browser, while a
+> screen and its native view run on the same device. Use `<LazyList>` for long
+> lists, with `on_end_reached` for pagination.
 
 ## Setup
 

@@ -26,6 +26,11 @@ def mount(%{id: id}, _session, socket) do
 end
 ```
 
+`mount/3` runs before the screen's first frame, so anything slow here (a
+network call, a large query) delays the whole screen. Assign a placeholder and
+load the data with `Mob.Socket.start_async/3` instead; see
+[`handle_async/3`](#handle_async-3) below.
+
 `session` is reserved for future use; pass it through.
 
 If `mount/3` returns `{:error, reason}`, the GenServer stops with that reason.
@@ -136,6 +141,61 @@ end
 
 The default implementation (from `use Mob.Screen`) raises for any unhandled event, so only define clauses for events you explicitly dispatch.
 
+### `handle_async/3`
+
+```elixir
+@callback handle_async(name :: term(), result :: {:ok, term()} | {:exit, term()}, socket :: Mob.Socket.t()) ::
+  {:noreply, Mob.Socket.t()}
+```
+
+Receives the outcome of a task started with `Mob.Socket.start_async/3`, the
+Mob counterpart of LiveView's `start_async/3` and `handle_async/3`. Use it to
+show a screen immediately with a loading state (a spinner, or skeleton boxes)
+and fill it in when the data arrives:
+
+```elixir
+def mount(%{id: id}, _session, socket) do
+  {:ok,
+   socket
+   |> Mob.Socket.assign(:profile, :loading)
+   |> Mob.Socket.start_async(:profile, fn -> MyApp.Api.fetch_profile(id) end)}
+end
+
+def handle_async(:profile, {:ok, profile}, socket),
+  do: {:noreply, Mob.Socket.assign(socket, :profile, profile)}
+
+def handle_async(:profile, {:exit, reason}, socket),
+  do: {:noreply, Mob.Socket.assign(socket, :profile, {:failed, reason})}
+
+def render(assigns) do
+  ~MOB"""
+  <Column padding={:space_md}>
+    <Box :for={_ <- 1..3} :if={@profile == :loading} fill_width={true}
+         background={:surface_raised} corner_radius={:radius_sm}>
+      <Spacer size={18} />
+    </Box>
+    <Text :if={is_map(@profile)} text={@profile.name} />
+    <Text :if={match?({:failed, _}, @profile)} text="Couldn't load the profile" />
+  </Column>
+  """
+end
+```
+
+`{:ok, result}` carries what the function returned. `{:exit, reason}` means it
+raised, threw or exited, or was cancelled with `Mob.Socket.cancel_async/3`; a
+crashing task does not crash the screen. Neither reaches `handle_info/2`.
+
+- **One task per name.** Starting a name whose task is still running kills the
+  older task, and only the newest reports. A search that starts a lookup on
+  every keystroke never renders a stale result.
+- **Tasks stop with the screen.** A task is linked to the screen that started
+  it, and it is stopped when that screen crashes or leaves the navigation stack.
+  Work that must outlive the screen belongs in a process of its own.
+- **No default.** `use Mob.Screen` does not define `handle_async/3`, and
+  `start_async/3` raises `ArgumentError` in a screen that doesn't define it.
+- **Testing.** Under `Mob.ScreenCase`, `render_async/2` waits for the screen's
+  tasks and delivers their results; see the [testing guide](testing.md).
+
 ### `terminate/2`
 
 ```elixir
@@ -170,6 +230,8 @@ start_root/2 or push_screen/2
         ├── text field change ───► handle_info/2  ──► render/1
         │                                                  │
         ├── device API result ───► handle_info/2  ──► render/1
+        │                                                  │
+        ├── start_async/3 task ──► handle_async/3 ──► render/1
         │                                                  │
         ├── send(pid, msg)  ──────► handle_info/2  ──► render/1
         │                                                  │
