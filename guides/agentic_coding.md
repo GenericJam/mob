@@ -36,7 +36,7 @@ exact state, not infer it from pixels.
 An agent working on a Mob **app** (not on Mob itself) should read, in this order:
 
 1. `deps/mob/usage-rules.md`: the short rules (screens, async loading, lists,
-   navigation, testing), each linked to its guide.
+   navigation, testing), each naming its guide.
 2. `deps/mob/guides/*.md`: every guide, for exactly the mob version in
    `mix.lock`. Both ship in the Hex package from mob 0.9.17 on.
 3. https://hexdocs.pm/mob/llms.txt: the index of guides and modules; every

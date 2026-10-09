@@ -1417,7 +1417,7 @@ Operator's bundled `priv/docs`. When you add or change docs:
   for. `llms.txt` lists titles only, no descriptions, so a title like "Screen
   Lifecycle & Async Loading" is what makes the page findable.
 - A new rule an app author must follow goes in `usage-rules.md`, which stays
-  short and links each rule to its guide.
+  short and names the guide behind each rule.
 - A new LiveView-equivalent API goes in `guides/coming_from_liveview.md`;
   agents search for the LiveView name.
 - Docs reach users only through a release (hexdocs and `deps/mob` are both

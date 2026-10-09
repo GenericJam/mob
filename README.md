@@ -335,7 +335,7 @@ Full documentation at [hexdocs.pm/mob](https://hexdocs.pm/mob), including:
 
 ### For AI agents
 
-- [Usage rules](https://hexdocs.pm/mob/usage-rules.html): the short version, with links to each guide. Also shipped as `deps/mob/usage-rules.md`, alongside `deps/mob/guides/`, for exactly the mob version your app uses.
+- [Usage rules](https://hexdocs.pm/mob/usage-rules.html): the short version, naming the guide behind each rule. Also shipped as `deps/mob/usage-rules.md`, alongside `deps/mob/guides/`, for exactly the mob version your app uses.
 - [llms.txt](https://hexdocs.pm/mob/llms.txt): index of every guide and module. Each page is also served as Markdown, e.g. [screen_lifecycle.md](https://hexdocs.pm/mob/screen_lifecycle.md).
 - `mix hex.docs fetch mob` for an offline copy.
 
