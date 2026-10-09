@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.17] - 2026-10-09
+
 ### Added
 - **Async work in screens, the LiveView way.** `Mob.Socket.start_async/3` runs
   a function in a task linked to the screen and delivers `{:ok, result}` or
