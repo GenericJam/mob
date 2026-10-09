@@ -151,8 +151,10 @@ the render tree. The canonical example is the `mob_bluetooth` plugin
     swift_files: ["priv/native/ios/MobBluetooth.swift"],
 
     # Info.plist keys the build adds when the host's own ios/Info.plist
-    # doesn't set them. iOS terminates an app that requests a permission
-    # without its usage description — same opt-in gate as Android.
+    # doesn't set them (an array value, e.g. UIBackgroundModes, appends its
+    # missing entries to the host's array instead). iOS terminates an app
+    # that requests a permission without its usage description — same opt-in
+    # gate as Android.
     plist_keys: %{
       "NSBluetoothAlwaysUsageDescription" =>
         "Bluetooth access is required to discover and advertise to nearby devices."
@@ -167,13 +169,14 @@ the render tree. The canonical example is the `mob_bluetooth` plugin
 Notes:
 
 - `:gradle_deps` accept any string Gradle would understand (`group:artifact:version`).
-- `:plist_keys` values are defaults: a key the host's `ios/Info.plist`
-  sets keeps the host's value. Write a usage description
+- `:plist_keys` values are defaults: a scalar key the host's `ios/Info.plist`
+  sets keeps the host's value; an array value (e.g. `UIBackgroundModes`)
+  appends its missing entries to the host's array. Write a usage description
   (`*UsageDescription`) as one sentence saying what *your plugin* uses the
   permission for. When several activated plugins declare the same usage
-  description, the build (mob_dev ≥ 0.7.19) combines their distinct sentences (activation
-  order) so the prompt gives every reason, and prints which plugins it
-  combined; the host words it itself by setting the key in
+  description, the build (mob_dev ≥ 0.7.19) combines their distinct sentences
+  (activation order) so the prompt gives every reason, and prints which
+  plugins it combined; the host words it itself by setting the key in
   `ios/Info.plist`. Any other key two plugins declare is a conflict (below).
 - iOS or Android can be omitted. iOS-only and Android-only plugins
   are valid. The validator warns (does not error) when one is missing
