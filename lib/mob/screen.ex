@@ -20,7 +20,9 @@ defmodule Mob.Screen do
   Lifecycle callbacks (`mount`, `render`, `handle_event`, `handle_info`,
   `terminate`) map directly to the GenServer lifecycle, so the BEAM's existing
   tools (selective receive, monitors, hot code push) work on screens without
-  any Mob-specific scaffolding.
+  any Mob-specific scaffolding. `handle_async/3` receives the results of
+  `Mob.Socket.start_async/3`, the way to load data without delaying the first
+  frame. The [Screen Lifecycle](screen_lifecycle.md) guide covers each callback.
 
   ## Usage
 

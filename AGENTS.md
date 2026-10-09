@@ -1289,7 +1289,8 @@ any point. They never need to touch the terminal or know Erlang exists.
 
 ### Project integration
 
-`mix mob.new` and `mix mob.inject` both emit `.mcp.json` in the project root:
+Planned, not built: `mix mob.new` and `mix mob.inject` would emit `.mcp.json`
+in the project root (neither does today):
 
 ```json
 {
@@ -1403,6 +1404,24 @@ catching it post-hoc costs a round-trip. Don't write it in the first place.
 > the changelogs and update this section. Credence has ~70 rules ExSlop
 > doesn't port yet; if any get backported (or if `credence` becomes worth
 > wiring in alongside Credo), revisit `mob/AGENTS.md` and the deps lists.
+
+## Agent-facing docs
+
+Most Mob users work through an AI agent, so docs have to be findable by one.
+The channels: hexdocs (`llms.txt` plus a `.md` copy of every page),
+`deps/mob/guides/` and `deps/mob/usage-rules.md` in the Hex package,
+`mix hex.docs fetch`, module docs via IEx, Sloppy Joe's `read_guide` and
+Operator's bundled `priv/docs`. When you add or change docs:
+
+- A new guide goes in `mix.exs` `extras` with a title an agent would search
+  for. `llms.txt` lists titles only, no descriptions, so a title like "Screen
+  Lifecycle & Async Loading" is what makes the page findable.
+- A new rule an app author must follow goes in `usage-rules.md`, which stays
+  short and names the guide behind each rule.
+- A new LiveView-equivalent API goes in `guides/coming_from_liveview.md`;
+  agents search for the LiveView name.
+- Docs reach users only through a release (hexdocs and `deps/mob` are both
+  versioned), so a doc fix warrants a patch bump (see `RELEASE.md`).
 
 ## Keep this file up to date
 

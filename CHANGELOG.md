@@ -18,11 +18,24 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   when the data arrives. A crashing task does not crash the screen, and none of
   the task's messages (`:DOWN`, the link's `:EXIT`) reach `handle_info/2`.
   Starting a name that is still running replaces the older task and only the
-  newest reports. `Mob.Socket.cancel_async/3` stops a task and reports
-  `{:exit, reason}`. A screen's tasks stop when the screen does, including a
+  newest reports. `Mob.Socket.cancel_async/3` always stops the task; its
+  reason is only what `handle_async/3` receives as `{:exit, reason}`. A
+  screen's tasks stop when the screen does, including a
   stop with reason `:normal`. `Mob.ScreenCase.render_async/2` awaits them in
   off-device tests. Mirrors LiveView's `start_async/3`, `handle_async/3`,
   `cancel_async/3` and `render_async/2`. See `decisions/2026-10-09-screen-async-tasks.md`.
+- **Docs for AI agents, in the package and on hexdocs.** The Hex package now
+  ships `guides/` and a new `usage-rules.md`, so an app has
+  `deps/mob/guides/*.md` and `deps/mob/usage-rules.md` matching its exact mob
+  version (`mix usage_rules.sync` picks the rules file up). `usage-rules.md` is
+  the short version: screens, async loading, lists, navigation, testing, and
+  where the docs are. It is also on hexdocs as "Usage Rules for AI Agents".
+  A new guide, [Coming from Phoenix LiveView](https://hexdocs.pm/mob/coming_from_liveview.html),
+  maps `assign_async`, `start_async`, streams, `phx-click`, navigation and
+  `LiveViewTest` to Mob. Guide titles name what they cover (`llms.txt` lists
+  titles only), e.g. "Screen Lifecycle & Async Loading". The README has a "For
+  AI agents" section, and `guides/agentic_coding.md` says where an app's agent
+  finds the docs.
 
 ### Fixed
 - **Docs: async loading and pagination examples.** The pull-to-refresh and
@@ -33,6 +46,10 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `<LazyList>` prop, and it delivers `{:tap, tag}`. `guides/screen_lifecycle.md`
   documents `handle_async/3` and that slow work in `mount/3` delays the screen's
   first frame.
+- **Docs: broken and wrong links.** The `Mob` module doc linked
+  `guides/getting_started.html` and `guides/architecture.html`, which 404 on
+  hexdocs. `guides/agentic_coding.md` linked the repos' `AGENTS.md` on a
+  `main` branch that doesn't exist (it's `master`).
 
 ## [0.9.16] - 2026-10-09
 

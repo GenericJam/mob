@@ -163,9 +163,9 @@ defmodule Mob.Socket do
 
   The screen's `handle_async/3` receives `{:exit, reason}`, even if the task had
   already finished and its result was waiting to be delivered, unless a
-  `start_async/3` for the same name replaces it first. Does nothing if no task is
-  running under `name`. Raises `ArgumentError` for reason `:normal`, which would
-  not stop the task.
+  `start_async/3` for the same name replaces it first. The task is stopped
+  whatever `reason` is; `reason` is only what `handle_async/3` is told. Does
+  nothing if no task is running under `name`.
   """
   @spec cancel_async(t(), term(), term()) :: t()
   def cancel_async(%__MODULE__{} = socket, name, reason \\ {:shutdown, :cancel}),

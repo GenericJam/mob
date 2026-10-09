@@ -54,9 +54,13 @@ same messages a device does.
   moves the entry to a new token. `Process.exit/2` is asynchronous, so a task
   finishing on another scheduler can still send its result after the flush. The
   new token drops that result; without it, review measured 273 in 300,000
-  cancels reporting `{:ok, _}`. Reason `:normal` raises, since it would not stop
-  the task. A `start_async/3` that replaces the name before the `{:exit, _}` is
-  delivered drops it, like any replacement.
+  cancels reporting `{:ok, _}`. The task is always stopped through the runner
+  with `{:shutdown, :cancel}`, and the caller's reason only goes into the
+  `{:exit, reason}` report. (Corrected before release: the first version sent
+  the caller's reason to the runner. With `:kill` that killed the runner and left
+  a worker that traps exits running, and `:normal` had to be rejected.) A
+  `start_async/3` that replaces the name before the `{:exit, _}` is delivered
+  drops it, like any replacement.
 - **`Mob.ScreenCase.render_async/2` waits only for its own view's tasks.** Every
   view in a test reports to the test process, so it matches by token. Without
   that, awaiting one view consumed and dropped another view's results.

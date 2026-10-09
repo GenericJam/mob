@@ -34,10 +34,12 @@ defmodule Mob do
   - `Mob.Renderer` — component tree serialisation
   - `Mob.Test` — live device inspection and testing helpers
 
-  See the [Getting Started](guides/getting_started.html) guide to create your
-  first app. See [Architecture & Prior Art](guides/architecture.html) for how
-  Mob compares to LiveView Native, Elixir Desktop, React Native, Flutter, and
-  native development.
+  See the [Getting Started](getting_started.md) guide to create your first app,
+  and [Coming from Phoenix LiveView](coming_from_liveview.md) if you know
+  LiveView. See [Architecture & Prior Art](architecture.md) for how Mob compares
+  to LiveView Native, Elixir Desktop, React Native, Flutter, and native
+  development. AI agents: start at [Usage Rules](usage-rules.md), or
+  `https://hexdocs.pm/mob/llms.txt`.
   """
 
   defdelegate assign(socket, key, value), to: Mob.Socket

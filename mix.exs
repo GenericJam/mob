@@ -139,16 +139,20 @@ defmodule Mob.MixProject do
       extras: [
         "README.md": [title: "Mob"],
         "CHANGELOG.md": [title: "Changelog"],
+        "usage-rules.md": [title: "Usage Rules for AI Agents"],
         "MOB_PLUGINS.md": [title: "Plugins — Manifest Reference"],
         "MOB_PLUGIN_SECURITY.md": [title: "Plugins — Security & Trust"],
         "MOB_STYLES.md": [title: "Styles — Manifest Reference"],
         "MOB_FONTS.md": [title: "Fonts — Design Reference"],
         "guides/why_beam.md": [title: "Why the BEAM?"],
         "guides/getting_started.md": [title: "Getting Started"],
+        "guides/coming_from_liveview.md": [
+          title: "Coming from Phoenix LiveView (assign_async, streams, events)"
+        ],
         "guides/packages.md": [title: "First-Party Packages"],
         "guides/architecture.md": [title: "Architecture & Prior Art"],
-        "guides/screen_lifecycle.md": [title: "Screen Lifecycle"],
-        "guides/events.md": [title: "Events"],
+        "guides/screen_lifecycle.md": [title: "Screen Lifecycle & Async Loading"],
+        "guides/events.md": [title: "Events (taps, input, scroll, pagination)"],
         "guides/event_model.md": [title: "Event Model"],
         "guides/background_execution.md": [title: "Background Execution"],
         "guides/components.md": [title: "Components"],
@@ -163,14 +167,14 @@ defmodule Mob.MixProject do
         "guides/dns_on_ios.md": [title: "DNS on iOS"],
         "guides/push_notifications.md": [title: "Push Notifications"],
         "guides/data.md": [title: "Data & Persistence"],
-        "guides/testing.md": [title: "Testing"],
+        "guides/testing.md": [title: "Testing (ScreenCase, render_async, Mob.Test)"],
         "guides/tooling.md": [title: "Tooling & Formatting"],
         "guides/publishing.md": [title: "Publishing to App Store / TestFlight"],
         "guides/troubleshooting.md": [title: "Troubleshooting"],
         "guides/support_matrix.md": [title: "Device Support Matrix"],
-        "guides/liveview.md": [title: "LiveView Mode"],
+        "guides/liveview.md": [title: "LiveView Mode (Phoenix LiveView in a WebView)"],
         "guides/ios_physical_device.md": [title: "iOS Physical Devices"],
-        "guides/agentic_coding.md": [title: "Agentic Coding"]
+        "guides/agentic_coding.md": [title: "Agentic Coding (AI agents driving a running app)"]
       ],
       groups_for_extras: [
         Guides: ~r/guides\/.*/,
@@ -224,6 +228,8 @@ defmodule Mob.MixProject do
       files: ~w(
         lib src priv
         android ios assets
+        guides usage-rules.md
+        MOB_PLUGINS.md MOB_PLUGIN_SECURITY.md MOB_STYLES.md MOB_FONTS.md
         mix.exs mix.lock
         README.md CHANGELOG.md LICENSE
       )
