@@ -1321,7 +1321,9 @@ No per-session setup required.
 - **Write UI the LiveView way.** The `~MOB` sigil supports `@assigns` shorthand
   and `:if` / `:for` control attributes (`<Row :for={u <- @users}>`), and
   `Mob.Socket` has `assign/2,3`, `update/3`, `assign_new/3`. See
-  `guides/components.md` → Control flow.
+  `guides/components.md` → Control flow. Async loading is
+  `Mob.Socket.start_async/3` + `handle_async/3` (not a bare `Task.async/1`);
+  see `guides/screen_lifecycle.md`.
 
 ## Don't write this slop
 

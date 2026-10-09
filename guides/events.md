@@ -110,12 +110,14 @@ scroll(
   on_scroll_ended:    {self(), :feed_ended},
   on_scroll_settled:  {self(), :feed_settled},   # fires after deceleration
   on_top_reached:     {self(), :pull_to_refresh},
-  on_end_reached:     {self(), :load_more},      # already wired pre-Batch 5
   on_scrolled_past:   {self(), :show_back_to_top, 600})  # threshold = 600 px
 
 def handle_info({:scroll_began, :feed_began}, socket), do: ...
 def handle_info({:scrolled_past, :show_back_to_top}, socket), do: ...
 ```
+
+Pagination is not a scroll event: `on_end_reached` belongs to `<LazyList>` and
+arrives as `{:tap, tag}` (see [Infinite scroll](#infinite-scroll)).
 
 **Tier 3 — native-side, no BEAM round-trip** (parallax, sticky headers, fades):
 
@@ -197,7 +199,7 @@ See [`event_model.md`](event_model.md) for the full event vocabulary.
 
 | You want to... | Use |
 |---|---|
-| Trigger pagination at the bottom of a list | Tier 2 — `on_end_reached` |
+| Trigger pagination at the bottom of a list | `<LazyList on_end_reached={...}>` |
 | Show a "back to top" button after 600 px | Tier 2 — `on_scrolled_past` |
 | Hide a navbar while user is actively scrolling | Tier 2 — `on_scroll_began` / `on_scroll_settled` |
 | Run analytics on "user reached product N" | Tier 2 — `on_scrolled_past` |
@@ -269,7 +271,7 @@ Same shape minus `velocity_x`/`velocity_y`.
 
 ### Tier 2 single-fire events
 `{:scroll_began, tag}`, `{:scroll_ended, tag}`, `{:scroll_settled, tag}`,
-`{:top_reached, tag}`, `{:end_reached, tag}`, `{:scrolled_past, tag}` — no
+`{:top_reached, tag}`, `{:scrolled_past, tag}` — no
 payload. The `tag` identifies the source widget.
 
 ## The canonical envelope
@@ -424,34 +426,75 @@ transparently for screens that opt in.
 
 ## Common patterns
 
+The first two patterns load data with `Mob.Socket.start_async/3`, so the
+screen stays responsive while the work runs and the result arrives in
+`handle_async/3` (see [Screen Lifecycle](screen_lifecycle.md#handle_async-3)).
+
 ### Pull-to-refresh
 
 ```elixir
-scroll(on_top_reached: {self(), :refresh},
-       on_scroll: {self(), :feed, throttle: 100}) do
+~MOB"""
+<Scroll on_top_reached={{self(), :refresh}}>
   ...rows...
-end
+</Scroll>
+"""
 
 def handle_info({:top_reached, :refresh}, socket) do
-  Task.async(fn -> reload_feed() end)
-  {:noreply, assign(socket, :refreshing, true)}
+  {:noreply,
+   socket
+   |> Mob.Socket.assign(:refreshing, true)
+   |> Mob.Socket.start_async(:refresh, fn -> reload_feed() end)}
 end
+
+def handle_async(:refresh, {:ok, items}, socket),
+  do: {:noreply, Mob.Socket.assign(socket, items: items, refreshing: false)}
+
+def handle_async(:refresh, {:exit, _reason}, socket),
+  do: {:noreply, Mob.Socket.assign(socket, :refreshing, false)}
 ```
+
+A second pull while a refresh is running starts a new one and the older one is
+discarded: only the newest result reaches `handle_async/3`.
 
 ### Infinite scroll
 
-```elixir
-scroll(on_end_reached: {self(), :load_more}) do ...end
+`<LazyList>`'s `on_end_reached` fires when the last row appears, delivered as
+`{:tap, tag}`. `<Scroll>` has no end-of-content event.
 
-def handle_info({:end_reached, :load_more}, socket) do
-  if !socket.assigns.loading do
-    Task.async(fn -> load_next_page() end)
-    {:noreply, assign(socket, :loading, true)}
-  else
-    {:noreply, socket}
-  end
+```elixir
+~MOB"""
+<LazyList on_end_reached={{self(), :load_more}}>
+  ...rows...
+</LazyList>
+"""
+
+def handle_info({:tap, :load_more}, %{assigns: %{loading: true}} = socket),
+  do: {:noreply, socket}
+
+def handle_info({:tap, :load_more}, socket) do
+  page = socket.assigns.page + 1
+
+  {:noreply,
+   socket
+   |> Mob.Socket.assign(:loading, true)
+   |> Mob.Socket.start_async(:page, fn -> load_page(page) end)}
 end
+
+def handle_async(:page, {:ok, rows}, socket) do
+  {:noreply,
+   socket
+   |> Mob.Socket.update(:items, &(&1 ++ rows))
+   |> Mob.Socket.update(:page, &(&1 + 1))
+   |> Mob.Socket.assign(:loading, false)}
+end
+
+def handle_async(:page, {:exit, _reason}, socket),
+  do: {:noreply, Mob.Socket.assign(socket, :loading, false)}
 ```
+
+`on_end_reached` fires again only after the row count changes, so a failed or
+empty page does not retry when the user scrolls back to the end. Offer a retry
+button for that case (see [`:lazy_list`](components.md#lazy_list)).
 
 ### Show "back to top" button
 

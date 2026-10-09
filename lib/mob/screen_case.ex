@@ -204,6 +204,48 @@ defmodule Mob.ScreenCase do
   end
 
   @doc """
+  Wait for every task the screen started with `Mob.Socket.start_async/3`,
+  deliver each outcome to its `handle_async/3`, and return the updated `View`.
+  The in-BEAM equivalent of the results arriving on device; mirrors
+  `Phoenix.LiveViewTest.render_async/2`. In-BEAM only.
+
+      view = mount_screen(MyApp.ProfileScreen, %{id: 1})
+      assert assigns(view).profile == :loading
+
+      view = render_async(view)
+      assert assigns(view).profile.name == "Ada"
+
+  A task that `handle_async/3` starts is awaited too. Flunks if they have not
+  all finished within `timeout` milliseconds.
+  """
+  @spec render_async(View.t(), timeout()) :: View.t()
+  def render_async(%View{source: :beam} = view, timeout \\ 1_000) do
+    await_async(view, System.monotonic_time(:millisecond) + timeout)
+  end
+
+  defp await_async(%View{module: module, socket: socket} = view, deadline) do
+    if Mob.Screen.Async.pending?(socket) do
+      remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+      case Mob.Screen.Async.await(socket, remaining) do
+        {:deliver, name, outcome, socket} ->
+          {:noreply, socket} = module.handle_async(name, outcome, socket)
+          await_async(%{view | socket: socket}, deadline)
+
+        {:dropped, socket} ->
+          await_async(%{view | socket: socket}, deadline)
+
+        :timeout ->
+          ExUnit.Assertions.flunk(
+            "#{inspect(module)} still has start_async/3 tasks running after the timeout"
+          )
+      end
+    else
+      view
+    end
+  end
+
+  @doc """
   Change the window's size class the way a rotation or a resize does on
   device, and return the updated `View`: `assigns.size_class` becomes
   `size_class`, then the screen's
