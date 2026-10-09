@@ -38,23 +38,27 @@ defmodule Mob.Plugin.SelfTest do
       assertion.
 
     * `{:skip, why}` — the test cannot run on this device, not a verdict on
-      the plugin. `:needs_hardware` for a sensor, radio or camera the
-      emulator does not have; `:needs_user` when a person must tap a system
+      the plugin. `:needs_hardware` for a sensor, radio or camera this
+      device does not have; `:needs_user` when a person must tap a system
       dialog or unlock something; a string for anything else (say what is
       missing). Reach for a skip only after the test has done everything it
       can without that resource: a plugin that can prove its NIF initialised
       and *then* finds no GPS passes; a GPS fix is a feature, not the proof.
-      A skip in the "no emulator support" sense MUST still hold on a physical
-      device, where the runner passes `device: :physical`.
+      Base `:needs_hardware` on what the native side reports is absent (no
+      NFC controller, no LiDAR, no cellular radio), not on
+      `device: :emulator` alone: a skip that is really "I did not look"
+      hides a hole, and one that assumes a phone has everything fails on
+      the tablet without a radio.
 
   ## The context
 
   `run/1` receives `%{platform: :ios | :android, device: :simulator |
   :emulator | :physical}` so the test can choose what to prove: a simulator
-  has no camera, an emulator has a fake GPS, a physical device has everything
-  but needs the user for permissions. The runner pre-grants the permissions
-  the manifest declares on emulators and simulators before calling the test,
-  so `:needs_user` is for prompts that cannot be granted from the host.
+  has no camera, an emulator has a fake GPS, a physical device usually has
+  the hardware but needs the user for permissions. The runner pre-grants the
+  permissions the manifest declares on emulators and simulators before
+  calling the test, so `:needs_user` is for prompts that cannot be granted
+  from the host.
 
   ## Writing one
 

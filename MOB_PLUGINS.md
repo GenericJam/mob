@@ -775,7 +775,8 @@ Setup section (tier 3+):
   Optional; mostly for tier-3/4 plugins. Reserved: mob_dev accepts the
   key, but nothing reads it yet.
 
-Self-test (every tier):
+Self-test (any manifest, tiers 1–4; a tier-0 package has no manifest to
+declare one in, and adding a manifest moves it into this model):
 
 - `:selftest` — a module implementing `Mob.Plugin.SelfTest`. See
   "Self-test" below. Missing: mob_dev warns today and will refuse the
@@ -845,8 +846,8 @@ end
 got a real answer back from native code (or, for a pure-Elixir plugin,
 from its real API path). Loading a module or reading config is not a
 pass. A skip is for a resource the device does not have, after the test
-has proved everything it can without it; `{:skip, :needs_hardware}` on
-an emulator is honest, on a physical device it is a hole.
+has proved everything it can without it; base `:needs_hardware` on what
+the native side reports is absent, not on the device being an emulator.
 
 The host runs them with `mix mob.selftest` (mob_dev; attaches to the
 running app on each selected device, pre-grants the manifest's declared
