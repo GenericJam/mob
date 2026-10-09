@@ -190,7 +190,7 @@ defmodule Mob.MixProject do
         ],
         Navigation: [Mob.Nav, Mob.Nav.Registry, Mob.Router],
         "Runtime Processes": [Mob.Screen.Server, Mob.Listener, Mob.Sender],
-        Plugins: [Mob.Plugins, Mob.Plugins.Supervisor, Mob.Plugins.Lifecycle],
+        Plugins: [Mob.Plugins, Mob.Plugins.Supervisor, Mob.Plugins.Lifecycle, Mob.Plugin.SelfTest],
         "Device APIs": [
           Mob.Haptic,
           Mob.Clipboard,

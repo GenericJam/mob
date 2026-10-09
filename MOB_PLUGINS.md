@@ -775,6 +775,13 @@ Setup section (tier 3+):
   Optional; mostly for tier-3/4 plugins. Reserved: mob_dev accepts the
   key, but nothing reads it yet.
 
+Self-test (any manifest, tiers 1–4; a tier-0 package has no manifest to
+declare one in, and adding a manifest moves it into this model):
+
+- `:selftest` — a module implementing `Mob.Plugin.SelfTest`. See
+  "Self-test" below. Missing: mob_dev warns today and will refuse the
+  plugin in a later release.
+
 ## Validation rules
 
 `mix mob.validate_plugin` (run from a plugin project) checks:
@@ -788,6 +795,9 @@ Setup section (tier 3+):
 - `permissions` and `plist_keys` declared (warning + manual review
   recommended before publishing)
 - `mob_version` satisfied by the version of `:mob` in deps
+- `selftest` names a module; when the plugin is compiled, that module
+  exports `run/1`. A manifest without `selftest` is a warning (an error
+  in a later mob_dev)
 
 Compile-time validation (run by mob_dev when activating plugins):
 
@@ -796,6 +806,58 @@ Compile-time validation (run by mob_dev when activating plugins):
 - **Cross-plugin conflict detection** (see below)
 
 Both stages fail loud — never silent.
+
+### Self-test
+
+Static validation checks manifests on paper. It cannot see a NIF that
+links but aborts in `nif_init`, a Kotlin bridge that compiles alone but
+not next to another plugin's, or an Objective-C delegate the release link
+dropped. So every plugin ships its own proof: a module implementing
+`Mob.Plugin.SelfTest`, named in the manifest:
+
+```elixir
+%{
+  name: :mob_location,
+  # ...
+  selftest: MobLocation.SelfTest
+}
+```
+
+```elixir
+defmodule MobLocation.SelfTest do
+  @behaviour Mob.Plugin.SelfTest
+
+  @impl true
+  def run(%{platform: platform, device: _}) do
+    # A no-op while nothing runs, but it goes through the NIF into
+    # CLLocationManager / the Kotlin bridge: :ok proves the native side
+    # is linked and initialised.
+    case :mob_location_nif.location_stop() do
+      :ok -> :pass
+      other -> {:fail, "location_stop/0 on #{platform} returned #{inspect(other)}"}
+    end
+  end
+end
+```
+
+`run/1` gets `%{platform: :ios | :android, device: :simulator | :emulator
+| :physical}` and answers `:pass`, `{:fail, "why"}` or `{:skip,
+:needs_hardware | :needs_user | "why"}`. The rule for `:pass`: the test
+got a real answer back from native code (or, for a pure-Elixir plugin,
+from its real API path). Loading a module or reading config is not a
+pass. A skip is for a resource the device does not have, after the test
+has proved everything it can without it; base `:needs_hardware` on what
+the native side reports is absent, not on the device being an emulator.
+
+The host runs them with `mix mob.selftest` (mob_dev; attaches to the
+running app on each selected device, pre-grants the manifest's declared
+permissions on emulators and simulators, calls every activated plugin's
+`run/1` over distribution with a 30 s timeout, prints a table and exits
+non-zero on any failure). mob_ci runs the same per nightly cell and
+attributes a failure to the plugin when it fails alone, or to the plugin
+set when it fails only in company. A raise, timeout or a return outside
+the contract counts as a failure, so a test can assert with pattern
+matches instead of rescuing.
 
 ### Cross-plugin conflict detection
 
