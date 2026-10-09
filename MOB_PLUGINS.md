@@ -150,11 +150,12 @@ the render tree. The canonical example is the `mob_bluetooth` plugin
     # Swift files compiled with the project's existing swiftc invocation.
     swift_files: ["priv/native/ios/MobBluetooth.swift"],
 
-    # Info.plist keys to merge. iOS rejects builds without these for
-    # the matching permission categories — same opt-in gate as Android.
+    # Info.plist keys the build adds when the host's own ios/Info.plist
+    # doesn't set them. iOS terminates an app that requests a permission
+    # without its usage description — same opt-in gate as Android.
     plist_keys: %{
       "NSBluetoothAlwaysUsageDescription" =>
-        "Required by mob_bluetooth — replace this string in your Info.plist"
+        "Bluetooth access is required to discover and advertise to nearby devices."
     },
 
     # System frameworks linked at the static-link step.
@@ -166,10 +167,14 @@ the render tree. The canonical example is the `mob_bluetooth` plugin
 Notes:
 
 - `:gradle_deps` accept any string Gradle would understand (`group:artifact:version`).
-- `:plist_keys` strings are placeholders — the user must replace them
-  in their `ios/Info.plist`. App Store review rejects apps with the
-  default text; this is intentional friction so the user provides a
-  real explanation.
+- `:plist_keys` values are defaults: a key the host's `ios/Info.plist`
+  sets keeps the host's value. Write a usage description
+  (`*UsageDescription`) as one sentence saying what *your plugin* uses the
+  permission for. When several activated plugins declare the same usage
+  description, the build (mob_dev ≥ 0.7.19) combines their distinct sentences (activation
+  order) so the prompt gives every reason, and prints which plugins it
+  combined; the host words it itself by setting the key in
+  `ios/Info.plist`. Any other key two plugins declare is a conflict (below).
 - iOS or Android can be omitted. iOS-only and Android-only plugins
   are valid. The validator warns (does not error) when one is missing
   so users discover the gap.
@@ -886,6 +891,12 @@ A clash on any of these is a build error naming the resource, the value, and how
 many plugins declared it. Resources that are *inherently* safe — settings (keyed
 per-plugin), `plugin://` images (namespaced per-plugin), Android permissions /
 iOS frameworks (set-unioned) — compose without a check.
+
+One exception for `ios.plist_keys`: a usage description (`*UsageDescription`)
+every declaring plugin gives as a string is combined, not a clash (see the tier-1
+notes). Any other Info.plist key two plugins declare is a clash unless every
+declaration is a scalar and the host's own `ios/Info.plist` sets the key, whose
+value then wins.
 
 A note on what counts as a clash: the check is **cross-plugin**, so a single
 plugin legitimately declaring the same value twice is fine — e.g. a
