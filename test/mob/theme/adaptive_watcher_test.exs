@@ -63,7 +63,7 @@ defmodule Mob.Theme.AdaptiveWatcherTest do
       on_exit(fn -> :persistent_term.erase({SchemeAdaptive, :scheme}) end)
       {:ok, pid} = AdaptiveWatcher.start_link()
       :ok = AdaptiveWatcher.register_adaptive(SchemeAdaptive)
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
       {:ok, watcher: pid}
     end
 

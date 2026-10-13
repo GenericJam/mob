@@ -33,6 +33,13 @@ struct is an explicit fixed choice.
 - Any later `set/1` with something other than the adaptive module stops the
   following, which is the "don't clobber the user's choice" rule the watcher
   always meant to keep.
+- Framework code that layers onto the active theme must keep the source.
+  `Mob.Plugins.apply_default_font/0` runs at boot after `use Mob.App,
+  theme:`; it turns a module source into `{module, fonts: ...}` instead of
+  setting a struct, which would have stopped `Mob.Theme.Adaptive` following
+  the OS in any app with a font-suggesting plugin. The fonts map is the one
+  active at boot, so a custom adaptive module whose light and dark themes
+  carry different fonts keeps the boot scheme's fonts.
 - `register_adaptive/1` after the theme was set needs no re-set: the watcher
   compares at event time.
 - `set/1` writes two env keys non-atomically. Two processes calling `set/1`

@@ -19,7 +19,9 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   watcher now goes by what was passed to `Mob.Theme.set/1`: the registered
   module, or `{module, overrides}` (the overrides are kept), follows the OS;
   a struct, a keyword list or any other module is a fixed theme and is left
-  alone. See `decisions/2026-10-13-adaptive-theme-follows-set-source.md`.
+  alone. A plugin's suggested default font, applied at boot, no longer turns
+  a module-set theme into a fixed one. See
+  `decisions/2026-10-13-adaptive-theme-follows-set-source.md`.
 
 ## [0.9.17] - 2026-10-09
 

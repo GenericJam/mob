@@ -99,6 +99,7 @@ defmodule Mob.Theme.AdaptiveWatcher do
     # flipped, so theme/0 returns the NEW scheme's theme and never equals the
     # still-old active one.
     case Mob.Theme.source() do
+      nil -> :ok
       adaptive when adaptive == state.adaptive -> Mob.Theme.set(adaptive)
       {adaptive, _overrides} = source when adaptive == state.adaptive -> Mob.Theme.set(source)
       _fixed -> :ok

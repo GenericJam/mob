@@ -255,6 +255,31 @@ defmodule Mob.PluginsTest do
       assert theme.primary == :emerald_500
       assert theme.fonts.default == %{ios: "PluginFont-Regular", android: "pluginfont_regular"}
     end
+
+    defmodule FlippingTheme do
+      def theme do
+        if :persistent_term.get({__MODULE__, :dark}, false),
+          do: Mob.Theme.Dark.theme(),
+          else: Mob.Theme.Light.theme()
+      end
+    end
+
+    test "an adaptive theme set from its module keeps following the OS with the font on" do
+      on_exit(fn -> :persistent_term.erase({FlippingTheme, :dark}) end)
+      {:ok, watcher} = Mob.Theme.AdaptiveWatcher.start_link()
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(watcher) end)
+      :ok = Mob.Theme.AdaptiveWatcher.register_adaptive(FlippingTheme)
+      Mob.Theme.set(FlippingTheme)
+      spec = %{ios: "PluginFont-Regular", android: "pluginfont_regular"}
+      Mob.Plugins.install(%{default_font: spec})
+
+      assert :ok = Mob.Plugins.apply_default_font()
+      :persistent_term.put({FlippingTheme, :dark}, true)
+      send(watcher, {:mob_device, :color_scheme_changed, :dark})
+      _ = :sys.get_state(watcher)
+
+      assert Mob.Theme.current() == %{Mob.Theme.Dark.theme() | fonts: %{default: spec}}
+    end
   end
 
   describe "resolve_image/1" do
