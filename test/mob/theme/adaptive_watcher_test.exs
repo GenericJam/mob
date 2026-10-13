@@ -13,9 +13,8 @@ defmodule Mob.Theme.AdaptiveWatcherTest do
 
     on_exit(fn ->
       Application.delete_env(:mob, :theme)
+      Application.delete_env(:mob, :theme_source)
     end)
-
-    {:ok, dispatcher: Process.whereis(Mob.Device)}
   end
 
   describe "start_link/1" do
@@ -49,58 +48,64 @@ defmodule Mob.Theme.AdaptiveWatcherTest do
   end
 
   describe "color_scheme_changed handling" do
-    defmodule TrackingAdaptive do
-      # Records calls so the test can assert the watcher hit theme/0 again.
+    defmodule SchemeAdaptive do
+      # Stands in for an adaptive theme: what it returns follows a scheme the
+      # test flips, the way Mob.Theme.Adaptive follows the OS.
       def theme do
-        Process.put({__MODULE__, :calls}, (Process.get({__MODULE__, :calls}) || 0) + 1)
-        Mob.Theme.build(primary: 0xFF445566)
+        case :persistent_term.get({__MODULE__, :scheme}, :light) do
+          :dark -> Mob.Theme.Dark.theme()
+          :light -> Mob.Theme.Light.theme()
+        end
       end
-
-      def call_count, do: Process.get({__MODULE__, :calls}) || 0
     end
 
-    test "re-resolves the theme when active theme matches the adaptive module",
-         %{dispatcher: d} do
+    setup do
+      on_exit(fn -> :persistent_term.erase({SchemeAdaptive, :scheme}) end)
       {:ok, pid} = AdaptiveWatcher.start_link()
-      :ok = AdaptiveWatcher.register_adaptive(TrackingAdaptive)
-
-      # Set the active theme to whatever TrackingAdaptive resolves to right
-      # now. After the appearance event, the watcher should re-call
-      # TrackingAdaptive.theme/0 (i.e. call count > 0).
-      Mob.Theme.set(TrackingAdaptive)
-      :ok = GenServer.call(d, {:subscribe, AdaptiveWatcher, [:appearance]})
-
-      send(pid, {:mob_device, :color_scheme_changed, :dark})
-      # Give the GenServer a tick to handle the message.
-      _ = :sys.get_state(pid)
-
-      assert TrackingAdaptive.call_count() >= 1
-
-      GenServer.stop(pid)
+      :ok = AdaptiveWatcher.register_adaptive(SchemeAdaptive)
+      on_exit(fn -> Mob.Test.ProcessHelpers.stop_pid(pid) end)
+      {:ok, watcher: pid}
     end
 
-    test "ignores the event when active theme is not the adaptive one",
-         %{dispatcher: _d} do
-      {:ok, pid} = AdaptiveWatcher.start_link()
-      :ok = AdaptiveWatcher.register_adaptive(Mob.Theme.Adaptive)
+    defp flip_os_to(watcher, scheme) do
+      :persistent_term.put({SchemeAdaptive, :scheme}, scheme)
+      send(watcher, {:mob_device, :color_scheme_changed, scheme})
+      _ = :sys.get_state(watcher)
+    end
 
-      # User explicitly picked a fixed theme — adaptive watcher must
-      # not clobber it on OS toggle.
-      fixed = Mob.Theme.Light.theme()
+    test "the adaptive module follows the flip", %{watcher: w} do
+      Mob.Theme.set(SchemeAdaptive)
+
+      flip_os_to(w, :dark)
+      assert Mob.Theme.current() == Mob.Theme.Dark.theme()
+
+      flip_os_to(w, :light)
+      assert Mob.Theme.current() == Mob.Theme.Light.theme()
+    end
+
+    test "{adaptive, overrides} follows the flip and keeps the overrides", %{watcher: w} do
+      Mob.Theme.set({SchemeAdaptive, primary: 0xFF112233})
+
+      flip_os_to(w, :dark)
+      assert Mob.Theme.current() == %{Mob.Theme.Dark.theme() | primary: 0xFF112233}
+    end
+
+    test "an explicit fixed theme set after the adaptive one is not clobbered",
+         %{watcher: w} do
+      Mob.Theme.set(SchemeAdaptive)
+      # The struct the adaptive module returns right now, set explicitly: a
+      # fixed choice, even though it is equal to the adaptive resolution.
+      fixed = SchemeAdaptive.theme()
       Mob.Theme.set(fixed)
-      send(pid, {:mob_device, :color_scheme_changed, :dark})
-      _ = :sys.get_state(pid)
 
+      flip_os_to(w, :dark)
       assert Mob.Theme.current() == fixed
-      GenServer.stop(pid)
     end
 
-    test "ignores arbitrary unrelated messages" do
-      {:ok, pid} = AdaptiveWatcher.start_link()
-      send(pid, :random_noise)
-      _ = :sys.get_state(pid)
-      assert Process.alive?(pid)
-      GenServer.stop(pid)
+    test "ignores arbitrary unrelated messages", %{watcher: w} do
+      send(w, :random_noise)
+      _ = :sys.get_state(w)
+      assert Process.alive?(w)
     end
   end
 end

@@ -14,11 +14,15 @@ defmodule Mob.Theme.Adaptive do
 
   ## Reactive switching
 
-  `Mob.Theme.set/1` snapshots the theme at call time, so toggling the OS
-  appearance after the app has started does not auto-update the rendered
-  theme. To re-evaluate, call `Mob.Theme.set(Mob.Theme.Adaptive)` again
-  (e.g. in response to a foreground / lifecycle event, or after a planned
-  `:color_scheme_changed` device event in a future version).
+  `Mob.Theme.AdaptiveWatcher` (started by `use Mob.App`) calls
+  `Mob.Theme.set(Mob.Theme.Adaptive)` again whenever the OS appearance
+  flips, as long as the active theme was set from this module. Setting a
+  fixed theme afterwards (another module, a struct, a keyword list) stops
+  that until `Mob.Theme.Adaptive` is set again.
+
+  The renderer reads the active theme on each render, so a screen that is
+  already showing repaints in the new theme on its next render; the
+  watcher does not re-render screens itself.
   """
 
   @doc "Returns the Light or Dark theme struct based on the current OS appearance."

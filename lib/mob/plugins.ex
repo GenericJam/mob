@@ -512,14 +512,20 @@ defmodule Mob.Plugins do
   `Mob.Theme.set/1` call (in `on_start/0`, which runs after this) still
   outranks it, same as `apply_default_style/0`. No-op when no plugin
   suggested one, or something already claimed `:default`.
+
+  A theme set from a module (e.g. `Mob.Theme.Adaptive`) stays set from that
+  module, with the font as an override, so it still follows the OS
+  light/dark setting (see `Mob.Theme.AdaptiveWatcher`).
   """
   @spec apply_default_font() :: :ok
   def apply_default_font do
     with spec when not is_nil(spec) <- default_font(),
          theme <- Mob.Theme.current(),
          false <- Map.has_key?(theme.fonts, :default) do
+      fonts = Map.put(theme.fonts, :default, spec)
+
       try do
-        Mob.Theme.set(%{theme | fonts: Map.put(theme.fonts, :default, spec)})
+        Mob.Theme.set(with_fonts(Mob.Theme.source(), theme, fonts))
       rescue
         e ->
           Logger.error(
@@ -531,6 +537,16 @@ defmodule Mob.Plugins do
 
     :ok
   end
+
+  # The whole fonts map rides as the override, taken from the theme active
+  # now: an adaptive module whose light and dark themes differ in fonts keeps
+  # this scheme's fonts after a flip. Mob.Theme.Light/Dark have none.
+  defp with_fonts(nil, theme, fonts), do: %{theme | fonts: fonts}
+
+  defp with_fonts({mod, overrides}, _theme, fonts),
+    do: {mod, Keyword.put(overrides, :fonts, fonts)}
+
+  defp with_fonts(mod, _theme, fonts), do: {mod, fonts: fonts}
 
   @doc """
   Resolves a `plugin://<plugin>/<file>` image reference to its on-device bundle

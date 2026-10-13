@@ -4,9 +4,19 @@ defmodule Mob.Theme.AdaptiveWatcher do
 
   Started automatically by `use Mob.App`. Subscribes to `Mob.Device`
   `:appearance` and, on `:color_scheme_changed`, calls `Mob.Theme.set/1`
-  again with whatever theme the app has registered as its "follow OS"
-  theme (via `register_adaptive/1`). If no adaptive theme is registered
-  the event is ignored — fixed themes stay put.
+  again with the theme the app registered as its "follow OS" theme (via
+  `register_adaptive/1`), but only while the active theme was set from that
+  module. Any other active theme stays put.
+
+  ## Which `Mob.Theme.set/1` calls follow the OS
+
+  With `MyApp.Theme.Adaptive` registered:
+
+  - `Mob.Theme.set(MyApp.Theme.Adaptive)` follows the OS.
+  - `Mob.Theme.set({MyApp.Theme.Adaptive, primary: :rose_500})` follows the
+    OS and keeps the overrides on every flip.
+  - A struct (`Mob.Theme.set(MyApp.Theme.Adaptive.theme())`), a keyword
+    list, or any other module is a fixed theme: the flip leaves it alone.
 
   ## Why a GenServer
 
@@ -19,8 +29,9 @@ defmodule Mob.Theme.AdaptiveWatcher do
 
   ## Default registration
 
-  When `Mob.Theme.set(Mob.Theme.Adaptive)` is called, the watcher
-  picks `Mob.Theme.Adaptive` as the active follow-OS theme. To use a
+  `Mob.Theme.Adaptive` is registered by default, so
+  `Mob.Theme.set(Mob.Theme.Adaptive)` (or `use Mob.App, theme:
+  Mob.Theme.Adaptive`) follows the OS with no further setup. To use a
   custom adaptive theme module instead, call
   `register_adaptive(MyApp.Theme.Adaptive)`.
   """
@@ -38,8 +49,9 @@ defmodule Mob.Theme.AdaptiveWatcher do
 
   @doc """
   Register `module` as the app's follow-OS theme. Whenever a
-  `:color_scheme_changed` event arrives, the watcher calls
-  `Mob.Theme.set(module)` to re-resolve.
+  `:color_scheme_changed` event arrives while the active theme was set
+  from `module` (or `{module, overrides}`), the watcher calls
+  `Mob.Theme.set/1` with it again to re-resolve.
   """
   @spec register_adaptive(module()) :: :ok
   def register_adaptive(module) when is_atom(module) do
@@ -80,24 +92,21 @@ defmodule Mob.Theme.AdaptiveWatcher do
 
   @impl true
   def handle_info({:mob_device, :color_scheme_changed, _scheme}, state) do
-    # Only re-resolve if the app's currently-active theme came from the
-    # adaptive module. Re-setting other themes would clobber a user's
-    # explicit choice.
-    if active_is_adaptive?(state.adaptive) do
-      Mob.Theme.set(state.adaptive)
+    # Re-resolve only when the active theme was set from the adaptive module.
+    # Re-setting anything else would clobber the app's explicit choice.
+    # Judged by what was passed to set/1, not by comparing current() with
+    # adaptive.theme(): by the time this event arrives the OS has already
+    # flipped, so theme/0 returns the NEW scheme's theme and never equals the
+    # still-old active one.
+    case Mob.Theme.source() do
+      nil -> :ok
+      adaptive when adaptive == state.adaptive -> Mob.Theme.set(adaptive)
+      {adaptive, _overrides} = source when adaptive == state.adaptive -> Mob.Theme.set(source)
+      _fixed -> :ok
     end
 
     {:noreply, state}
   end
 
   def handle_info(_other, state), do: {:noreply, state}
-
-  # The active theme matches the adaptive resolution iff calling the
-  # adaptive module's theme/0 right now returns the same struct that's
-  # currently in Application env. Cheap struct equality check.
-  defp active_is_adaptive?(module) do
-    Code.ensure_loaded?(module) and
-      function_exported?(module, :theme, 0) and
-      Mob.Theme.current() == module.theme()
-  end
 end

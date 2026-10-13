@@ -180,6 +180,17 @@ Mob.Theme.set(%Mob.Theme{primary: :teal_500, space_scale: 1.1})
 
 This is useful for accessibility features (larger type, high-contrast), user-selected themes, or A/B testing.
 
+### Following the OS light/dark setting
+
+`Mob.Theme.set(Mob.Theme.Adaptive)` (or `use Mob.App, theme: Mob.Theme.Adaptive`)
+follows the OS: when the user flips light/dark, `Mob.Theme.AdaptiveWatcher`
+sets it again, so the next render uses the matching theme.
+`{Mob.Theme.Adaptive, overrides}` follows too and keeps the overrides. Any
+other `set/1` call (a different module, a struct, a keyword list) is a fixed
+choice that the flip leaves alone. For your own adaptive module, call
+`Mob.Theme.AdaptiveWatcher.register_adaptive(MyApp.Theme.Adaptive)` and set it
+the same way.
+
 ## Style packages
 
 Theme presets are distributed as **style packages** — a separate lane from
