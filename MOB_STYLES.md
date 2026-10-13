@@ -38,10 +38,18 @@ runtime manifest, and core applying the default style's theme at boot
 BUILD, a broken theme module logs and renders baseline). First package:
 `mob_themes` (Obsidian/ObsidianGlass/Citrus/Birch/Material3).
 
+A style can also **bundle its own font files** with an optional
+`assets: %{fonts: [...]}` (mob_dev with MOB-476). They ship exactly like
+plugin fonts: iOS `.app` root plus `UIAppFonts`, Android `res/font/`, with
+the same collision checks. A declared font file that doesn't exist fails
+the build, naming the style and the path.
+
 **NOT yet implemented** (the mob_m3 tier): the cascade, per-element
 `style:` props, the `_style` node field, and the namespaced native
 dispatch table — everything from "The cascade" onward describes design,
-not shipped behavior. Precedence note learned in practice:
+not shipped behavior, except the `:name`, `:mob_version`,
+`:style_spec_version`, `:theme` and `:assets` keys and the validation
+rules marked as enforced. Precedence note learned in practice:
 `:default_style` is a DEFAULT — app code calling `Mob.Theme.set/1`
 (e.g. restoring a persisted user choice) outranks it, so hosts should
 only override when the user explicitly chose.
@@ -168,6 +176,30 @@ Four required fields. A style this small means "tokens only, no
 per-component native overrides" — useful for repalette-only styles
 (e.g., a brand pack that swaps colors but keeps shapes). The baseline
 native primitives are used for rendering.
+
+A style that ships its own typefaces adds `assets: %{fonts: [...]}` and
+names those files in its theme's `fonts:` map:
+
+```elixir
+# priv/mob_style.exs
+%{
+  name: :mob_bezalel,
+  mob_version: "~> 0.9",
+  style_spec_version: 1,
+  theme: MobBezalel.Theme,
+  assets: %{fonts: ["priv/fonts/EBGaramond-Medium.ttf"]}
+}
+
+# MobBezalel.Theme.theme/0
+%Mob.Theme{
+  fonts: %{
+    heading:
+      Mob.Theme.font("EBGaramond-Medium", from_file: "priv/fonts/EBGaramond-Medium.ttf")
+  }
+}
+```
+
+`style_spec_version` stays `1`: `assets` is optional and additive.
 
 ## Tier — tokens + native overrides
 
@@ -405,17 +437,24 @@ Top-level required:
 - `:mob_version` — string, semver requirement (`"~> 0.6"`).
 - `:style_spec_version` — integer. Current: `1`. Independent of
   `:plugin_spec_version`.
-
-Top-level optional:
-
-- `:description` — short string for `mix mob.styles` output.
-- `:theme` — module name. Required if the style provides tokens (almost
-  always true). Module must export `theme/0` returning a `%Mob.Theme{}`
+- `:theme` — module name; mob_dev rejects a manifest without one. Module
+  must export `theme/0` returning a `%Mob.Theme{}`
   struct. `fonts` and `font_fallback` are theme fields like any other
   token category (colors, spacing, radii) — a style package that sets
   `fonts: %{default: ...}` gets its own default font applied for free
   the moment it's activated via `:default_style`, no separate schema
   needed. See `MOB_FONTS.md`.
+
+Top-level optional:
+
+- `:description` — short string for `mix mob.styles` output.
+- `:assets` — `%{fonts: [path]}`, paths relative to the style package
+  root. The build bundles the activated styles' fonts with the app's and
+  plugins' (iOS `.app` root plus `UIAppFonts`, Android `res/font/`), so the
+  theme's `fonts:` map can reference them through `Mob.Theme.font/2`. Only
+  `:fonts` is supported: any other key (`:images` included) is a validation
+  error. A listed file that doesn't exist fails the build. See
+  `MOB_FONTS.md`.
 
 Component overrides (any combination):
 
@@ -442,11 +481,20 @@ doesn't error — same UX as plugins).
 - Every file path referenced exists and parses
 - Native views consume the full prop contract for their primitive
 
-Compile-time validation (run by mob_dev when activating styles):
+Compile-time validation (run by mob_dev when activating styles). Enforced
+today:
 
-- Every style in `config :mob, :styles` is present in `deps`
+- The required fields' shapes, and `:style_spec_version` is supported
 - `:default_style` (if set) is in `:styles`
-- `mob_version` requirement satisfied by installed mob
+- `assets` has only `:fonts`, a list of path strings, and every listed
+  font file exists in the style package
+
+Planned, not enforced yet:
+
+- Every style in `config :mob, :styles` is present in `deps` (today a
+  name that isn't a dep, or whose manifest fails to load, is skipped)
+- `mob_version` requirement satisfied by installed mob (today it is only
+  parsed)
 - No two styles with the same `:name` (Hex prevents this anyway)
 
 Conflicts between styles are **not** validation errors — that's the

@@ -46,6 +46,7 @@ frozen proposal.
 | Per-node `font:` prop | ✅ shipped | `ios/mob_nif.m:688-693` → `MobNode.h:199` → `MobRootView.swift` (`resolvedFont`); Android `MobBridge.kt.eex` (`fontFamilyProp`) |
 | App-level font bundling (`priv/fonts/*.ttf`) | ✅ shipped | `mob_dev/lib/mob_dev/native_build.ex` |
 | Plugin font bundling (`assets: %{fonts: [...]}`) | ✅ shipped | `mob_dev/lib/mob_dev/plugin/assets.ex`, merged in `plugin/merge.ex` |
+| Style font bundling (`assets: %{fonts: [...]}` in `priv/mob_style.exs`) | ✅ on mob_dev master (MOB-476), not yet in a mob_dev release | `mob_dev/lib/mob_dev/style.ex` (`MobDev.Style.fonts!/1`), merged in `native_build.ex` `collect_all_fonts/0` |
 | iOS `UIAppFonts` registration | ✅ shipped (build-time plist patch) | `assets.ex` |
 | Android `res/font/` + runtime lookup | ✅ shipped | `Mob.Font.android_resource_name/1` (mob core) — one implementation, called both at build time (bundling) and to compute a theme token's Android name |
 | Cross-plugin font *file* collision detection | ✅ shipped | `assets.ex` (raises on basename collision) |
@@ -184,7 +185,10 @@ Two plugin-facing mechanisms carry this, meaning different things:
   note this is **`set/1` with a bare module**, i.e. `mod.theme()`
   wholesale, not the `{module, overrides}` partial-merge form
   (`plugins.ex`, `theme.ex`). A style package's `fonts` map rides along
-  for free — no separate infra needed for that case.
+  for free — no separate infra needed for that case. The style can ship
+  the font files themselves too: `assets: %{fonts: [...]}` in
+  `priv/mob_style.exs` bundles them alongside the app's and plugins'
+  fonts (see "Where font files come from" below).
 - A plugin that ONLY wants to suggest a default font (e.g. a capability
   plugin, not a full visual-identity package) has a narrow manifest
   field for exactly that, so it doesn't need to author colors/spacing/
@@ -324,6 +328,23 @@ through the equivalent conversion in `mob_dev` — `RuntimeManifest`
 builds the exact same `%{ios:, android:}` shape from the plugin's
 declared family + file before it ever reaches `Mob.Plugins`.
 
+### Where font files come from
+
+The build bundles font files from three places into one set (iOS `.app`
+root plus `UIAppFonts`, Android `res/font/`):
+
+1. The host app's `priv/fonts/*.ttf|otf`.
+2. Each activated plugin's `assets: %{fonts: [...]}` (`priv/mob_plugin.exs`).
+3. Each activated style's `assets: %{fonts: [...]}` (`priv/mob_style.exs`).
+   A listed file that doesn't exist fails the build, naming the style and
+   the path.
+
+These are not a precedence order. Every file is bundled, the same path
+is bundled once, and two different files that would land on the same iOS
+bundle name or Android resource name fail the build rather than one
+silently replacing the other. Which font a node *uses* is decided by the
+ladder below, not by where its file came from.
+
 ## Precedence summary (single source of truth)
 
 ```
@@ -353,8 +374,10 @@ separate axis, handled by `font_fallback`, independent of which default
   build error. `MobDev.Plugin.RuntimeManifest.build/1` converts the
   survivor to the on-device `%{ios:, android:}` spec, read at boot by
   `Mob.Plugins.default_font/0` / `apply_default_font/0`.
-- `priv/mob_style.exs` (style packages): no schema change — `fonts`
-  rides in the existing `theme:` module's struct.
+- `priv/mob_style.exs` (style packages): `fonts` rides in the existing
+  `theme:` module's struct. The optional `assets: %{fonts: [...]}` ships
+  the files the theme names (MOB-476, `MobDev.Style.validate/1` and
+  `fonts!/1`).
 - `mob_dev/mix.exs`: new dependency on `mob` (currently a `path: "../mob"`
   dep pending a published `mob` version with `Mob.Font` — see the `TEMP`
   comment there), so the asset planner and `RuntimeManifest` can call
