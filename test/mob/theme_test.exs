@@ -37,13 +37,13 @@ defmodule Mob.ThemeTest do
     end
 
     test "set/1 accepts a theme module" do
-      on_exit(fn -> Application.delete_env(:mob, :theme) end)
+      on_exit(fn -> Enum.each([:theme, :theme_source], &Application.delete_env(:mob, &1)) end)
       Theme.set(PresetFixture)
       assert Theme.current().primary == :violet_600
     end
 
     test "set/1 accepts {module, overrides}" do
-      on_exit(fn -> Application.delete_env(:mob, :theme) end)
+      on_exit(fn -> Enum.each([:theme, :theme_source], &Application.delete_env(:mob, &1)) end)
       Theme.set({PresetFixture, primary: :rose_500})
       t = Theme.current()
       assert t.primary == :rose_500

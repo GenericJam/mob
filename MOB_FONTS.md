@@ -209,10 +209,12 @@ Two plugin-facing mechanisms carry this, meaning different things:
 This sets **only** `Mob.Theme.fonts[:default]`
 (`Mob.Plugins.apply_default_font/0`, called at boot right after
 `apply_default_style/0`), layered onto whichever theme is already
-active via `Theme.set(%{theme | fonts: Map.put(theme.fonts, :default, spec)})`
-— it does not touch colors/spacing/radii, and does not use
-`Mob.Theme.set/1`'s whole-struct-replace path the way a style package
-does.
+active — it does not touch colors/spacing/radii. A theme set from a
+module (or `{module, overrides}`) is re-set as `{module, fonts: ...}`,
+so `Mob.Theme.Adaptive` keeps following the OS light/dark setting; a
+theme set as a struct or keyword list gets
+`%{theme | fonts: Map.put(theme.fonts, :default, spec)}`. See
+`decisions/2026-10-13-adaptive-theme-follows-set-source.md`.
 
 **Precedence when more than one thing wants to set the default font**
 (enforced by boot order — `use Mob.App, theme:` runs first, then
