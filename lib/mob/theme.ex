@@ -231,29 +231,40 @@ defmodule Mob.Theme do
   - A theme module (any module exporting `theme/0`, e.g. `MobThemes.Obsidian`)
   - A `{module, overrides}` tuple
   - A keyword list of overrides against the neutral base
+
+  The module and `{module, overrides}` forms are remembered (see
+  `Mob.Theme.AdaptiveWatcher`): when the module is the registered
+  follow-OS theme, an OS light/dark flip resolves it again, keeping the
+  overrides. A struct or keyword list is a fixed theme and is never
+  re-resolved, even if it equals what the adaptive module returns.
   """
   @spec set(t() | module() | {module(), keyword()} | keyword()) :: :ok
-  def set(%__MODULE__{} = theme) do
+  def set(%__MODULE__{} = theme), do: put_theme(theme, nil)
+
+  def set(mod) when is_atom(mod), do: put_theme(mod.theme(), mod)
+
+  def set({mod, overrides} = source) when is_atom(mod) and is_list(overrides) do
+    put_theme(struct(mod.theme(), overrides), source)
+  end
+
+  def set(overrides) when is_list(overrides), do: put_theme(build(overrides), nil)
+
+  defp put_theme(theme, source) do
     Application.put_env(:mob, :theme, theme)
+    Application.put_env(:mob, :theme_source, source)
     notify_native(theme)
     :ok
-  end
-
-  def set(mod) when is_atom(mod) do
-    set(mod.theme())
-  end
-
-  def set({mod, overrides}) when is_atom(mod) and is_list(overrides) do
-    set(struct(mod.theme(), overrides))
-  end
-
-  def set(overrides) when is_list(overrides) do
-    set(build(overrides))
   end
 
   @doc "Return the currently active theme (or the neutral base if none is set)."
   @spec current() :: t()
   def current, do: Application.get_env(:mob, :theme, default())
+
+  @doc false
+  # What the active theme was set from: the module or `{module, overrides}`
+  # passed to `set/1`, or nil for a struct, a keyword list, or nothing set.
+  @spec source() :: module() | {module(), keyword()} | nil
+  def source, do: Application.get_env(:mob, :theme_source)
 
   @doc """
   Returns the active theme's palette resolved to ARGB integers — semantic

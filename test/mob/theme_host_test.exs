@@ -178,6 +178,40 @@ defmodule Mob.ThemeHostTest do
     assert_isolated_success(script, "no_backoff_ok")
   end
 
+  # MOB-479: the built-in adaptive theme, with the real color_scheme/0 read
+  # through a stand-in mob_nif whose answer the script flips like the OS does.
+  test "an OS appearance flip re-resolves Mob.Theme.Adaptive" do
+    script = ~S'''
+    Code.compile_string("""
+    defmodule :mob_nif do
+      def platform, do: :ios
+      def set_theme(_json), do: :ok
+      def color_scheme, do: :persistent_term.get(:mob479_scheme)
+    end
+    """)
+
+    :persistent_term.erase({Mob.Theme, :nif_status})
+    :persistent_term.put(:mob479_scheme, :light)
+    {:ok, watcher} = Mob.Theme.AdaptiveWatcher.start_link()
+
+    :ok = Mob.Theme.set(Mob.Theme.Adaptive)
+    true = Mob.Theme.current() == Mob.Theme.Light.theme()
+
+    :persistent_term.put(:mob479_scheme, :dark)
+    send(watcher, {:mob_device, :color_scheme_changed, :dark})
+    _ = :sys.get_state(watcher)
+    if Mob.Theme.current() != Mob.Theme.Dark.theme(), do: raise("still light after flip to dark")
+
+    :persistent_term.put(:mob479_scheme, :light)
+    send(watcher, {:mob_device, :color_scheme_changed, :light})
+    _ = :sys.get_state(watcher)
+    if Mob.Theme.current() != Mob.Theme.Light.theme(), do: raise("still dark after flip to light")
+    IO.puts("adaptive_flip_ok")
+    '''
+
+    assert_isolated_success(script, "adaptive_flip_ok")
+  end
+
   defp assert_isolated_success(script, marker) do
     {output, status} =
       System.cmd("mix", ["run", "--no-compile", "--no-start", "-e", script],

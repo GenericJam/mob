@@ -1,0 +1,42 @@
+# The adaptive theme watcher goes by what was passed to `Mob.Theme.set/1`
+- Date: 2026-10-13
+- Status: accepted
+
+## Context
+
+`Mob.Theme.AdaptiveWatcher` must re-resolve the theme on an OS light/dark
+flip, but only when the app chose the adaptive theme; re-setting anything
+else would overwrite an explicit choice. It decided by checking
+`Mob.Theme.current() == adaptive.theme()`. The event arrives after the OS
+flipped, so `theme/0` already returns the new scheme's theme and never equals
+the still-old active one: the check was false exactly when a re-resolve was
+needed (MOB-479, seen with `Mob.Theme.Adaptive` and Bezalel's
+`MobBezalel.System` on the iOS simulator).
+
+## Decision
+
+`Mob.Theme.set/1` records what it was given in `Application` env
+(`:mob, :theme_source`, read through the internal `Mob.Theme.source/0`):
+
+- a module → the module;
+- `{module, overrides}` → the tuple;
+- a `%Mob.Theme{}` struct or a keyword list → `nil`.
+
+On `:color_scheme_changed` the watcher re-sets the source when it is the
+registered adaptive module, or `{adaptive, overrides}` (so the overrides
+survive the flip). Anything else is a fixed theme and is left alone, including
+a struct that happens to equal what the adaptive module returns: passing a
+struct is an explicit fixed choice.
+
+## Consequences
+
+- Any later `set/1` with something other than the adaptive module stops the
+  following, which is the "don't clobber the user's choice" rule the watcher
+  always meant to keep.
+- `register_adaptive/1` after the theme was set needs no re-set: the watcher
+  compares at event time.
+- `set/1` writes two env keys non-atomically. Two processes calling `set/1`
+  at once could pair one call's theme with the other's source; concurrent
+  `set/1` was already unordered (the native palette push races the same way).
+- The watcher does not re-render mounted screens; they pick the new theme up
+  on their next render.

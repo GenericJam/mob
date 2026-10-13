@@ -10,6 +10,17 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **An adaptive theme now follows the OS light/dark flip (MOB-479).**
+  `Mob.Theme.AdaptiveWatcher` decided whether to re-resolve by comparing the
+  active theme with what the adaptive module returns *after* the OS had
+  flipped, which never matched, so `Mob.Theme.Adaptive` (and any module
+  registered with `register_adaptive/1`) stayed on the old scheme. The
+  watcher now goes by what was passed to `Mob.Theme.set/1`: the registered
+  module, or `{module, overrides}` (the overrides are kept), follows the OS;
+  a struct, a keyword list or any other module is a fixed theme and is left
+  alone. See `decisions/2026-10-13-adaptive-theme-follows-set-source.md`.
+
 ## [0.9.17] - 2026-10-09
 
 ### Added
