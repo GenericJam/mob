@@ -47,7 +47,9 @@ the build, naming the style and the path.
 **NOT yet implemented** (the mob_m3 tier): the cascade, per-element
 `style:` props, the `_style` node field, and the namespaced native
 dispatch table — everything from "The cascade" onward describes design,
-not shipped behavior. Precedence note learned in practice:
+not shipped behavior, except the `:name`, `:mob_version`,
+`:style_spec_version`, `:theme` and `:assets` keys and the validation
+rules marked as enforced. Precedence note learned in practice:
 `:default_style` is a DEFAULT — app code calling `Mob.Theme.set/1`
 (e.g. restoring a persisted user choice) outranks it, so hosts should
 only override when the user explicitly chose.
@@ -479,13 +481,20 @@ doesn't error — same UX as plugins).
 - Every file path referenced exists and parses
 - Native views consume the full prop contract for their primitive
 
-Compile-time validation (run by mob_dev when activating styles):
+Compile-time validation (run by mob_dev when activating styles). Enforced
+today:
 
-- Every style in `config :mob, :styles` is present in `deps`
+- The required fields' shapes, and `:style_spec_version` is supported
 - `:default_style` (if set) is in `:styles`
-- `mob_version` requirement satisfied by installed mob
 - `assets` has only `:fonts`, a list of path strings, and every listed
   font file exists in the style package
+
+Planned, not enforced yet:
+
+- Every style in `config :mob, :styles` is present in `deps` (today a
+  name that isn't a dep, or whose manifest fails to load, is skipped)
+- `mob_version` requirement satisfied by installed mob (today it is only
+  parsed)
 - No two styles with the same `:name` (Hex prevents this anyway)
 
 Conflicts between styles are **not** validation errors — that's the
