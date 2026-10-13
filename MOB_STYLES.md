@@ -437,17 +437,17 @@ Top-level required:
 - `:mob_version` — string, semver requirement (`"~> 0.6"`).
 - `:style_spec_version` — integer. Current: `1`. Independent of
   `:plugin_spec_version`.
-
-Top-level optional:
-
-- `:description` — short string for `mix mob.styles` output.
-- `:theme` — module name. Required if the style provides tokens (almost
-  always true). Module must export `theme/0` returning a `%Mob.Theme{}`
+- `:theme` — module name; mob_dev rejects a manifest without one. Module
+  must export `theme/0` returning a `%Mob.Theme{}`
   struct. `fonts` and `font_fallback` are theme fields like any other
   token category (colors, spacing, radii) — a style package that sets
   `fonts: %{default: ...}` gets its own default font applied for free
   the moment it's activated via `:default_style`, no separate schema
   needed. See `MOB_FONTS.md`.
+
+Top-level optional:
+
+- `:description` — short string for `mix mob.styles` output.
 - `:assets` — `%{fonts: [path]}`, paths relative to the style package
   root. The build bundles the activated styles' fonts with the app's and
   plugins' (iOS `.app` root plus `UIAppFonts`, Android `res/font/`), so the
