@@ -82,9 +82,10 @@ SwiftUI's `.lineSpacing` adds *extra space between lines*, not total line height
 
 ### Custom fonts
 
-Drop `.ttf` / `.otf` files into `priv/fonts/` in your Mix project (or a
-plugin's `assets: %{fonts: [...]}`). `mix mob.deploy --native` copies them
-into the correct platform directories and patches `Info.plist` for iOS.
+Drop `.ttf` / `.otf` files into `priv/fonts/` in your Mix project (or list
+them in a plugin's or an activated style package's
+`assets: %{fonts: [...]}`). `mix mob.deploy --native` copies them into the
+correct platform directories and patches `Info.plist` for iOS.
 
 The **recommended way to reference a font** is a named token on `Mob.Theme`,
 resolved by the renderer exactly like a color token (`text_color: :primary`):
