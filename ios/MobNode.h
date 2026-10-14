@@ -212,6 +212,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) BOOL fillWidthSet;    // distinguish an explicit false from an absent prop
 // scroll only: build content lazily (LazyVStack). Opt-in — see MOB-128.
 @property(nonatomic) BOOL lazyContent;
+// scroll only: `anchor: "bottom"` — open at the end, follow it while pinned (MOB-481).
+@property(nonatomic) BOOL scrollAnchorBottom;
 @property(nonatomic)
     BOOL fillHeight; // fill parent height (default NO) — used for full-screen overlays/dialogs
 @property(nonatomic) CGFloat cornerRadius; // rounded corners in pt (default 0)

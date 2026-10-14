@@ -520,8 +520,9 @@ struct MobNodeView: View {
                 // there's no clean SwiftUI API for raw offset; UIKit-backed
                 // alternative pending. Until then, scroll events are silently
                 // unavailable on iOS 17 (renderer still accepts on_scroll
-                // props — they just won't fire).
-                .modifier(MobScrollObserverGate(node: node, isHorizontal: isHorizontal))
+                // props — they just won't fire). Also the bottom anchor
+                // (MOB-481); one call keeps MobNodeView's body within budget.
+                .mobScrollBehaviors(node, isHorizontal: isHorizontal)
 
             case .textField:
                 let placeholder = node.placeholder ?? ""
@@ -3264,6 +3265,95 @@ struct MobScrollObserver: ViewModifier {
                         node.onScroll?(0, 0, lastX, lastY, 0, 0, "ended")
                         hasBegun = false
                     }
+                }
+            }
+    }
+}
+
+// MARK: - Scroll anchor (MOB-481)
+//
+// `anchor: "bottom"` on a vertical, non-lazy :scroll: open at the end, and
+// keep following the end as the content grows or the viewport resizes, but
+// only while the user is at (or within pinThreshold of) the end. Someone who
+// scrolled up to read is left where they are. Horizontal and lazy scrolls
+// ignore it, matching Android.
+
+extension View {
+    /// A :scroll's behaviour beyond layout: position events and the anchor.
+    func mobScrollBehaviors(_ node: MobNode, isHorizontal: Bool) -> some View {
+        modifier(MobScrollObserverGate(node: node, isHorizontal: isHorizontal))
+            .modifier(MobScrollBottomAnchorGate(
+                enabled: node.scrollAnchorBottom && !isHorizontal && !node.lazyContent))
+    }
+}
+
+struct MobScrollBottomAnchorGate: ViewModifier {
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        if !enabled {
+            content
+        } else if #available(iOS 18.0, *) {
+            content.modifier(MobScrollBottomAnchor())
+        } else {
+            // No scroll-geometry observer before iOS 18, so following is left
+            // to SwiftUI's own size-change handling for this anchor. It also
+            // bottom-aligns content shorter than the viewport.
+            content.defaultScrollAnchor(.bottom)
+        }
+    }
+}
+
+/// The parts of a scroll view's geometry the bottom anchor reacts to. A change
+/// in anything but `offset` is the content or viewport resizing.
+struct MobScrollExtent: Equatable {
+    let offset: CGFloat
+    let contentHeight: CGFloat
+    let containerHeight: CGFloat
+    let bottomInset: CGFloat
+
+    @available(iOS 18.0, *)
+    init(_ geometry: ScrollGeometry) {
+        offset = geometry.contentOffset.y
+        contentHeight = geometry.contentSize.height
+        containerHeight = geometry.containerSize.height
+        bottomInset = geometry.contentInsets.bottom
+    }
+
+    var distanceToEnd: CGFloat {
+        contentHeight + bottomInset - containerHeight - offset
+    }
+
+    func sameSize(as other: MobScrollExtent) -> Bool {
+        contentHeight == other.contentHeight
+            && containerHeight == other.containerHeight
+            && bottomInset == other.bottomInset
+    }
+}
+
+@available(iOS 18.0, *)
+struct MobScrollBottomAnchor: ViewModifier {
+    static let pinThreshold: CGFloat = 32
+
+    @State private var position = ScrollPosition(edge: .bottom)
+    @State private var pinned = true
+
+    func body(content: Content) -> some View {
+        content
+            .scrollPosition($position)
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .onScrollGeometryChange(for: MobScrollExtent.self, of: { MobScrollExtent($0) }) { old, new in
+                let wasPinned = pinned
+                // Where the view is now: after the user scrolls, after our own
+                // jump lands, and after a size change that is not followed —
+                // content that shrank to fit leaves a view that was scrolled
+                // up sitting at the end, and it follows from then on.
+                pinned = new.distanceToEnd <= Self.pinThreshold
+                if wasPinned && !new.sameSize(as: old) && new.distanceToEnd > 0.5 {
+                    // Not animated: an animated jump passes through offsets
+                    // far from the end, which would read as the user leaving.
+                    pinned = true
+                    position.scrollTo(edge: .bottom)
                 }
             }
     }

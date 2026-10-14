@@ -47,6 +47,7 @@
         _fillWidth = NO;
         _fillWidthSet = NO;
         _lazyContent = NO;
+        _scrollAnchorBottom = NO;
         _cornerRadius = 0.0;
         _nativeViewHandle = -1;     // -1 = no native component slot assigned (MOB-100)
         _sheetCornerRadius = -1.0;  // -1 = unset — use the system default sheet corner radius

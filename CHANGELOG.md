@@ -10,6 +10,16 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **`anchor: "bottom"` on `:scroll`, for chat logs (MOB-481).** The scroll
+  opens at the end of its content and stays there as content grows or the
+  viewport shrinks (the keyboard opening), while the view is at the end or
+  within 32 pt of it. A user who has scrolled further up is left where they
+  are; scrolling back to the end resumes following. Vertical, non-lazy scrolls
+  only; `"top"` (the default) is unchanged. iOS here; Android needs the
+  matching mob_new template. On iOS 17 following is SwiftUI's
+  `defaultScrollAnchor(.bottom)`. See `guides/components.md`.
+
 ### Fixed
 - **An adaptive theme now follows the OS light/dark flip (MOB-479).**
   `Mob.Theme.AdaptiveWatcher` decided whether to re-resolve by comparing the
