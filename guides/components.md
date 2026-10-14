@@ -321,7 +321,8 @@ For chat logs and consoles, where the newest content is at the end:
 
 On Android and on iOS 18 and later:
 
-* The scroll **opens at the end** of its content.
+* The scroll **opens at the end** of its content, and again each time its
+  screen is navigated to, back navigation included.
 * When the content grows (a message sent or received) or the viewport shrinks
   (something below it appears) while the view is at the end, or within
   32 pt/dp of it, it **moves to the new end**. The jump is not animated.

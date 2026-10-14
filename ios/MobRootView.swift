@@ -3337,6 +3337,7 @@ struct MobScrollExtent: Equatable {
 struct MobScrollBottomAnchor: ViewModifier {
     static let pinThreshold: CGFloat = 32
 
+    @Environment(\.mobScreenIsActive) private var isActive
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var jumpPending = false
 
@@ -3344,6 +3345,16 @@ struct MobScrollBottomAnchor: ViewModifier {
         content
             .scrollPosition($position)
             .defaultScrollAnchor(.bottom, for: .initialOffset)
+            // Navigation reuses the parked slot's view identities (MOB-129), so
+            // a screen arriving there inherits the offset of the scroll that
+            // sat at this position before, and the initial-offset anchor does
+            // not apply again. Arriving opens at the end, as Android's
+            // per-navigation ScrollState does.
+            .onChange(of: isActive) { _, nowActive in
+                if nowActive {
+                    position.scrollTo(edge: .bottom)
+                }
+            }
             .onScrollGeometryChange(for: MobScrollExtent.self, of: { MobScrollExtent($0) }) { old, new in
                 if new.sameSize(as: old) {
                     jumpPending = false
@@ -3354,10 +3365,11 @@ struct MobScrollBottomAnchor: ViewModifier {
                 // back. A jump not yet landed still counts as at the end, or a
                 // second growth right behind the first is missed.
                 let wasAtEnd = jumpPending || old.distanceToEnd(from: new.offset) <= Self.pinThreshold
-                if wasAtEnd && new.distanceToEnd > 0.5 {
+                // Already at the end: nothing will land to clear the flag.
+                jumpPending = wasAtEnd && new.distanceToEnd > 0.5
+                if jumpPending {
                     // Not animated: growth arriving mid-animation would find
                     // the offset far from the old end and stop following.
-                    jumpPending = true
                     position.scrollTo(edge: .bottom)
                 }
             }
