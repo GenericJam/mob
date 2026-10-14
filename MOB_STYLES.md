@@ -39,10 +39,11 @@ BUILD, a broken theme module logs and renders baseline). First package:
 `mob_themes` (Obsidian/ObsidianGlass/Citrus/Birch/Material3).
 
 A style can also **bundle its own font files** with an optional
-`assets: %{fonts: [...]}` (mob_dev with MOB-476). They ship exactly like
-plugin fonts: iOS `.app` root plus `UIAppFonts`, Android `res/font/`, with
-the same collision checks. A declared font file that doesn't exist fails
-the build, naming the style and the path.
+`assets: %{fonts: [...]}` (mob_dev 0.7.25+). They ship exactly like
+plugin fonts: iOS `.app` root plus `UIAppFonts` (dev builds and
+`mix mob.release --ios`), Android `res/font/`, with the same collision
+checks. A declared font file that doesn't exist fails the build, naming
+the style and the path.
 
 **NOT yet implemented** (the mob_m3 tier): the cascade, per-element
 `style:` props, the `_style` node field, and the namespaced native

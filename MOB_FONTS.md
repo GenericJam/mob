@@ -46,7 +46,7 @@ frozen proposal.
 | Per-node `font:` prop | ✅ shipped | `ios/mob_nif.m:688-693` → `MobNode.h:199` → `MobRootView.swift` (`resolvedFont`); Android `MobBridge.kt.eex` (`fontFamilyProp`) |
 | App-level font bundling (`priv/fonts/*.ttf`) | ✅ shipped | `mob_dev/lib/mob_dev/native_build.ex` |
 | Plugin font bundling (`assets: %{fonts: [...]}`) | ✅ shipped | `mob_dev/lib/mob_dev/plugin/assets.ex`, merged in `plugin/merge.ex` |
-| Style font bundling (`assets: %{fonts: [...]}` in `priv/mob_style.exs`) | ✅ on mob_dev master (MOB-476), not yet in a mob_dev release | `mob_dev/lib/mob_dev/style.ex` (`MobDev.Style.fonts!/1`), merged in `native_build.ex` `collect_all_fonts/0` |
+| Style font bundling (`assets: %{fonts: [...]}` in `priv/mob_style.exs`) | ✅ shipped in mob_dev 0.7.25 (MOB-476); `mix mob.release --ios` bundles app, plugin and style fonts from 0.7.25 (MOB-480) | `mob_dev/lib/mob_dev/style.ex` (`MobDev.Style.fonts!/1`), merged in `native_build.ex` `collect_all_fonts/0` |
 | iOS `UIAppFonts` registration | ✅ shipped (build-time plist patch) | `assets.ex` |
 | Android `res/font/` + runtime lookup | ✅ shipped | `Mob.Font.android_resource_name/1` (mob core) — one implementation, called both at build time (bundling) and to compute a theme token's Android name |
 | Cross-plugin font *file* collision detection | ✅ shipped | `assets.ex` (raises on basename collision) |
