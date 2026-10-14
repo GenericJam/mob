@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.18] - 2026-10-14
+
 ### Added
 - **`anchor: "bottom"` on `:scroll`, for chat logs (MOB-481).** The scroll
   opens at the end of its content. On iOS 18 and later, when content grows or
