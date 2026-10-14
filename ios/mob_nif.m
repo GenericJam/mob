@@ -1093,6 +1093,7 @@ typedef NS_ENUM(NSUInteger, MobPropKey) {
     MOB_PROP_active,
     MOB_PROP_align,
     MOB_PROP_allow,
+    MOB_PROP_anchor,
     MOB_PROP_autoplay,
     MOB_PROP_axis,
     MOB_PROP_background,
@@ -1230,6 +1231,7 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
           [MOB_PROP_active] = @"active",
           [MOB_PROP_align] = @"align",
           [MOB_PROP_allow] = @"allow",
+          [MOB_PROP_anchor] = @"anchor",
           [MOB_PROP_autoplay] = @"autoplay",
           [MOB_PROP_axis] = @"axis",
           [MOB_PROP_background] = @"background",
@@ -1934,6 +1936,10 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         id lazyContent = pv[MOB_PROP_lazy];
         if ([lazyContent isKindOfClass:[NSNumber class]])
             node.lazyContent = [lazyContent boolValue];
+
+        id anchor = pv[MOB_PROP_anchor];
+        if ([anchor isKindOfClass:[NSString class]])
+            node.scrollAnchorBottom = [anchor isEqualToString:@"bottom"];
 
         id fillWidth = pv[MOB_PROP_fill_width];
         if (fillWidth) {
