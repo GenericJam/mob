@@ -3320,8 +3320,10 @@ struct MobScrollExtent: Equatable {
         bottomInset = geometry.contentInsets.bottom
     }
 
-    var distanceToEnd: CGFloat {
-        contentHeight + bottomInset - containerHeight - offset
+    var distanceToEnd: CGFloat { distanceToEnd(from: offset) }
+
+    func distanceToEnd(from contentOffset: CGFloat) -> CGFloat {
+        contentHeight + bottomInset - containerHeight - contentOffset
     }
 
     func sameSize(as other: MobScrollExtent) -> Bool {
@@ -3336,23 +3338,26 @@ struct MobScrollBottomAnchor: ViewModifier {
     static let pinThreshold: CGFloat = 32
 
     @State private var position = ScrollPosition(edge: .bottom)
-    @State private var pinned = true
+    @State private var jumpPending = false
 
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
             .defaultScrollAnchor(.bottom, for: .initialOffset)
             .onScrollGeometryChange(for: MobScrollExtent.self, of: { MobScrollExtent($0) }) { old, new in
-                let wasPinned = pinned
-                // Where the view is now: after the user scrolls, after our own
-                // jump lands, and after a size change that is not followed —
-                // content that shrank to fit leaves a view that was scrolled
-                // up sitting at the end, and it follows from then on.
-                pinned = new.distanceToEnd <= Self.pinThreshold
-                if wasPinned && !new.sameSize(as: old) && new.distanceToEnd > 0.5 {
-                    // Not animated: an animated jump passes through offsets
-                    // far from the end, which would read as the user leaving.
-                    pinned = true
+                if new.sameSize(as: old) {
+                    jumpPending = false
+                    return
+                }
+                // Judged by the offset now against the OLD end: a drag and a
+                // resize delivered in one callback must not pull the user
+                // back. A jump not yet landed still counts as at the end, or a
+                // second growth right behind the first is missed.
+                let wasAtEnd = jumpPending || old.distanceToEnd(from: new.offset) <= Self.pinThreshold
+                if wasAtEnd && new.distanceToEnd > 0.5 {
+                    // Not animated: growth arriving mid-animation would find
+                    // the offset far from the old end and stop following.
+                    jumpPending = true
                     position.scrollTo(edge: .bottom)
                 }
             }
