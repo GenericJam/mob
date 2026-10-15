@@ -28,4 +28,5 @@ Video
 CameraPreview
 WebView
 GpuView
+Anchored
 NativeView

@@ -261,14 +261,16 @@ defmodule Mob.SigilTest do
       assert node.type == :gpu_view
     end
 
-    for tag <- ~w(Canvas Icon NativeView) do
+    # Anchored is MOB-365: Android renders it, and without it in android.txt the
+    # sigil warns that it is iOS-only.
+    for tag <- ~w(Canvas Icon NativeView Anchored) do
       test "<#{tag}> is on both whitelists, so the sigil does not warn" do
         warnings =
           ExUnit.CaptureIO.capture_io(:stderr, fn ->
             Code.eval_string("import Mob.Sigil\n~MOB(<#{unquote(tag)} />)")
           end)
 
-        refute warnings =~ "not in the Mob tag whitelist"
+        refute warnings =~ "~MOB:"
       end
     end
 
@@ -313,6 +315,42 @@ defmodule Mob.SigilTest do
       assert node.type == :map_view
       assert node.props.zoom == 10
       assert warnings =~ "~MOB: <MapView> is not in the Mob tag whitelist"
+    end
+  end
+
+  # The packaged manifests list the same tags, so the single-platform branches
+  # are exercised against manifests that differ (MOB-194: the union check made
+  # them unreachable).
+  describe "tag_warning/2" do
+    setup do
+      %{
+        known: %{
+          ios: MapSet.new(~w(Text OnlyIos)),
+          android: MapSet.new(~w(Text OnlyAndroid))
+        }
+      }
+    end
+
+    test "a tag on both manifests does not warn", %{known: known} do
+      assert Mob.Sigil.tag_warning("Text", known) == nil
+    end
+
+    test "a tag only iOS lists warns that it is iOS-only", %{known: known} do
+      msg = Mob.Sigil.tag_warning("OnlyIos", known)
+      assert msg =~ "<OnlyIos> is iOS-only"
+      refute msg =~ "not in the Mob tag whitelist"
+    end
+
+    test "a tag only Android lists warns that it is Android-only", %{known: known} do
+      msg = Mob.Sigil.tag_warning("OnlyAndroid", known)
+      assert msg =~ "<OnlyAndroid> is Android-only"
+      refute msg =~ "not in the Mob tag whitelist"
+    end
+
+    test "a tag on neither manifest is unknown", %{known: known} do
+      msg = Mob.Sigil.tag_warning("MapView", known)
+      assert msg =~ "<MapView> is not in the Mob tag whitelist"
+      refute msg =~ "-only"
     end
   end
 
