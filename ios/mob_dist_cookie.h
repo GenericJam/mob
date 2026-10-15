@@ -11,10 +11,11 @@
 //      Mob.Dist ignores it.
 //   2. `<beams_dir>/mob_dist_cookie`, the project's private cookie that
 //      `mix mob.deploy` writes next to the BEAMs: the simulator runtime dir on
-//      the Mac, or Documents/otp/<app> on a physical iPhone. Only mob_dev's
-//      format is accepted: 64 lowercase hex characters, optionally followed by
-//      whitespace. This is what keeps a node reachable after a launch mob_dev
-//      didn't make (icon tap, `xcrun simctl launch`, agent-device relaunch).
+//      the Mac, or the deployed code dir on a physical iPhone (see
+//      mob_code_versions.h). Only mob_dev's format is accepted: 64 lowercase
+//      hex characters, optionally followed by whitespace. This is what keeps a
+//      node reachable after a launch mob_dev didn't make (icon tap,
+//      `xcrun simctl launch`, agent-device relaunch).
 //   3. A random 256-bit cookie, new on every launch and never logged. No
 //      shared public cookie is ever used (MOB-49).
 #ifndef MOB_DIST_COOKIE_H
