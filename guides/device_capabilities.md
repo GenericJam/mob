@@ -521,12 +521,14 @@ it still report `false` from `excluded_from_backup?/1` because the flag lives
 on the directory. Call it at every launch: a restore or a move to a new
 device can drop the attribute.
 
-On Android both calls do nothing (`:ok`, `false`): generated apps set
-`android:allowBackup="false"`, so nothing is backed up. If your app turns
-backup on, exclude the directory in its backup rules instead
-(`android:fullBackupContent` up to Android 11, `android:dataExtractionRules`
-from Android 12); Android has no per-file flag. Off device both calls also
-return `:ok` / `false`.
+On Android both calls do nothing (`:ok`, `false`); Android has no per-file
+flag. Generated apps set `android:allowBackup="false"`, which keeps app data
+out of cloud backups (and, up to Android 11, device-to-device transfers). To
+keep a directory out of a backup when your app turns backup on, or out of an
+Android 12+ device-to-device transfer (which `allowBackup="false"` doesn't
+stop), exclude it in the backup rules (`android:fullBackupContent` up to
+Android 11, `android:dataExtractionRules` from Android 12). Off device both
+calls also return `:ok` / `false`.
 
 For saving to the native media library (Camera Roll, Downloads), see `Mob.Storage.Apple` and `Mob.Storage.Android`.
 

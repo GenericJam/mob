@@ -18,8 +18,9 @@ defmodule Mob.Storage do
     - `:app_support` — persists, hidden from user; backed up to iCloud on iOS
                        unless excluded (see `exclude_from_backup/1`)
 
-  On Android none of these are backed up in a generated app, which sets
-  `android:allowBackup="false"`.
+  On Android a generated app sets `android:allowBackup="false"`, so none of
+  these go to a cloud backup. On Android 12 and higher that flag doesn't stop
+  a device-to-device transfer; only `android:dataExtractionRules` does.
 
   ## Backup
 
@@ -55,12 +56,14 @@ defmodule Mob.Storage do
   every launch, not once: restoring the app or moving it to a new device can
   drop the attribute, and setting it again is cheap.
 
-  On Android this does nothing. Generated apps set
-  `android:allowBackup="false"`, so nothing is backed up. An app that turns
-  backup on must exclude the path in its backup rules instead
+  On Android this does nothing; Android has no per-file flag. Generated apps
+  set `android:allowBackup="false"`, which keeps app data out of cloud
+  backups (and, up to Android 11, device-to-device transfers). To keep a
+  path out of either when backup is on, or out of an Android 12+
+  device-to-device transfer, exclude it in the app's backup rules
   (`android:fullBackupContent` for Android 11 and lower,
-  `android:dataExtractionRules` for 12 and higher); Android has no per-file
-  flag. Off device (host, tests) it also does nothing.
+  `android:dataExtractionRules` for 12 and higher). Off device (host, tests)
+  it also does nothing.
 
   Returns `{:error, :enoent}` on every platform when `path` doesn't exist,
   and on iOS `{:error, description}` with the system's message when the

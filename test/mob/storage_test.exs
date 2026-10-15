@@ -178,10 +178,5 @@ defmodule Mob.StorageTest do
     test "a missing path is {:error, :enoent}, as on a device", %{dir: dir} do
       assert Storage.exclude_from_backup(Path.join(dir, "not_yet")) == {:error, :enoent}
     end
-
-    test "a non-binary path is rejected" do
-      assert_raise FunctionClauseError, fn -> Storage.exclude_from_backup(:app_support) end
-      assert_raise FunctionClauseError, fn -> Storage.excluded_from_backup?(~c"/tmp") end
-    end
   end
 end

@@ -3677,9 +3677,9 @@ export fn nif_storage_dir(
     return out;
 }
 
-/// No-op: generated apps set `android:allowBackup="false"`, so nothing in the
-/// app's storage is backed up. An app that enables backup excludes paths in
-/// its backup rules XML instead; Android has no per-file flag.
+/// No-op: Android has no per-file backup flag. Generated apps set
+/// `android:allowBackup="false"`; an app that needs a path out of a backup or
+/// an Android 12+ device-to-device transfer excludes it in its backup rules XML.
 export fn nif_storage_exclude_from_backup(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
