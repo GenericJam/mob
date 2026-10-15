@@ -158,4 +158,30 @@ defmodule Mob.StorageTest do
       assert {:error, :enoent} = Storage.read(src)
     end
   end
+
+  # ── exclude_from_backup/1 and excluded_from_backup?/1 ───────────────────────
+
+  describe "backup exclusion off device" do
+    # The host has no backup and no NIF: both calls answer as a platform that
+    # backs nothing up would, so app startup code can call them unguarded.
+    test "exclude_from_backup/1 is :ok and leaves the directory as it was", %{dir: dir} do
+      File.write!(Path.join(dir, "pack.db"), "x")
+      assert Storage.exclude_from_backup(dir) == :ok
+      assert File.read!(Path.join(dir, "pack.db")) == "x"
+    end
+
+    test "excluded_from_backup?/1 is false, even after excluding", %{dir: dir} do
+      :ok = Storage.exclude_from_backup(dir)
+      refute Storage.excluded_from_backup?(dir)
+    end
+
+    test "a missing path is {:error, :enoent}, as on a device", %{dir: dir} do
+      assert Storage.exclude_from_backup(Path.join(dir, "not_yet")) == {:error, :enoent}
+    end
+
+    test "a non-binary path is rejected" do
+      assert_raise FunctionClauseError, fn -> Storage.exclude_from_backup(:app_support) end
+      assert_raise FunctionClauseError, fn -> Storage.excluded_from_backup?(~c"/tmp") end
+    end
+  end
 end

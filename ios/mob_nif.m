@@ -7932,6 +7932,54 @@ static ERL_NIF_TERM nif_storage_dir(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     return enif_make_binary(env, &bin);
 }
 
+// The path argument as an NSURL, or nil when it is not valid UTF-8. A fresh
+// NSURL on every call: NSURL caches resource values, and the query has to read
+// the flag from disk, not from a URL object that set it.
+static NSURL *storage_path_url(ErlNifEnv *env, ERL_NIF_TERM term) {
+    ErlNifBinary bin;
+    if (!enif_inspect_binary(env, term, &bin) && !enif_inspect_iolist_as_binary(env, term, &bin))
+        return nil;
+    NSString *path = [[NSString alloc] initWithBytes:bin.data
+                                              length:bin.size
+                                            encoding:NSUTF8StringEncoding];
+    if (!path)
+        return nil;
+    BOOL is_dir = NO;
+    [[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&is_dir];
+    return [NSURL fileURLWithPath:path isDirectory:is_dir];
+}
+
+// Sets NSURLIsExcludedFromBackupKey. On a directory the flag covers everything
+// beneath it, including files created later.
+static ERL_NIF_TERM nif_storage_exclude_from_backup(ErlNifEnv *env, int argc,
+                                                    const ERL_NIF_TERM argv[]) {
+    @autoreleasepool {
+        NSURL *url = storage_path_url(env, argv[0]);
+        if (!url)
+            return enif_make_badarg(env);
+        NSError *err = nil;
+        if ([url setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:&err])
+            return enif_make_atom(env, "ok");
+        const char *msg = err ? err.localizedDescription.UTF8String : "set_resource_value_failed";
+        ErlNifBinary out;
+        enif_alloc_binary(strlen(msg), &out);
+        memcpy(out.data, msg, strlen(msg));
+        return enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_binary(env, &out));
+    }
+}
+
+static ERL_NIF_TERM nif_storage_excluded_from_backup(ErlNifEnv *env, int argc,
+                                                     const ERL_NIF_TERM argv[]) {
+    @autoreleasepool {
+        NSURL *url = storage_path_url(env, argv[0]);
+        if (!url)
+            return enif_make_badarg(env);
+        NSNumber *value = nil;
+        BOOL ok = [url getResourceValue:&value forKey:NSURLIsExcludedFromBackupKey error:nil];
+        return enif_make_atom(env, ok && value.boolValue ? "true" : "false");
+    }
+}
+
 static ERL_NIF_TERM nif_storage_save_to_photo_library(ErlNifEnv *env, int argc,
                                                       const ERL_NIF_TERM argv[]) {
     ErlNifBinary bin;
@@ -9162,6 +9210,8 @@ static ErlNifFunc nif_funcs[] = {
     {"take_opened_document", 0, nif_take_opened_document, 0},
     {"storage_dir", 1, nif_storage_dir, 0},
     {"storage_save_to_photo_library", 1, nif_storage_save_to_photo_library, 0},
+    {"storage_exclude_from_backup", 1, nif_storage_exclude_from_backup, 0},
+    {"storage_excluded_from_backup", 1, nif_storage_excluded_from_backup, 0},
     {"storage_save_to_media_store", 2, nif_storage_save_to_media_store, 0},
     {"storage_external_files_dir", 1, nif_storage_external_files_dir, 0},
     {"alert_show", 3, nif_alert_show, 0},

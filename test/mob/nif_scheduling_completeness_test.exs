@@ -55,7 +55,8 @@ defmodule Mob.NifSchedulingCompletenessTest do
     motion_start motion_stop native_stats_enable open_settings open_url
     press_down_xy press_move_xy press_up_xy
     platform post_mortem_android_drain post_mortem_ios_drain register_component register_tap
-    request_permission share_text storage_dir storage_external_files_dir
+    request_permission share_text storage_dir storage_exclude_from_backup
+    storage_excluded_from_backup storage_external_files_dir
     storage_save_to_media_store storage_save_to_photo_library
     take_launch_link take_launch_notification take_opened_document toast_show torch tts_speak
     tts_stop vendor_usb_bulk_write vendor_usb_close vendor_usb_list_devices

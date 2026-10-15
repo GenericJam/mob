@@ -3677,6 +3677,30 @@ export fn nif_storage_dir(
     return out;
 }
 
+/// No-op: generated apps set `android:allowBackup="false"`, so nothing in the
+/// app's storage is backed up. An app that enables backup excludes paths in
+/// its backup rules XML instead; Android has no per-file flag.
+export fn nif_storage_exclude_from_backup(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    return erts.ok(env);
+}
+
+/// Always false: Android has no per-file backup flag (see above).
+export fn nif_storage_excluded_from_backup(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
+    return erts.atom(env, "false");
+}
+
 export fn nif_storage_save_to_media_store(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
@@ -5497,6 +5521,8 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "take_launch_link", .arity = 0, .fptr = nif_take_launch_link, .flags = 0 },
     .{ .name = "take_opened_document", .arity = 0, .fptr = nif_take_opened_document, .flags = 0 },
     .{ .name = "storage_dir", .arity = 1, .fptr = nif_storage_dir, .flags = 0 },
+    .{ .name = "storage_exclude_from_backup", .arity = 1, .fptr = nif_storage_exclude_from_backup, .flags = 0 },
+    .{ .name = "storage_excluded_from_backup", .arity = 1, .fptr = nif_storage_excluded_from_backup, .flags = 0 },
     .{ .name = "storage_save_to_media_store", .arity = 2, .fptr = nif_storage_save_to_media_store, .flags = 0 },
     .{ .name = "storage_external_files_dir", .arity = 1, .fptr = nif_storage_external_files_dir, .flags = 0 },
     .{ .name = "storage_save_to_photo_library", .arity = 1, .fptr = nif_storage_save_to_photo_library, .flags = 0 },

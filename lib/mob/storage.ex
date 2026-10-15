@@ -10,10 +10,22 @@ defmodule Mob.Storage do
   ## Locations
 
     - `:temp`        — ephemeral; may be purged by the OS at any time
-    - `:documents`   — persists across app sessions; user-visible on iOS
-                       when `UIFileSharingEnabled` is set (see `mix mob.enable`)
-    - `:cache`       — persists until OS needs space; not user-visible
-    - `:app_support` — persists, hidden from user, backed up on iOS
+    - `:documents`   — persists across app sessions; backed up to iCloud on
+                       iOS; user-visible there when `UIFileSharingEnabled` is
+                       set (see `mix mob.enable`)
+    - `:cache`       — persists until OS needs space; not user-visible, not
+                       backed up
+    - `:app_support` — persists, hidden from user; backed up to iCloud on iOS
+                       unless excluded (see `exclude_from_backup/1`)
+
+  On Android none of these are backed up in a generated app, which sets
+  `android:allowBackup="false"`.
+
+  ## Backup
+
+  Apple rejects apps that back up data they can download again. Keep such data
+  (downloaded models, content packs, media caches you don't want purged) in
+  `:app_support` and mark its directory with `exclude_from_backup/1`.
 
   ## Platform-specific storage
 
@@ -32,6 +44,62 @@ defmodule Mob.Storage do
   @spec dir(atom()) :: String.t()
   def dir(location) when location in @locations do
     :mob_nif.storage_dir(location) |> IO.iodata_to_binary()
+  end
+
+  @doc """
+  Exclude a file or directory from iCloud and device backups.
+
+  On iOS this sets `NSURLIsExcludedFromBackupKey` on `path`. On a directory
+  the flag covers everything beneath it, including files created later, so
+  marking the top directory of your downloaded data is enough. Call it at
+  every launch, not once: restoring the app or moving it to a new device can
+  drop the attribute, and setting it again is cheap.
+
+  On Android this does nothing. Generated apps set
+  `android:allowBackup="false"`, so nothing is backed up. An app that turns
+  backup on must exclude the path in its backup rules instead
+  (`android:fullBackupContent` for Android 11 and lower,
+  `android:dataExtractionRules` for 12 and higher); Android has no per-file
+  flag. Off device (host, tests) it also does nothing.
+
+  Returns `{:error, :enoent}` on every platform when `path` doesn't exist,
+  and on iOS `{:error, description}` with the system's message when the
+  attribute can't be set.
+  """
+  @spec exclude_from_backup(String.t()) :: :ok | {:error, :enoent | String.t()}
+  def exclude_from_backup(path) when is_binary(path) do
+    if File.exists?(path),
+      do: nif_or(:storage_exclude_from_backup, path, :ok),
+      else: {:error, :enoent}
+  end
+
+  @doc """
+  Whether `path` is excluded from backup, read back from the filesystem.
+
+  `true` only on iOS, for a path whose `NSURLIsExcludedFromBackupKey` is set.
+  A path inside an excluded directory reports `false` (the flag is on the
+  directory, not copied to its contents), yet it is not backed up. Android and
+  the host always answer `false`; see `exclude_from_backup/1`.
+  """
+  @spec excluded_from_backup?(String.t()) :: boolean()
+  def excluded_from_backup?(path) when is_binary(path) do
+    nif_or(:storage_excluded_from_backup, path, false)
+  end
+
+  # Off device :mob_nif is absent (UndefinedFunctionError) or its stub raises
+  # :not_loaded; both mean there is no backup to exclude from.
+  defp nif_or(fun, path, host_result) do
+    apply(:mob_nif, fun, [path])
+  rescue
+    e in UndefinedFunctionError ->
+      if e.module == :mob_nif and e.function == fun,
+        do: host_result,
+        else: reraise(e, __STACKTRACE__)
+
+    e in ErlangError ->
+      if Map.get(e, :original) == :not_loaded,
+        do: host_result,
+        else: reraise(e, __STACKTRACE__)
   end
 
   @doc """
