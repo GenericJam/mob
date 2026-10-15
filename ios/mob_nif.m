@@ -4852,11 +4852,14 @@ static NSString *mob_notification_envelope(UNNotification *notification, NSStrin
 }
 
 @implementation MobNotificationDelegate
-// Arrived while the app is in the foreground. The banner is still shown.
+// Arrived while the app is in the foreground. The banner is still shown, and
+// List keeps it in Notification Center after the banner times out (without it
+// iOS 14+ drops a foreground notification once its banner goes; MOB-353).
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
        willPresentNotification:(UNNotification *)notification
          withCompletionHandler:(void (^)(UNNotificationPresentationOptions))handler {
-    handler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionSound);
+    handler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionList |
+            UNNotificationPresentationOptionSound);
     [self deliver:mob_notification_envelope(notification, @"foreground", nil)];
 }
 // The user opened the notification, including the tap that launched the app:
