@@ -24,6 +24,14 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `priv/tags/android.txt` did not list it, so with the fix above
   `~MOB(<Anchored>)` would have warned that it is iOS-only. It was the only
   tag on one manifest and not the other.
+- **iOS: a notification that arrives while the app is open now stays in
+  Notification Center (MOB-353).** The notification delegate presented
+  foreground notifications with a banner and sound only; without
+  `UNNotificationPresentationOptionList`, iOS 14+ does not add them to
+  Notification Center, so once the banner timed out the notification was
+  gone and could not be tapped later. The change is in `ios/mob_nif.m`: an
+  app gets it by updating mob and rebuilding natively
+  (`mix mob.deploy --native`).
 
 ## [0.9.18] - 2026-10-14
 

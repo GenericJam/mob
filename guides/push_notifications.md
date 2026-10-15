@@ -98,7 +98,8 @@ Every notification arrives as `{:notification, notif}`, where `notif` is a
 `presentation` tells an arrival from a tap:
 
 * `:foreground` — the notification arrived while the app was in the
-  foreground. The OS still shows its banner. Refresh state, don't navigate.
+  foreground. The OS still shows its banner, and on iOS keeps it in
+  Notification Center after the banner goes. Refresh state, don't navigate.
 * `:tap` — the user opened it, whether the app was in the foreground, in the
   background, or killed. Navigate here.
 
@@ -244,7 +245,7 @@ end
 
 | App state | What happens |
 |-----------|-------------|
-| **Foreground** | iOS shows its banner and `{:notification, %{presentation: :foreground}}` arrives; tapping the banner delivers a second message with `presentation: :tap`. Android: a push reaches mob in the foreground only through an app-owned `MobFirebaseService` (see the upgrade step below); FCM documents that it shows no tray banner for a push it hands to that service. |
+| **Foreground** | iOS shows its banner, keeps the notification in Notification Center, and `{:notification, %{presentation: :foreground}}` arrives; tapping the banner delivers a second message with `presentation: :tap`. Android: a push reaches mob in the foreground only through an app-owned `MobFirebaseService` (see the upgrade step below); FCM documents that it shows no tray banner for a push it hands to that service. |
 | **Background** (home button pressed) | OS shows the notification. When tapped, the app foregrounds and `{:notification, %{presentation: :tap}}` arrives. |
 | **Killed** (fully closed) | OS shows the notification. When tapped, the app launches and `{:notification, %{presentation: :tap}}` arrives at the root screen once it has mounted. |
 
