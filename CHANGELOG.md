@@ -10,6 +10,17 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **`Mob.Storage.exclude_from_backup/1` and `Mob.Storage.excluded_from_backup?/1`.**
+  Apple rejects apps that back up data they can download again, and both
+  `:documents` and `:app_support` are backed up to iCloud on iOS. The first
+  sets `NSURLIsExcludedFromBackupKey` on a file or directory (a directory's
+  flag covers its contents); the second reads it back. On Android, where
+  generated apps set `android:allowBackup="false"`, and off device they
+  return `:ok` / `false` without effect. The `Mob.Storage` docs and the
+  device capabilities guide now say which locations are backed up. No
+  `MobBridge.kt` change.
+
 ## [0.9.20] - 2026-10-15
 
 ### Fixed

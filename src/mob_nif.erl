@@ -59,6 +59,8 @@
     post_mortem_android_drain/0,
     %% Storage
     storage_dir/1,
+    storage_exclude_from_backup/1,
+    storage_excluded_from_backup/1,
     storage_save_to_photo_library/1,
     storage_save_to_media_store/2,
     storage_external_files_dir/1,
@@ -223,6 +225,8 @@
     post_mortem_android_drain/0,
     %% Storage
     storage_dir/1,
+    storage_exclude_from_backup/1,
+    storage_excluded_from_backup/1,
     storage_save_to_photo_library/1,
     storage_save_to_media_store/2,
     storage_external_files_dir/1,
@@ -409,6 +413,8 @@ native_stats() -> erlang:nif_error(not_loaded).
 %% from an earlier one.
 native_stats_enable(_On) -> erlang:nif_error(not_loaded).
 storage_dir(_Location) -> erlang:nif_error(not_loaded).
+storage_exclude_from_backup(_Path) -> erlang:nif_error(not_loaded).
+storage_excluded_from_backup(_Path) -> erlang:nif_error(not_loaded).
 storage_save_to_photo_library(_Path) -> erlang:nif_error(not_loaded).
 storage_save_to_media_store(_Path, _Type) -> erlang:nif_error(not_loaded).
 storage_external_files_dir(_Type) -> erlang:nif_error(not_loaded).

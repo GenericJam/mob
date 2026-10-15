@@ -480,10 +480,10 @@ App-local file storage using named locations instead of raw paths. No permission
 
 ```elixir
 # Resolve a location to its absolute path
-path = Mob.Storage.dir(:documents)   # persists, user-visible on iOS
-path = Mob.Storage.dir(:cache)       # persists until OS needs space
+path = Mob.Storage.dir(:documents)   # persists, backed up to iCloud on iOS, user-visible there
+path = Mob.Storage.dir(:cache)       # persists until OS needs space, not backed up
 path = Mob.Storage.dir(:temp)        # ephemeral, may be purged any time
-path = Mob.Storage.dir(:app_support) # persists, hidden from user, backed up on iOS
+path = Mob.Storage.dir(:app_support) # persists, hidden from user, backed up on iOS unless excluded
 
 # File operations
 {:ok, files} = Mob.Storage.list(:documents)       # returns full paths
@@ -498,6 +498,37 @@ ext = Mob.Storage.extension("/tmp/clip.mp4")  # => ".mp4"
 ```
 
 All operations that can fail return `{:ok, value} | {:error, posix}`. `dir/1` raises on an unknown location atom.
+
+### Keeping downloaded data out of backups
+
+Apple rejects apps that back up data they can download again (Apple's iOS
+Data Storage Guidelines). `:documents` and
+`:app_support` are both backed up to iCloud on iOS, so put re-downloadable
+data (models, content packs, offline media) in its own directory under
+`:app_support` and exclude that directory:
+
+```elixir
+dir = Path.join(Mob.Storage.dir(:app_support), "packs")
+File.mkdir_p!(dir)
+:ok = Mob.Storage.exclude_from_backup(dir)   # a directory's flag covers its contents
+Mob.Storage.excluded_from_backup?(dir)       # => true on iOS
+```
+
+On iOS this sets `NSURLIsExcludedFromBackupKey`. The path must exist
+(`{:error, :enoent}` otherwise, on every platform); the
+flag on a directory also covers files created in it later, and files inside
+it still report `false` from `excluded_from_backup?/1` because the flag lives
+on the directory. Call it at every launch: a restore or a move to a new
+device can drop the attribute.
+
+On Android both calls do nothing (`:ok`, `false`); Android has no per-file
+flag. Generated apps set `android:allowBackup="false"`, which keeps app data
+out of cloud backups (and, up to Android 11, device-to-device transfers). To
+keep a directory out of a backup when your app turns backup on, or out of an
+Android 12+ device-to-device transfer (which `allowBackup="false"` doesn't
+stop), exclude it in the backup rules (`android:fullBackupContent` up to
+Android 11, `android:dataExtractionRules` from Android 12). Off device both
+calls also return `:ok` / `false`.
 
 For saving to the native media library (Camera Roll, Downloads), see `Mob.Storage.Apple` and `Mob.Storage.Android`.
 
