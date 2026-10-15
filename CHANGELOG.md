@@ -28,7 +28,9 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   other file on each deploy) is fixed in mob_dev 0.7.28, with any mob. For
   crash-safe deploys, update both and run `mix mob.deploy --native` once: that
   deploy still writes `Documents/otp/<app>`, and the ones after it, once the
-  new runtime has booted, use the numbered directories.
+  new runtime has booted, use the numbered directories. Moving an app's mob
+  across 0.9.20 in either direction needs `--native` as well; a fast deploy
+  that the app doesn't boot from fails, naming the directory it booted from.
 
 ## [0.9.19] - 2026-10-15
 

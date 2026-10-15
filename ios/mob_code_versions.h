@@ -27,9 +27,10 @@
 //
 // The choice, in order:
 //   1. the highest N that has the marker;
-//   2. <app>/, written by mob_dev < 0.7.28, or by a later mob_dev before this
-//      runtime first booted (mob_dev uses <app>.versions/ only once it exists;
-//      mob_code_advertise creates it);
+//   2. <app>/, written by mob_dev < 0.7.28; by a later mob_dev before this
+//      runtime first booted (it uses <app>.versions/ only once that exists;
+//      mob_code_advertise creates it); or by a later mob_dev for a project
+//      whose mob dependency lacks this header;
 //   3. the BEAMs in the signed bundle.
 //
 // Clean-up, when 1 was chosen: every N below it, marked or not, and <app>/.

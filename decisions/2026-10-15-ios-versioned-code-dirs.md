@@ -45,7 +45,10 @@ to delete (`ios/mob_code_versions.h`, run by `test/native/code_versions_test.c`)
   That is how mob_dev tells a runtime reads the layout: it uses it only when
   that directory exists on the phone *and* the project's mob has
   `ios/mob_code_versions.h` (so keep that file name). Otherwise it merges into
-  `Documents/otp/<app>` without removing anything. See mob_dev's
+  `Documents/otp/<app>` without removing anything. After relaunching, mob_dev
+  waits for `Documents/mob_diag_beams_dir.txt` (which every runtime since
+  0.6.2 writes at boot) to name the directory it wrote, and fails the deploy
+  if the app booted from another. See mob_dev's
   `decisions/2026-10-15-ios-deploy-never-empties-the-container.md`.
 
 Rejected:
@@ -56,7 +59,9 @@ Rejected:
   marker per directory is written once and only its existence matters.
 - **Numbering from the Mac's clock.** Two Macs, or a clock set back, would
   deploy below the version already running. mob_dev numbers from the phone's
-  own listing instead.
+  own listing instead. (That serialises deploys made one after another; two
+  deploys to one phone at the same moment can still pick the same `N`, as
+  two concurrent deploys could always clobber each other.)
 - **Collecting garbage from the Mac.** devicectl can't delete.
 
 ## Consequences
@@ -67,11 +72,17 @@ Rejected:
 - A deploy uploads every BEAM again, as before (the old flag emptied the
   directory first). A module removed from the project is gone on the next
   versioned deploy instead of lingering.
-- The first deploy after `mix mob.deploy --native` to mob ≥ 0.9.20 still goes
-  to the legacy directory, because the new runtime hasn't booted to create
-  `<app>.versions/`; the ones after are versioned, and the first versioned
-  boot deletes the legacy directory.
+- The `mix mob.deploy --native` run that first puts mob ≥ 0.9.20 on a phone still pushes
+  to the legacy directory, because the new runtime hasn't booted yet to
+  create `<app>.versions/`; its restart boots that runtime, the deploys after
+  it are versioned, and the first versioned boot deletes the legacy directory.
 - Release builds (`MOB_RELEASE`) don't create `<app>.versions/`, but still
   load what is there, as they loaded the legacy override before.
-- An app downgraded below mob 0.9.20 keeps `<app>.versions/` on the phone;
-  mob_dev ignores it because the project's mob lacks the header.
+- `<app>.versions/` outlives the runtime that made it. A `--native` downgrade
+  below 0.9.20 is fine (the project's mob lacks the header, so mob_dev
+  merges into the legacy directory the old runtime reads). Moving the
+  project's mob across 0.9.20 *without* `--native` leaves the phone's runtime
+  and mob_dev's choice disagreeing: a versioned upload an old runtime
+  ignores, or a legacy merge a new runtime shadows with its committed version
+  (and then deletes). mob_dev's boot check reports that as a failed deploy;
+  the fix is `mix mob.deploy --native`.
