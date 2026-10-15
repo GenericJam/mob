@@ -106,6 +106,10 @@ defmodule Mob.Sigil do
   Mix does not track the reads, so after changing the config or updating a
   plugin run `mix compile --force` (or touch the screens) for already-compiled
   modules to pick it up.
+
+  A declared tag never warns, not even iOS-only / Android-only: the platform
+  keys of a per-platform `tags:` map are not checked, and declaring a tag that
+  only one of mob's manifests lists silences that warning too.
   """
 
   # ── Whitelist ────────────────────────────────────────────────────────────────
@@ -518,6 +522,8 @@ defmodule Mob.Sigil do
   def wrap_child(node), do: [node]
 
   defp resolve_type(tag, caller) do
+    # No membership pre-filter before tag_warning/2: the tests reach the
+    # single-platform branches only through it, not through the sigil.
     with msg when is_binary(msg) <- tag_warning(tag, @known_tags),
          false <- extra_tag?(tag) or plugin_tag?(tag) do
       IO.warn(msg, Macro.Env.stacktrace(caller))
