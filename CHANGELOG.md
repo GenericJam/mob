@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.20] - 2026-10-15
+
 ### Fixed
 - **iOS: an interrupted BEAM deploy to a physical iPhone leaves the previous
   code running (MOB-408).** `mob_beam.m` loaded deployed BEAMs from the one
