@@ -397,6 +397,9 @@ void mob_start_beam(const char *app_module) {
     unsigned long long code_version = 0;
     mob_code_source code_source = mob_code_choose(docs_dir, app_module, bundle_beams, beams_dir,
                                                   sizeof(beams_dir), &code_version);
+    // mob_dev waits for this to name the directory it deployed: write it as
+    // soon as the choice is made, before the clean-up below.
+    mob_write_diag(docs_dir, "mob_diag_beams_dir.txt", beams_dir);
     if (code_source == MOB_CODE_FROM_VERSION) {
         int removed = mob_code_collect_garbage(docs_dir, app_module, code_version);
         NSLog(@"[MobBeam] beams dir: deployed version %llu (%d older removed)", code_version,
@@ -405,7 +408,6 @@ void mob_start_beam(const char *app_module) {
         NSLog(@"[MobBeam] beams dir: %s",
               code_source == MOB_CODE_FROM_LEGACY ? "legacy Documents override" : "app bundle");
     }
-    mob_write_diag(docs_dir, "mob_diag_beams_dir.txt", beams_dir);
 #endif
 
     // MOB_BEAMS_DIR — the directory where app BEAMs (and priv/) are deployed.

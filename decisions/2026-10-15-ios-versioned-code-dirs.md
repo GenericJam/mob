@@ -27,7 +27,8 @@ overwrites, so the host can't swap a directory atomically or clean one up.
 ## Decision
 
 Each deploy is a new directory, and the phone decides what to load and what
-to delete (`ios/mob_code_versions.h`, run by `test/native/code_versions_test.c`):
+to delete (`ios/mob_code_versions.h`, run by
+`test/native/code_versions_test.c`):
 
 - mob_dev uploads to `Documents/otp/<app>.versions/<N>/` with a plain copy,
   `N` above every entry already there (zero-padded to 10 digits), reads back
@@ -72,10 +73,11 @@ Rejected:
 - A deploy uploads every BEAM again, as before (the old flag emptied the
   directory first). A module removed from the project is gone on the next
   versioned deploy instead of lingering.
-- The `mix mob.deploy --native` run that first puts mob ≥ 0.9.20 on a phone still pushes
-  to the legacy directory, because the new runtime hasn't booted yet to
-  create `<app>.versions/`; its restart boots that runtime, the deploys after
-  it are versioned, and the first versioned boot deletes the legacy directory.
+- The `mix mob.deploy --native` run that first puts mob ≥ 0.9.20 on a phone
+  still pushes to the legacy directory, because the new runtime hasn't booted
+  yet to create `<app>.versions/`; its restart boots that runtime, the deploys
+  after it are versioned, and the first versioned boot deletes the legacy
+  directory.
 - Release builds (`MOB_RELEASE`) don't create `<app>.versions/`, but still
   load what is there, as they loaded the legacy override before.
 - `<app>.versions/` outlives the runtime that made it. A `--native` downgrade
