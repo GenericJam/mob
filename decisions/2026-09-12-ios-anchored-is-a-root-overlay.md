@@ -73,3 +73,6 @@ The code lives in `ios/MobAnchored.swift`. `MobRootView.swift` crossed swiftlint
   (mob_new, MOB-189) carries `MobAnchored`. The sigil does not flag it as
   iOS-only: its whitelist check tests the union of both files, so the
   per-platform branches never fire (MOB-194).
+  Update 2026-10-15: `Anchored` joined `priv/tags/android.txt` (MOB-365; the
+  bridge has carried `MobAnchored` since mob_new 0.5.0), and the sigil now
+  warns about a tag on exactly one manifest (MOB-194).

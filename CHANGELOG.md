@@ -10,6 +10,21 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **The `~MOB` sigil now warns about iOS-only and Android-only tags
+  (MOB-194).** The whitelist check tested the union of
+  `priv/tags/ios.txt` and `priv/tags/android.txt`, so its iOS-only /
+  Android-only branches could never fire: a tag one platform does not render
+  compiled silently. A tag on exactly one manifest now warns at compile time,
+  naming the platform that has it; a tag on neither still warns that it is not
+  in the whitelist. Tags from `config :mob, :extra_tags` and plugin manifests
+  stay silent.
+- **`Anchored` is on the Android tag whitelist (MOB-365).** The Android bridge
+  has rendered `:anchored` since mob_new 0.5.0 (MOB-189), but
+  `priv/tags/android.txt` did not list it, so with the fix above
+  `~MOB(<Anchored>)` would have warned that it is iOS-only. It was the only
+  tag on one manifest and not the other.
+
 ## [0.9.18] - 2026-10-14
 
 ### Added

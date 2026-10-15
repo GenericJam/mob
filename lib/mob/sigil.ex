@@ -76,10 +76,12 @@ defmodule Mob.Sigil do
   ## Tag whitelist
 
   Tags are validated against `priv/tags/ios.txt` and `priv/tags/android.txt` at
-  compile time. Unknown tags emit a warning but still pass through — the type
-  atom is derived by converting PascalCase to snake_case (e.g. `TabBar` →
-  `:tab_bar`). This allows new native tags to be used before the whitelist is
-  updated.
+  compile time. A tag on only one of them warns that it is iOS-only or
+  Android-only: the other platform's renderer does not draw it. A tag on
+  neither warns that it is not in the whitelist. Either way the tag still
+  passes through — the type atom is derived by converting PascalCase to
+  snake_case (e.g. `TabBar` → `:tab_bar`). This allows new native tags to be
+  used before the whitelist is updated.
 
   Composite tags an app registers at boot (`Mob.Composite.register/2`, or a UI
   kit's own registry) are invisible to that compile-time check, so declare them
@@ -135,11 +137,7 @@ defmodule Mob.Sigil do
                 ios_tags = parse_tags.(ios_file)
                 android_tags = parse_tags.(android_file)
 
-                %{
-                  ios: ios_tags,
-                  android: android_tags,
-                  both: MapSet.union(ios_tags, android_tags)
-                }
+                %{ios: ios_tags, android: android_tags}
               )
 
   # ── Parser (NimbleParsec) ────────────────────────────────────────────────────
@@ -520,26 +518,34 @@ defmodule Mob.Sigil do
   def wrap_child(node), do: [node]
 
   defp resolve_type(tag, caller) do
-    atom = tag |> Macro.underscore() |> String.to_atom()
-
-    unless MapSet.member?(@known_tags.both, tag) or extra_tag?(tag) or plugin_tag?(tag) do
-      ios_only =
-        MapSet.member?(@known_tags.ios, tag) and not MapSet.member?(@known_tags.android, tag)
-
-      android_only =
-        MapSet.member?(@known_tags.android, tag) and not MapSet.member?(@known_tags.ios, tag)
-
-      msg =
-        cond do
-          ios_only -> "~MOB: <#{tag}> is iOS-only — not supported on Android"
-          android_only -> "~MOB: <#{tag}> is Android-only — not supported on iOS"
-          true -> "~MOB: <#{tag}> is not in the Mob tag whitelist — pass-through as :#{atom}"
-        end
-
+    with msg when is_binary(msg) <- tag_warning(tag, @known_tags),
+         false <- extra_tag?(tag) or plugin_tag?(tag) do
       IO.warn(msg, Macro.Env.stacktrace(caller))
     end
 
-    atom
+    tag |> Macro.underscore() |> String.to_atom()
+  end
+
+  # Public so the platform branches can be tested against manifests that differ;
+  # the packaged ones list the same tags today. A tag on exactly one manifest is
+  # one the other platform's renderer does not draw, which the union check this
+  # replaced let through silently (MOB-194).
+  @doc false
+  @spec tag_warning(String.t(), %{ios: MapSet.t(), android: MapSet.t()}) :: String.t() | nil
+  def tag_warning(tag, %{ios: ios, android: android}) do
+    case {MapSet.member?(ios, tag), MapSet.member?(android, tag)} do
+      {true, true} ->
+        nil
+
+      {true, false} ->
+        "~MOB: <#{tag}> is iOS-only — not supported on Android"
+
+      {false, true} ->
+        "~MOB: <#{tag}> is Android-only — not supported on iOS"
+
+      {false, false} ->
+        "~MOB: <#{tag}> is not in the Mob tag whitelist — pass-through as :#{Macro.underscore(tag)}"
+    end
   end
 
   # `config :mob, :extra_tags` — composite tags the app registers at boot.
@@ -643,10 +649,9 @@ defmodule Mob.Sigil do
   #    `ui_components` gets whitelist coverage for free — no need to also
   #    duplicate the tag names into a top-level `tags:` field.
   #
-  # Platform scoping for warning messages is intentionally NOT honored here —
-  # the whitelist union treats any plugin-declared tag as known; refining
-  # "iOS-only" warnings for plugin tags is a follow-up if it turns out to
-  # matter.
+  # Platform scoping is intentionally NOT honored here: any plugin-declared
+  # tag counts as rendered on both platforms and never warns, even one that
+  # only one of mob's own manifests lists.
   defp extract_plugin_tags(manifest) do
     from_tags_field(manifest) ++ from_ui_components(manifest)
   end
