@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.19] - 2026-10-15
+
 ### Fixed
 - **The `~MOB` sigil now warns about iOS-only and Android-only tags
   (MOB-194).** The whitelist check tested the union of
@@ -23,7 +25,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   has rendered `:anchored` since mob_new 0.5.0 (MOB-189), but
   `priv/tags/android.txt` did not list it, so with the fix above
   `~MOB(<Anchored>)` would have warned that it is iOS-only. It was the only
-  tag on one manifest and not the other.
+  tag on one manifest and not the other, so the two manifests now list the
+  same tags and no existing `~MOB` usage gains a warning in this release.
 - **iOS: a notification that arrives while the app is open now stays in
   Notification Center (MOB-353).** The notification delegate presented
   foreground notifications with a banner and sound only; without
