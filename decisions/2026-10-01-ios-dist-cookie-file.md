@@ -33,7 +33,11 @@ got a random cookie: the node registered in EPMD but nothing could connect.
     after the BEAM sync, since a `--native` build's runtime rsync (`--delete`)
     removes it.
   - Physical iPhone: into the staging dir copied to `Documents/otp/<app>/`,
-    which `mob_beam.m` prefers over the bundle once it exists. That is
+    which `mob_beam.m` prefers over the bundle once it exists. (Amended by
+    MOB-408: with mob ≥ 0.9.20 and mob_dev ≥ 0.7.28 the staging dir goes to a
+    new `Documents/otp/<app>.versions/<N>/` instead, and the file is read from
+    whichever directory `mob_beam.m` loads; see
+    `2026-10-15-ios-versioned-code-dirs.md`.) That is
     `--native` and any deploy to a device that isn't connected over dist; a
     connected device is only hot-loaded (mob_dev's `persistable?/1`: a
     devicectl replace has no undo) and gets no file. Since reading the file

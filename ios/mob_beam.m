@@ -4,6 +4,7 @@
 // Swift-generated header) so this file stays free of app-specific includes.
 
 #include "mob_beam.h"
+#include "mob_code_versions.h"
 #include "mob_dist_cookie.h"
 #include "mob_dist_port.h"
 #include "mob_init_args.h"
@@ -379,14 +380,30 @@ void mob_start_beam(const char *app_module) {
     snprintf(beams_dir, sizeof(beams_dir), "%s/%s", otp_root, app_module);
 
 #ifdef MOB_BUNDLE_OTP
-    // On physical device, the bundle BEAMs are read-only (code-signed).
-    // deployer.ex can push updated BEAMs to Documents/otp/<app>/ via
-    // `xcrun devicectl device copy to --domain-type appDataContainer`.
-    // If that directory exists, prefer it over the in-bundle copy.
-    static char docs_beams[512];
-    snprintf(docs_beams, sizeof(docs_beams), "%s/otp/%s", docs_dir, app_module);
-    if ([[NSFileManager defaultManager] fileExistsAtPath:@(docs_beams)]) {
-        strlcpy(beams_dir, docs_beams, sizeof(beams_dir));
+    // On a physical device the bundle's BEAMs are read-only (code-signed), so
+    // `mix mob.deploy` uploads newer ones into Documents/otp with `xcrun
+    // devicectl device copy to`. mob_code_versions.h has the layout and the
+    // order: the newest complete Documents/otp/<app>.versions/<N>, else the
+    // legacy Documents/otp/<app>, else the bundle (MOB-408).
+#ifndef MOB_RELEASE
+    // Tells mob_dev this runtime reads <app>.versions/.
+    if (!mob_code_advertise(docs_dir, app_module))
+        NSLog(@"[MobBeam] could not create Documents/otp/%s%s: mob.deploy will use the legacy "
+              @"Documents/otp/%s",
+              app_module, MOB_CODE_VERSIONS_SUFFIX, app_module);
+#endif
+    static char bundle_beams[512];
+    strlcpy(bundle_beams, beams_dir, sizeof(bundle_beams));
+    unsigned long long code_version = 0;
+    mob_code_source code_source = mob_code_choose(docs_dir, app_module, bundle_beams, beams_dir,
+                                                  sizeof(beams_dir), &code_version);
+    if (code_source == MOB_CODE_FROM_VERSION) {
+        int removed = mob_code_collect_garbage(docs_dir, app_module, code_version);
+        NSLog(@"[MobBeam] beams dir: deployed version %llu (%d older removed)", code_version,
+              removed);
+    } else {
+        NSLog(@"[MobBeam] beams dir: %s",
+              code_source == MOB_CODE_FROM_LEGACY ? "legacy Documents override" : "app bundle");
     }
     mob_write_diag(docs_dir, "mob_diag_beams_dir.txt", beams_dir);
 #endif

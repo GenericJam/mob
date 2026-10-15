@@ -10,6 +10,26 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **iOS: an interrupted BEAM deploy to a physical iPhone leaves the previous
+  code running (MOB-408).** `mob_beam.m` loaded deployed BEAMs from the one
+  directory `Documents/otp/<app>` whenever it existed, so a copy that died
+  part-way left an override the app could not boot from. It now loads the
+  highest-numbered `Documents/otp/<app>.versions/<N>` that has its
+  `.mob_complete` marker, which mob_dev copies only after the upload is
+  verified; then the legacy `Documents/otp/<app>`, then the bundle. Once it
+  has chosen a version it deletes the older ones and the legacy directory.
+  Development builds create `Documents/otp/<app>.versions/` at each boot,
+  which tells mob_dev 0.7.28 or later to use it. The choice is in
+  `ios/mob_code_versions.h`, covered by `test/native/code_versions_test.c`.
+  See `decisions/2026-10-15-ios-versioned-code-dirs.md`.
+  **Upgrading:** the Documents wipe itself (`devicectl
+  --remove-existing-content` erasing the app's database, Library and every
+  other file on each deploy) is fixed in mob_dev 0.7.28, with any mob. For
+  crash-safe deploys, update both and run `mix mob.deploy --native` once: that
+  deploy still writes `Documents/otp/<app>`, and the ones after it, once the
+  new runtime has booted, use the numbered directories.
+
 ## [0.9.19] - 2026-10-15
 
 ### Fixed
