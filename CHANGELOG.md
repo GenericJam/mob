@@ -29,8 +29,9 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   foreground notifications with a banner and sound only; without
   `UNNotificationPresentationOptionList`, iOS 14+ does not add them to
   Notification Center, so once the banner timed out the notification was
-  gone and could not be tapped later. Android heads-ups already stayed in the
-  tray.
+  gone and could not be tapped later. The change is in `ios/mob_nif.m`: an
+  app gets it by updating mob and rebuilding natively
+  (`mix mob.deploy --native`).
 
 ## [0.9.18] - 2026-10-14
 
