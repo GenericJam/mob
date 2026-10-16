@@ -94,10 +94,10 @@ defmodule Mob.Storage do
     nif_or(nif, :storage_excluded_from_backup, path, false, false)
   end
 
-  # The NIF is missing in three cases: off device :mob_nif is absent
-  # (UndefinedFunctionError); on a phone whose native build predates the
-  # function, the Erlang stub is loaded but the library doesn't export it, so
-  # the stub raises :not_loaded. Off device and on Android there is no backup
+  # The NIF is missing in two ways: the module or its export is absent
+  # (UndefinedFunctionError: off device, or an older stub module), or the
+  # Erlang stub is current but the native build predates the function, so the
+  # stub raises :not_loaded. Off device and on Android there is no backup
   # to exclude from (`no_backup`); on iOS the path is still backed up, so the
   # caller gets `old_ios`, not a false success.
   defp nif_or(nif, fun, path, no_backup, old_ios) do

@@ -195,6 +195,11 @@ defmodule Mob.StorageTest do
       def storage_exclude_from_backup(_path), do: :erlang.nif_error(:not_loaded)
     end
 
+    # An older stub module: platform/0 but no storage exports at all.
+    defmodule OlderIosModule do
+      def platform, do: :ios
+    end
+
     defmodule CurrentIosNif do
       def platform, do: :ios
       def storage_exclude_from_backup(_path), do: :ok
@@ -204,6 +209,11 @@ defmodule Mob.StorageTest do
     test "iOS without the NIF says it couldn't, instead of :ok", %{dir: dir} do
       assert Storage.exclude_from_backup(dir, OldIosNif) == {:error, :unsupported}
       refute Storage.excluded_from_backup?(dir, OldIosNif)
+    end
+
+    test "iOS whose module lacks the export says it couldn't too", %{dir: dir} do
+      assert Storage.exclude_from_backup(dir, OlderIosModule) == {:error, :unsupported}
+      refute Storage.excluded_from_backup?(dir, OlderIosModule)
     end
 
     test "Android without the NIF is :ok (nothing is backed up there)", %{dir: dir} do
