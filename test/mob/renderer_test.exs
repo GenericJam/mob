@@ -105,6 +105,25 @@ defmodule Mob.RendererTest do
       assert decoded["props"]["text"] == "Hello"
     end
 
+    # Both renderers branch on the encoded string: iOS reads `axis` as an
+    # NSString (mob_nif.m) and compares it with "horizontal" (MobRootView.swift);
+    # Android's bridge compares `node.props["axis"] == "horizontal"`.
+    test "a scroll's axis reaches the renderer as a string, atom or not" do
+      for platform <- [:ios, :android], axis <- [:horizontal, "horizontal"] do
+        MockNIF.reset()
+
+        tree = %{
+          type: :scroll,
+          props: %{axis: axis},
+          children: [%{type: :row, props: %{}, children: []}]
+        }
+
+        Renderer.render(tree, platform, MockNIF)
+        {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+        assert :json.decode(json)["props"]["axis"] == "horizontal", inspect({platform, axis})
+      end
+    end
+
     test "box accessibility and disabled props survive the renderer boundary" do
       tree = %{
         type: :box,

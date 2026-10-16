@@ -260,14 +260,33 @@ box_style = {self(), :box}
 
 ### `:scroll`
 
-A vertically scrolling container.
+A scrolling container: vertical by default, or horizontal with
+`axis: "horizontal"`.
 
 | Prop | Type | Description |
 |------|------|-------------|
+| `axis` | `"vertical"` / `"horizontal"` | Scroll direction. Default `"vertical"`. Horizontal lays its children out as a row (`ScrollView(.horizontal)` on iOS, `Modifier.horizontalScroll` on a `Row` on Android) |
 | `padding` | number / token | Padding inside the scroll area |
 | `background` | color | Background color |
-| `lazy` | boolean | Build only the rows currently on screen. Opt-in; see below |
-| `anchor` | `"top"` / `"bottom"` | `"bottom"` opens at the end and keeps new content in view, chat-style. Default `"top"`. See below |
+| `show_indicator` | boolean | `false` hides the scroll indicator on iOS; Android has no control for it |
+| `lazy` | boolean | Build only the rows currently on screen. Vertical only; opt-in; see below |
+| `anchor` | `"top"` / `"bottom"` | `"bottom"` opens at the end and keeps new content in view, chat-style. Default `"top"`. Vertical only; see below |
+
+A horizontal scroll suits content wider than the screen that should keep its
+shape, such as a row of cards or a wide table:
+
+```elixir
+~MOB"""
+<Scroll axis="horizontal">
+  <Row gap={8}>
+    {cards}
+  </Row>
+</Scroll>
+"""
+```
+
+The value may also be an atom (`axis: :horizontal`); props are encoded as JSON,
+so both reach the renderer as `"horizontal"`.
 
 For a scrolling body with a pinned footer, use
 `box(width, fill_height) > column(fill_width, fill_height) > [header, scroll(weight: 1), footer]`.
