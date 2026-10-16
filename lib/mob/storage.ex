@@ -67,12 +67,16 @@ defmodule Mob.Storage do
 
   Returns `{:error, :enoent}` on every platform when `path` doesn't exist,
   and on iOS `{:error, description}` with the system's message when the
-  attribute can't be set.
+  attribute can't be set. On an iOS app whose native build predates this
+  function (mob 0.9.20 or older, not rebuilt with `mix mob.deploy --native`)
+  it returns `{:error, :unsupported}`: the path stays backed up, and saying
+  `:ok` would hide that.
   """
-  @spec exclude_from_backup(String.t()) :: :ok | {:error, :enoent | String.t()}
-  def exclude_from_backup(path) when is_binary(path) do
+  @spec exclude_from_backup(String.t(), module()) ::
+          :ok | {:error, :enoent | :unsupported | String.t()}
+  def exclude_from_backup(path, nif \\ :mob_nif) when is_binary(path) do
     if File.exists?(path),
-      do: nif_or(:storage_exclude_from_backup, path, :ok),
+      do: nif_or(nif, :storage_exclude_from_backup, path, :ok, {:error, :unsupported}),
       else: {:error, :enoent}
   end
 
@@ -82,27 +86,43 @@ defmodule Mob.Storage do
   `true` only on iOS, for a path whose `NSURLIsExcludedFromBackupKey` is set.
   A path inside an excluded directory reports `false` (the flag is on the
   directory, not copied to its contents), yet it is not backed up. Android and
-  the host always answer `false`; see `exclude_from_backup/1`.
+  the host always answer `false`, and so does an iOS native build that
+  predates this function; see `exclude_from_backup/1`.
   """
-  @spec excluded_from_backup?(String.t()) :: boolean()
-  def excluded_from_backup?(path) when is_binary(path) do
-    nif_or(:storage_excluded_from_backup, path, false)
+  @spec excluded_from_backup?(String.t(), module()) :: boolean()
+  def excluded_from_backup?(path, nif \\ :mob_nif) when is_binary(path) do
+    nif_or(nif, :storage_excluded_from_backup, path, false, false)
   end
 
-  # Off device :mob_nif is absent (UndefinedFunctionError) or its stub raises
-  # :not_loaded; both mean there is no backup to exclude from.
-  defp nif_or(fun, path, host_result) do
-    apply(:mob_nif, fun, [path])
+  # The NIF is missing in three cases: off device :mob_nif is absent
+  # (UndefinedFunctionError); on a phone whose native build predates the
+  # function, the Erlang stub is loaded but the library doesn't export it, so
+  # the stub raises :not_loaded. Off device and on Android there is no backup
+  # to exclude from (`no_backup`); on iOS the path is still backed up, so the
+  # caller gets `old_ios`, not a false success.
+  defp nif_or(nif, fun, path, no_backup, old_ios) do
+    apply(nif, fun, [path])
   rescue
     e in UndefinedFunctionError ->
-      if e.module == :mob_nif and e.function == fun,
-        do: host_result,
+      if e.module == nif and e.function == fun,
+        do: missing_nif(nif, no_backup, old_ios),
         else: reraise(e, __STACKTRACE__)
 
     e in ErlangError ->
       if Map.get(e, :original) == :not_loaded,
-        do: host_result,
+        do: missing_nif(nif, no_backup, old_ios),
         else: reraise(e, __STACKTRACE__)
+  end
+
+  defp missing_nif(nif, no_backup, old_ios) do
+    if platform(nif) == :ios, do: old_ios, else: no_backup
+  end
+
+  # :mob_nif.platform/0 is as old as mob's native layer; off device it's absent.
+  defp platform(nif) do
+    nif.platform()
+  rescue
+    _ in [UndefinedFunctionError, ErlangError] -> :host
   end
 
   @doc """

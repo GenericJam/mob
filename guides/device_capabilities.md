@@ -511,6 +511,8 @@ data (models, content packs, offline media) in its own directory under
 dir = Path.join(Mob.Storage.dir(:app_support), "packs")
 File.mkdir_p!(dir)
 :ok = Mob.Storage.exclude_from_backup(dir)   # a directory's flag covers its contents
+# {:error, :unsupported} on an iOS native build older than mob 0.9.21:
+# rebuild with `mix mob.deploy --native`.
 Mob.Storage.excluded_from_backup?(dir)       # => true on iOS
 ```
 
