@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.21] - 2026-10-15
+
 ### Added
 - **`Mob.Storage.exclude_from_backup/1` and `Mob.Storage.excluded_from_backup?/1`.**
   Apple rejects apps that back up data they can download again, and both
