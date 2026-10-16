@@ -19,7 +19,10 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   generated apps set `android:allowBackup="false"`, and off device they
   return `:ok` / `false` without effect. The `Mob.Storage` docs and the
   device capabilities guide now say which locations are backed up. No
-  `MobBridge.kt` change.
+  `MobBridge.kt` change, but the iOS half is in `ios/mob_nif.m`: rebuild
+  natively (`mix mob.deploy --native`). On an iOS build that predates it,
+  `exclude_from_backup/1` returns `{:error, :unsupported}` rather than a
+  false `:ok`.
 
 ## [0.9.20] - 2026-10-15
 

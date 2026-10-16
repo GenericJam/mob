@@ -179,4 +179,54 @@ defmodule Mob.StorageTest do
       assert Storage.exclude_from_backup(Path.join(dir, "not_yet")) == {:error, :enoent}
     end
   end
+
+  describe "backup exclusion on a native build that predates it" do
+    # The phone's Erlang stub is current but its native library is older: the
+    # stub raises :not_loaded, as mob_nif.erl's does. On iOS the path is still
+    # backed up, so the call must not claim success.
+    defmodule OldIosNif do
+      def platform, do: :ios
+      def storage_exclude_from_backup(_path), do: :erlang.nif_error(:not_loaded)
+      def storage_excluded_from_backup(_path), do: :erlang.nif_error(:not_loaded)
+    end
+
+    defmodule OldAndroidNif do
+      def platform, do: :android
+      def storage_exclude_from_backup(_path), do: :erlang.nif_error(:not_loaded)
+    end
+
+    # An older stub module: platform/0 but no storage exports at all.
+    defmodule OlderIosModule do
+      def platform, do: :ios
+    end
+
+    defmodule CurrentIosNif do
+      def platform, do: :ios
+      def storage_exclude_from_backup(_path), do: :ok
+      def storage_excluded_from_backup(_path), do: true
+    end
+
+    test "iOS without the NIF says it couldn't, instead of :ok", %{dir: dir} do
+      assert Storage.exclude_from_backup(dir, OldIosNif) == {:error, :unsupported}
+      refute Storage.excluded_from_backup?(dir, OldIosNif)
+    end
+
+    test "iOS whose module lacks the export says it couldn't too", %{dir: dir} do
+      assert Storage.exclude_from_backup(dir, OlderIosModule) == {:error, :unsupported}
+      refute Storage.excluded_from_backup?(dir, OlderIosModule)
+    end
+
+    test "Android without the NIF is :ok (nothing is backed up there)", %{dir: dir} do
+      assert Storage.exclude_from_backup(dir, OldAndroidNif) == :ok
+    end
+
+    test "a missing path is still {:error, :enoent}", %{dir: dir} do
+      assert Storage.exclude_from_backup(Path.join(dir, "nope"), OldIosNif) == {:error, :enoent}
+    end
+
+    test "a current iOS NIF answers for itself", %{dir: dir} do
+      assert Storage.exclude_from_backup(dir, CurrentIosNif) == :ok
+      assert Storage.excluded_from_backup?(dir, CurrentIosNif)
+    end
+  end
 end
