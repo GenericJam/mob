@@ -10,6 +10,13 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Documentation
+- **`:scroll`'s `axis` prop is in the components guide** (#212). Horizontal
+  scrolling worked on both platforms but the `:scroll` reference called it a
+  vertical container and left `axis` (and `show_indicator`) out of its prop
+  table. The table now lists them, with an example and which props are
+  vertical-only; the guides use the string form `"horizontal"` throughout.
+
 ## [0.9.21] - 2026-10-15
 
 ### Added
