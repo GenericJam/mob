@@ -30,7 +30,9 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 - **Upgrading:** the iOS half is in `ios/mob_nif.m` and the Android NIF in
   `android/jni/mob_nif.zig`, so rebuild natively (`mix mob.deploy --native`).
   Android also needs the `MobBridge.kt` text-to-speech block from mob_new
-  0.6.14 (`ttsSpeakFor`, `ttsVoices`, the reworked `ttsSpeak`/`ttsStop`) and
+  0.6.14 (`ttsSpeakFor`, `ttsVoices`, the reworked `ttsSpeak`/`ttsStop`, and
+  the `ttsAppContext` line in `MobBridge.init`; mob_new's CHANGELOG has the
+  steps) and
   an `android.intent.action.TTS_SERVICE` entry in the manifest's `<queries>`;
   without that entry, API 30+ hides the TTS engine from the app. With an
   older bridge, `voices/0` returns `{:error, :unsupported}` and `speak/3`
