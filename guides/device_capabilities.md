@@ -249,7 +249,8 @@ socket = Mob.Speech.speak(socket, reply, voice: socket.assigns.voice_id)
 socket = Mob.Speech.speak(socket, "Bonjour", voice: "fr-FR")  # a language works too
 socket = Mob.Speech.stop_speaking(socket)
 
-# One message per utterance, to the process that called speak/3
+# One message per utterance, to the process that called speak/3; stop_speaking/1
+# cancels every unfinished one (Mob.Speech lists the one exception)
 def handle_info({:speech, :done}, socket), do: {:noreply, Mob.Socket.assign(socket, :reading, false)}
 def handle_info({:speech, :cancelled}, socket), do: {:noreply, socket}
 def handle_info({:speech, :failed}, socket), do: {:noreply, socket}   # Android only
@@ -258,9 +259,10 @@ def handle_info({:speech, :failed}, socket), do: {:noreply, socket}   # Android 
 `:voice` matches a voice id first; otherwise it's read as a language tag, and
 a value that is neither speaks with the system default voice. Voice ids are
 per device, so a saved id may be missing on another phone. Options apply to
-one utterance only. iOS uses `AVSpeechSynthesizer`; Android uses
-`TextToSpeech`, and needs a `MobBridge.kt` from mob_new 0.6.14 or newer for
-voice ids, `voices/0` and the events (see `Mob.Speech`).
+one utterance only; left out, rate and pitch follow the user's text-to-speech
+settings. iOS uses `AVSpeechSynthesizer`; Android uses `TextToSpeech`, and
+needs a `MobBridge.kt` from mob_new 0.6.14 or newer for voice ids, `voices/0`
+and the events (see `Mob.Speech`).
 
 ## Location
 

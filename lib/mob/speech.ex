@@ -63,9 +63,10 @@ defmodule Mob.Speech do
   Each queued utterance sends exactly one message, so after three `speak/3`
   calls the third `{:speech, :done}` means reading has finished, and
   `stop_speaking/1` sends `:cancelled` for every utterance that hadn't ended
-  (the one speaking and the ones queued behind it). The one exception: when
-  Android's TTS engine process dies mid-utterance, that utterance sends
-  nothing.
+  (the one speaking and the ones queued behind it). An Android engine that
+  doesn't start within 10 s fails what was waiting for it with `:failed`. The
+  one exception: when Android's TTS engine process dies mid-utterance, that
+  utterance sends nothing.
 
       def handle_info({:speech, :done}, socket),
         do: {:noreply, Mob.Socket.assign(socket, :reading, false)}
