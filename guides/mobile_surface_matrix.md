@@ -136,7 +136,7 @@ and orthogonal — composition over a fat component library.
 | Photo library picker | ✅ | ✓ | ✓ | `MobPhotos.pick/2` (`mob_photos` plugin) |
 | Audio recording | ✅ | ✓ | ✓ | `Mob.Audio.start_recording/2` |
 | Audio playback | ✅ | ✓ | ✓ | `Mob.Audio.play/3`, stop, volume |
-| Text-to-speech | ✅ | ✓ | ✓ | `Mob.Speech.speak/3` + `stop_speaking/1` (AVSpeechSynthesizer / TextToSpeech) |
+| Text-to-speech | ✅ | ✓ | ✓ | `Mob.Speech.speak/3` + `stop_speaking/1` + `voices/0` (pick a voice by id; `{:speech, :done}` when an utterance ends) (AVSpeechSynthesizer / TextToSpeech) |
 | Speech recognition | 🟡 | 🟡 | ✓ | `mob_speech` plugin (`MobSpeech.listen/2`; platform recognizer by default, or offline whisper.cpp via `mob_whisper`). Android verified; iOS builds, not yet run on a device |
 | Voice activity detection | ❌ | — | — | Plugin candidate |
 | Audio effects (reverb, EQ) | ❌ | — | — | Plugin candidate |

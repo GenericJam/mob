@@ -227,6 +227,41 @@ end
 
 iOS uses `AVAudioPlayer` / `AVPlayer`. Android uses `MediaPlayer`.
 
+## Text-to-speech
+
+No permission needed. `Mob.Speech` reads text aloud with the system voice, or
+one the user picked from `Mob.Speech.voices/0`.
+
+```elixir
+# List the installed voices (blocks; Android waits for the engine the first
+# time, so load it asynchronously)
+def mount(_params, _session, socket) do
+  {:ok, Mob.Socket.start_async(socket, :voices, fn -> Mob.Speech.voices() end)}
+end
+
+def handle_async(:voices, {:ok, {:ok, voices}}, socket),
+  do: {:noreply, Mob.Socket.assign(socket, :voices, voices)}
+
+# voices: [%{id: "com.apple.voice.compact.en-US.Samantha", name: "Samantha",
+#            language: "en-US", quality: :normal, network: false}, ...]
+
+socket = Mob.Speech.speak(socket, reply, voice: socket.assigns.voice_id)
+socket = Mob.Speech.speak(socket, "Bonjour", voice: "fr-FR")  # a language works too
+socket = Mob.Speech.stop_speaking(socket)
+
+# One message per utterance, to the process that called speak/3
+def handle_info({:speech, :done}, socket), do: {:noreply, Mob.Socket.assign(socket, :reading, false)}
+def handle_info({:speech, :cancelled}, socket), do: {:noreply, socket}
+def handle_info({:speech, :failed}, socket), do: {:noreply, socket}   # Android only
+```
+
+`:voice` matches a voice id first; otherwise it's read as a language tag, and
+a value that is neither speaks with the system default voice. Voice ids are
+per device, so a saved id may be missing on another phone. Options apply to
+one utterance only. iOS uses `AVSpeechSynthesizer`; Android uses
+`TextToSpeech`, and needs a `MobBridge.kt` from mob_new 0.6.14 or newer for
+voice ids, `voices/0` and the events (see `Mob.Speech`).
+
 ## Location
 
 `MobLocation` ships in the `mob_location` plugin. Requires `:location` permission.

@@ -10,6 +10,37 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **`Mob.Speech.voices/0`: the text-to-speech voices installed on the
+  device**, as `{:ok, [%{id, name, language, quality, network}]}` sorted by
+  language, then best quality, then name, on-device before network (iOS
+  `AVSpeechSynthesisVoice.speechVoices`, Android `TextToSpeech.getVoices`,
+  leaving out voices whose data isn't downloaded). `quality` is
+  `:very_low | :low | :normal | :high | :very_high` on both platforms. It
+  blocks the caller (on Android until the engine starts, at most 5 s) and
+  returns `{:error, :unavailable}` when the engine didn't start or
+  `{:error, :unsupported}` off device or on an older native build or bridge.
+- **`speak/3`'s `:voice` takes a voice id from `voices/0`** as well as a
+  BCP-47 language tag. An exact id match wins; otherwise it's a language tag;
+  a value that's neither speaks with the system default voice.
+- **End-of-speech events** (part of MOB-453). The process that called
+  `speak/3` gets `{:speech, :done}` when its utterance finishes,
+  `{:speech, :cancelled}` when `stop_speaking/1` interrupts it, and on Android
+  `{:speech, :failed}` when the engine can't speak it.
+- **Upgrading:** the iOS half is in `ios/mob_nif.m` and the Android NIF in
+  `android/jni/mob_nif.zig`, so rebuild natively (`mix mob.deploy --native`).
+  Android also needs the `MobBridge.kt` text-to-speech block from mob_new
+  0.6.14 (`ttsSpeakFor`, `ttsVoices`, the reworked `ttsSpeak`/`ttsStop`) and
+  an `android.intent.action.TTS_SERVICE` entry in the manifest's `<queries>`;
+  without that entry, API 30+ hides the TTS engine from the app. With an
+  older bridge, `voices/0` returns `{:error, :unsupported}` and `speak/3`
+  still speaks, with `:voice` as a language tag only and no events.
+
+### Changed
+- **Android: `:rate`, `:pitch` and `:voice` apply to one utterance**, as on
+  iOS (with mob_new 0.6.14's bridge). `TextToSpeech` kept them between calls,
+  so a `speak/3` without `:voice` used whatever voice the previous call chose.
+
 ### Documentation
 - **`:scroll`'s `axis` prop is in the components guide** (#212). Horizontal
   scrolling worked on both platforms but the `:scroll` reference called it a

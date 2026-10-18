@@ -45,6 +45,7 @@
     %% Text-to-speech (no permission required)
     tts_speak/2,
     tts_stop/0,
+    tts_voices/0,
     %% Motion sensors
     motion_start/2,
     motion_stop/0,
@@ -175,6 +176,7 @@
     audio_output_level/1,
     tts_speak/2,
     tts_stop/0,
+    tts_voices/0,
     motion_start/2,
     motion_stop/0,
     take_launch_notification/0,
@@ -308,6 +310,7 @@ audio_output_status() -> erlang:nif_error(not_loaded).
 audio_output_level(_Source) -> erlang:nif_error(not_loaded).
 tts_speak(_Text, _OptsJson) -> erlang:nif_error(not_loaded).
 tts_stop() -> erlang:nif_error(not_loaded).
+tts_voices() -> erlang:nif_error(not_loaded).
 motion_start(_Sensors, _Interval) -> erlang:nif_error(not_loaded).
 motion_stop() -> erlang:nif_error(not_loaded).
 take_launch_notification() -> erlang:nif_error(not_loaded).
