@@ -2633,6 +2633,9 @@ export fn nif_tts_voices(
     var attached: c_int = 0;
     const jenv = get_jenv(&attached) orelse return erts.atom(env, "unavailable");
     const result = jenv.*.CallStaticObjectMethod.?(jenv, Bridge.cls, Bridge.tts_voices);
+    // A Kotlin exception would otherwise stay pending on this dirty scheduler
+    // thread and break its next JNI call; result is null then, so :unavailable.
+    jni.exceptionClear(jenv);
     const out = jstringToBinaryTerm(env, jenv, result) orelse erts.atom(env, "unavailable");
     detachIfAttached(attached);
     return out;

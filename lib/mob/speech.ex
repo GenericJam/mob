@@ -20,11 +20,12 @@ defmodule Mob.Speech do
   | Option   | Type    | Meaning                                              | Default |
   |----------|---------|------------------------------------------------------|---------|
   | `:rate`  | float   | Speech rate (platform-scaled, see below)             | system  |
-  | `:pitch` | float   | Pitch multiplier (0.5–2.0)                           | 1.0     |
+  | `:pitch` | float   | Pitch multiplier (0.5–2.0)                           | system  |
   | `:voice` | binary  | A voice `id` from `voices/0`, or a BCP-47 language tag (`"en-US"`) | system  |
 
   Options apply to that utterance only: a `speak/3` without `:voice` uses the
-  system default voice even if the previous call chose one. `:rate` is
+  system default voice even if the previous call chose one, and one without
+  `:rate` or `:pitch` uses the user's text-to-speech settings. `:rate` is
   platform-scaled: iOS takes 0.0–1.0 (0.5 is normal), Android centres on 1.0
   (about 0.5–2.0).
 
@@ -59,10 +60,12 @@ defmodule Mob.Speech do
   | `{:speech, :cancelled}` | `stop_speaking/1` interrupted it.                         |
   | `{:speech, :failed}`    | The engine couldn't speak it (Android only).              |
 
-  Each queued utterance sends its own message, so after three `speak/3` calls
-  the third `{:speech, :done}` means reading has finished. After
-  `stop_speaking/1`, iOS sends `:cancelled` for the utterance in progress only;
-  Android sends it for every utterance it flushes from the queue.
+  Each queued utterance sends exactly one message, so after three `speak/3`
+  calls the third `{:speech, :done}` means reading has finished, and
+  `stop_speaking/1` sends `:cancelled` for every utterance that hadn't ended
+  (the one speaking and the ones queued behind it). The one exception: when
+  Android's TTS engine process dies mid-utterance, that utterance sends
+  nothing.
 
       def handle_info({:speech, :done}, socket),
         do: {:noreply, Mob.Socket.assign(socket, :reading, false)}

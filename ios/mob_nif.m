@@ -3403,14 +3403,20 @@ static ERL_NIF_TERM nif_clipboard_get(ErlNifEnv *env, int argc, const ERL_NIF_TE
 // Speaks UTF-8 text via AVSpeechSynthesizer. opts is a JSON object, all keys
 // optional: {"rate": float, "pitch": float, "voice": id-or-language}.
 // Fire-and-forget; a synthesizer is created lazily and kept alive so
-// utterances can queue. The caller gets {speech, done | cancelled} when its
-// utterance ends; the pid rides on the utterance as an associated object.
+// utterances can queue. The caller gets one {speech, done | cancelled} when
+// its utterance ends; the pid rides on the utterance as an associated object.
+//
+// g_tts_queue (main thread only) holds every utterance that hasn't ended.
+// stopSpeakingAtBoundary drops unspoken utterances without a didCancel, so
+// tts_stop ends them all itself; an utterance is answered only while it is
+// still in the queue, which keeps the late didCancel from answering twice.
 
 @interface MobSpeechDelegate : NSObject <AVSpeechSynthesizerDelegate>
 @end
 
 static AVSpeechSynthesizer *g_tts_synth = nil;
 static MobSpeechDelegate *g_tts_delegate = nil;
+static NSMutableArray<AVSpeechUtterance *> *g_tts_queue = nil;
 static const void *const kMobTtsPidKey = &kMobTtsPidKey;
 
 static void mob_tts_send(AVSpeechUtterance *utt, const char *event) {
@@ -3425,14 +3431,35 @@ static void mob_tts_send(AVSpeechUtterance *utt, const char *event) {
     enif_free_env(e);
 }
 
+// Main thread.
+static void mob_tts_end_now(AVSpeechUtterance *utt, const char *event) {
+    NSUInteger i = [g_tts_queue indexOfObjectIdenticalTo:utt];
+    if (i == NSNotFound)
+        return;
+    [g_tts_queue removeObjectAtIndex:i];
+    mob_tts_send(utt, event);
+}
+
+// The delegate runs on the main thread in practice, and handling it there
+// inline means a finish that lands before tts_stop is answered :done.
+static void mob_tts_end(AVSpeechUtterance *utt, const char *event) {
+    if ([NSThread isMainThread]) {
+        mob_tts_end_now(utt, event);
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      mob_tts_end_now(utt, event);
+    });
+}
+
 @implementation MobSpeechDelegate
 - (void)speechSynthesizer:(AVSpeechSynthesizer *)synthesizer
     didFinishSpeechUtterance:(AVSpeechUtterance *)utterance {
-    mob_tts_send(utterance, "done");
+    mob_tts_end(utterance, "done");
 }
 - (void)speechSynthesizer:(AVSpeechSynthesizer *)synthesizer
     didCancelSpeechUtterance:(AVSpeechUtterance *)utterance {
-    mob_tts_send(utterance, "cancelled");
+    mob_tts_end(utterance, "cancelled");
 }
 @end
 
@@ -3458,6 +3485,7 @@ static ERL_NIF_TERM nif_tts_speak(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
           g_tts_synth = [[AVSpeechSynthesizer alloc] init];
           g_tts_delegate = [[MobSpeechDelegate alloc] init];
           g_tts_synth.delegate = g_tts_delegate;
+          g_tts_queue = [NSMutableArray array];
       }
 
       AVSpeechUtterance *utt = [AVSpeechUtterance speechUtteranceWithString:text];
@@ -3483,6 +3511,7 @@ static ERL_NIF_TERM nif_tts_speak(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
           }
       }
 
+      [g_tts_queue addObject:utt];
       [g_tts_synth speakUtterance:utt];
     });
     return enif_make_atom(env, "ok");
@@ -3517,11 +3546,16 @@ static ERL_NIF_TERM nif_tts_voices(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 }
 
 // ── NIF: tts_stop/0 ───────────────────────────────────────────────────────────
-// Stops any in-progress speech immediately. Fire-and-forget.
+// Stops any in-progress speech immediately and sends {speech, cancelled} for
+// every utterance that hadn't ended. Fire-and-forget.
 
 static ERL_NIF_TERM nif_tts_stop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     dispatch_async(dispatch_get_main_queue(), ^{
       [g_tts_synth stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
+      NSArray<AVSpeechUtterance *> *ended = [g_tts_queue copy];
+      [g_tts_queue removeAllObjects];
+      for (AVSpeechUtterance *utt in ended)
+          mob_tts_send(utt, "cancelled");
     });
     return enif_make_atom(env, "ok");
 }

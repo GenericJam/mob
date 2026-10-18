@@ -42,15 +42,24 @@ asynchronous `onInit`, and its completion callbacks need a
   `:failed` rather than `:error` to keep the two apart when read. iOS has no
   failure callback, so `:failed` is Android only.
 - **Android options are per utterance.** `speakNow` sets rate, pitch and voice
-  (or the default voice) before every `speak`, because the engine keeps them
-  between calls and iOS doesn't.
+  before every `speak`, because the engine keeps them between calls and iOS
+  doesn't. Absent ones go back to the user's system defaults
+  (`Settings.Secure.TTS_DEFAULT_RATE` / `TTS_DEFAULT_PITCH`, the default
+  voice), not to a hard-coded 1.0.
+- **iOS tracks unfinished utterances itself.** `stopSpeakingAtBoundary:`
+  drops queued utterances without `didCancel`, so `tts_stop` answers every
+  utterance in `g_tts_queue` with `:cancelled`, and a delegate callback is
+  answered only while its utterance is still queued. Android's `onStop`
+  already covers flushed utterances; a failed `stop()` ends the outstanding
+  callers in Kotlin.
 
 ## Consequences
 
 - Android needs mob_new 0.6.14's bridge block and a `TTS_SERVICE` entry in
   the manifest's `<queries>` (missing from the template until then; without
   it API 30+ hides the engine). Existing apps port both by hand.
-- After `stop_speaking/1`, Android sends `:cancelled` for every flushed
-  utterance and iOS for the one in progress only. Documented, not unified.
+- An Android engine process that dies mid-utterance sends no callback, so
+  that utterance gets no event. Documented rather than worked around:
+  `TextToSpeech` exposes no disconnect hook.
 - Android voice names are synthesised (`"English (United States) sfg"`);
   the platform has none.

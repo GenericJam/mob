@@ -40,6 +40,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 - **Android: `:rate`, `:pitch` and `:voice` apply to one utterance**, as on
   iOS (with mob_new 0.6.14's bridge). `TextToSpeech` kept them between calls,
   so a `speak/3` without `:voice` used whatever voice the previous call chose.
+  Options left out now use the user's text-to-speech settings.
 
 ### Documentation
 - **`:scroll`'s `axis` prop is in the components guide** (#212). Horizontal
