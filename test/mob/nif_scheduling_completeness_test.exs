@@ -37,7 +37,7 @@ defmodule Mob.NifSchedulingCompletenessTest do
   # CPU_BOUND: computing, not waiting.
   @cpu_heavy ~w(
     element_frames native_stats sample_region screenshot set_root
-    set_transition ui_debug ui_paint_debug ui_tree ui_view_tree
+    set_transition tts_voices ui_debug ui_paint_debug ui_tree ui_view_tree
   )
 
   # Returns promptly. Includes the ones that LOOK blocking: audio_set_volume

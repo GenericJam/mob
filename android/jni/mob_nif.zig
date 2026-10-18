@@ -243,7 +243,9 @@ pub const BridgeMethods = extern struct {
     clipboard_put: jni.JMethodID = null,
     clipboard_get: jni.JMethodID = null,
     tts_speak: jni.JMethodID = null,
+    tts_speak_for: jni.JMethodID = null,
     tts_stop: jni.JMethodID = null,
+    tts_voices: jni.JMethodID = null,
     share_text: jni.JMethodID = null,
     open_url: jni.JMethodID = null,
     open_settings: jni.JMethodID = null,
@@ -2580,23 +2582,30 @@ export fn nif_clipboard_get(
     return out;
 }
 
-// nif_tts_speak/2 — speaks Text via MobBridge.ttsSpeak(String, String). The
-// OptsJson string carries {"rate","pitch","voice"} (all optional). The Bridge
-// method is optional: apps generated before TTS existed won't have it, so we
-// return :ok without doing anything rather than failing.
+// nif_tts_speak/2 — speaks Text via MobBridge. The OptsJson string carries
+// {"rate","pitch","voice"} (all optional). ttsSpeakFor(pid, text, opts)
+// (mob_new 0.6.14+) resolves "voice" as a voice id before a language tag and
+// sends the caller {speech, done | cancelled | failed}; older bridges only
+// have ttsSpeak(text, opts). Both are optional: an app generated before TTS
+// existed has neither, so we return :ok without doing anything.
 export fn nif_tts_speak(
     env: ?*erts.ErlNifEnv,
     argc: c_int,
     argv: [*]const erts.ERL_NIF_TERM,
 ) callconv(.c) erts.ERL_NIF_TERM {
     _ = argc;
-    if (Bridge.tts_speak == null) return erts.ok(env);
+    if (Bridge.tts_speak_for == null and Bridge.tts_speak == null) return erts.ok(env);
     const text_bin = getBinOrIolist(env, argv[0]) orelse return erts.badarg(env);
     const text = binToCString(text_bin) orelse return erts.atom(env, "error");
     defer freeCString(text);
     const opts_bin = getBinOrIolist(env, argv[1]) orelse return erts.badarg(env);
     const opts = binToCString(opts_bin) orelse return erts.atom(env, "error");
     defer freeCString(opts);
+    if (Bridge.tts_speak_for != null) {
+        var pid: erts.ErlNifPid = undefined;
+        _ = erts.enif_self(env, &pid);
+        return callBridgePidStr2(env, Bridge.tts_speak_for, pid, text, opts);
+    }
     var attached: c_int = 0;
     const jenv = get_jenv(&attached) orelse return erts.atom(env, "error");
     const jtext = jni.newStringUTF(jenv, text);
@@ -2606,6 +2615,30 @@ export fn nif_tts_speak(
     jni.deleteLocalRef(jenv, jopts);
     detachIfAttached(attached);
     return erts.ok(env);
+}
+
+// nif_tts_voices/0 — the installed voices as the JSON string
+// MobBridge.ttsVoices() returns, or :unavailable when it returns null (the
+// engine failed to start or took longer than its 5 s wait). Dirty IO: the
+// first call waits for TextToSpeech to bind. :unsupported when the app's
+// bridge predates the method (mob_new < 0.6.14).
+export fn nif_tts_voices(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    _ = argv;
+    if (Bridge.tts_voices == null) return erts.atom(env, "unsupported");
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.atom(env, "unavailable");
+    const result = jenv.*.CallStaticObjectMethod.?(jenv, Bridge.cls, Bridge.tts_voices);
+    // A Kotlin exception would otherwise stay pending on this dirty scheduler
+    // thread and break its next JNI call; result is null then, so :unavailable.
+    jni.exceptionClear(jenv);
+    const out = jstringToBinaryTerm(env, jenv, result) orelse erts.atom(env, "unavailable");
+    detachIfAttached(attached);
+    return out;
 }
 
 // nif_tts_stop/0 — stops any in-progress speech via MobBridge.ttsStop().
@@ -5275,6 +5308,9 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     // Optional: apps generated before TTS existed lack these MobBridge methods.
     cacheOptional(jenv, "ttsSpeak", "(Ljava/lang/String;Ljava/lang/String;)V", &Bridge.tts_speak);
     cacheOptional(jenv, "ttsStop", "()V", &Bridge.tts_stop);
+    // Optional: voice ids, voice listing and end-of-speech events (mob_new 0.6.14).
+    cacheOptional(jenv, "ttsSpeakFor", "(JLjava/lang/String;Ljava/lang/String;)V", &Bridge.tts_speak_for);
+    cacheOptional(jenv, "ttsVoices", "()Ljava/lang/String;", &Bridge.tts_voices);
     if (!cacheRequired(jenv, "shareText", "(Ljava/lang/String;)V", &Bridge.share_text)) return -1;
     if (!cacheRequired(jenv, "openUrl", "(Ljava/lang/String;)V", &Bridge.open_url)) return -1;
     cacheOptional(jenv, "openSettings", "(Ljava/lang/String;)V", &Bridge.open_settings);
@@ -5496,6 +5532,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "clipboard_get", .arity = 0, .fptr = nif_clipboard_get, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
     .{ .name = "tts_speak", .arity = 2, .fptr = nif_tts_speak, .flags = 0 },
     .{ .name = "tts_stop", .arity = 0, .fptr = nif_tts_stop, .flags = 0 },
+    .{ .name = "tts_voices", .arity = 0, .fptr = nif_tts_voices, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
     .{ .name = "share_text", .arity = 1, .fptr = nif_share_text, .flags = 0 },
     .{ .name = "open_url", .arity = 1, .fptr = nif_open_url, .flags = 0 },
     .{ .name = "open_settings", .arity = 1, .fptr = nif_open_settings, .flags = 0 },

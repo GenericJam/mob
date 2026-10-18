@@ -3401,10 +3401,67 @@ static ERL_NIF_TERM nif_clipboard_get(ErlNifEnv *env, int argc, const ERL_NIF_TE
 
 // ── NIF: tts_speak/2 ──────────────────────────────────────────────────────────
 // Speaks UTF-8 text via AVSpeechSynthesizer. opts is a JSON object, all keys
-// optional: {"rate": float, "pitch": float, "voice": "en-US"}. Fire-and-forget;
-// a synthesizer is created lazily and kept alive so utterances can queue.
+// optional: {"rate": float, "pitch": float, "voice": id-or-language}.
+// Fire-and-forget; a synthesizer is created lazily and kept alive so
+// utterances can queue. The caller gets one {speech, done | cancelled} when
+// its utterance ends; the pid rides on the utterance as an associated object.
+//
+// g_tts_queue (main thread only) holds every utterance that hasn't ended.
+// stopSpeakingAtBoundary drops unspoken utterances without a didCancel, so
+// tts_stop ends them all itself; an utterance is answered only while it is
+// still in the queue, which keeps the late didCancel from answering twice.
+
+@interface MobSpeechDelegate : NSObject <AVSpeechSynthesizerDelegate>
+@end
 
 static AVSpeechSynthesizer *g_tts_synth = nil;
+static MobSpeechDelegate *g_tts_delegate = nil;
+static NSMutableArray<AVSpeechUtterance *> *g_tts_queue = nil;
+static const void *const kMobTtsPidKey = &kMobTtsPidKey;
+
+static void mob_tts_send(AVSpeechUtterance *utt, const char *event) {
+    NSData *pid_data = objc_getAssociatedObject(utt, kMobTtsPidKey);
+    if (pid_data.length != sizeof(ErlNifPid))
+        return;
+    ErlNifPid pid;
+    memcpy(&pid, pid_data.bytes, sizeof(pid));
+    ErlNifEnv *e = enif_alloc_env();
+    ERL_NIF_TERM msg = enif_make_tuple2(e, enif_make_atom(e, "speech"), enif_make_atom(e, event));
+    enif_send(NULL, &pid, e, msg);
+    enif_free_env(e);
+}
+
+// Main thread.
+static void mob_tts_end_now(AVSpeechUtterance *utt, const char *event) {
+    NSUInteger i = [g_tts_queue indexOfObjectIdenticalTo:utt];
+    if (i == NSNotFound)
+        return;
+    [g_tts_queue removeObjectAtIndex:i];
+    mob_tts_send(utt, event);
+}
+
+// The delegate runs on the main thread in practice, and handling it there
+// inline means a finish that lands before tts_stop is answered :done.
+static void mob_tts_end(AVSpeechUtterance *utt, const char *event) {
+    if ([NSThread isMainThread]) {
+        mob_tts_end_now(utt, event);
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      mob_tts_end_now(utt, event);
+    });
+}
+
+@implementation MobSpeechDelegate
+- (void)speechSynthesizer:(AVSpeechSynthesizer *)synthesizer
+    didFinishSpeechUtterance:(AVSpeechUtterance *)utterance {
+    mob_tts_end(utterance, "done");
+}
+- (void)speechSynthesizer:(AVSpeechSynthesizer *)synthesizer
+    didCancelSpeechUtterance:(AVSpeechUtterance *)utterance {
+    mob_tts_end(utterance, "cancelled");
+}
+@end
 
 static ERL_NIF_TERM nif_tts_speak(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     ErlNifBinary text_bin, opts_bin;
@@ -3419,12 +3476,20 @@ static ERL_NIF_TERM nif_tts_speak(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
                                               length:text_bin.size
                                             encoding:NSUTF8StringEncoding];
     NSData *optsData = [NSData dataWithBytes:opts_bin.data length:opts_bin.size];
+    ErlNifPid caller;
+    enif_self(env, &caller);
+    NSData *pid_data = [NSData dataWithBytes:&caller length:sizeof(caller)];
 
     dispatch_async(dispatch_get_main_queue(), ^{
-      if (!g_tts_synth)
+      if (!g_tts_synth) {
           g_tts_synth = [[AVSpeechSynthesizer alloc] init];
+          g_tts_delegate = [[MobSpeechDelegate alloc] init];
+          g_tts_synth.delegate = g_tts_delegate;
+          g_tts_queue = [NSMutableArray array];
+      }
 
       AVSpeechUtterance *utt = [AVSpeechUtterance speechUtteranceWithString:text];
+      objc_setAssociatedObject(utt, kMobTtsPidKey, pid_data, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
       NSDictionary *opts = [NSJSONSerialization JSONObjectWithData:optsData options:0 error:nil];
       if ([opts isKindOfClass:[NSDictionary class]]) {
@@ -3434,25 +3499,63 @@ static ERL_NIF_TERM nif_tts_speak(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
           NSNumber *pitch = opts[@"pitch"];
           if ([pitch isKindOfClass:[NSNumber class]])
               utt.pitchMultiplier = [pitch floatValue];
+          // A voice identifier from tts_voices first, then a BCP-47 language.
+          // Neither leaves utt.voice nil: the system default voice.
           NSString *voice = opts[@"voice"];
           if ([voice isKindOfClass:[NSString class]]) {
-              AVSpeechSynthesisVoice *v = [AVSpeechSynthesisVoice voiceWithLanguage:voice];
+              AVSpeechSynthesisVoice *v = [AVSpeechSynthesisVoice voiceWithIdentifier:voice];
+              if (!v)
+                  v = [AVSpeechSynthesisVoice voiceWithLanguage:voice];
               if (v)
                   utt.voice = v;
           }
       }
 
+      [g_tts_queue addObject:utt];
       [g_tts_synth speakUtterance:utt];
     });
     return enif_make_atom(env, "ok");
 }
 
+// ── NIF: tts_voices/0 ─────────────────────────────────────────────────────────
+// The installed voices as a JSON array of {"id","name","language","quality",
+// "network"}; quality is the raw AVSpeechSynthesisVoiceQuality (1–3), which
+// Mob.Speech normalises. Dirty CPU: enumerating voices loads their metadata.
+
+static ERL_NIF_TERM nif_tts_voices(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    @autoreleasepool {
+        NSMutableArray *out = [NSMutableArray array];
+        for (AVSpeechSynthesisVoice *v in [AVSpeechSynthesisVoice speechVoices]) {
+            [out addObject:@{
+                @"id" : v.identifier ?: @"",
+                @"name" : v.name ?: @"",
+                @"language" : v.language ?: @"",
+                @"quality" : @(v.quality),
+                @"network" : @NO
+            }];
+        }
+        NSData *json = [NSJSONSerialization dataWithJSONObject:out options:0 error:nil];
+        if (!json)
+            return enif_make_atom(env, "unavailable");
+        ErlNifBinary bin;
+        if (!enif_alloc_binary(json.length, &bin))
+            return enif_make_atom(env, "unavailable");
+        memcpy(bin.data, json.bytes, json.length);
+        return enif_make_binary(env, &bin);
+    }
+}
+
 // ── NIF: tts_stop/0 ───────────────────────────────────────────────────────────
-// Stops any in-progress speech immediately. Fire-and-forget.
+// Stops any in-progress speech immediately and sends {speech, cancelled} for
+// every utterance that hadn't ended. Fire-and-forget.
 
 static ERL_NIF_TERM nif_tts_stop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     dispatch_async(dispatch_get_main_queue(), ^{
       [g_tts_synth stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
+      NSArray<AVSpeechUtterance *> *ended = [g_tts_queue copy];
+      [g_tts_queue removeAllObjects];
+      for (AVSpeechUtterance *utt in ended)
+          mob_tts_send(utt, "cancelled");
     });
     return enif_make_atom(env, "ok");
 }
@@ -9203,6 +9306,7 @@ static ErlNifFunc nif_funcs[] = {
     {"audio_output_level", 1, nif_audio_output_level, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"tts_speak", 2, nif_tts_speak, 0},
     {"tts_stop", 0, nif_tts_stop, 0},
+    {"tts_voices", 0, nif_tts_voices, ERL_NIF_DIRTY_JOB_CPU_BOUND},
     {"motion_start", 2, nif_motion_start, 0},
     {"motion_stop", 0, nif_motion_stop, 0},
     {"take_launch_notification", 0, nif_take_launch_notification, 0},
