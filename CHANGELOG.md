@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.22] - 2026-10-18
+
 ### Added
 - **`Mob.Speech.voices/0`: the text-to-speech voices installed on the
   device**, as `{:ok, [%{id, name, language, quality, network}]}` sorted by
