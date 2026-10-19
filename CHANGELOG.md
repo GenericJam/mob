@@ -18,10 +18,12 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   still offer Settings → Text size: `Mob.Theme.set({MyApp.Theme, text_scale:
   1.3})`. `type_scale` keeps its meaning (tokens only; a numeric size stays
   put). It multiplies the OS font scale on Android (`sp`) and, on iOS, for
-  text in a custom font (Dynamic Type); iOS system-font text and text fields
-  are fixed points. Canvas `text` ops and sizes inside a plugin's own props
-  aren't scaled. At the default 1.0 every value reaches native exactly as
-  written.
+  text in a custom font (Dynamic Type); iOS system-font text and the
+  UIKit-backed text field are fixed points. Only sizes on the node scale: a
+  `:text` with no `text_size` keeps the platform default (give it `:base`),
+  and a sized `:icon` grows with the text. Canvas `text` ops and sizes inside
+  a plugin's own props aren't scaled. At the default 1.0 every value reaches
+  native exactly as written.
 
 ## [0.9.22] - 2026-10-18
 

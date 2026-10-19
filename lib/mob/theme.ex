@@ -88,12 +88,15 @@ defmodule Mob.Theme do
   `text_scale` is the user's text-size preference (a Settings choice such as
   Small … Largest): the renderer multiplies it into every node's `text_size`
   and `font_size` prop, numeric or token, so an app written in exact numbers
-  still grows. Not scaled: a Canvas `text` op's `size` (it's in the drawing's
-  coordinates) and sizes nested in a plugin's own props (a style map). It
-  multiplies the OS font scale where native follows one: Android sizes are
-  `sp`; on iOS, text in a custom font (`Font.custom(_:size:)`) follows
-  Dynamic Type, while system-font text and text fields are fixed points. At
-  1.0 (the default) every value reaches native exactly as written.
+  still grows. Only sizes on the node scale: a `:text` with no `text_size`
+  keeps the platform default (give it `:base` to follow), and a sized
+  `:icon`'s glyph grows with it. Not scaled: a Canvas `text` op's `size`
+  (it's in the drawing's coordinates) and sizes nested in a plugin's own
+  props (a style map). It multiplies the OS font scale where native follows
+  one: Android text sizes are `sp`; on iOS, custom-font text (`Font.custom(_:size:)`)
+  follows Dynamic Type, while system-font text and the UIKit-backed text
+  field are fixed points. At 1.0 (the default) every value reaches native
+  exactly as written.
   Set it with the rest of the theme, and keep it when you switch themes:
 
       Mob.Theme.set({MyApp.Theme.Dark, text_scale: 1.3})

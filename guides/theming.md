@@ -197,10 +197,20 @@ Keep it when you switch themes (pass it in every `set/1`), and re-render: a
 theme change applies from the next render.
 
 It multiplies the OS font scale where native follows one, it doesn't replace
-it. On Android every size is `sp`, so a phone set to large text and a Largest
-choice compound. On iOS, text in a custom font (a theme `fonts` token,
-`Font.custom(_:size:)`) follows Dynamic Type the same way; text in the system
-font and text fields are fixed points, so only `text_scale` moves them.
+it. On Android every text size is `sp`, so a phone set to large text and a
+Largest choice compound. On iOS, text and text fields in a custom font (a
+theme `fonts` token, `Font.custom(_:size:)`) follow Dynamic Type the same way;
+text in the system font is a fixed point, as is the UIKit-backed text field
+(`on_compose`, `caret: :end` or a single-line `max_length`), so only
+`text_scale` moves them.
+
+It scales sizes that are on the node. A `:text` with no `text_size` takes the
+platform's default size (14 pt on iOS, Compose's body style on Android), which
+`text_scale` doesn't touch: give body text a size (`text_size: :base`) for it
+to follow the user's choice. `:button` and `:text_field` have a default size,
+so they follow. An `:icon`'s `text_size` is its glyph size, so a sized icon
+grows with the text (in `dp` on Android, so without the OS font scale) and an
+unsized one stays at its default.
 
 Not scaled: a Canvas `text` op's `size` (it lives in the drawing's
 coordinates, with the shapes around it) and sizes nested in a plugin's own
