@@ -10,6 +10,17 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **`text_scale` on `%Mob.Theme{}`: the user's text-size preference**
+  (GenericJam/mob#216). The renderer multiplies it into every `text_size` and
+  `font_size`, a number as well as a token (a token is `table × type_scale ×
+  text_scale`), so an app whose sizes are exact numbers from a design can
+  still offer Settings → Text size: `Mob.Theme.set({MyApp.Theme, text_scale:
+  1.3})`. `type_scale` keeps its meaning (tokens only; a numeric size stays
+  put). It sits on top of the OS font scale (Android `sp`, iOS Dynamic Type
+  for custom fonts). At the default 1.0 every value reaches native exactly as
+  written.
+
 ## [0.9.22] - 2026-10-18
 
 ### Added

@@ -35,6 +35,7 @@ defmodule Mob.Theme do
 
       Mob.Theme.set(MobThemes.Obsidian)
       Mob.Theme.set({MobThemes.Obsidian, type_scale: 1.2})
+      Mob.Theme.set({MobThemes.Obsidian, text_scale: 1.3})   # the user's text size
       Mob.Theme.set(primary: :pink_500)
 
   ## Base theme
@@ -78,8 +79,21 @@ defmodule Mob.Theme do
 
   ### Scale factors
 
-      type_scale:  1.0  # multiply all text sizes by this
+      type_scale:  1.0  # multiply the text size tokens (:sm, :base, :xl…) by this
+      text_scale:  1.0  # multiply every text size, number or token, by this
       space_scale: 1.0  # multiply all spacing tokens by this
+
+  `type_scale` belongs to the theme's design: it scales the token sizes and
+  leaves a numeric `text_size` (a size pinned to a design) alone.
+  `text_scale` is the user's text-size preference (a Settings choice such as
+  Small … Largest): the renderer multiplies it into every `text_size` and
+  `font_size`, numeric or token, so an app written in exact numbers still
+  grows. It applies on top of the OS font scale, not instead of it: native
+  sizes stay Android `sp` and iOS points that follow Dynamic Type for custom
+  fonts. At 1.0 (the default) every value reaches native exactly as written.
+  Set it with the rest of the theme, and keep it when you switch themes:
+
+      Mob.Theme.set({MyApp.Theme.Dark, text_scale: 1.3})
 
   ### Font tokens
 
@@ -131,6 +145,8 @@ defmodule Mob.Theme do
 
     # ── Scale factors ─────────────────────────────────────────────────────
     type_scale: 1.0,
+    # The user's text-size preference: every text size, number or token.
+    text_scale: 1.0,
     space_scale: 1.0,
 
     # ── Corner radii (dp / pt) ─────────────────────────────────────────────
