@@ -41,6 +41,9 @@
         _returnKeyStr = @"done";
         _textContentTypeStr = @""; // empty = no hint (default UITextContentType behaviour)
         _contentModeStr = @"fit";
+        _zoomable = NO;
+        _maxZoom = 4.0;
+        _doubleTapZoom = 2.5;
         _fixedWidth = 0.0;
         _fixedHeight = 0.0;
         _layoutWeight = 0.0;

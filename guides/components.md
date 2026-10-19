@@ -575,6 +575,49 @@ An editable text input. Has defaults injected by the renderer (surface_raised ba
 | `caret` | `"end"` | Pins the insertion point to the end of the text wherever the field is tapped (segmented code inputs). On iOS a pinned field (as one with `on_compose`) is single-line: `lines` is ignored with it |
 | `underline` | boolean | Android only: Material's indicator line (default: on unless the field draws its own border) |
 
+### `:image`
+
+A picture from an `http(s)` URL or a local file path. Also `Mob.UI.image/1`.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `src` | string | `http(s)` URL or local file path |
+| `content_mode` | `"fit"` / `"fill"` / `"stretch"` | How the picture meets its frame (default `"fit"`; `"fill"` crops; `"stretch"` is Android-only, iOS fits) |
+| `width` / `height` | number | Fixed size in pt/dp |
+| `corner_radius` | number | Rounded corners in pt/dp |
+| `placeholder_color` | color | Shown until the picture loads (default system gray) |
+| `zoomable` | boolean | `true`: the user can zoom the picture in place (below) |
+| `max_zoom` | number | Largest zoom for a zoomable image, ≥ 1 (default `4.0`) |
+| `double_tap_zoom` | number | Zoom a double tap goes to (default `2.5`, clamped to `max_zoom`) |
+
+#### `zoomable: true`
+
+For a full-screen photo viewer. The picture fits its frame, and then:
+
+- **pinch** zooms about the pinch, from 1× up to `max_zoom`;
+- **double tap** zooms to `double_tap_zoom` centred on the tapped point, and a
+  second double tap goes back to 1×;
+- **one finger pans** while zoomed in. At 1× a one-finger drag is left alone,
+  so a zoomable image inside a `:scroll` or a pager still scrolls it.
+
+The zoom is clipped to the image's frame and panning stops at the picture's
+edges. A new `src` starts again at 1×. Everything happens natively; no event
+reaches the screen, so don't also put `on_double_tap` or `on_pinch` on it.
+
+A zoomable image fills the space it is offered, because that space is the
+zoom viewport: a landscape photo on a portrait screen can be zoomed into the
+whole screen, not just the letterboxed strip. An axis with no bound (the height
+inside a vertical `:scroll`) follows the picture's aspect ratio. Set the
+viewport with `width`/`height`, or with the space its parent gives it (a
+`weight` in a column or row).
+
+```elixir
+~MOB(<Image src={assigns.photo_path} zoomable={true} max_zoom={6.0} weight={1} />)
+```
+
+Pass the flag and the numbers in braces: `zoomable="true"` and `max_zoom="6"`
+are strings, and iOS ignores a string there.
+
 ### `:divider`
 
 A horizontal rule. Default color is `:border`.

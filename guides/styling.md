@@ -189,6 +189,9 @@ iOS automatically shows a "Done" button in a keyboard toolbar above the keyboard
 | `height` | `.frame(height:)` | `Modifier.height()` | Fixed height in pt/dp |
 | `corner_radius` | `.clipShape(RoundedRectangle(cornerRadius:))` | `RoundedCornerShape` + clip | Applied after dimensions |
 | `placeholder_color` | `Color(argb)` shown while loading or on error | Same | Defaults to system gray |
+| `zoomable: true` | `UIScrollView` zooming a `UIImageView` | `graphicsLayer` scale/translation driven by `pointerInput` | Pinch, double-tap and pan zoom, all native; see [`:image`](components.md#image) |
+| `max_zoom` | `maximumZoomScale` | Zoom clamp | Default `4.0` |
+| `double_tap_zoom` | `zoom(to:animated:)` around the tap | Zoom about the tap point | Default `2.5`, clamped to `max_zoom` |
 
 iOS reference: [AsyncImage (SwiftUI)](https://developer.apple.com/documentation/swiftui/asyncimage)
 Android reference: [Coil](https://coil-kt.github.io/coil/compose/)

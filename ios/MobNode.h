@@ -236,6 +236,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) CGFloat fixedHeight;                     // 0 = auto
 @property(nonatomic, strong, nullable) UIColor *placeholderColor;
 
+// Zoomable image: pinch/double-tap zoom and pan, handled natively. The
+// picture fits its frame; maxZoom >= 1, doubleTapZoom is clamped into
+// 1...maxZoom at use.
+@property(nonatomic) BOOL zoomable;
+@property(nonatomic) CGFloat maxZoom;       // default 4.0
+@property(nonatomic) CGFloat doubleTapZoom; // default 2.5
+
 // Typography
 @property(nonatomic, copy, nullable) NSString *fontFamily; // nil = system font
 @property(nonatomic, copy, nonnull)

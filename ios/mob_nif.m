@@ -1211,6 +1211,10 @@ typedef NS_ENUM(NSUInteger, MobPropKey) {
     MOB_PROP_panel_offset_y,
     MOB_PROP_side,
     MOB_PROP_side_offset,
+    // zoomable image
+    MOB_PROP_double_tap_zoom,
+    MOB_PROP_max_zoom,
+    MOB_PROP_zoomable,
     MOB_PROP__COUNT
 };
 
@@ -1347,7 +1351,10 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
           [MOB_PROP_url] = @"url",
           [MOB_PROP_value] = @"value",
           [MOB_PROP_weight] = @"weight",
-          [MOB_PROP_width] = @"width"};
+          [MOB_PROP_width] = @"width",
+          [MOB_PROP_double_tap_zoom] = @"double_tap_zoom",
+          [MOB_PROP_max_zoom] = @"max_zoom",
+          [MOB_PROP_zoomable] = @"zoomable"};
       NSMutableDictionary *m = [NSMutableDictionary dictionaryWithCapacity:MOB_PROP__COUNT];
       for (NSUInteger i = 0; i < MOB_PROP__COUNT; i++) {
           // A gap means an enum entry with no name: that prop would never
@@ -1909,6 +1916,16 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         id contentMode = pv[MOB_PROP_content_mode];
         if ([contentMode isKindOfClass:[NSString class]])
             node.contentModeStr = contentMode;
+
+        id zoomable = pv[MOB_PROP_zoomable];
+        if ([zoomable isKindOfClass:[NSNumber class]])
+            node.zoomable = [zoomable boolValue];
+        id maxZoom = pv[MOB_PROP_max_zoom];
+        if ([maxZoom isKindOfClass:[NSNumber class]])
+            node.maxZoom = [maxZoom doubleValue];
+        id doubleTapZoom = pv[MOB_PROP_double_tap_zoom];
+        if ([doubleTapZoom isKindOfClass:[NSNumber class]])
+            node.doubleTapZoom = [doubleTapZoom doubleValue];
 
         id fixedWidth = pv[MOB_PROP_width];
         if (fixedWidth)
