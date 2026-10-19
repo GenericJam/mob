@@ -266,15 +266,20 @@ final class MobZoomScrollView: UIScrollView, UIScrollViewDelegate {
     }
 }
 
+// stat(2), not FileManager.attributesOfItem: it follows a symlink to the
+// file the picture is decoded from (as MobImageCache does), so a link whose
+// target lands later or is rewritten is noticed, and it is nil while the
+// link dangles.
 struct MobZoomableFileStamp: Equatable {
-    let size: UInt64
-    let modified: Date
+    let size: Int64
+    let seconds: Int
+    let nanoseconds: Int
 
     init?(path: String) {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-              let size = (attributes[.size] as? NSNumber)?.uint64Value,
-              let modified = attributes[.modificationDate] as? Date else { return nil }
-        self.size = size
-        self.modified = modified
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        size = Int64(info.st_size)
+        seconds = info.st_mtimespec.tv_sec
+        nanoseconds = info.st_mtimespec.tv_nsec
     }
 }
