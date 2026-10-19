@@ -8,7 +8,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ---
 
-## [Unreleased]
+## [0.9.23] - 2026-10-19
 
 ### Added
 - **`text_scale` on `%Mob.Theme{}`: the user's text-size preference**
