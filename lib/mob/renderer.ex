@@ -38,9 +38,10 @@ defmodule Mob.Renderer do
   border draws.
 
   **Text size props** (`:text_size`, `:font_size`): token atoms (`:xl`, `:lg`,
-  etc.) are multiplied by `theme.type_scale`. Every size, a number or a token,
-  is then multiplied by `theme.text_scale`, the user's text-size preference
-  (1.0 by default, which leaves every value as written).
+  etc.) are multiplied by `theme.type_scale`. Every such prop, a number or a
+  token, is then multiplied by `theme.text_scale`, the user's text-size
+  preference (1.0 by default, which leaves every value as written). A Canvas
+  `text` op's `size` is drawing geometry and isn't scaled.
 
   **Font props** (`:font`): an atom (`:heading`) resolves through the active
   theme's `fonts` map to a platform-specific family name; an unresolved atom

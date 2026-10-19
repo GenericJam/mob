@@ -1000,6 +1000,19 @@ defmodule Mob.RendererTest do
                %{"text_size" => 24, "padding" => 8, "line_height" => 1.5, "letter_spacing" => 1}
     end
 
+    test "a theme struct from before text_scale existed renders sizes as written" do
+      Application.put_env(:mob, :theme, Map.delete(Mob.Theme.default(), :text_scale))
+
+      Renderer.render(
+        %{type: :text, props: %{text: "hi", text_size: 13}, children: []},
+        :android,
+        MockNIF
+      )
+
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      assert :json.decode(json)["props"]["text_size"] == 13
+    end
+
     test "text_scale survives a {module, overrides} theme switch" do
       Mob.Theme.set({Mob.Theme.Dark, text_scale: 1.5})
 

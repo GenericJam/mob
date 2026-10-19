@@ -90,6 +90,13 @@ defmodule Mob.Theme.AdaptiveWatcherTest do
       assert Mob.Theme.current() == %{Mob.Theme.Dark.theme() | primary: 0xFF112233}
     end
 
+    test "the user's text_scale survives the flip", %{watcher: w} do
+      Mob.Theme.set({SchemeAdaptive, text_scale: 1.3})
+
+      flip_os_to(w, :light)
+      assert Mob.Theme.current().text_scale == 1.3
+    end
+
     test "an explicit fixed theme set after the adaptive one is not clobbered",
          %{watcher: w} do
       Mob.Theme.set(SchemeAdaptive)

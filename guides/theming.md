@@ -194,12 +194,18 @@ Mob.Theme.set({MyApp.Theme.Dark, text_scale: 1.3})
 ```
 
 Keep it when you switch themes (pass it in every `set/1`), and re-render: a
-theme change applies from the next render. It multiplies the OS font scale,
-it doesn't replace it: sizes reach Android as `sp` and iOS as points that
-follow Dynamic Type for custom fonts (`Font.custom(_:size:)`), so a phone set
-to large text and a Largest choice compound. Sizes a plugin takes in its own
-props (a style map, say) aren't text-size props; read
-`Mob.Theme.current().text_scale` where you build them. Layouts with a fixed
+theme change applies from the next render.
+
+It multiplies the OS font scale where native follows one, it doesn't replace
+it. On Android every size is `sp`, so a phone set to large text and a Largest
+choice compound. On iOS, text in a custom font (a theme `fonts` token,
+`Font.custom(_:size:)`) follows Dynamic Type the same way; text in the system
+font and text fields are fixed points, so only `text_scale` moves them.
+
+Not scaled: a Canvas `text` op's `size` (it lives in the drawing's
+coordinates, with the shapes around it) and sizes nested in a plugin's own
+props (a style map, say), which aren't text-size props; read
+`Mob.Theme.current().text_scale` where you build those. Layouts with a fixed
 height or `max_lines: 1` need checking at the largest choice.
 
 ### Following the OS light/dark setting

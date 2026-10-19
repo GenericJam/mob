@@ -80,17 +80,20 @@ defmodule Mob.Theme do
   ### Scale factors
 
       type_scale:  1.0  # multiply the text size tokens (:sm, :base, :xl…) by this
-      text_scale:  1.0  # multiply every text size, number or token, by this
+      text_scale:  1.0  # multiply every text_size / font_size prop, number or token
       space_scale: 1.0  # multiply all spacing tokens by this
 
   `type_scale` belongs to the theme's design: it scales the token sizes and
   leaves a numeric `text_size` (a size pinned to a design) alone.
   `text_scale` is the user's text-size preference (a Settings choice such as
-  Small … Largest): the renderer multiplies it into every `text_size` and
-  `font_size`, numeric or token, so an app written in exact numbers still
-  grows. It applies on top of the OS font scale, not instead of it: native
-  sizes stay Android `sp` and iOS points that follow Dynamic Type for custom
-  fonts. At 1.0 (the default) every value reaches native exactly as written.
+  Small … Largest): the renderer multiplies it into every node's `text_size`
+  and `font_size` prop, numeric or token, so an app written in exact numbers
+  still grows. Not scaled: a Canvas `text` op's `size` (it's in the drawing's
+  coordinates) and sizes nested in a plugin's own props (a style map). It
+  multiplies the OS font scale where native follows one: Android sizes are
+  `sp`; on iOS, text in a custom font (`Font.custom(_:size:)`) follows
+  Dynamic Type, while system-font text and text fields are fixed points. At
+  1.0 (the default) every value reaches native exactly as written.
   Set it with the rest of the theme, and keep it when you switch themes:
 
       Mob.Theme.set({MyApp.Theme.Dark, text_scale: 1.3})
