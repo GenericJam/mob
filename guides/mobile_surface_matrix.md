@@ -279,7 +279,7 @@ and orthogonal — composition over a fat component library.
 | Focus management (programmatic) | ❌ | — | — | Plugin / core candidate |
 | Reduce-motion preference | ❌ | — | — | Plugin candidate |
 | Bold-text preference | ❌ | — | — | Plugin candidate |
-| Dynamic type / font scaling | 🟡 | 🟡 | 🟡 | Android `sp` follows the OS font scale; iOS custom-font text follows Dynamic Type, system-font text and text fields don't; an app's own setting: `Mob.Theme` `text_scale` |
+| Dynamic type / font scaling | 🟡 | 🟡 | 🟡 | Android `sp` follows the OS font scale; iOS custom-font text follows Dynamic Type, system-font text and the UIKit-backed text field don't; an app's own setting: `Mob.Theme` `text_scale` (sizes set on the node) |
 | RTL support | 🟡 | 🟡 | 🟡 | Layout-engine level; no explicit `I18nManager` equivalent |
 | Accessibility test inspection | ✅ | ✓ | ✓ | `Mob.Test` reads the AX tree for assertion-based UI testing |
 
