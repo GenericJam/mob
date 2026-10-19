@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.24] - 2026-10-19
+
 ### Added
 - **Zoomable images: `zoomable: true` on `:image`.** The picture fits its
   frame and the user can pinch to zoom (1× up to `max_zoom`, default `4.0`),
