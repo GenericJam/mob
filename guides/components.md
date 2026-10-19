@@ -582,7 +582,7 @@ A picture from an `http(s)` URL or a local file path. Also `Mob.UI.image/1`.
 | Prop | Type | Description |
 |------|------|-------------|
 | `src` | string | `http(s)` URL or local file path |
-| `content_mode` | `"fit"` / `"fill"` / `"stretch"` | How the picture meets its frame (default `"fit"`; `"fill"` crops) |
+| `content_mode` | `"fit"` / `"fill"` / `"stretch"` | How the picture meets its frame (default `"fit"`; `"fill"` crops; `"stretch"` is Android-only, iOS fits) |
 | `width` / `height` | number | Fixed size in pt/dp |
 | `corner_radius` | number | Rounded corners in pt/dp |
 | `placeholder_color` | color | Shown until the picture loads (default system gray) |
@@ -607,11 +607,12 @@ reaches the screen, so don't also put `on_double_tap` or `on_pinch` on it.
 A zoomable image fills the space it is offered, because that space is the
 zoom viewport: a landscape photo on a portrait screen can be zoomed into the
 whole screen, not just the letterboxed strip. An axis with no bound (the height
-inside a vertical `:scroll`) follows the picture's aspect ratio. Give it
-`width`/`height`, or `fill_width`/`fill_height`, to set the viewport yourself.
+inside a vertical `:scroll`) follows the picture's aspect ratio. Set the
+viewport with `width`/`height`, or with the space its parent gives it (a
+`weight` in a column or row).
 
 ```elixir
-~MOB(<Image src={assigns.photo_path} zoomable={true} max_zoom={6.0} fill_width={true} fill_height={true} />)
+~MOB(<Image src={assigns.photo_path} zoomable={true} max_zoom={6.0} weight={1} />)
 ```
 
 Pass the flag and the numbers in braces: `zoomable="true"` and `max_zoom="6"`

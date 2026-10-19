@@ -57,7 +57,7 @@ defmodule Mob.UI do
 
     * `:src` — an `http(s)` URL or a local file path (required)
     * `:content_mode` — `"fit"` (default), `"fill"` (crop to fill) or
-      `"stretch"`. A zoomable image always fits.
+      `"stretch"` (Android only; iOS fits). A zoomable image always fits.
     * `:width`, `:height` — fixed size in pt/dp
     * `:corner_radius` — rounded corners in pt/dp
     * `:placeholder_color` — shown until the picture has loaded

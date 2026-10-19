@@ -91,7 +91,13 @@ private struct MobZoomableImageView: UIViewRepresentable {
         case let (width?, height?): return CGSize(width: width, height: height)
         case let (width?, nil): return CGSize(width: width, height: width / aspect)
         case let (nil, height?): return CGSize(width: height * aspect, height: height)
-        case (nil, nil): return imageSize
+        case (nil, nil):
+            // No bound on either axis (a flow measuring its children): the
+            // window's width, or a fixed side before there is a window, at the
+            // picture's aspect ratio. A bitmap's own size is in pixels, far too
+            // big as points.
+            let side = uiView.window?.bounds.width ?? 320
+            return CGSize(width: side, height: side / aspect)
         }
     }
 }
@@ -99,6 +105,10 @@ private struct MobZoomableImageView: UIViewRepresentable {
 final class MobZoomScrollView: UIScrollView, UIScrollViewDelegate {
     private let imageView = UIImageView()
     private var src: String?
+    // A local file's size and modification date when it was last shown: the
+    // file can land after the first render (a download or capture still being
+    // written) or be rewritten in place, and either must show the new picture.
+    private var fileStamp: MobZoomableFileStamp?
     private var task: URLSessionDataTask?
     // The bounds size the content was last fitted to. layoutSubviews runs on
     // every scroll and zoom step; only a real size change refits.
@@ -117,6 +127,9 @@ final class MobZoomScrollView: UIScrollView, UIScrollViewDelegate {
         maximumZoomScale = 4
         // Panning stops at the picture's edge; only zoom rubber-bands.
         bounces = false
+        // A second scroll view with scrollsToTop on disables the status-bar tap
+        // for the :scroll this image sits in, and the picture has no "top".
+        scrollsToTop = false
         bouncesZoom = true
         showsHorizontalScrollIndicator = false
         showsVerticalScrollIndicator = false
@@ -139,8 +152,12 @@ final class MobZoomScrollView: UIScrollView, UIScrollViewDelegate {
     deinit { task?.cancel() }
 
     func setSource(_ newSrc: String?) {
-        guard newSrc != src else { return }
+        guard newSrc != src else {
+            reloadIfFileChanged()
+            return
+        }
         src = newSrc
+        fileStamp = nil
         task?.cancel()
         task = nil
         show(nil)
@@ -161,8 +178,20 @@ final class MobZoomScrollView: UIScrollView, UIScrollViewDelegate {
             task = request
             request.resume()
         } else {
+            fileStamp = MobZoomableFileStamp(path: newSrc)
             show(MobImageCache.shared.image(atPath: newSrc))
         }
+    }
+
+    // Called on every update with an unchanged src. One stat for a local file;
+    // the picture (and the zoom, which belongs to it) is replaced only when
+    // the file has appeared or changed since it was last shown.
+    private func reloadIfFileChanged() {
+        guard let src, !src.hasPrefix("http://"), !src.hasPrefix("https://") else { return }
+        let stamp = MobZoomableFileStamp(path: src)
+        guard stamp != fileStamp else { return }
+        fileStamp = stamp
+        show(MobImageCache.shared.image(atPath: src))
     }
 
     private func show(_ image: UIImage?) {
@@ -234,5 +263,18 @@ final class MobZoomScrollView: UIScrollView, UIScrollViewDelegate {
         zoom(to: CGRect(x: point.x - size.width / 2, y: point.y - size.height / 2,
                         width: size.width, height: size.height),
              animated: true)
+    }
+}
+
+struct MobZoomableFileStamp: Equatable {
+    let size: UInt64
+    let modified: Date
+
+    init?(path: String) {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = (attributes[.size] as? NSNumber)?.uint64Value,
+              let modified = attributes[.modificationDate] as? Date else { return nil }
+        self.size = size
+        self.modified = modified
     }
 }
