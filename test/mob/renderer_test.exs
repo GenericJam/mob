@@ -1,6 +1,8 @@
 defmodule Mob.RendererTest do
   use ExUnit.Case, async: false
 
+  import Mob.Sigil, only: [sigil_MOB: 2]
+
   alias Mob.Renderer
 
   # A mock NIF backend that records calls instead of touching Android.
@@ -121,6 +123,29 @@ defmodule Mob.RendererTest do
         Renderer.render(tree, platform, MockNIF)
         {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
         assert :json.decode(json)["props"]["axis"] == "horizontal", inspect({platform, axis})
+      end
+    end
+
+    # Both native sides read these by JSON type, not by value: iOS keeps
+    # `zoomable`/`max_zoom`/`double_tap_zoom` only when they decode as
+    # NSNumber (mob_nif.m), and Android's boolProp/floatProp ignore anything
+    # but a boolean/number. A zoomable that reached the renderer as the string
+    # "true" would leave the image silently unzoomable on iOS.
+    test "an image's zoom props reach the renderer as a JSON boolean and numbers" do
+      sigil_node = ~MOB(<Image src="/p.jpg" zoomable={true} max_zoom={6.0} double_tap_zoom={3} />)
+      ui_node = Mob.UI.image(src: "/p.jpg", zoomable: true, max_zoom: 6.0, double_tap_zoom: 3)
+
+      for platform <- [:ios, :android], node <- [sigil_node, ui_node] do
+        MockNIF.reset()
+        Renderer.render(node, platform, MockNIF)
+        {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+        decoded = :json.decode(json)
+
+        assert decoded["type"] == "image"
+
+        assert Map.take(decoded["props"], ~w(zoomable max_zoom double_tap_zoom)) ==
+                 %{"zoomable" => true, "max_zoom" => 6.0, "double_tap_zoom" => 3},
+               inspect({platform, node})
       end
     end
 

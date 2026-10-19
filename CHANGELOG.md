@@ -25,6 +25,22 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   a plugin's own props aren't scaled. At the default 1.0 every value reaches
   native exactly as written.
 
+### Added
+- **Zoomable images: `zoomable: true` on `:image`.** The picture fits its
+  frame and the user can pinch to zoom (1× up to `max_zoom`, default `4.0`),
+  double-tap to zoom to `double_tap_zoom` (default `2.5`) around the tapped
+  point and double-tap again to return to 1×, and pan with one finger while
+  zoomed in. It is all native, with no event to handle. At 1× a one-finger
+  drag is left to the parent, so a zoomable image in a `:scroll` or pager
+  still scrolls it; the zoom is clipped to the image's frame, panning stops at
+  the picture's edges, and a new `src` starts back at 1×. A zoomable image
+  fills the space it is offered (its zoom viewport). Local paths and `http(s)`
+  URLs both work. iOS: a `UIScrollView` zooming a `UIImageView`
+  (`ios/MobZoomableImage.swift`). Android needs the matching `MobBridge.kt`
+  from mob_new 0.6.15.
+- **`Mob.UI.image/1`**, the function form of `<Image ... />`.
+- `:image` documented in the components guide, with its props.
+
 ## [0.9.22] - 2026-10-18
 
 ### Added

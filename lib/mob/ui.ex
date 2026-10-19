@@ -51,6 +51,46 @@ defmodule Mob.UI do
   end
 
   @doc """
+  Returns an `:image` leaf node, the same node `<Image ... />` produces.
+
+  ## Props
+
+    * `:src` — an `http(s)` URL or a local file path (required)
+    * `:content_mode` — `"fit"` (default), `"fill"` (crop to fill) or
+      `"stretch"`. A zoomable image always fits.
+    * `:width`, `:height` — fixed size in pt/dp
+    * `:corner_radius` — rounded corners in pt/dp
+    * `:placeholder_color` — shown until the picture has loaded
+    * `:zoomable` — `true` to let the user zoom the picture in place: pinch
+      zooms (from 1× up to `:max_zoom`), a double tap zooms to
+      `:double_tap_zoom` around the tapped point and a second one goes back to
+      1×, and one finger pans while zoomed in. All of it is native; no event
+      reaches the screen. At 1× a one-finger drag is left to the parent, so a
+      zoomable image inside a scroll or pager still scrolls it. The zoom is
+      clipped to the image's frame, panning stops at the picture's edges, and
+      a new `:src` starts back at 1×. A zoomable image fills the space it is
+      offered (that space is the zoom viewport); an unbounded axis, such as
+      the height inside a vertical scroll, follows the picture's aspect ratio.
+    * `:max_zoom` — the largest zoom, a number ≥ 1 (default `4.0`)
+    * `:double_tap_zoom` — the zoom a double tap goes to (default `2.5`),
+      clamped to `:max_zoom`
+
+  Layout and gesture props every node takes (`:padding`, `:fill_width`,
+  `:on_tap`, ...) pass through as well.
+
+  ## Examples
+
+      Mob.UI.image(src: "https://example.com/photo.jpg", width: 120, height: 120)
+
+      Mob.UI.image(src: path, zoomable: true, max_zoom: 6.0)
+      #=> %{type: :image, props: %{src: path, zoomable: true, max_zoom: 6.0}, children: []}
+  """
+  @spec image(keyword() | map()) :: map()
+  def image(props) when is_list(props), do: image(Map.new(props))
+
+  def image(%{} = props), do: %{type: :image, props: props, children: []}
+
+  @doc """
   Returns a `:webview` component node. Renders a native web view inline.
 
   The JS bridge is injected automatically — the page can call `window.mob.send(data)`

@@ -2741,6 +2741,16 @@ private struct MobImage: View {
     }
 
     var body: some View {
+        if node.zoomable {
+            // A UIScrollView that does its own loading, sizing and gestures;
+            // see MobZoomableImage.swift.
+            MobZoomableImage(node: node)
+        } else {
+            fixed
+        }
+    }
+
+    private var fixed: some View {
         Group {
             if let src = node.src {
                 if src.hasPrefix("http://") || src.hasPrefix("https://"),
