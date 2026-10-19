@@ -38,7 +38,10 @@ defmodule Mob.Renderer do
   border draws.
 
   **Text size props** (`:text_size`, `:font_size`): token atoms (`:xl`, `:lg`,
-  etc.) are multiplied by `theme.type_scale`.
+  etc.) are multiplied by `theme.type_scale`. Every such prop, a number or a
+  token, is then multiplied by `theme.text_scale`, the user's text-size
+  preference (1.0 by default, which leaves every value as written). A Canvas
+  `text` op's `size` is drawing geometry and isn't scaled.
 
   **Font props** (`:font`): an atom (`:heading`) resolves through the active
   theme's `fonts` map to a platform-specific family name; an unresolved atom
@@ -180,7 +183,8 @@ defmodule Mob.Renderer do
   # Props whose atom values are resolved as spacing or radius tokens
   @spacing_props ~w(padding padding_top padding_right padding_bottom padding_left gap spacing run_spacing)a
   @radius_props ~w(corner_radius)a
-  # Props whose atom values are resolved as text sizes (scaled by type_scale)
+  # Props resolved as text sizes: atom tokens through @text_sizes × type_scale,
+  # then every size (number or token) × text_scale
   @size_props ~w(text_size font_size)a
   # Props whose atom values are resolved as font tokens
   @font_props ~w(font)a
@@ -254,6 +258,9 @@ defmodule Mob.Renderer do
       spacing: Theme.spacing_map(theme),
       radii: Theme.radius_map(theme),
       type_scale: theme.type_scale,
+      # Map.get: a theme struct built before the field existed (a hot-loaded
+      # renderer over a theme already in the application env) has no key.
+      text_scale: Map.get(theme, :text_scale, 1.0),
       flags: Theme.flags_map(theme),
       fonts: Theme.fonts_map(theme),
       platform: platform
@@ -637,12 +644,19 @@ defmodule Mob.Renderer do
     resolve_font(value, ctx.fonts, ctx.platform)
   end
 
-  # Text size props — scale table value by type_scale
+  # Text size props — a token's table value × type_scale; then the user's
+  # text_scale over every size. At 1.0 a number passes through untouched (an
+  # integer stays an integer on the wire).
   defp resolve_token(key, value, ctx) when is_atom(value) and key in @size_props do
     case Map.get(@text_sizes, value) do
       nil -> value
-      size -> size * ctx.type_scale
+      size -> size * ctx.type_scale * ctx.text_scale
     end
+  end
+
+  defp resolve_token(key, value, %{text_scale: scale})
+       when is_number(value) and key in @size_props and scale != 1.0 do
+    value * scale
   end
 
   # Spacing props — spacing tokens first, then radius tokens, then pass through

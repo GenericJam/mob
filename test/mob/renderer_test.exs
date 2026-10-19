@@ -941,6 +941,91 @@ defmodule Mob.RendererTest do
       assert :json.decode(json)["props"]["text_size"] == 32.0
     end
 
+    test "type_scale leaves a numeric text_size alone" do
+      Mob.Theme.set(type_scale: 2.0)
+      tree = %{type: :text, props: %{text: "hi", text_size: 15}, children: []}
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      assert :json.decode(json)["props"]["text_size"] == 15
+    end
+
+    test "text_scale multiplies a numeric text_size and font_size" do
+      Mob.Theme.set(text_scale: 1.5)
+
+      tree = %{
+        type: :column,
+        props: %{},
+        children: [
+          %{type: :text, props: %{text: "a", text_size: 14}, children: []},
+          %{type: :text, props: %{text: "b", font_size: 10.5}, children: []}
+        ]
+      }
+
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      [a, b] = :json.decode(json)["children"]
+      assert a["props"]["text_size"] == 21.0
+      assert b["props"]["font_size"] == 15.75
+    end
+
+    test "text_scale multiplies a token after type_scale, and the defaults' :base" do
+      Mob.Theme.set(type_scale: 1.25, text_scale: 2.0)
+
+      tree = %{
+        type: :column,
+        props: %{},
+        children: [
+          %{type: :text, props: %{text: "a", text_size: :sm}, children: []},
+          %{type: :text_field, props: %{value: ""}, children: []}
+        ]
+      }
+
+      Renderer.render(tree, :ios, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      [text, field] = :json.decode(json)["children"]
+      assert text["props"]["text_size"] == 35.0
+      assert field["props"]["text_size"] == 40.0
+    end
+
+    test "text_scale leaves other numeric props (padding, line_height) alone" do
+      Mob.Theme.set(text_scale: 2.0)
+      props = %{text: "hi", text_size: 12, padding: 8, line_height: 1.5, letter_spacing: 1}
+      Renderer.render(%{type: :text, props: props, children: []}, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+
+      assert Map.take(
+               :json.decode(json)["props"],
+               ~w(text_size padding line_height letter_spacing)
+             ) ==
+               %{"text_size" => 24, "padding" => 8, "line_height" => 1.5, "letter_spacing" => 1}
+    end
+
+    test "a theme struct from before text_scale existed renders sizes as written" do
+      Application.put_env(:mob, :theme, Map.delete(Mob.Theme.default(), :text_scale))
+
+      Renderer.render(
+        %{type: :text, props: %{text: "hi", text_size: 13}, children: []},
+        :android,
+        MockNIF
+      )
+
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      assert :json.decode(json)["props"]["text_size"] == 13
+    end
+
+    test "text_scale survives a {module, overrides} theme switch" do
+      Mob.Theme.set({Mob.Theme.Dark, text_scale: 1.5})
+
+      Renderer.render(
+        %{type: :text, props: %{text: "hi", text_size: 10}, children: []},
+        :android,
+        MockNIF
+      )
+
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      assert :json.decode(json)["props"]["text_size"] == 15.0
+    end
+
     test "semantic color :primary resolves through theme to palette integer" do
       Mob.Theme.set(primary: :emerald_500)
       tree = %{type: :column, props: %{background: :primary}, children: []}

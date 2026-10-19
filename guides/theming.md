@@ -32,7 +32,8 @@ Mob's design token system lets you control color, spacing, and typography across
 | `:space_lg` | 24 |
 | `:space_xl` | 32 |
 
-**Text size tokens** (multiplied by `type_scale`):
+**Text size tokens** (multiplied by `type_scale`; a numeric `text_size` is
+not, it stays as the design pinned it):
 
 | Token | Base sp |
 |-------|---------|
@@ -179,6 +180,33 @@ Mob.Theme.set(%Mob.Theme{primary: :teal_500, space_scale: 1.1})
 ```
 
 This is useful for accessibility features (larger type, high-contrast), user-selected themes, or A/B testing.
+
+### The user's text size: `text_scale`
+
+`type_scale` is the theme's: it scales the size tokens and leaves numbers
+alone. For a Settings → Text size choice, set `text_scale` instead. The
+renderer multiplies it into every `text_size` and `font_size`, numeric or
+token, so screens written in exact sizes grow too:
+
+```elixir
+# Small 0.85 … Default 1.0 … Largest 1.5
+Mob.Theme.set({MyApp.Theme.Dark, text_scale: 1.3})
+```
+
+Keep it when you switch themes (pass it in every `set/1`), and re-render: a
+theme change applies from the next render.
+
+It multiplies the OS font scale where native follows one, it doesn't replace
+it. On Android every size is `sp`, so a phone set to large text and a Largest
+choice compound. On iOS, text in a custom font (a theme `fonts` token,
+`Font.custom(_:size:)`) follows Dynamic Type the same way; text in the system
+font and text fields are fixed points, so only `text_scale` moves them.
+
+Not scaled: a Canvas `text` op's `size` (it lives in the drawing's
+coordinates, with the shapes around it) and sizes nested in a plugin's own
+props (a style map, say), which aren't text-size props; read
+`Mob.Theme.current().text_scale` where you build those. Layouts with a fixed
+height or `max_lines: 1` need checking at the largest choice.
 
 ### Following the OS light/dark setting
 
