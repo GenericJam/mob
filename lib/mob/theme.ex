@@ -148,7 +148,8 @@ defmodule Mob.Theme do
 
     # ── Scale factors ─────────────────────────────────────────────────────
     type_scale: 1.0,
-    # The user's text-size preference: every text size, number or token.
+    # The user's text-size preference: every top-level text_size/font_size
+    # prop, number or token (not Canvas text ops or plugin style maps).
     text_scale: 1.0,
     space_scale: 1.0,
 
