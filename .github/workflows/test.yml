@@ -120,7 +120,7 @@ jobs:
         run: swiftlint lint --reporter github-actions-logging ios/
 
   security_scan:
-    name: Security scan (mix_audit)
+    name: Security scan (mix_audit + osv-scanner)
     needs: test
     runs-on: ubuntu-latest
     if: always()
@@ -157,3 +157,19 @@ jobs:
       # starts the host app and yaml_elixir gets pulled in transitively.
       - name: Audit deps
         run: mix do app.start + deps.audit
+
+      # osv-scanner reads OSV.dev, which carries EEF/GHSA advisories mix_audit's
+      # feed lags on (decimal EEF-CVE-2026-97853 was invisible to mix_audit on
+      # 2026-10-22; MOB-496). Runs even when mix_audit fails; exits 1 on any
+      # finding, which marks this informational job red.
+      - name: Install osv-scanner
+        if: ${{ !cancelled() }}
+        run: |
+          curl -sSfL https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 \
+            -o /usr/local/bin/osv-scanner
+          chmod +x /usr/local/bin/osv-scanner
+          osv-scanner --version
+
+      - name: osv-scanner (mix.lock)
+        if: ${{ !cancelled() }}
+        run: osv-scanner scan -L mix.lock:mix.lock
