@@ -10,7 +10,16 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Changed
+- **Zig pin is 0.17.0.** Replaces `0.17.0-dev.269+ebff43698`. That nightly
+  existed because 0.15.x could not link on the macOS 26 SDK; 0.17.0 is the
+  stable that has the fix (`build_system_migration.md`). `mix mob.doctor`
+  still requires an exact `zig version` match, so install `0.17.0` (mise:
+  `mise install zig@0.17.0`). Companion to mob_dev and mob_new.
+
 ### Fixed
+- **Android post-mortem marker paths compile on Zig 0.17.0.** `std.fmt.bufPrintZ`
+  was removed; `mob_nif.zig` now uses `std.fmt.bufPrintSentinel`.
 - **A task killed from outside right after `start_async/3` reports the real
   reason (MOB-500).** `Mob.Screen.Server` could pass `{:exit, :noproc}` to
   `handle_async/3` when the kill landed before the screen's monitor reached
