@@ -7,6 +7,7 @@
 #include "mob_code_versions.h"
 #include "mob_dist_cookie.h"
 #include "mob_dist_port.h"
+#include "mob_erts_dir.h"
 #include "mob_init_args.h"
 #include "mob_node_host.h"
 #import <Foundation/Foundation.h>
@@ -79,9 +80,6 @@ static mob_init_args s_init_args;
 // against the same compiled mob_beam.m.
 #ifndef OTP_ROOT_LEGACY
 #define OTP_ROOT_LEGACY "/tmp/otp-ios-sim"
-#endif
-#ifndef ERTS_VSN
-#define ERTS_VSN "erts-17.0"
 #endif
 #ifndef OTP_RELEASE
 #define OTP_RELEASE "29"
@@ -170,12 +168,24 @@ void mob_start_beam(const char *app_module) {
     NSString *bundle_otp =
         [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"otp"];
     const char *otp_root = [bundle_otp UTF8String];
-    const char *erts_vsn = ERTS_VSN;
-    const char *otp_release = OTP_RELEASE;
 #else
     const char *otp_root = resolve_sim_otp_root(app_module);
-    const char *erts_vsn = ERTS_VSN;
+#endif
     const char *otp_release = OTP_RELEASE;
+    // The device build passes the tarball's erts dir as -DERTS_VSN. Otherwise
+    // (the simulator, whose build doesn't) read it from the runtime: it
+    // follows the OTP version mob_dev ships, so it can't be a constant here.
+#ifdef ERTS_VSN
+    const char *erts_vsn = ERTS_VSN;
+#else
+    static char erts_vsn_buf[64];
+    if (!mob_erts_dir(otp_root, erts_vsn_buf, sizeof(erts_vsn_buf))) {
+        NSLog(@"[MobBeam] no erts-* directory under %s", otp_root);
+        mob_set_startup_error("OTP runtime missing (no erts-* under the runtime root) — redeploy "
+                              "with mix mob.deploy --native");
+        return;
+    }
+    const char *erts_vsn = erts_vsn_buf;
 #endif
 
     mob_write_diag(docs_dir, "mob_diag_b_otp_root.txt", otp_root);

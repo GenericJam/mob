@@ -19,6 +19,20 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   Apps get decimal on the device through `ecto_sqlite3`; an existing app's
   lock still holds the old one until `mix deps.update decimal`.
 
+### Fixed
+- **The Android and iOS-simulator BEAM find their ERTS directory at runtime
+  instead of assuming `erts-17.0` (MOB-493).** `android/jni/mob_beam.zig`
+  hard-coded `erts-17.0` for BINDIR and the ERTS helper symlinks, and
+  `ios/mob_beam.m` fell back to it when the build didn't pass `-DERTS_VSN`
+  (the simulator build doesn't). The ERTS version follows the OTP runtime
+  mob_dev ships, and the OTP 29.1.2 runtime is `erts-17.1.1`, so these apps
+  would not have booted on it. Both now take the highest `erts-*` under the
+  OTP root (an upgrade leaves the old one in place on Android) and stall with
+  a startup error if there is none. Physical-iOS and release builds already
+  passed the version from the tarball and are unchanged. The rule lives in
+  `android/jni/mob_erts_dir.zig` and `ios/mob_erts_dir.h`, tested by `zig test`
+  and `test/native/erts_dir_test.c`.
+
 ### Changed
 - `.tool-versions` pins erlang 29.1.2, matching the rebuilt device runtime
   (MOB-493).

@@ -81,12 +81,14 @@ jobs:
             ios/mob_init_args.h \
             ios/mob_node_host.h \
             ios/mob_code_versions.h \
+            ios/mob_erts_dir.h \
             test/native/dist_port_test.c \
             test/native/dist_cookie_test.c \
             test/native/stored_queue_test.c \
             test/native/init_args_test.c \
             test/native/node_host_test.c \
             test/native/code_versions_test.c \
+            test/native/erts_dir_test.c \
             android/jni/mob_beam.h
 
       - name: Android init-args tokenizer
@@ -94,8 +96,10 @@ jobs:
         with:
           version: 0.17.0-dev.269+ebff43698
 
-      - name: Android init-args tests
-        run: zig test android/jni/mob_init_args.zig
+      - name: Android init-args and ERTS-dir tests
+        run: |
+          zig test android/jni/mob_init_args.zig
+          zig test android/jni/mob_erts_dir.zig
 
       - name: Native harness (frame registry MOB-102/MOB-103, dist port MOB-139, dist cookie MOB-348, stored queue MOB-379, init args MOB-406, node host MOB-428, code versions MOB-408)
         # The frame-registry check is the only automated guard on the

@@ -23,6 +23,7 @@
 const std = @import("std");
 const jni = @import("mob_zig.zig");
 const init_args = @import("mob_init_args.zig");
+const erts_dir = @import("mob_erts_dir.zig");
 const build_options = @import("build_options");
 
 // ── Comptime build flags ──────────────────────────────────────────────────
@@ -75,10 +76,6 @@ extern var g_activity: jni.JObject;
 // BEAM entry point. erl_start blocks forever in the normal case; returning
 // is an unexpected-exit condition we report and let the OS reap the process.
 extern fn erl_start(argc: c_int, argv: [*]const ?[*:0]const u8) callconv(.c) void;
-
-// ── Constants ─────────────────────────────────────────────────────────────
-
-const ERTS_VSN: []const u8 = "erts-17.0";
 
 // ── Module-level state ────────────────────────────────────────────────────
 // Populated in mob_init_bridge, read by mob_start_beam. Sized generously
@@ -258,8 +255,24 @@ export fn mob_start_beam(app_module: [*:0]const u8) callconv(.c) void {
     var otp_root_buf: [560]u8 = undefined;
     const otp_root = formatZ(&otp_root_buf, "{s}/otp", .{jni.asCStr(&s_files_dir)});
 
+    // The erts-<vsn> dir comes from the pushed OTP runtime, not a constant:
+    // see mob_erts_dir.zig.
+    var erts_picker: erts_dir.Picker = .{};
+    if (jni.opendir(otp_root)) |d| {
+        while (jni.readdir(d)) |entry| {
+            erts_picker.offer(std.mem.sliceTo(@as([*:0]const u8, @ptrCast(&entry.d_name)), 0));
+        }
+        _ = jni.closedir(d);
+    }
+    const erts_vsn = erts_picker.name() orelse {
+        loge("mob_start_beam: no erts-* directory under {s}; the OTP runtime was not pushed", .{otp_root});
+        mob_set_startup_error("OTP runtime missing (no erts-* under files/otp) — redeploy with mix mob.deploy --native");
+        return;
+    };
+    logi("mob_start_beam: ERTS dir {s}", .{erts_vsn});
+
     var bindir_buf: [600]u8 = undefined;
-    const bindir = formatZ(&bindir_buf, "{s}/{s}/bin", .{ otp_root, ERTS_VSN });
+    const bindir = formatZ(&bindir_buf, "{s}/{s}/bin", .{ otp_root, erts_vsn });
 
     var beams_dir_buf: [600]u8 = undefined;
     const beams_dir = formatZ(&beams_dir_buf, "{s}/{s}", .{ otp_root, app_module });
@@ -558,7 +571,7 @@ export fn mob_start_beam(app_module: [*:0]const u8) callconv(.c) void {
         while (i < exes.len) : (i += 1) {
             var bin_path_buf: [512]u8 = undefined;
             var lib_path_buf: [512]u8 = undefined;
-            const bin_path = formatZ(&bin_path_buf, "{s}/{s}/bin/{s}", .{ otp_root, ERTS_VSN, exes[i] });
+            const bin_path = formatZ(&bin_path_buf, "{s}/{s}/bin/{s}", .{ otp_root, erts_vsn, exes[i] });
             const lib_path = formatZ(&lib_path_buf, "{s}/{s}", .{ jni.asCStr(&s_native_lib_dir), libs[i] });
             var st: jni.Stat = undefined;
             if (jni.stat(lib_path, &st) == 0) {
@@ -597,7 +610,7 @@ export fn mob_start_beam(app_module: [*:0]const u8) callconv(.c) void {
         while (j < opt_exes.len) : (j += 1) {
             var bin_path_buf: [512]u8 = undefined;
             var lib_path_buf: [512]u8 = undefined;
-            const bin_path = formatZ(&bin_path_buf, "{s}/{s}/bin/{s}", .{ otp_root, ERTS_VSN, opt_exes[j] });
+            const bin_path = formatZ(&bin_path_buf, "{s}/{s}/bin/{s}", .{ otp_root, erts_vsn, opt_exes[j] });
             const lib_path = formatZ(&lib_path_buf, "{s}/{s}", .{ jni.asCStr(&s_native_lib_dir), opt_libs[j] });
             var st: jni.Stat = undefined;
             if (jni.stat(lib_path, &st) == 0) {
