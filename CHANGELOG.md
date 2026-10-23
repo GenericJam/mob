@@ -10,6 +10,15 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **A task killed from outside right after `start_async/3` reports the real
+  reason (MOB-500).** `Mob.Screen.Server` could pass `{:exit, :noproc}` to
+  `handle_async/3` when the kill landed before the screen's monitor reached
+  the task's runner, since `Process.monitor/1` is asynchronous. The screen
+  traps exits, so it now takes the reason from the runner's link (`:killed`
+  for `Process.exit(pid, :kill)`). Seen once in a few thousand runs of
+  `async_test.exs`, next to a test-side race on the same signal ordering.
+
 ## [0.9.25] - 2026-10-22
 
 ### Security

@@ -85,6 +85,18 @@ defmodule Mob.Screen.AsyncTest do
 
   defp assigns(screen), do: :sys.get_state(screen).socket.assigns
 
+  # Process.monitor/1 is an asynchronous signal, and the kill comes from
+  # another process (the runner), so it can reach the task first: the DOWN
+  # then says :noproc instead of :killed (MOB-500). Signals between two
+  # processes stay in order, so a process_info/2 reply after the monitor
+  # proves the monitor is in place before anything is killed.
+  defp monitor!(pid) do
+    ref = Process.monitor(pid)
+    {:monitored_by, by} = Process.info(pid, :monitored_by)
+    true = self() in by
+    ref
+  end
+
   describe "on a running screen" do
     test "a result reaches handle_async and nothing reaches handle_info" do
       {_owner, screen} = start_screen()
@@ -126,7 +138,7 @@ defmodule Mob.Screen.AsyncTest do
 
       start(screen, :search, held(self(), "old"))
       assert_receive {:task, old}
-      ref = Process.monitor(old)
+      ref = monitor!(old)
 
       start(screen, :search, fn -> "new" end)
 
@@ -151,7 +163,7 @@ defmodule Mob.Screen.AsyncTest do
 
       start(screen, :search, trapping)
       assert_receive {:task, old}
-      ref = Process.monitor(old)
+      ref = monitor!(old)
 
       start(screen, :search, fn -> "new" end)
 
@@ -191,7 +203,7 @@ defmodule Mob.Screen.AsyncTest do
 
       start(screen, :profile, held(self(), "never"))
       assert_receive {:task, task}
-      ref = Process.monitor(task)
+      ref = monitor!(task)
 
       {:ok, nil} = Mob.Screen.Server.dispatch(screen, "cancel", %{"name" => :profile})
 
@@ -215,7 +227,7 @@ defmodule Mob.Screen.AsyncTest do
 
       start(screen, :profile, held(self(), "never"))
       assert_receive {:task, task}
-      ref = Process.monitor(task)
+      ref = monitor!(task)
 
       # The router restarts the stopped screen and says so; that is not under test.
       capture_log(fn ->
@@ -248,7 +260,7 @@ defmodule Mob.Screen.AsyncTest do
 
         socket = Mob.Socket.start_async(Mob.Socket.new(LoadScreen), :profile, trapping)
         assert_receive {:task, worker}
-        ref = Process.monitor(worker)
+        ref = monitor!(worker)
 
         socket = Mob.Socket.cancel_async(socket, :profile, reason)
 
