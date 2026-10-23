@@ -76,7 +76,9 @@ defmodule Mob.Screen.Async do
     end
   end
 
-  # Only a runner killed from outside ends without reporting first.
+  # Only a runner killed from outside ends without reporting first. Where the
+  # owner traps exits (every Mob.Screen.Server) the link's {:EXIT, ...} below
+  # may come first and report it instead; forget/1 then drops the other.
   def handle_message({:DOWN, monitor, :process, _pid, reason}, socket) do
     case Enum.find(entries(socket), fn {_name, entry} -> entry.monitor == monitor end) do
       {name, entry} ->
@@ -88,12 +90,20 @@ defmodule Mob.Screen.Async do
     end
   end
 
-  # A killed runner's :DOWN follows and reports it; delivering this too would
-  # report it twice.
-  def handle_message({:EXIT, pid, _reason}, socket) do
-    if Enum.any?(entries(socket), fn {_name, entry} -> entry.pid == pid end),
-      do: {:dropped, socket},
-      else: :unknown
+  # A runner killed from outside. The link carries the real reason; the
+  # :DOWN can't be trusted for it, because Process.monitor/1 is asynchronous:
+  # a runner killed right after start can die before the monitor reaches it,
+  # and the :DOWN then says :noproc (MOB-500). forget/1 flushes that :DOWN,
+  # so the task is reported once.
+  def handle_message({:EXIT, pid, reason}, socket) do
+    case Enum.find(entries(socket), fn {_name, entry} -> entry.pid == pid end) do
+      {name, entry} ->
+        forget(entry)
+        {:deliver, name, {:exit, reason}, delete(socket, name)}
+
+      nil ->
+        :unknown
+    end
   end
 
   def handle_message(_message, _socket), do: :unknown
