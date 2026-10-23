@@ -5,3 +5,4 @@ stored_queue_test
 init_args_test
 node_host_test
 code_versions_test
+erts_dir_test
