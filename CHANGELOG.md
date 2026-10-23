@@ -10,6 +10,19 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Security
+- **CI runs osv-scanner over `mix.lock` (MOB-496).** The security-scan job ran
+  only `mix_audit`, whose advisory feed lagged OSV.dev: on 2026-10-22 it
+  reported nothing while decimal 3.1.1 had EEF-CVE-2026-97853 (unbounded
+  allocation in `Decimal.round/3`). The job keeps `mix_audit` and adds
+  osv-scanner. decimal is test-only here (via ecto_sqlite3) and is now 3.2.0.
+  Apps get decimal on the device through `ecto_sqlite3`; an existing app's
+  lock still holds the old one until `mix deps.update decimal`.
+
+### Changed
+- `.tool-versions` pins erlang 29.1.2, matching the rebuilt device runtime
+  (MOB-493).
+
 ## [0.9.24] - 2026-10-19
 
 ### Added
