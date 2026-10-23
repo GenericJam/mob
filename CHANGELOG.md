@@ -26,10 +26,12 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `ios/mob_beam.m` fell back to it when the build didn't pass `-DERTS_VSN`
   (the simulator build doesn't). The ERTS version follows the OTP runtime
   mob_dev ships, and the OTP 29.1.2 runtime is `erts-17.1.1`, so these apps
-  would not have booted on it. Both now take the highest `erts-*` under the
-  OTP root (an upgrade leaves the old one in place on Android) and stall with
-  a startup error if there is none. Physical-iOS and release builds already
-  passed the version from the tarball and are unchanged. The rule lives in
+  would not have booted on it. Both now take the highest `erts-*` that has a
+  `bin/` under the OTP root (an upgrade leaves the old one in place on
+  Android). With none, the app doesn't start: iOS shows a startup error, and
+  Android logs it to logcat (tag `MobBeam`), since the generated `MobBridge`
+  has no `setStartupError`. Physical-iOS and release builds already passed
+  the version from the tarball and are unchanged. The rule lives in
   `android/jni/mob_erts_dir.zig` and `ios/mob_erts_dir.h`, tested by `zig test`
   and `test/native/erts_dir_test.c`.
 

@@ -256,16 +256,26 @@ export fn mob_start_beam(app_module: [*:0]const u8) callconv(.c) void {
     const otp_root = formatZ(&otp_root_buf, "{s}/otp", .{jni.asCStr(&s_files_dir)});
 
     // The erts-<vsn> dir comes from the pushed OTP runtime, not a constant:
-    // see mob_erts_dir.zig.
+    // see mob_erts_dir.zig. Only dirs with a bin/ count, so a half-pushed
+    // newer runtime doesn't win over a complete older one.
     var erts_picker: erts_dir.Picker = .{};
     if (jni.opendir(otp_root)) |d| {
         while (jni.readdir(d)) |entry| {
-            erts_picker.offer(std.mem.sliceTo(@as([*:0]const u8, @ptrCast(&entry.d_name)), 0));
+            const name = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(&entry.d_name)), 0);
+            if (!erts_dir.isErts(name)) continue;
+            var erts_bin_buf: [640]u8 = undefined;
+            var st_erts: jni.Stat = undefined;
+            if (jni.stat(formatZ(&erts_bin_buf, "{s}/{s}/bin", .{ otp_root, name }), &st_erts) == 0)
+                erts_picker.offer(name);
         }
         _ = jni.closedir(d);
+    } else {
+        loge("mob_start_beam: cannot list {s}: {s}", .{ otp_root, lastErrno() });
     }
     const erts_vsn = erts_picker.name() orelse {
-        loge("mob_start_beam: no erts-* directory under {s}; the OTP runtime was not pushed", .{otp_root});
+        loge("mob_start_beam: no erts-*/bin under {s}; the OTP runtime was not pushed", .{otp_root});
+        // A no-op unless the app's MobBridge defines setStartupError (the
+        // generated one doesn't), so the loge above is what shows.
         mob_set_startup_error("OTP runtime missing (no erts-* under files/otp) — redeploy with mix mob.deploy --native");
         return;
     };

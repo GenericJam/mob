@@ -33,12 +33,21 @@ static void mk(const char *name) {
     mkdir(p, 0755);
 }
 
+static void mk_erts(const char *name) {
+    char p[512];
+    mk(name);
+    snprintf(p, sizeof(p), "%s/bin", name);
+    mk(p);
+}
+
 int main(void) {
     CHECK(mob_erts_cmp("erts-17.1.1", "erts-17.0") > 0, "17.1.1 > 17.0");
     CHECK(mob_erts_cmp("erts-17.0", "erts-17.1.1") < 0, "17.0 < 17.1.1");
     CHECK(mob_erts_cmp("erts-17.10", "erts-17.9") > 0, "17.10 > 17.9");
     CHECK(mob_erts_cmp("erts-17.1.1", "erts-17.1") > 0, "17.1.1 > 17.1");
     CHECK(mob_erts_cmp("erts-17.1", "erts-17.1") == 0, "17.1 == 17.1");
+    CHECK(mob_erts_cmp("erts-17.1rc1", "erts-17.0") == 0, "non-numeric component counts as 0");
+    CHECK(mob_erts_cmp("erts-17.-1", "erts-17.1") < 0, "a sign is not a digit");
 
     snprintf(root, sizeof(root), "/tmp/mob_erts_dir_test_%d", (int)getpid());
     mkdir(root, 0755);
@@ -50,14 +59,18 @@ int main(void) {
     mk("lib");
     mk("releases");
     mk("erts");
-    mk("erts-17.0");
+    mk_erts("erts-17.0");
     CHECK(mob_erts_dir(root, out, sizeof(out)) == 1 && strcmp(out, "erts-17.0") == 0,
           "single erts dir, got %s", out);
 
-    mk("erts-17.1.1");
-    mk("erts-17.1");
+    mk_erts("erts-17.1.1");
+    mk_erts("erts-17.1");
     CHECK(mob_erts_dir(root, out, sizeof(out)) == 1 && strcmp(out, "erts-17.1.1") == 0,
           "highest of three, got %s", out);
+
+    mk("erts-18.0"); // newer, but no bin/: a half-copied runtime
+    CHECK(mob_erts_dir(root, out, sizeof(out)) == 1 && strcmp(out, "erts-17.1.1") == 0,
+          "an erts dir without bin/ is skipped, got %s", out);
 
     char tiny[8];
     CHECK(mob_erts_dir(root, tiny, sizeof(tiny)) == 0, "names that don't fit are skipped");
