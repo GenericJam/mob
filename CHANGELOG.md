@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.25] - 2026-10-22
+
 ### Security
 - **CI runs osv-scanner over `mix.lock` (MOB-496).** The security-scan job ran
   only `mix_audit`, whose advisory feed lagged OSV.dev: on 2026-10-22 it
