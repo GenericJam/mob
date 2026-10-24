@@ -15,7 +15,7 @@ defmodule Mob.Keyboard do
 
   It matters most for `keyboard: "decimal"` and `"number"`: those iOS
   keyboards have no return key, so `on_submit` never fires for them and the
-  toolbar button is the only built-in exit.
+  toolbar button is the only built-in exit on the field itself.
 
   A `value:` assigned in the same handler reaches the field, and the field's
   `on_blur` arrives, including when that handler re-renders.

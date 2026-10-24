@@ -20,9 +20,11 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   New `dismiss_keyboard/0` NIF. iOS resigns the first responder in any
   visible window and returns once the main thread has done it (IO_BOUND,
   2 s bound), so a `value:` assigned in the same handler reaches the field.
-  Android calls `MobBridge.dismissKeyboard()`, which hides the soft keyboard
-  and clears focus, from the matching mob_new template. On a bridge without
-  it the NIF returns `{:error, :not_loaded}` and `dismiss/1` is a no-op.
+  Android calls `MobBridge.dismissKeyboard()` from the matching mob_new
+  template (GenericJam/mob_new#113), which hides the soft keyboard and clears
+  focus in the focused field's own window, a sheet's included. On a bridge
+  without it the NIF returns `{:error, :not_loaded}` and `dismiss/1` is a
+  no-op.
   `dismiss/1` returns the socket and is a no-op on the host. Guide:
   `guides/device_capabilities.md` → Keyboard. Decision:
   `decisions/2026-09-24-keyboard-dismiss-is-a-device-api.md`.
@@ -79,9 +81,11 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   Or copy the block from a freshly generated app. `mix mob.doctor` flags
   both.
 - **Android: `Mob.Keyboard.dismiss/1` needs `MobBridge.dismissKeyboard()`.**
-  New apps from the matching mob_new have it. In an existing app, copy the
-  method (and its `InputMethodManager` import) from a freshly generated
-  `MobBridge.kt`; without it the call leaves the keyboard up.
+  New apps from the matching mob_new have it. In an existing app, copy
+  `dismissKeyboard()`, `focusedFieldHost`, the `InputMethodManager` and
+  `LocalView` imports, and the two `focusedFieldHost` lines in `MobTextField`
+  from a freshly generated `MobBridge.kt`. Without the method the call leaves
+  the keyboard up.
 
 ## [0.9.25] - 2026-10-22
 

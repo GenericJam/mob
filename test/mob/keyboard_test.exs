@@ -2,8 +2,9 @@ defmodule Mob.KeyboardTest do
   # The NIF itself needs a device (same as Mob.Haptic / Mob.Clipboard). What
   # the host can check: dismiss/1 hands the socket back untouched even though
   # the NIF library never loads here — a screen chaining it must not crash on
-  # the host. That the stub and both native tables agree on name and arity is
-  # covered by nif_scheduling_completeness_test.exs, which reads the tables.
+  # the host. nif_declaration_test.exs checks both native tables against the
+  # stub's -nifs list; nif_scheduling_completeness_test.exs classifies the iOS
+  # entry as IO_BOUND.
   use ExUnit.Case, async: true
 
   defmodule Screen do
