@@ -65,26 +65,40 @@ defmodule Mob.Alert do
   Result arrives as `{:alert, action_atom}` in `handle_info/2`.
   Dismissing the dialog without tapping a button (e.g. Android back gesture)
   sends `{:alert, :dismiss}`.
+
+  In an app with several windows (`Mob.Scene`) the alert appears in the
+  window of the screen that showed it, and the result comes back there.
   """
   @spec alert(Mob.Socket.t(), keyword()) :: Mob.Socket.t()
   def alert(socket, opts) do
     title = to_string(opts[:title] || "")
     message = to_string(opts[:message] || "")
-    buttons = opts[:buttons] || [[label: "OK", style: :cancel]]
-    :mob_nif.alert_show(title, message, encode_buttons(buttons))
+    buttons = encode_buttons(opts[:buttons] || [[label: "OK", style: :cancel]])
+
+    case Mob.Scene.of(socket) do
+      nil -> :mob_nif.alert_show(title, message, buttons)
+      scene -> :mob_nif.alert_show(scene, title, message, buttons)
+    end
+
     socket
   end
 
   @doc """
   Show a bottom-anchored action sheet.
 
-  Result arrives as `{:alert, action_atom}` in `handle_info/2`.
+  Result arrives as `{:alert, action_atom}` in `handle_info/2`. Shown in the
+  screen's own window, like `alert/2`.
   """
   @spec action_sheet(Mob.Socket.t(), keyword()) :: Mob.Socket.t()
   def action_sheet(socket, opts) do
     title = to_string(opts[:title] || "")
-    buttons = opts[:buttons] || []
-    :mob_nif.action_sheet_show(title, encode_buttons(buttons))
+    buttons = encode_buttons(opts[:buttons] || [])
+
+    case Mob.Scene.of(socket) do
+      nil -> :mob_nif.action_sheet_show(title, buttons)
+      scene -> :mob_nif.action_sheet_show(scene, title, buttons)
+    end
+
     socket
   end
 

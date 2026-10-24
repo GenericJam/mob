@@ -10,6 +10,49 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **Several windows of one app on iPad, one BEAM (MOB-245, iPad half).** Each
+  `UIWindowScene` gets its own `Mob.Router`, navigation and screens; the app's
+  root router keeps `:mob_screen` and renders to native's default scene, so a
+  single-window app runs the same path as before. New `Mob.Scenes` (scene
+  registry and lifecycle), `Mob.Scene` (`request_new/0`, `supported?/0`,
+  `of/1`), `Mob.Test.screens/1`, `scene:` on every `Mob.Test` helper that
+  addresses the current screen, and `Mob.Test.MultipleScenesError` when
+  several windows are live and no `scene:` is given. Native: a tap set and
+  view model per scene, scene-routed back gesture, size class and alert
+  results, scene-aware `safe_area/1`, `size_class/1`, `alert_show/4`,
+  `action_sheet_show/3`, `clear_taps/1`, `scenes/0`, `scene_request/0`,
+  `scene_multiple_supported/0`. Only application-role window scenes count,
+  so an AirPlay or cable display is not a second window. An alert or action
+  sheet appears in the window of the screen that showed it, even when another
+  window is in front. `Mob.WebView`, the back gesture's WebView history step
+  and `Mob.Keyboard.dismiss/1` act on the calling screen's window
+  (`webview_*` and `dismiss_keyboard` NIFs gained a scene arity; with window
+  scenes attached, `dismiss_keyboard/0` now looks only in the primary's
+  window, not in any visible one), and on
+  that window's shown WebView, never the previous screen's parked one. A
+  WebView's messages and blocked URLs carry the scene its tree was built for,
+  so they reach that window's screen even before the view is in a window.
+  Every window event with a known scene, the window-connected notice
+  included, goes through `Mob.Scenes`, which drops one no router shows.
+  `scene: nil` in `Mob.Test` addresses the window the app started in. Launch
+  notifications and links (`Mob.Link`) go to the root router only, and to
+  whichever router takes over `:mob_screen`. A frame in flight for a window
+  that closes is dropped rather than shown in the window that takes over its
+  tap set, and a closing window's router is stopped without holding up the
+  other windows' events. A
+  further window's router mounts its root screen after starting, so a
+  `mount/3` may call `Mob.Scene.list/0`; `:mob_screen` moves to a remaining
+  window before the closing primary stops; a new session takes over a kept
+  window only when that window's session is gone (`{:mob_scene, :replaced,
+  ...}`), and a kept window whose session is discarded stops
+  (`{:mob_scene, :discarded, id}`). The by-tag press helpers
+  (`press_in/3`, `press_out/3`, `hold/4`) take `scene:` too. Opt in with
+  `config :mob_dev, multi_window: true` (mob_dev#114 stamps
+  `UIApplicationSupportsMultipleScenes`). Needs a native rebuild. Run on the
+  iPad and iPhone simulators, not yet on a physical iPad. See
+  `decisions/2026-10-02-one-router-per-window-scene.md`.
+
 ## [0.9.26] - 2026-10-24
 
 ### Added

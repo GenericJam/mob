@@ -20,8 +20,9 @@ defmodule Mob.Keyboard do
   A `value:` assigned in the same handler reaches the field, and the field's
   `on_blur` arrives, including when that handler re-renders.
 
-  iOS resigns the first responder found in any visible window of a connected
-  scene — the view the keyboard is up for — and returns once the main thread
+  iOS resigns the first responder found in a visible window of the screen's
+  own window scene (with several iPad windows, `Mob.Scene`, only that one's)
+  — the view the keyboard is up for — and returns once the main thread
   has done it, so the handler's re-render applies to a field that is no
   longer focused (a focused field keeps what the user typed rather than take
   a new `value:`). Android calls `MobBridge.dismissKeyboard()`, which hides
@@ -46,7 +47,14 @@ defmodule Mob.Keyboard do
     # Guarded, unlike Mob.Haptic: this sits in handlers Mob.ScreenCase drives
     # on the host, where no NIF library loads and the call raises — a screen
     # that chains it has to stay testable there.
-    if function_exported?(nif, :dismiss_keyboard, 0), do: nif.dismiss_keyboard()
+    case Mob.Scene.of(socket) do
+      nil ->
+        if function_exported?(nif, :dismiss_keyboard, 0), do: nif.dismiss_keyboard()
+
+      scene ->
+        if function_exported?(nif, :dismiss_keyboard, 1), do: nif.dismiss_keyboard(scene)
+    end
+
     socket
   end
 end

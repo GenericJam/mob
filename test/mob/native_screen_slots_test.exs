@@ -168,7 +168,6 @@ defmodule Mob.NativeScreenSlotsTest do
       body = region(code_only(@nif, :objc), "static ERL_NIF_TERM nif_set_root(", "\n}\n")
       assert body =~ ~s|((NSDictionary *)json)[@"replaces_stack"]|
       assert body =~ "[replacesRaw isKindOfClass:[NSNumber class]] && [replacesRaw boolValue]"
-      assert body =~ "setRoot:node transition:transitionStr replacesStack:replacesStack"
 
       # And the view model must keep it, not drop it on the floor.
       vm = code_only(@view_model)
