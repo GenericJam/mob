@@ -323,6 +323,12 @@ defmodule Mob.UI do
   Android Material 3 `ModalBottomSheet`) that composes ordinary Mob nodes
   as its content.
 
+  A sheet's `:id` is its identity: the same `:id` across a re-render keeps
+  the sheet's presentation and its exactly-once dismiss, and a different
+  `:id` in the same place is a new sheet. Without an `:id`, identity is the
+  sheet's position in the tree. `1` and `"1"` are the same id, because
+  `Mob.Renderer` stringifies a numeric `:id` before either platform sees it.
+
   `children` is one child node or a list of them.
 
   ## Props

@@ -730,6 +730,15 @@ def handle_info({:dismiss, :sheet_dismissed}, socket) do
 end
 ```
 
+A sheet's `:id` is its identity. A re-render with the same `:id` keeps the
+sheet as it is: up if it is up, dismissed if the user dismissed it. A
+different `:id` in the same place is a new sheet, which presents even if the
+previous one was dismissed, and whose `on_dismiss` is its own: replacing a
+sheet that is still open does not deliver the old sheet's `on_dismiss`.
+Without an `:id`, the sheet's identity is its position in the tree. `1` and
+`"1"` are the same id, because `Mob.Renderer` stringifies a numeric `:id`
+before either platform sees it.
+
 | Prop | Type | Description |
 |------|------|-------------|
 | `detents` | list | Stops the sheet can rest at: a subset of `[:medium, :large]`, or the exclusive content-height detent `[:content]` / `[{:content, max_height: n}]`. Default `[:medium, :large]`. Invalid detents raise, both in `Mob.UI.sheet/2` and again at render time. |

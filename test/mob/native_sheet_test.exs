@@ -3,6 +3,8 @@
 defmodule Mob.NativeSheetTest do
   use ExUnit.Case, async: true
 
+  import Mob.Test.NativeSource
+
   @ios Path.expand("../../ios", __DIR__)
 
   test "SwiftUI sheet preserves built-ins and measures content detents" do
@@ -39,5 +41,82 @@ defmodule Mob.NativeSheetTest do
     assert source =~ "safeAreaInsets.bottom"
     assert source =~ "contentMetrics = measured"
     refute source =~ "UIScreen.main.bounds.height * 0.9"
+  end
+
+  # #115. These sheet behaviours were verified on the iOS simulator; the
+  # assertions pin the mechanisms that produce them.
+  test "an authored :id is the sheet's identity, applied outside MobSheetView" do
+    sheet =
+      Path.join(@ios, "MobRootView.swift")
+      |> File.read!()
+      |> code_only()
+      |> region("case .sheet:", "case .anchored:")
+
+    # `.id` inside MobSheetView's body would not reset its @State, so it has to
+    # wrap the constructor. Any NSString id keys it, "" included, as on
+    # Android; a nil id leaves the slot identity. ObjectIdentifier would change
+    # on every render, because the node is rebuilt each time.
+    assert sheet =~
+             ~r/MobSheetView\(node: node\)\s*\.ifLet\(node\.nativeViewId\) \{ view, id in view\.id\(id\) \}/
+
+    refute sheet =~ "ObjectIdentifier"
+  end
+
+  test "a dismiss while the anchor is gone is held until it appears again" do
+    body =
+      Path.join(@ios, "MobRootView.swift")
+      |> File.read!()
+      |> code_only()
+      |> region("private struct MobSheetView: View {", "\n}\n")
+
+    # SwiftUI runs a replaced sheet's onDismiss after the replacement is in
+    # place. The callback reads a class instance captured in body, not this
+    # view's @State, which is no longer installed by then. A torn-down view
+    # never appears again, so its held dismiss is never delivered; a hidden
+    # one (deselected TabView tab) delivers it when it comes back.
+    anchor = region(body, "let lifetime = lifetime", "sheetContent")
+    assert anchor =~ ".onDisappear { lifetime.active = false }"
+
+    on_dismiss = region(body, ".sheet(isPresented: $isPresented, onDismiss: {", "sheetContent")
+
+    assert index_of(on_dismiss, "guard lifetime.active else {") <
+             index_of(on_dismiss, "sendDismissOnce()"),
+           "an inactive lifetime must hold the dismiss, not deliver it"
+
+    assert on_dismiss =~ "lifetime.pendingDismiss = true"
+
+    appear = region(anchor, ".onAppear {", ".onDisappear")
+    assert appear =~ "lifetime.active = true"
+
+    assert index_of(appear, "if lifetime.pendingDismiss {") <
+             index_of(appear, "sendDismissOnce()")
+
+    dismiss = region(body, "private func sendDismissOnce() {", "\n    }")
+
+    assert index_of(dismiss, "if dismissedByPark { return }") <
+             index_of(dismiss, "node.onDismiss?()")
+
+    # A park only flips dismissedByPark. Deactivating here would swallow the
+    # user's dismiss after the sheet comes back.
+    watcher = region(body, ".onChange(of: isActive)", "\n            }")
+    refute watcher =~ "lifetime"
+  end
+
+  test "a sheet asks to be presented from its first onAppear, not at init" do
+    body =
+      Path.join(@ios, "MobRootView.swift")
+      |> File.read!()
+      |> code_only()
+      |> region("private struct MobSheetView: View {", "\n}\n")
+
+    # Presenting in the update that removes an open predecessor put the
+    # replacement up at the system default height with no drag indicator.
+    assert body =~ "@State private var isPresented = false"
+
+    appear = region(body, ".onAppear {", ".onDisappear")
+    assert appear =~ "guard !appeared else { return }"
+    assert appear =~ "isPresented = true"
+    # Mounted on a parked screen: the resume presents it.
+    assert appear =~ "dismissedByPark = true"
   end
 end

@@ -1561,6 +1561,23 @@ defmodule Mob.RendererTest do
       assert Enum.any?(MockNIF.calls(), fn {f, args} -> f == :register_tap and args == [tag] end)
     end
 
+    test ":id reaches the platform as one string however it was written (#115)" do
+      # iOS keys a sheet's presentation on :id read as an NSString, so a
+      # numeric id must arrive as the same string an author would write.
+      # Otherwise `id: 1` and `id: "1"` would be two different sheets, and a
+      # numeric id would not key the sheet at all.
+      for id <- [1, "1"] do
+        MockNIF.reset()
+        Renderer.render(sheet_tree(%{id: id}), :ios, MockNIF)
+        assert set_root_json()["props"]["id"] == "1"
+      end
+
+      # No :id stays absent, so the sheet keeps positional identity.
+      MockNIF.reset()
+      Renderer.render(sheet_tree(%{}), :ios, MockNIF)
+      refute Map.has_key?(set_root_json()["props"], "id")
+    end
+
     test "scrim is a color-token prop — resolves through the theme like :background" do
       Mob.Theme.set(muted: :black)
       Renderer.render(sheet_tree(%{scrim: :muted}), :android, MockNIF)
