@@ -91,10 +91,10 @@ jobs:
             test/native/erts_dir_test.c \
             android/jni/mob_beam.h
 
-      - name: Android init-args tokenizer
+      - name: Set up Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.17.0-dev.269+ebff43698
+          version: 0.17.0
 
       - name: Android init-args and ERTS-dir tests
         run: |
