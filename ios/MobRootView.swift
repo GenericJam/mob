@@ -624,12 +624,11 @@ struct MobNodeView: View {
             case .sheet:
                 // `.id` has to wrap MobSheetView itself. A modifier inside
                 // `body` does not reset this struct's @State, so a replacement
-                // sheet would keep the predecessor's presentation. Nil and ""
-                // take the else branch and stay on the slot's identity.
+                // sheet would keep the predecessor's presentation. Any authored
+                // :id, "" included, is the identity, as on Android
+                // (MobNodeIdentity.keyFor); no :id stays on the slot.
                 MobSheetView(node: node)
-                    .ifLet(node.nativeViewId.flatMap { $0.isEmpty ? nil : $0 }) { view, id in
-                        view.id(id)
-                    }
+                    .ifLet(node.nativeViewId) { view, id in view.id(id) }
 
             case .anchored:
                 MobAnchoredView(node: node)
@@ -2185,19 +2184,22 @@ private struct MobSlider: View {
 
 // MobSheetView — native modal bottom sheet. Presentation state
 // (`isPresented`, `dismissSent`, `dismissedByPark`, `contentMetrics`) lives
-// in this view's @State, which SwiftUI keeps for one view identity. A
-// non-empty `nativeViewId` applies `.id` at the `.sheet` call site, so that
+// in this view's @State, which SwiftUI keeps for one view identity. An
+// authored `nativeViewId` applies `.id` at the `.sheet` call site, so that
 // identity is the sheet's `:id`: the same id keeps the state across a
 // rerender, and a different id presents fresh. `.id` inside `body` does not
-// reset this struct's @State. A nil or empty id applies no `.id`, and
-// identity stays the slot.
+// reset this struct's @State. Without an id, identity stays the slot.
 //
-// Replacing an open sheet destroys this view while `.sheet`'s `onDismiss`
-// can still run. `lifetime` is a class so that callback still sees the
-// predecessor's flag; reading the flag from @State after the identity is
-// gone can observe the replacement, which is born active. The zero-size
-// anchor clears it from `.onDisappear`. A swipe leaves that anchor mounted,
-// so the dismiss is still delivered once. A park only sets `dismissedByPark`.
+// Replacing an open sheet tears this view down, and SwiftUI then runs the
+// old `.sheet`'s `onDismiss` (seen on the iOS simulator, about half a second
+// later). `lifetime` is a class captured in `body`, so that callback reads
+// the flag of the view that built it; this view's @State is no longer
+// installed by then. The zero-size anchor clears the flag in `.onDisappear`
+// and sets it again in `.onAppear`, so a view that leaves the hierarchy and
+// comes back still delivers its own dismiss. A swipe leaves the anchor
+// mounted, so the dismiss is delivered once. A park only sets
+// `dismissedByPark`.
+
 // Measured intrinsic content height plus the bottom safe-area inset that
 // applies *inside* the sheet. `.presentationDetents(.height(x))` sets the
 // sheet's TOTAL height, but the content region is inset by the home indicator,
@@ -2261,8 +2263,8 @@ private extension EnvironmentValues {
     }
 }
 
-// A class, like MobFrameBox: the dismiss callback can run after this view's
-// identity is gone, and the flag has to stay readable across that teardown.
+// A class, like MobFrameBox: the dismiss callback can run after this view is
+// gone, and the flag has to stay readable across that teardown.
 private final class MobSheetLifetime {
     var active = true
 }
@@ -2271,7 +2273,13 @@ private struct MobSheetView: View {
     let node: MobNode
     @Environment(\.mobAvailableSheetHeight) private var availableHeight
     @Environment(\.mobScreenIsActive) private var isActive
-    @State private var isPresented = true
+    // Starts false and is set from the anchor's first `.onAppear`, not at
+    // init. A sheet that replaces an open one under a different `:id` is
+    // inserted in the same update that removes its predecessor; asking for
+    // the presentation in that update put the new sheet up at the system
+    // default (full height, no drag indicator) instead of its detents.
+    @State private var isPresented = false
+    @State private var appeared = false
     @State private var dismissSent = false
     // Set when a park dismissed the sheet, so the resume can put it back and
     // the dismiss is not reported to the BEAM as a user action.
@@ -2284,12 +2292,22 @@ private struct MobSheetView: View {
     @State private var contentMetrics: MobSheetContentMetrics?
 
     var body: some View {
-        // Capture the class. The closure below must not read `lifetime` back
-        // out of @State: after an `:id` change that storage belongs to the
-        // replacement, whose flag is still active.
+        // Capture the instance: a late callback must read the flag of the
+        // view that built it, not this view's @State after teardown.
         let lifetime = lifetime
         Color.clear
             .frame(width: 0, height: 0)
+            .onAppear {
+                lifetime.active = true
+                guard !appeared else { return }
+                appeared = true
+                if isActive {
+                    isPresented = true
+                } else {
+                    // Mounted on a parked screen: present on resume.
+                    dismissedByPark = true
+                }
+            }
             .onDisappear { lifetime.active = false }
             .sheet(isPresented: $isPresented, onDismiss: {
                 if !lifetime.active { return }

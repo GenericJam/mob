@@ -710,14 +710,6 @@ presentation**. Rendering the sheet node presents it, a re-render that still
 includes it updates its content in place, and removing it from the tree
 dismisses it. So sheet visibility is an ordinary assign plus `:if`:
 
-An explicit `:id` scopes presentation and the exactly-once dismiss to that
-id. The same `:id` across a re-render keeps the sheet up. A different `:id`
-at the same position presents on its own, and a late dismiss from the sheet
-it replaced is not delivered. Omitting `:id`, including `id: ""`, keeps slot
-identity, so presentation state follows the node's position in the tree.
-`1` and `"1"` are the same id: `Mob.Renderer` stringifies a numeric `:id`
-before either platform sees it.
-
 ```elixir
 def render(assigns) do
   dismiss = {self(), :sheet_dismissed}
@@ -737,6 +729,15 @@ def handle_info({:dismiss, :sheet_dismissed}, socket) do
   {:noreply, Mob.Socket.assign(socket, :show_sheet, false)}
 end
 ```
+
+A sheet's `:id` is its identity. A re-render with the same `:id` keeps the
+sheet as it is: up if it is up, dismissed if the user dismissed it. A
+different `:id` in the same place is a new sheet, which presents even if the
+previous one was dismissed, and whose `on_dismiss` is its own: replacing a
+sheet that is still open does not deliver the old sheet's `on_dismiss`.
+Without an `:id`, the sheet's identity is its position in the tree. `1` and
+`"1"` are the same id, because `Mob.Renderer` stringifies a numeric `:id`
+before either platform sees it.
 
 | Prop | Type | Description |
 |------|------|-------------|
