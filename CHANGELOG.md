@@ -25,15 +25,21 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   results, scene-aware `safe_area/1`, `size_class/1`, `alert_show/4`,
   `action_sheet_show/3`, `clear_taps/1`, `scenes/0`, `scene_request/0`,
   `scene_multiple_supported/0`. Only application-role window scenes count,
-  so an AirPlay or cable display is not a second window. A further window's
-  router mounts its root screen after starting, so a `mount/3` may call
-  `Mob.Scene.list/0`; `:mob_screen` moves to a remaining window before the
-  closing primary stops; a new session takes over a kept window only when
-  that window's session is gone (`{:mob_scene, :replaced, ...}`), and a kept
-  window whose session is discarded stops (`{:mob_scene, :discarded, id}`).
-  Opt in with `config :mob_dev, multi_window: true` (mob_dev#114 stamps
-  `UIApplicationSupportsMultipleScenes`). Needs a native rebuild. Not yet run
-  on a device. See `decisions/2026-10-02-one-router-per-window-scene.md`.
+  so an AirPlay or cable display is not a second window. An alert or action
+  sheet appears in the window of the screen that showed it, even when another
+  window is in front. Launch notifications and links (`Mob.Link`) go to the
+  root router only, and to whichever router takes over `:mob_screen`. A
+  further window's router mounts its root screen after starting, so a
+  `mount/3` may call `Mob.Scene.list/0`; `:mob_screen` moves to a remaining
+  window before the closing primary stops; a new session takes over a kept
+  window only when that window's session is gone (`{:mob_scene, :replaced,
+  ...}`), and a kept window whose session is discarded stops
+  (`{:mob_scene, :discarded, id}`). The by-tag press helpers
+  (`press_in/3`, `press_out/3`, `hold/4`) take `scene:` too. Opt in with
+  `config :mob_dev, multi_window: true` (mob_dev#114 stamps
+  `UIApplicationSupportsMultipleScenes`). Needs a native rebuild. Run on the
+  iPad and iPhone simulators, not yet on a physical iPad. See
+  `decisions/2026-10-02-one-router-per-window-scene.md`.
 - **`Mob.Keyboard.dismiss/1` — take the on-screen keyboard down from the
   BEAM.** A screen had no way to dismiss the keyboard from its own handler —
   a Save button, a tap on blank space, a committed value — short of removing

@@ -1,7 +1,7 @@
 # One router per window scene, one BEAM for all of them
 
 - Date: 2026-10-02
-- Status: accepted (iPad half; device runs pending, see Verification)
+- Status: accepted (iPad half; run on iPad and iPhone simulators, see Verification)
 - Tickets: MOB-245 (multi-instance, iPad half), epic MOB-200 (iPhone Duo).
   Android follow-up filed separately (see Android).
 
@@ -131,14 +131,17 @@ from:
 - **Alerts** and action sheets shown by a screen in a bound scene go through
   `alert_show/4` and `action_sheet_show/3`, which take the scene id, present
   on that scene's window and route the result back to it. Unbound screens
-  use the existing NIFs, which now present on the default scene's window.
+  use the existing NIFs, which present on the default scene's window, even
+  while another window is in front.
 - **Size class and safe area reads** at mount take the scene id
   (`size_class/1`, `safe_area/1`) for a bound screen. The unbound reads
   prefer the default scene's window, so a second window cannot hand the
   primary its insets.
-- **Notifications are app-wide.** They go to `:mob_screen`, i.e. the primary
-  scene's current screen, unless a process registered through `mob_notify`,
-  as before.
+- **Notifications and links are app-wide.** They go to `:mob_screen`, i.e.
+  the primary scene's current screen, unless a process registered through
+  `mob_notify` (or `Mob.Link.register/1`), as before. Only the primary takes
+  what native stored at launch, and a router that takes over `:mob_screen`
+  takes what native stored while the name moved.
 - **Taps need no routing.** `Mob.Listener` already delivers each tap to the
   screen pid baked into its handle; what changes is that each scene has its
   own native tap set, so one window's render no longer invalidates the
@@ -241,6 +244,24 @@ implementation reports activities as scenes and implements the scene NIFs.
 
 Host tests cover the routing, `Mob.Scenes` lifecycle, `Mob.Sender`'s
 per-scene commits, `Mob.Test.screens/1`, `MultipleScenesError` and `scene:`,
-and fail with the change reverted. The native half has not run on a device:
-iOS simulators were down on this machine when it was written. Pending device
-checks are listed on MOB-245.
+and fail with the change reverted (with `Mob.Scenes.register_primary/4`
+removed from the router, 25 of the 29 tests in `test/mob/scenes_test.exs`
+fail).
+
+On the iPad Pro 11-inch (M5) simulator (iOS 27.0), with a `mix mob.new` app
+built with `multi_window: true`: `Mob.Scene.request_new/0` opened a second
+window in the same BEAM, and `Mob.Test.screens/1` listed both. `tap/3`,
+`navigate/4` and `assigns/2` with `scene:` acted on that window only, and
+leaving out `scene:` raised `MultipleScenesError`. A real tap in the front
+window reached only its screen. Each window's edge-pan handler popped only
+its own stack. A horizontal size class override on one window's hosting
+controller reached only that window's `size_class`. Each window's alert
+appeared in its own window and returned its result there, and so did a
+sheet's dismissal. With the second window closed, navigation, a sheet and an
+alert worked as before. The run found one bug, now fixed: an alert from the
+unbound primary was shown in whichever window was in front. On the iPhone 18
+Pro simulator, `Mob.Test.screens/1` returned one entry, and
+`screen/1`, `tap/2`, navigation, the edge-pan back, a sheet and an alert
+worked unchanged. Synthetic touches (XCUITest) don't fire
+`UIScreenEdgePanGestureRecognizer`, so the back runs invoked the hosting
+controller's handler with the recognizer in `.ended` from lldb.
