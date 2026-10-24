@@ -2194,11 +2194,13 @@ private struct MobSlider: View {
 // old `.sheet`'s `onDismiss` (seen on the iOS simulator, about half a second
 // later). `lifetime` is a class captured in `body`, so that callback reads
 // the flag of the view that built it; this view's @State is no longer
-// installed by then. The zero-size anchor clears the flag in `.onDisappear`
-// and sets it again in `.onAppear`, so a view that leaves the hierarchy and
-// comes back still delivers its own dismiss. A swipe leaves the anchor
-// mounted, so the dismiss is delivered once. A park only sets
-// `dismissedByPark`.
+// installed by then. The zero-size anchor clears the flag in `.onDisappear`.
+// A dismiss that arrives while the flag is clear is held, not dropped: a
+// view that is only hidden (its TabView tab deselected while the sheet is
+// up) appears again and delivers it from `.onAppear`, and a torn-down view
+// never appears again, so its late dismiss is never delivered. A swipe
+// leaves the anchor mounted, so the dismiss is delivered once. A park only
+// sets `dismissedByPark`.
 
 // Measured intrinsic content height plus the bottom safe-area inset that
 // applies *inside* the sheet. `.presentationDetents(.height(x))` sets the
@@ -2264,9 +2266,11 @@ private extension EnvironmentValues {
 }
 
 // A class, like MobFrameBox: the dismiss callback can run after this view is
-// gone, and the flag has to stay readable across that teardown.
+// gone, and the flags have to stay readable across that teardown.
 private final class MobSheetLifetime {
     var active = true
+    // A dismiss that arrived while `active` was false.
+    var pendingDismiss = false
 }
 
 private struct MobSheetView: View {
@@ -2299,6 +2303,10 @@ private struct MobSheetView: View {
             .frame(width: 0, height: 0)
             .onAppear {
                 lifetime.active = true
+                if lifetime.pendingDismiss {
+                    lifetime.pendingDismiss = false
+                    sendDismissOnce()
+                }
                 guard !appeared else { return }
                 appeared = true
                 if isActive {
@@ -2310,7 +2318,10 @@ private struct MobSheetView: View {
             }
             .onDisappear { lifetime.active = false }
             .sheet(isPresented: $isPresented, onDismiss: {
-                if !lifetime.active { return }
+                guard lifetime.active else {
+                    if !dismissedByPark { lifetime.pendingDismiss = true }
+                    return
+                }
                 sendDismissOnce()
             }) {
                 sheetContent

@@ -62,24 +62,34 @@ defmodule Mob.NativeSheetTest do
     refute sheet =~ "ObjectIdentifier"
   end
 
-  test "a replaced sheet's late onDismiss is dropped, and a swipe still delivers" do
+  test "a dismiss while the anchor is gone is held until it appears again" do
     body =
       Path.join(@ios, "MobRootView.swift")
       |> File.read!()
       |> code_only()
       |> region("private struct MobSheetView: View {", "\n}\n")
 
-    # SwiftUI runs the old sheet's onDismiss after the replacement is in
-    # place. The callback must read a class instance captured in body, not
-    # this view's @State, which is no longer installed by then.
+    # SwiftUI runs a replaced sheet's onDismiss after the replacement is in
+    # place. The callback reads a class instance captured in body, not this
+    # view's @State, which is no longer installed by then. A torn-down view
+    # never appears again, so its held dismiss is never delivered; a hidden
+    # one (deselected TabView tab) delivers it when it comes back.
     anchor = region(body, "let lifetime = lifetime", "sheetContent")
-
     assert anchor =~ ".onDisappear { lifetime.active = false }"
-    assert anchor =~ "lifetime.active = true"
 
-    assert index_of(anchor, "if !lifetime.active { return }") <
-             index_of(anchor, "sendDismissOnce()"),
-           "an inactive lifetime must return before the dismiss is delivered"
+    on_dismiss = region(body, ".sheet(isPresented: $isPresented, onDismiss: {", "sheetContent")
+
+    assert index_of(on_dismiss, "guard lifetime.active else {") <
+             index_of(on_dismiss, "sendDismissOnce()"),
+           "an inactive lifetime must hold the dismiss, not deliver it"
+
+    assert on_dismiss =~ "lifetime.pendingDismiss = true"
+
+    appear = region(anchor, ".onAppear {", ".onDisappear")
+    assert appear =~ "lifetime.active = true"
+
+    assert index_of(appear, "if lifetime.pendingDismiss {") <
+             index_of(appear, "sendDismissOnce()")
 
     dismiss = region(body, "private func sendDismissOnce() {", "\n    }")
 
