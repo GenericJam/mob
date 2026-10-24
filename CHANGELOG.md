@@ -83,7 +83,7 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 - **Android: `Mob.Keyboard.dismiss/1` needs `MobBridge.dismissKeyboard()`.**
   New apps from the matching mob_new have it. In an existing app, copy
   `dismissKeyboard()`, `focusedFieldHost`, the `InputMethodManager` and
-  `LocalView` imports, and the two `focusedFieldHost` lines in `MobTextField`
+  `LocalView` imports, and the `hostView` and `focusedFieldHost` lines in `MobTextField`
   from a freshly generated `MobBridge.kt`. Without the method the call leaves
   the keyboard up.
 
