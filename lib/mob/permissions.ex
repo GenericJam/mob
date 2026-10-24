@@ -18,7 +18,7 @@ defmodule Mob.Permissions do
   lets the native layer decide whether it is a known capability — an unrecognized
   one returns `badarg` from the NIF (surfacing as an `ArgumentError`).
 
-  Capabilities that need *no* permission: haptics, clipboard, share sheet, file picker.
+  Capabilities that need *no* permission: haptics, keyboard, clipboard, share sheet, file picker.
 
   > **Beyond `request/2`**: each capability also needs a matching
   > `Info.plist` key (iOS) and `AndroidManifest.xml` entry. Without

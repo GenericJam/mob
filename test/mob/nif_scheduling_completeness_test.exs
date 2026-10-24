@@ -26,7 +26,7 @@ defmodule Mob.NifSchedulingCompletenessTest do
   # thread, not computing.
   @blocks_ui_thread ~w(
     audio_output_level ax_action ax_action_at_xy battery_level clear_text
-    clipboard_get color_scheme delete_backward device_battery_state
+    clipboard_get color_scheme delete_backward device_battery_state dismiss_keyboard
     device_foreground device_orientation key_press long_press_xy resolve_ipv4
     safe_area screen_info scroll_info scroll_to set_theme size_class swipe_xy tap
     tap_xy

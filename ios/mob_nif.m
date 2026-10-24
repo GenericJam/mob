@@ -6991,6 +6991,48 @@ static ERL_NIF_TERM nif_delete_backward(ErlNifEnv *env, int argc, const ERL_NIF_
                             enif_make_atom(env, "no_first_responder"));
 }
 
+// ─── dismiss_keyboard/0 — take the keyboard down from the BEAM ───────────────
+//
+// Resigns the first responder found in any visible window of a connected
+// scene — the walk delete_backward and key_press use — which is the view the
+// keyboard is up for. Nothing focused is not an error; the keyboard is
+// already down.
+//
+// Waits (bounded) for the main thread to do it, so it is IO_BOUND. The caller
+// is a handler that usually re-renders too, and MobTextField adopts a new
+// `value:` only once it is no longer focused. Queued fire-and-forget, the
+// handler's render reached the field while SwiftUI still had it focused, and
+// the value assigned next to the dismiss was dropped in most runs after an
+// edit (iPhone Air simulator, iOS 27.0). Returning once the resign has run
+// queues the re-render behind it, and the value then landed every time.
+// {error, timeout} if the main thread did not get to it within 2 s.
+
+static ERL_NIF_TERM nif_dismiss_keyboard(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+      id fr = nil;
+      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+          if (![scene isKindOfClass:[UIWindowScene class]])
+              continue;
+          for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+              if (win.isHidden)
+                  continue;
+              fr = find_first_responder_in(win);
+              if (fr)
+                  break;
+          }
+          if (fr)
+              break;
+      }
+      [fr resignFirstResponder];
+      dispatch_semaphore_signal(done);
+    });
+    dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC));
+    if (dispatch_semaphore_wait(done, deadline) != 0)
+        return enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_atom(env, "timeout"));
+    return enif_make_atom(env, "ok");
+}
+
 // ─── key_press/1 — send a special key to the focused text input ───────────────
 //
 // Accepts an atom:
@@ -9302,6 +9344,7 @@ static ErlNifFunc nif_funcs[] = {
     {"safe_area", 0, nif_safe_area, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"size_class", 0, nif_size_class, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"haptic", 1, nif_haptic, 0},
+    {"dismiss_keyboard", 0, nif_dismiss_keyboard, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"torch", 1, nif_torch, 0},
     {"clipboard_put", 1, nif_clipboard_put, 0},
     {"clipboard_get", 0, nif_clipboard_get, ERL_NIF_DIRTY_JOB_IO_BOUND},
