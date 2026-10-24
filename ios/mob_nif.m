@@ -9021,6 +9021,24 @@ static UIViewController *root_vc(void) {
     return nil;
 }
 
+// Where an alert or action sheet shown for `sceneId` is presented: a bound
+// screen's own window. The unbound primary router's screens (nil) get their
+// results through :mob_screen, i.e. in the default scene, so with several
+// windows attached their alert goes to the default scene's window even while
+// another window is in front (MOB-245); presenting it in the front window
+// would answer one window's screen from another's. With one window, root_vc()
+// as before.
+static UIViewController *mob_alert_presenter(NSString *sceneId) {
+    if (sceneId)
+        return mob_top_vc_in(mob_window_scene_for(sceneId));
+    if (mob_scene_attached_count() > 1) {
+        UIViewController *vc = mob_top_vc_in(mob_default_window_scene());
+        if (vc)
+            return vc;
+    }
+    return root_vc();
+}
+
 // ── NIF: alert_show/3, alert_show/4 ──────────────────────────────────────────
 // alert_show/4 takes the scene id of the screen showing it first (MOB-245): the
 // alert is presented in that window and its result routed back to it.
@@ -9078,7 +9096,7 @@ static ERL_NIF_TERM nif_alert_show(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
                                                                           [action UTF8String]);
                                                }]];
       }
-      UIViewController *vc = sceneId ? mob_top_vc_in(mob_window_scene_for(sceneId)) : root_vc();
+      UIViewController *vc = mob_alert_presenter(sceneId);
       if (vc)
           [vc presentViewController:ac animated:YES completion:nil];
     });
@@ -9132,7 +9150,7 @@ static ERL_NIF_TERM nif_action_sheet_show(ErlNifEnv *env, int argc, const ERL_NI
                                                                           [action UTF8String]);
                                                }]];
       }
-      UIViewController *vc = sceneId ? mob_top_vc_in(mob_window_scene_for(sceneId)) : root_vc();
+      UIViewController *vc = mob_alert_presenter(sceneId);
       if (!vc)
           return;
       // iPad requires a source view for action sheets
