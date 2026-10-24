@@ -1332,8 +1332,8 @@ fn snapChangeTap(handle: c_int, env: ?*erts.ErlNifEnv) ?TapSnap {
     return snap;
 }
 
-/// `{:event, tag}` — used by focus/blur/submit/select and the gesture
-/// senders that don't carry a payload.
+/// `{:event, tag}` — used by focus/submit/select and the gesture senders
+/// that don't carry a payload.
 fn sendEvent(handle: c_int, comptime atom_name: [:0]const u8) void {
     const env = erts.enif_alloc_env() orelse return;
     defer erts.enif_free_env(env);
@@ -1438,8 +1438,13 @@ pub export fn mob_send_change_float(handle: c_int, value: f64) callconv(.c) void
 pub export fn mob_send_focus(handle: c_int) callconv(.c) void {
     sendEvent(handle, "focus");
 }
+/// Identity-tolerant, like the iOS final-text blur: focus is lost on the UI
+/// thread, often by the same handler that re-renders (Mob.Keyboard.dismiss/1
+/// next to an assign), and set_root commits the new table on the BEAM thread
+/// before Compose recomposes, so the blur carries the previous render's
+/// handle. A strict check dropped most of those blurs.
 pub export fn mob_send_blur(handle: c_int) callconv(.c) void {
-    sendEvent(handle, "blur");
+    sendIdentityEvent(handle, "blur");
 }
 pub export fn mob_send_submit(handle: c_int) callconv(.c) void {
     sendEvent(handle, "submit");

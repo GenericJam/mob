@@ -17,13 +17,13 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   the field from the tree. The built-in exits are the return key (which the
   decimal and number keyboards don't have, so `on_submit` never fires for
   them), another field taking focus, and the iOS keyboard-toolbar "Done".
-  New `dismiss_keyboard/0` NIF: iOS resigns the first responder in any
-  visible window (fire-and-forget, returns promptly); Android calls
-  `MobBridge.dismissKeyboard()` when the generated bridge defines it — no
-  template does yet, so there the NIF returns `{:error, :not_loaded}` and
-  `dismiss/1` is a no-op. `dismiss/1` returns the socket and is a no-op on
-  the host. Act in the dismissing handler rather than in the field's
-  `on_blur`, which may not arrive when that handler also re-renders. Guide:
+  New `dismiss_keyboard/0` NIF. iOS resigns the first responder in any
+  visible window and returns once the main thread has done it (IO_BOUND,
+  2 s bound), so a `value:` assigned in the same handler reaches the field.
+  Android calls `MobBridge.dismissKeyboard()`, which hides the soft keyboard
+  and clears focus, from the matching mob_new template. On a bridge without
+  it the NIF returns `{:error, :not_loaded}` and `dismiss/1` is a no-op.
+  `dismiss/1` returns the socket and is a no-op on the host. Guide:
   `guides/device_capabilities.md` → Keyboard. Decision:
   `decisions/2026-09-24-keyboard-dismiss-is-a-device-api.md`.
 
@@ -58,6 +58,13 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   traps exits, so it now takes the reason from the runner's link (`:killed`
   for `Process.exit(pid, :kill)`). Seen once in a few thousand runs of
   `async_test.exs`, next to a test-side race on the same signal ordering.
+- **Android `on_blur` survives a re-render in the handler that took focus
+  away.** The blur was resolved generation-strictly, but focus is lost on
+  the UI thread after the BEAM has already committed the handler's new tap
+  table, so it carried a stale handle and was dropped: 6 of 8 blurs after
+  `Mob.Keyboard.dismiss/1` plus an assign, on a Moto G Power 2021. It now
+  resolves by identity (same slot, pid and tag), as change events and the
+  iOS final-text blur already do.
 
 ### Upgrading
 - **Zig 0.17.0, with mob_dev and mob_new's matching releases.** In each
@@ -71,6 +78,10 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   caches the configure phase, so without it a new mob Swift file is missed).
   Or copy the block from a freshly generated app. `mix mob.doctor` flags
   both.
+- **Android: `Mob.Keyboard.dismiss/1` needs `MobBridge.dismissKeyboard()`.**
+  New apps from the matching mob_new have it. In an existing app, copy the
+  method (and its `InputMethodManager` import) from a freshly generated
+  `MobBridge.kt`; without it the call leaves the keyboard up.
 
 ## [0.9.25] - 2026-10-22
 

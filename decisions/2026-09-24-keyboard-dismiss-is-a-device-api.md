@@ -1,6 +1,6 @@
-# Keyboard dismissal is a fire-and-forget device API (`Mob.Keyboard`)
+# Keyboard dismissal is a device API (`Mob.Keyboard`)
 
-- Date: 2026-09-24
+- Date: 2026-09-24 (revised 2026-10-23)
 - Status: accepted
 
 ## Context
@@ -16,41 +16,55 @@ keyboard down.
 
 ## Decision
 
-- **A device API, not a harness NIF.** `dismiss_keyboard/0` is shaped like
-  `haptic/1` and `torch/1`: `dispatch_async` to the main thread, `ok` means
-  queued. The observed-effect rule
-  (`2026-08-09-tap-xy-reports-observed-effect.md`) governs harness NIFs that
-  *report* on the app; a screen calling this is *acting*, and the observing
-  form already exists — `key_press(:escape)` — for a test that needs to know.
+- **A device API, not a harness NIF.** A screen calling `dismiss_keyboard/0`
+  is *acting*, not reporting on the app, so the observed-effect rule
+  (`2026-08-09-tap-xy-reports-observed-effect.md`) doesn't apply and there is
+  no effect to report back; `key_press(:escape)` remains the observing form
+  for a test. `Mob.Keyboard.dismiss/1` ignores the NIF's result and returns
+  the socket.
 - **Resign whatever is first responder** in any visible window of a connected
   scene, the walk `delete_backward` / `key_press` use. Nothing focused is not
   an error.
+- **iOS waits for the resign (IO_BOUND, 2 s bound).** It was first
+  `dispatch_async` and returned at once, like `haptic/1`. The dismissing
+  handler usually re-renders too, and `MobTextField` adopts a new `value:`
+  only once it is no longer focused (a focused field keeps what the user is
+  typing). With the async resign, that render reached a field SwiftUI still
+  had focused: on the iPhone Air simulator (iOS 27.0), after an edit, the
+  value assigned next to the dismiss was dropped in nearly every run and the
+  field kept showing the typed text. Returning only once the main thread has
+  resigned queues the render behind it; the value then landed in 22 of 22
+  runs. `{:error, :timeout}` if the main thread doesn't get to it in time.
+- **Android hides the IME and clears focus.** `MobBridge.dismissKeyboard()`
+  (mob_new) calls `InputMethodManager.hideSoftInputFromWindow` and
+  `clearFocus()` on the focused view. Hiding alone left the Compose field
+  focused, so no `on_blur` and no `on_focus` on the next tap, unlike iOS.
+  Android doesn't wait: its field adopts a rendered value while focused
+  (`MobTextSync`), and the value landed every run.
 - **Optional on Android.** The bridge method is cached with `cacheOptional`;
-  a bridge without it returns `{:error, :not_loaded}`, which
-  `Mob.Keyboard.dismiss/1` swallows, so an app on an older generated bridge
-  degrades to "keyboard stays up" rather than crashing. The Kotlin half
-  (`MobBridge.dismissKeyboard()`, `InputMethodManager.hideSoftInputFromWindow`)
-  is the paired `mob_new` change.
-- **Guarded on the host.** Unlike `Mob.Haptic`, `dismiss/1` checks the stub is
-  loaded before calling it: it sits in handlers `Mob.ScreenCase` drives on the
-  host, where no NIF library loads, and a screen must stay testable there.
+  a bridge without it returns `{:error, :not_loaded}`, which `dismiss/1`
+  swallows, so an app on an older generated bridge degrades to "keyboard
+  stays up" rather than crashing.
+- **Guarded on the host.** Unlike `Mob.Haptic`, `dismiss/1` checks `:mob_nif`
+  is loaded before calling it: it sits in handlers `Mob.ScreenCase` drives on
+  the host, where no NIF library loads, and a screen must stay testable there.
+- **Android `on_blur` is identity-tolerant.** The dismissing handler's render
+  commits the new tap table on the BEAM thread before Compose recomposes, so
+  the blur that `clearFocus()` causes carries the previous render's handle.
+  The generation-strict `mob_send_blur` dropped 6 of 8 such blurs on a Moto G
+  Power 2021. It now resolves like change events and the iOS final-text blur
+  (same slot, pid and tag), and all 10 arrived. iOS already delivered blur
+  through `mob_send_text_final`, which is identity-tolerant (MOB-406), and
+  needed no change.
 
 ## Consequences
 
-- Cross-repo, one issue: `mob` (Elixir + NIF + iOS + zig) plus `mob_new` (the
-  generated `MobBridge.dismissKeyboard`). Until the template lands, Android is
-  a documented no-op.
-- Verified on the iOS 26.5 simulator over dist: `Mob.Test.type_text/2`
-  succeeded before the call and returned `{:error, :no_first_responder}` after
-  it, with the field still in the tree; full-screen captures agree. Android:
-  host tests only (no Android toolchain on the authoring machine).
-- Dismiss and a re-render in the same handler are safe for the field's
-  value: the `value:` assigned alongside the dismiss reached the field
-  (SwiftUI's focus state had already flipped when `MobTextField`'s
-  `initialText` sync ran). The field's `on_blur` did **not** arrive in that
-  case, while it did when the NIF ran with no re-render and via
-  `key_press(:escape)` — consistent with the blur firing after the new render
-  generation committed and being dropped as stale. Documented as "act in the
-  dismissing handler, not in `on_blur`"; routing the resign through
-  `Mob.Sender` so the blur lands in the new generation is the follow-up if
-  that ever matters.
+- Cross-repo: `mob` (Elixir, iOS and Android NIFs) plus `mob_new` (the
+  generated `MobBridge.dismissKeyboard`). Existing Android apps need the
+  method copied into their `MobBridge.kt`.
+- Verified on the iPhone Air simulator (iOS 27.0) and a Moto G Power 2021
+  (Android 11) with a decimal field: the keyboard goes down, a `value:`
+  assigned in the same handler reaches the field, `on_blur` arrives with and
+  without a re-render, and the app keeps running. An Android build without
+  the bridge method logs `dismissKeyboard not found (optional)` at NIF load,
+  returns `{:error, :not_loaded}`, and leaves the keyboard up.

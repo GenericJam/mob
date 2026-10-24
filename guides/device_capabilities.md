@@ -72,9 +72,9 @@ def handle_info({:tap, :save}, socket) do
 end
 ```
 
-Act in the dismissing handler, not in the field's `on_blur`: when that handler also re-renders, the new `value:` reaches the field but the blur may not arrive (it fires after the new render committed and is dropped as stale). The handler already knows the field lost focus.
+A `value:` assigned in the same handler reaches the field, and the field's `on_blur` arrives, including when that handler re-renders.
 
-iOS resigns the first responder in any visible window. Android calls `MobBridge.dismissKeyboard()` (`InputMethodManager.hideSoftInputFromWindow`) when the generated bridge defines it; today's templates don't, so on Android the keyboard stays up and nothing else changes.
+iOS resigns the first responder in any visible window and returns once that has run, so the handler's re-render lands on an unfocused field. Android calls `MobBridge.dismissKeyboard()`, which hides the soft keyboard (`InputMethodManager.hideSoftInputFromWindow`) and clears focus. Apps generated before mob_new had it lack the method: there `dismiss/1` is a no-op and the keyboard stays up. Copy `dismissKeyboard()` from a freshly generated `MobBridge.kt` to add it.
 
 ## Clipboard
 
