@@ -734,7 +734,10 @@ defmodule Mob.Diag.StoreTest do
 
       assert_receive :held
 
-      on_exit(fn -> Process.exit(holder, :kill) end)
+      # Wait for the death, not just send the kill: the holder's tables go
+      # with it, and a death landing during tear_down's whereis-then-delete
+      # made that delete raise (MOB-502).
+      on_exit(fn -> kill(holder) end)
 
       assert Store.guard(TestStore, :fallback, fn -> raise "boom" end) == :fallback
       assert Store.health(TestStore).lost == 1
