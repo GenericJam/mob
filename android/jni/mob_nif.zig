@@ -4915,6 +4915,18 @@ fn filesDirPath(env: *jni.JNIEnv, context: jni.JObject) ?[]const u8 {
 
 const MARKER_FILENAME = "mob_post_mortem_appexit_marker.txt";
 
+// Formats into `buf` and NUL-terminates. Built on std.fmt.bufPrint because it
+// exists in both Zig toolchains apps may build with: the 0.17.0 stable mob_dev
+// pins now and the 0.17.0-dev.269 nightly older mob_dev pins. The sentinel
+// helpers differ between them (bufPrintZ is gone in 0.17.0, printSentinel is
+// missing in the nightly), and an app can resolve this mob with either.
+fn printZ(buf: []u8, comptime fmt: []const u8, args: anytype) ?[:0]u8 {
+    if (buf.len == 0) return null;
+    const s = std.fmt.bufPrint(buf[0 .. buf.len - 1], fmt, args) catch return null;
+    buf[s.len] = 0;
+    return buf[0..s.len :0];
+}
+
 // Read the persisted last-seen timestamp. Returns 0 on first-ever
 // sweep (no marker file), on parse failure, or on any I/O error —
 // treating any of those as "we have not seen anything yet" is the
@@ -4922,7 +4934,7 @@ const MARKER_FILENAME = "mob_post_mortem_appexit_marker.txt";
 // Registry then dedups within the current BEAM session.
 fn readMarker(dir: []const u8) i64 {
     var path_buf: [640]u8 = @splat(0);
-    const path = std.mem.printSentinel(&path_buf, "{s}/{s}", .{ dir, MARKER_FILENAME }, 0) catch return 0;
+    const path = printZ(&path_buf, "{s}/{s}", .{ dir, MARKER_FILENAME }) orelse return 0;
 
     const f = jni.fopen(path.ptr, "rb") orelse return 0;
     defer _ = jni.fclose(f);
@@ -4952,7 +4964,7 @@ fn readMarker(dir: []const u8) i64 {
 // console on a permanently-failing path.
 fn writeMarker(dir: []const u8, ts_ms: i64) void {
     var path_buf: [640]u8 = @splat(0);
-    const path = std.mem.printSentinel(&path_buf, "{s}/{s}", .{ dir, MARKER_FILENAME }, 0) catch {
+    const path = printZ(&path_buf, "{s}/{s}", .{ dir, MARKER_FILENAME }) orelse {
         logMarkerFailureOnce(.path_too_long);
         return;
     };
@@ -4965,7 +4977,7 @@ fn writeMarker(dir: []const u8, ts_ms: i64) void {
     defer _ = jni.close(fd);
 
     var out_buf: [32]u8 = @splat(0);
-    const out = std.mem.printSentinel(&out_buf, "{d}\n", .{ts_ms}, 0) catch {
+    const out = printZ(&out_buf, "{d}\n", .{ts_ms}) orelse {
         logMarkerFailureOnce(.format_failed);
         return;
     };
@@ -5001,7 +5013,7 @@ fn logMarkerFailureOnce(kind: MarkerFailure) void {
     };
 
     var buf: [128]u8 = @splat(0);
-    const msg = std.mem.printSentinel(&buf, "mob_post_mortem: marker write failed ({s}); cross-boot dedup will re-emit until this clears", .{reason}, 0) catch return;
+    const msg = printZ(&buf, "mob_post_mortem: marker write failed ({s}); cross-boot dedup will re-emit until this clears", .{reason}) orelse return;
     jni.logWrite(jni.ANDROID_LOG_ERROR, "MobNIF", "{s}", .{msg});
 }
 

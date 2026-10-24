@@ -37,12 +37,15 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   mob_new, which move with it.
 
 ### Fixed
-- **Android Zig sources compile on Zig 0.17.0.** `std.fmt.bufPrintZ` was
-  removed, so the post-mortem marker paths in `mob_nif.zig` use
-  `std.mem.printSentinel`, and `Allocator.dupeZ` was removed, so
-  `mob_stored_queue.zig`'s tests use `dupeSentinel`. CI now sets up the
-  pinned Zig from `.tool-versions`, compiles `mob_nif.zig` for Android and
-  runs every Android Zig test file.
+- **Android Zig sources compile on Zig 0.17.0, and still on the old
+  nightly.** `std.fmt.bufPrintZ` was removed in 0.17.0, and its replacement
+  `std.mem.printSentinel` is missing in `0.17.0-dev.269`, so the post-mortem
+  marker paths in `mob_nif.zig` format through a local `printZ` on
+  `std.fmt.bufPrint`, which both have. An app that updates mob but keeps
+  mob_dev 0.7.30 (which pins the nightly) still builds for Android.
+  `Allocator.dupeZ` was removed, so `mob_stored_queue.zig`'s tests use
+  `dupeSentinel`. CI now sets up the pinned Zig from `.tool-versions`,
+  compiles `mob_nif.zig` for Android and runs every Android Zig test file.
 - **iOS sheets take their identity from `:id` (#115).** A sheet's
   presentation state was tied to its place in the tree, and a container's
   child keying (MOB-127) does not reach every sheet, such as one that is the
