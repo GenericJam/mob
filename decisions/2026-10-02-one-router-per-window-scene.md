@@ -246,8 +246,9 @@ existing apps are unaffected until they opt in.
 - **Share sheet, file picker and toast pick their own window.**
   `share_text`, `files_pick` and `toast_show` present in the first, the
   default or the front window, not the calling screen's, so one opened from
-  a second window can appear in another. Results still reach the calling
-  pid. Scene arities like `alert_show/4` are follow-up work (MOB-503).
+  a second window can appear in another. A picked file still reaches the
+  calling pid. Scene arities like `alert_show/4` are follow-up work
+  (MOB-503).
 - **`on_no_live_screen` applies to the primary only.** A secondary router
   whose screen cannot be restarted leaves that window on its last frame
   instead of ending the app.
