@@ -14,12 +14,12 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 - **Zig pin is 0.17.0.** Replaces `0.17.0-dev.269+ebff43698`. That nightly
   existed because 0.15.x could not link on the macOS 26 SDK; 0.17.0 is the
   stable that has the fix (`build_system_migration.md`). `mix mob.doctor`
-  still requires an exact `zig version` match, so install `0.17.0` (mise:
-  `mise install zig@0.17.0`). Companion to mob_dev and mob_new.
+  still requires an exact `zig version` match. Companion to mob_dev and
+  mob_new, which move with it.
 
 ### Fixed
 - **Android post-mortem marker paths compile on Zig 0.17.0.** `std.fmt.bufPrintZ`
-  was removed; `mob_nif.zig` now uses `std.fmt.bufPrintSentinel`.
+  was removed; `mob_nif.zig` now uses `std.mem.printSentinel`.
 - **A task killed from outside right after `start_async/3` reports the real
   reason (MOB-500).** `Mob.Screen.Server` could pass `{:exit, :noproc}` to
   `handle_async/3` when the kill landed before the screen's monitor reached
@@ -27,6 +27,16 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   traps exits, so it now takes the reason from the runner's link (`:killed`
   for `Process.exit(pid, :kill)`). Seen once in a few thousand runs of
   `async_test.exs`, next to a test-side race on the same signal ordering.
+
+### Upgrading
+- **Zig 0.17.0, with mob_dev and mob_new's matching releases.** In each
+  app, set `zig 0.17.0` in `.tool-versions` (`mise use zig@0.17.0` installs
+  it and edits the file; `mise install zig@0.17.0` alone leaves the app on
+  the nightly). iOS apps also need `ios/build.zig` and
+  `ios/build_device.zig` off `b.build_root`, which 0.17.0 removed: in the
+  Swift glob, replace `b.build_root.handle.openDir(` with
+  `std.Io.Dir.openDirAbsolute(`, or copy both files from a freshly
+  generated app. `mix mob.doctor` flags the old form.
 
 ## [0.9.25] - 2026-10-22
 

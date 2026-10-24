@@ -533,7 +533,7 @@ Apple framework module maps under -fmodules — Phase 1 finding).
     the macOS 26 fix when one is released (likely 0.17.0).
 
   - 2026-10-22: Zig 0.17.0 is that stable. Pin across mob / mob_dev /
-    mob_new is `0.17.0`. `std.fmt.bufPrintZ` is gone (`bufPrintSentinel`);
+    mob_new is `0.17.0`. `std.fmt.bufPrintZ` is gone (`std.mem.printSentinel`);
     iOS templates open `{mob_dir}/ios` with `std.Io.Dir.openDirAbsolute`
     because `Build.build_root` was removed.
 

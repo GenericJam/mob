@@ -1030,8 +1030,8 @@ landed should drop in cleanly:
 **Why** — `:zigler ~> 0.15` resolves to `zigler 0.15.2`, which targets a
 Zig stdlib snapshot from before the `@Type` builtin signature change
 and before `std.fs.File.stdout()` was removed. The installed Zig
-(currently `0.17.0-dev.269+ebff43698`, the version mob_dev builds with)
-is past both changes.
+(then `0.17.0-dev.269+ebff43698`, the version mob_dev built with; 0.17.0
+since 2026-10-22) is past both changes.
 
 The Elixir-side scaffolding itself is correct — it emits a clean
 `use Zig, otp_app: :app` module with an example `pub fn` in a `~Z`
@@ -1043,8 +1043,8 @@ sigil. The bug is only the version pin.
    tracks Zig 0.17-dev. If a newer zigler release is compatible, bump
    the version in `MobDev.AddNif.maybe_add_zigler_dep/2`.
 
-2. **Pin Zig instead.** Mob already pins a specific Zig version via
-   `~/zig/zig-aarch64-macos-0.17.0-dev.269+ebff43698/`. If zigler 0.15
+2. **Pin Zig instead.** Mob already pins a specific Zig version (then the
+   `0.17.0-dev.269+ebff43698` nightly, now 0.17.0). If zigler 0.15
    needs an earlier Zig, document the supported range, or vendor a
    second Zig install for the zigler path.
 
