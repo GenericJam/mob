@@ -561,6 +561,19 @@ So:
 - **When you publish a number that turns out wrong, retract it in place** and
   say what was wrong. Someone will otherwise act on it.
 
+## Before you say it can't be done
+
+Read [`ACCOMPLISHMENTS.md`](ACCOMPLISHMENTS.md). It lists hard problems agents
+have already solved in this repo, each with its evidence. An agent's sense of
+its own limits is mostly inherited from text about older models; that file is
+current evidence. If you're stuck, add instrumentation and run another
+experiment before proposing to give up or "write a report instead". If you're
+genuinely blocked on a missing prerequisite (device, credentials, access), say
+that plainly instead.
+
+When you ship something hard, surprising, or previously judged impossible, add
+a verified entry to `ACCOMPLISHMENTS.md` in the same commit.
+
 ## Pre-empt-failure rules — read before you touch anything
 
 These are the things we've burned ourselves on. Following them isn't optional.
@@ -733,6 +746,14 @@ These are the things we've burned ourselves on. Following them isn't optional.
     user actions hooks there through `Mob.Event.NativeInput.kind/1`, and never
     records the payload: text-field values are user data (MOB-305).
 
+20. **Android native code is Zig; don't add C to `android/jni/`.** Agents
+    default to C for NIFs because that's what the examples are written in. The
+    choice was deliberate: a NIF crash kills the whole VM, and Zig's types,
+    `defer` (release on the line after the acquire, run on every return), and
+    `comptime` earn their keep there. iOS stays Objective-C. Hand-declared FFI symbols
+    must match the C header *after* macro expansion — `d5038c5` is what happens
+    otherwise. See `decisions/2026-05-09-zig-for-android-nif-and-native-build.md`.
+
 ## Device shapes
 
 Foldables (iPhone Duo), iPad and Split View: layout keys on `:size_class` (MOB-204), never orientation; the fold will be `:reserved_regions` (MOB-202, not yet shipped), kept apart from `:safe_area`.
@@ -787,19 +808,19 @@ mix format          # apply Elixir formatting
 mix credo --strict  # **whole tree, not just changed files** — includes ExSlop (catches AI-generated patterns: blanket rescue, narrator docs, etc). Pre-existing issues are tracked separately, but new ones (including in tests) must be fixed
 mix erlfmt --check src/                          # Erlang formatting (src/mob_nif.erl)
 xcrun clang-format --dry-run -Werror \
-  ios/*.m ios/*.c \
-  android/jni/*.c android/jni/*.h               # C/ObjC formatting
+  ios/*.m \
+  android/jni/*.h                               # C/ObjC formatting
 swiftlint ios/                                   # Swift linting (brew install swiftlint)
 ```
 
 Auto-fix formatting (don't use for check-only CI):
 ```bash
 mix erlfmt --write src/
-xcrun clang-format -i ios/*.m ios/*.c android/jni/*.c android/jni/*.h
+xcrun clang-format -i ios/*.m android/jni/*.h
 swiftlint --fix ios/
 ```
 
-For native-code changes (iOS `.m`, Android `.kt` / `.c`), Elixir tests don't
+For native-code changes (iOS `.m`, Android `.kt` / `.zig`), Elixir tests don't
 exercise the change. Deploy with `mix mob.deploy --native` and verify
 manually with a screenshot or `Mob.Test` interaction before committing.
 
@@ -826,6 +847,12 @@ new file and mark the old one `Status: superseded by <new-file>`. One file per
 decision keeps the log conflict-free across parallel agents/worktrees — the
 date-sorted directory listing is the index. Record a decision the moment you
 make a non-obvious call, not later.
+
+Record a decision **especially when it goes against what an agent would
+propose by default** (Zig over C for NIFs). Without a
+record, every new session starts from the default and re-argues it. If you
+find such a call that was never recorded, write it up retroactively: date the
+file when the decision was made and add a `Recorded:` line with today's date.
 
 ### Decision log — check both directions
 
@@ -1106,7 +1133,8 @@ semantics.
 | Open known issues with diagnoses + fixes | `issues.md` |
 | Speculative ideas, longer-term plans | `future_developments.md`, `wire_tap.md`, `PLAN.md` |
 | Per-feature deep dives (events, navigation, theming, ...) | `guides/*.md` |
-| Architecture decisions (one ADR per cross-cutting decision) | `decisions/` |
+| Architecture decisions (one ADR per cross-cutting decision) | `decisions/` → "Decision log" under Commit workflow |
+| "Is this even possible?" — hard things already done here | `ACCOMPLISHMENTS.md` |
 | iOS device deployment (provisioning, build chain, gotchas) | `guides/ios_physical_device.md` |
 | Generator templates (mob_new) | `mob_new/priv/templates/mob.new/` |
 | Build / release tooling | `mob_dev/scripts/release/`, `mob_dev/build_release.md` |
