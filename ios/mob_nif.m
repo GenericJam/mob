@@ -4093,6 +4093,9 @@ static ERL_NIF_TERM nif_clear_taps(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
     enif_mutex_lock(tap_mutex);
     tap_build_set = set;
     MobTapSet *ts = &tap_sets[set];
+    // The lease this frame holds: set_root commits it, and the main thread
+    // shows it, only while the set has not been released since.
+    tap_build_epoch = ts->epoch;
     ts->build_generation = mob_next_handle_generation(ts->build_generation);
     ts->generations[1 - ts->active] = 0;
     // Prepare the INACTIVE (building) table for a fresh frame; leave the active
