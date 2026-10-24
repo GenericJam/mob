@@ -35,8 +35,11 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   the nightly). iOS apps also need `ios/build.zig` and
   `ios/build_device.zig` off `b.build_root`, which 0.17.0 removed: in the
   Swift glob, replace `b.build_root.handle.openDir(` with
-  `std.Io.Dir.openDirAbsolute(`, or copy both files from a freshly
-  generated app. `mix mob.doctor` flags the old form.
+  `std.Io.Dir.openDirAbsolute(`, and add `b.dependOnDirectoryContents(.{
+  .cwd_relative = b.fmt("{s}/ios", .{mob_dir}) });` before it (0.17.0
+  caches the configure phase, so without it a new mob Swift file is missed).
+  Or copy the block from a freshly generated app. `mix mob.doctor` flags
+  both.
 
 ## [0.9.25] - 2026-10-22
 
