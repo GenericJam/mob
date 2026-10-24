@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.26] - 2026-10-24
+
 ### Added
 - **`Mob.Keyboard.dismiss/1` — take the on-screen keyboard down from the
   BEAM.** A screen had no way to dismiss the keyboard from its own handler —
