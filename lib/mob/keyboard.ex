@@ -52,7 +52,12 @@ defmodule Mob.Keyboard do
         if function_exported?(nif, :dismiss_keyboard, 0), do: nif.dismiss_keyboard()
 
       scene ->
+<<<<<<< HEAD
         if function_exported?(nif, :dismiss_keyboard, 1), do: nif.dismiss_keyboard(scene)
+=======
+        if function_exported?(:mob_nif, :dismiss_keyboard, 1),
+          do: :mob_nif.dismiss_keyboard(scene)
+>>>>>>> f27fd93 (MOB-245: document share sheet, file picker and toast as window-global (MOB-503); second simulator run)
     end
 
     socket

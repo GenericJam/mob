@@ -64,6 +64,11 @@ defmodule Mob.Scene do
   notifications, which go to the window the app started in unless a process
   registered for them.
 
+  Not yet per window: the share sheet (`Mob.Share`), the file picker and
+  toasts still pick a window themselves (the front or the first window), so
+  one opened from a second window can appear in another. Their results still
+  reach the calling screen (MOB-503).
+
   A window the user closes, or one iPadOS discards in the background to save
   memory, has its screens stopped (persisted screens dump their state); if it
   comes back it starts on the root screen again. The last window is never

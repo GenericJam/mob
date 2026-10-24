@@ -52,6 +52,7 @@ defmodule Mob.WebView do
   @spec post_message(Phoenix.LiveView.Socket.t(), term()) :: Phoenix.LiveView.Socket.t()
   def post_message(socket, data) do
     json = :json.encode(data)
+
     case scene(socket) do
       nil -> :mob_nif.webview_post_message(json)
       scene -> :mob_nif.webview_post_message(scene, json)

@@ -243,6 +243,11 @@ existing apps are unaffected until they opt in.
   `screenshot/2`, `element_frames/1` and `tap_id/2` were written against one
   window. Secondary scenes do not take part in the element frame registry or
   the navigation frame generation; giving them their own is follow-up work.
+- **Share sheet, file picker and toast pick their own window.**
+  `share_text`, `files_pick` and `toast_show` present in the first, the
+  default or the front window, not the calling screen's, so one opened from
+  a second window can appear in another. Results still reach the calling
+  pid. Scene arities like `alert_show/4` are follow-up work (MOB-503).
 - **`on_no_live_screen` applies to the primary only.** A secondary router
   whose screen cannot be restarted leaves that window on its last frame
   instead of ending the app.
@@ -285,3 +290,15 @@ Pro simulator, `Mob.Test.screens/1` returned one entry, and
 worked unchanged. Synthetic touches (XCUITest) don't fire
 `UIScreenEdgePanGestureRecognizer`, so the back runs invoked the hosting
 controller's handler with the recognizer in `.ended` from lldb.
+
+A second iPad run checked the routing fixes, calling `mob_handle_back`,
+`mob_notify_size_class` and the alert action's handler from lldb. With the
+primary's window detached and kept and a new window the only one attached,
+that window's back popped only its own stack, its size class reached only
+it, its alert showed in it and answered it, and an alert from the primary
+showed nowhere. With two windows, the primary's alert showed in its own
+background window, not the front one. A back in one window stepped that
+window's WebView history and left the other's alone, and a page's
+`window.mob.send` reached only its window's screen. The single-window iPad
+and the iPhone 18 Pro (`supported?/0` false, one `screens/1` entry) behaved
+as before, including a WebView message through the original arities.
