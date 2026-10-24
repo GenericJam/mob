@@ -255,7 +255,18 @@ defmodule Mob.Diag.StoreTest do
       kill(first)
       replacement = await_replacement(TestStore, first)
 
-      kill(Process.whereis(Mob.Diag.Heir))
+      heir = Process.whereis(Mob.Diag.Heir)
+      kill(heir)
+
+      # The owner re-points each table at the restarted heir on its own; wait
+      # for that, or teardown can delete a table mid-setopts and crash the
+      # owner (MOB-502).
+      ProcessHelpers.eventually(fn ->
+        new_heir = Process.whereis(Mob.Diag.Heir)
+
+        is_pid(new_heir) and new_heir != heir and
+          Enum.all?(TestStore.tables(), fn {t, _} -> :ets.info(t, :heir) == new_heir end)
+      end)
 
       assert owner(TestStore) == replacement
       assert held_by(TestStore) == [:owner, :owner]
@@ -734,7 +745,10 @@ defmodule Mob.Diag.StoreTest do
 
       assert_receive :held
 
-      on_exit(fn -> Process.exit(holder, :kill) end)
+      # Wait for the death, not just send the kill: the holder's tables go
+      # with it, and a death landing during tear_down's whereis-then-delete
+      # made that delete raise (MOB-502).
+      on_exit(fn -> kill(holder) end)
 
       assert Store.guard(TestStore, :fallback, fn -> raise "boom" end) == :fallback
       assert Store.health(TestStore).lost == 1
