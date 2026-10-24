@@ -323,8 +323,10 @@ defmodule Mob.Scenes do
 
         try do
           Process.register(router, :mob_screen)
-          # Notifications native stored while the name was moving.
+          # Notifications and links (Mob.Link) native stored while the name
+          # was moving.
           send(router, :mob_notification_stored)
+          send(router, :mob_link_stored)
         rescue
           # Something else registered it, or the router just died (its :DOWN
           # is queued and promotes again).

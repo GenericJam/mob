@@ -353,7 +353,8 @@ defmodule Mob.Router do
           state = deliver_stored_notifications(stored_notifications, state)
           {:ok, deliver_links(stored_links, :launch, state)}
 
-        {:error, reason} -> {:stop, reason}
+        {:error, reason} ->
+          {:stop, reason}
       end
     end
   end

@@ -55,8 +55,9 @@ defmodule Mob.Test do
   own navigation and screens. `screens/1` lists them as
   `{scene_id, screen_module, screen_pid}`. With more than one window live,
   every helper that addresses "the current screen" — `screen`, `assigns`,
-  `inspect`, `tree`, `find`, `tap`, `back`, `select`, `send_message` and the
-  navigation helpers — needs `scene: scene_id` to say which, and raises
+  `inspect`, `tree`, `find`, `tap`, `back`, `select`, `send_message`,
+  `press_in`, `press_out`, `hold` and the navigation helpers — needs
+  `scene: scene_id` to say which, and raises
   `Mob.Test.MultipleScenesError` without it rather than guess:
 
       [{_, HomeScreen, _}, {second, HomeScreen, _}] = Mob.Test.screens(node)
@@ -1410,7 +1411,8 @@ defmodule Mob.Test do
       Mob.Test.hold(node, :mic, 1_500)
   """
   @spec hold(node(), term(), non_neg_integer(), [{:scene, Mob.Scene.id()}]) :: :ok
-  def hold(node, tag, duration_ms, opts \\ []) when is_integer(duration_ms) and duration_ms >= 0 do
+  def hold(node, tag, duration_ms, opts \\ [])
+      when is_integer(duration_ms) and duration_ms >= 0 do
     press_in(node, tag, opts)
     Process.sleep(duration_ms)
     press_out(node, tag, opts)

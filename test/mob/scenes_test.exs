@@ -78,6 +78,11 @@ defmodule Mob.ScenesTest do
       :none
     end
 
+    def take_launch_link do
+      send(state().test, {:took_links, self()})
+      :none
+    end
+
     def webview_can_go_back, do: false
     def exit_app, do: :ok
     def safe_area, do: {10.0, 0.0, 0.0, 0.0}
@@ -158,6 +163,7 @@ defmodule Mob.ScenesTest do
   defp flush_took_stored do
     receive do
       {:took_stored, _} -> flush_took_stored()
+      {:took_links, _} -> flush_took_stored()
     after
       0 -> :ok
     end
@@ -208,6 +214,19 @@ defmodule Mob.ScenesTest do
       # Built and committed exactly as before scenes existed: clear_taps/0 and
       # no "scene" key on the root.
       assert_received {:frame, :default, nil, _root}
+    end
+
+    test "only the root router takes what launched the app; a further window's does not" do
+      primary = boot(["A"])
+      assert_received {:took_stored, ^primary}
+      assert_received {:took_links, ^primary}
+
+      connect("B")
+      second = router("B")
+      _ = Mob.Router.get_current_module(second)
+
+      refute_received {:took_stored, ^second}
+      refute_received {:took_links, ^second}
     end
 
     test "the scene native reported at boot is not news to the primary" do
@@ -368,8 +387,10 @@ defmodule Mob.ScenesTest do
       # Moved before the old primary stopped, so the surviving window's events
       # never reach a dying router or no one.
       assert_receive {:terminating, ^primary_screen, ^second}
-      # And the new holder took what native stored while the name moved.
+      # And the new holder took the notifications and links native stored
+      # while the name moved.
       assert_received {:took_stored, ^second}
+      assert_receive {:took_links, ^second}
       assert Process.whereis(:mob_screen) == second
       assert Mob.Test.screens(node()) == [{"B", HomeScreen, Mob.Router.get_screen_pid(second)}]
       assert Mob.Test.screen(node()) == HomeScreen
