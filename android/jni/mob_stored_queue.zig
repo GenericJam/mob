@@ -105,7 +105,7 @@ pub const StoredQueue = struct {
 const testing = std.testing;
 
 fn dup(s: []const u8) ![*:0]u8 {
-    return (try testing.allocator.dupeZ(u8, s)).ptr;
+    return (try testing.allocator.dupeSentinel(u8, s, 0)).ptr;
 }
 
 fn release(s: [*:0]u8) void {

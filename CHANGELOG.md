@@ -18,8 +18,12 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   mob_new, which move with it.
 
 ### Fixed
-- **Android post-mortem marker paths compile on Zig 0.17.0.** `std.fmt.bufPrintZ`
-  was removed; `mob_nif.zig` now uses `std.mem.printSentinel`.
+- **Android Zig sources compile on Zig 0.17.0.** `std.fmt.bufPrintZ` was
+  removed, so the post-mortem marker paths in `mob_nif.zig` use
+  `std.mem.printSentinel`, and `Allocator.dupeZ` was removed, so
+  `mob_stored_queue.zig`'s tests use `dupeSentinel`. CI now sets up the
+  pinned Zig from `.tool-versions`, compiles `mob_nif.zig` for Android and
+  runs every Android Zig test file.
 - **A task killed from outside right after `start_async/3` reports the real
   reason (MOB-500).** `Mob.Screen.Server` could pass `{:exit, :noproc}` to
   `handle_async/3` when the kill landed before the screen's monitor reached

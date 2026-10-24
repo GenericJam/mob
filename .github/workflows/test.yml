@@ -110,10 +110,12 @@ jobs:
         with:
           version: ${{ steps.zig.outputs.version }}
 
-      - name: Android init-args and ERTS-dir tests
+      - name: Android Zig unit tests (every file with `test` blocks)
         run: |
-          zig test android/jni/mob_init_args.zig
-          zig test android/jni/mob_erts_dir.zig
+          for f in $(grep -l '^test "' android/jni/*.zig); do
+            echo "== zig test $f"
+            zig test "$f"
+          done
 
       - name: Native harness (frame registry MOB-102/MOB-103, dist port MOB-139, dist cookie MOB-348, stored queue MOB-379, init args MOB-406, node host MOB-428, code versions MOB-408, ERTS dir MOB-493)
         # The frame-registry check is the only automated guard on the
