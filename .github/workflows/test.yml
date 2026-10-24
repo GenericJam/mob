@@ -39,6 +39,9 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ steps.zig.outputs.version }}
+          # A cached .zig-cache holds configure results that name the zig
+          # binary by its absolute path, which changes every run.
+          use-cache: false
 
       - name: Cache deps + _build
         uses: actions/cache@v4
@@ -109,6 +112,9 @@ jobs:
         uses: mlugg/setup-zig@v2
         with:
           version: ${{ steps.zig.outputs.version }}
+          # A cached .zig-cache holds configure results that name the zig
+          # binary by its absolute path, which changes every run.
+          use-cache: false
 
       - name: Android Zig unit tests (every file with `test` blocks)
         run: |
