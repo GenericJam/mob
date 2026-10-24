@@ -37,11 +37,16 @@ defmodule Mob.Keyboard do
   `handle_info` / `handle_event` return. Nothing focused is not an error.
   """
   @spec dismiss(Mob.Socket.t()) :: Mob.Socket.t()
-  def dismiss(socket) do
+  def dismiss(socket), do: __dismiss__(socket, :mob_nif)
+
+  @doc false
+  # The NIF module is a parameter so a test can stand in for :mob_nif.
+  @spec __dismiss__(Mob.Socket.t(), module()) :: Mob.Socket.t()
+  def __dismiss__(socket, nif) do
     # Guarded, unlike Mob.Haptic: this sits in handlers Mob.ScreenCase drives
     # on the host, where no NIF library loads and the call raises — a screen
     # that chains it has to stay testable there.
-    if function_exported?(:mob_nif, :dismiss_keyboard, 0), do: :mob_nif.dismiss_keyboard()
+    if function_exported?(nif, :dismiss_keyboard, 0), do: nif.dismiss_keyboard()
     socket
   end
 end

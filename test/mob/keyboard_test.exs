@@ -17,4 +17,22 @@ defmodule Mob.KeyboardTest do
     socket = Mob.Socket.new(Screen, platform: :no_render)
     assert Mob.Keyboard.dismiss(socket) == socket
   end
+
+  defmodule FakeNif do
+    @moduledoc false
+    # Stands in for :mob_nif: reports the call to the test that set itself up.
+    def dismiss_keyboard do
+      send(:persistent_term.get({__MODULE__, :test}), :dismiss_keyboard)
+      :ok
+    end
+  end
+
+  test "dismiss takes the keyboard down through the NIF and returns the socket" do
+    :persistent_term.put({FakeNif, :test}, self())
+    on_exit(fn -> :persistent_term.erase({FakeNif, :test}) end)
+    socket = Mob.Socket.new(Screen, platform: :no_render)
+
+    assert Mob.Keyboard.__dismiss__(socket, FakeNif) == socket
+    assert_received :dismiss_keyboard
+  end
 end

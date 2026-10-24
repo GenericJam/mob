@@ -201,6 +201,15 @@ defmodule Mob.NativeEventHandleTest do
     assert ios_dismiss =~ "mob_send_identity_event(handle, \"dismiss\")"
   end
 
+  # mob#173: Mob.Keyboard.dismiss/1 clears focus in the same handler that may
+  # re-render, so the blur lands after the new generation committed. Strict
+  # resolution dropped 6 of 8 of them on a Moto G.
+  test "Android blur resolves by identity, so a re-render does not drop it" do
+    [_, android_blur] = String.split(@android_source, "pub export fn mob_send_blur(", parts: 2)
+    [android_blur, _] = String.split(android_blur, "}", parts: 2)
+    assert android_blur =~ "sendIdentityEvent(handle, \"blur\")"
+  end
+
   test "plain taps stay strict; press-node taps and press pairs survive a re-render" do
     # A plain tap resolves generation-strictly: a stale positional tag such as
     # Mob.List's {:select, id, index} must be dropped, not routed to whatever
