@@ -29,12 +29,18 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   sheet appears in the window of the screen that showed it, even when another
   window is in front. `Mob.WebView`, the back gesture's WebView history step
   and `Mob.Keyboard.dismiss/1` act on the calling screen's window
-  (`webview_*` and `dismiss_keyboard` NIFs gained a scene arity), and WebView
-  messages reach that window's screen. Every window event with a known scene
-  goes through `Mob.Scenes`, which drops one no router shows. `scene: nil` in
-  `Mob.Test` addresses the window the app started in. Launch notifications
-  and links (`Mob.Link`) go to the root router only, and to whichever router
-  takes over `:mob_screen`. A
+  (`webview_*` and `dismiss_keyboard` NIFs gained a scene arity), and on
+  that window's shown WebView, never the previous screen's parked one. A
+  WebView's messages and blocked URLs carry the scene its tree was built for,
+  so they reach that window's screen even before the view is in a window.
+  Every window event with a known scene, the window-connected notice
+  included, goes through `Mob.Scenes`, which drops one no router shows.
+  `scene: nil` in `Mob.Test` addresses the window the app started in. Launch
+  notifications and links (`Mob.Link`) go to the root router only, and to
+  whichever router takes over `:mob_screen`. A frame in flight for a window
+  that closes is dropped rather than shown in the window that takes over its
+  tap set, and a closing window's router is stopped without holding up the
+  other windows' events. A
   further window's router mounts its root screen after starting, so a
   `mount/3` may call `Mob.Scene.list/0`; `:mob_screen` moves to a remaining
   window before the closing primary stops; a new session takes over a kept
@@ -52,9 +58,12 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   the field from the tree. The built-in exits are the return key (which the
   decimal and number keyboards don't have, so `on_submit` never fires for
   them), another field taking focus, and the iOS keyboard-toolbar "Done".
-  New `dismiss_keyboard/0` NIF. iOS resigns the first responder in any
-  visible window and returns once the main thread has done it (IO_BOUND,
-  2 s bound), so a `value:` assigned in the same handler reaches the field.
+  New `dismiss_keyboard/0` NIF. iOS resigns the first responder and returns
+  once the main thread has done it (IO_BOUND, 2 s bound), so a `value:`
+  assigned in the same handler reaches the field. With no window scene
+  attached it looks in any visible window; with window scenes (MOB-245) only
+  in the primary's, and `dismiss/1` passes a further window's screen's scene
+  to `dismiss_keyboard/1`, which looks only in that window.
   Android calls `MobBridge.dismissKeyboard()` from the matching mob_new
   template (GenericJam/mob_new#113), which hides the soft keyboard and clears
   focus in the focused field's own window, a sheet's included. On a bridge

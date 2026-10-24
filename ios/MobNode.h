@@ -15,11 +15,6 @@
 // isn't activated — the symbol resolves to NULL and the preview shows black.
 extern AVCaptureSession *_Nullable g_preview_session __attribute__((weak));
 
-// The WebView MobWebView most recently created or updated (mob_webview_attach).
-// The webview NIFs look a window's WebView up per scene; this is their
-// fallback while no window scene is attached.
-extern WKWebView *_Nullable g_webview;
-
 typedef NS_ENUM(NSInteger, MobNodeType) {
     MobNodeTypeColumn,
     MobNodeTypeRow,

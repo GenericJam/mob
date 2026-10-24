@@ -243,12 +243,12 @@ defmodule Mob.ScenesTest do
       refute_received {:mob_window, :connected}
     end
 
-    test "a returning window's router that holds :mob_screen is told once, by native" do
+    test "a returning window's router is told once, by native's event for that window" do
       Nif.configure(self(), [{"A", true}])
       Mob.Scenes.ensure_started(nif: Nif)
-      # Standing in for the primary router, as :mob_screen, which native's
-      # SceneDelegate tells when the window is back (mob_notify_window_connected).
-      Process.register(self(), :mob_screen)
+      # Standing in for the primary router. Native's SceneDelegate says when
+      # the window exists again (mob_notify_window_connected), as an event of
+      # that scene; the reconnect itself comes before the window does.
       Mob.Scenes.register_primary(self(), HomeScreen, %{test: self()}, Nif)
 
       send(Mob.Scenes, {:mob_scene, :disconnected, "A"})
@@ -256,6 +256,12 @@ defmodule Mob.ScenesTest do
       :sys.get_state(Mob.Scenes)
 
       assert Mob.Scenes.list() == [{"A", self()}]
+      refute_received {:mob_window, :connected}
+
+      send(Mob.Scenes, {:mob_scene_event, "A", {:mob_window, :connected}})
+      :sys.get_state(Mob.Scenes)
+
+      assert_received {:mob_window, :connected}
       refute_received {:mob_window, :connected}
     end
 
@@ -512,6 +518,58 @@ defmodule Mob.ScenesTest do
 
       assert Process.alive?(primary)
       assert Process.whereis(:mob_screen) == primary
+    end
+
+    test "a router slow to stop holds up no other window" do
+      primary = boot(["A"])
+      connect("B")
+      second = router("B")
+      ref = Process.monitor(second)
+      # Wedged: it can't answer the stop request until resumed.
+      :erlang.suspend_process(second)
+
+      send(Mob.Scenes, {:mob_scene, :disconnected, "B"})
+
+      # Answered well inside the stop timeout, with B's router still up.
+      assert %Mob.Scenes{} = :sys.get_state(Mob.Scenes, 1_000)
+      assert Process.alive?(second)
+      assert Mob.Scenes.list() == [{"A", primary}]
+
+      :erlang.resume_process(second)
+      assert_receive {:DOWN, ^ref, :process, ^second, _}
+    end
+
+    test "the old root's frames are no longer committed once its window closes" do
+      boot(["A"])
+      connect("B")
+      assert is_reference(:sys.get_state(Mob.Sender).active)
+
+      disconnect("A")
+
+      # Committed with no scene they would land in tap set 0, which the next
+      # window to connect may take.
+      assert :sys.get_state(Mob.Sender).active == nil
+    end
+
+    test "a window out of router restarts leaves nothing in Mob.Sender when it closes" do
+      boot(["A"])
+      connect("B")
+
+      # One death more than the restart ceiling allows.
+      for _ <- 1..4 do
+        router = router("B")
+        ref = Process.monitor(router)
+        Process.exit(router, :kill)
+        assert_receive {:DOWN, ^ref, :process, ^router, :killed}
+        :sys.get_state(Mob.Scenes)
+      end
+
+      assert router("B") == nil
+      assert Map.has_key?(:sys.get_state(Mob.Sender).scenes, "B")
+
+      disconnect("B")
+
+      refute Map.has_key?(:sys.get_state(Mob.Sender).scenes, "B")
     end
   end
 

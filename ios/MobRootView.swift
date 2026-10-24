@@ -1745,10 +1745,18 @@ private struct MobWebView: View {
 
 private struct MobWKWebView: UIViewRepresentable {
     let node: MobNode
+    // Whether this WebView's screen is the one on show rather than the one the
+    // two-slot presenter keeps parked: the webview NIFs act on the shown one.
+    @Environment(\.mobScreenIsActive) private var isActive
+    // The window scene this tree was built for (MOB-245). Captured here, not
+    // read from webView.window in a callback: that is nil before the view is
+    // attached (the first load starts in makeUIView) and while it is torn down.
+    @Environment(\.mobSceneId) private var sceneId
 
     func makeCoordinator() -> Coordinator { Coordinator(node: node) }
 
     func makeUIView(context: Context) -> WKWebView {
+        context.coordinator.sceneId = sceneId
         let config = WKWebViewConfiguration()
         config.userContentController.add(context.coordinator, name: "mob")
         let shim = WKUserScript(source: kMobJsShimSwift,
@@ -1757,7 +1765,7 @@ private struct MobWKWebView: UIViewRepresentable {
         config.userContentController.addUserScript(shim)
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.navigationDelegate = context.coordinator
-        mob_webview_attach(wv)
+        mob_webview_attach(wv, isActive)
         if let urlStr = node.webViewUrl, let url = URL(string: urlStr) {
             wv.load(URLRequest(url: url))
         }
@@ -1765,23 +1773,24 @@ private struct MobWKWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ wv: WKWebView, context: Context) {
-        mob_webview_attach(wv)
+        mob_webview_attach(wv, isActive)
         context.coordinator.node = node
+        context.coordinator.sceneId = sceneId
     }
 
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var node: MobNode
+        var sceneId: String?
         init(node: MobNode) { self.node = node }
 
         // JS → Elixir: window.mob.send(data) arrives here. Delegates to
-        // mob_deliver_webview_message() in mob_nif.m with this WebView's window
-        // scene, so the message reaches that window's screen (MOB-245).
+        // mob_deliver_webview_message() in mob_nif.m with the window scene this
+        // WebView's tree was built for, so the message reaches that window's
+        // screen (MOB-245).
         func userContentController(_ ucc: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
             guard message.name == "mob", let json = message.body as? String else { return }
-            mobWithSceneId(message.webView?.window?.windowScene?.session.persistentIdentifier) {
-                mob_deliver_webview_message($0, json)
-            }
+            mobWithSceneId(sceneId) { mob_deliver_webview_message($0, json) }
         }
 
         // URL whitelist enforcement.
@@ -1798,9 +1807,7 @@ private struct MobWKWebView: UIViewRepresentable {
                 decisionHandler(.allow)
             } else {
                 decisionHandler(.cancel)
-                mobWithSceneId(wv.window?.windowScene?.session.persistentIdentifier) {
-                    mob_deliver_webview_blocked($0, url)
-                }
+                mobWithSceneId(sceneId) { mob_deliver_webview_blocked($0, url) }
             }
         }
     }
@@ -2267,6 +2274,12 @@ struct MobTracksFramesKey: EnvironmentKey {
     static let defaultValue: Bool = true
 }
 
+/// The window scene id this tree is shown in (MOB-245): the root view's model's
+/// `sceneId`, nil before any scene exists. Set by `MobRootView`.
+private struct MobSceneIdKey: EnvironmentKey {
+    static let defaultValue: String? = nil
+}
+
 extension EnvironmentValues {
     var mobScreenIsActive: Bool {
         get { self[MobScreenIsActiveKey.self] }
@@ -2283,6 +2296,11 @@ private extension EnvironmentValues {
     var mobAvailableSheetHeight: CGFloat {
         get { self[MobAvailableSheetHeightKey.self] }
         set { self[MobAvailableSheetHeightKey.self] = newValue }
+    }
+
+    var mobSceneId: String? {
+        get { self[MobSceneIdKey.self] }
+        set { self[MobSceneIdKey.self] = newValue }
     }
 }
 
@@ -3000,6 +3018,7 @@ public struct MobRootView: View {
         // registry (MOB-245). Applied after the anchored-panel overlay so it
         // reaches a further window's open popover or select panel too.
         .environment(\.mobTracksFrames, model === MobViewModel.shared)
+        .environment(\.mobSceneId, model.sceneId)
         .ignoresSafeArea(.container, edges: [.bottom, .horizontal])
         .onChange(of: model.rootVersion) {
             applyRoot(

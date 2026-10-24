@@ -44,6 +44,7 @@ extern char *dlerror(void) __attribute__((weak));
 #import <Photos/Photos.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <UserNotifications/UserNotifications.h>
+#import <objc/runtime.h>
 #import <os/lock.h>
 #include <string.h>
 
@@ -146,12 +147,20 @@ typedef struct {
     // cap and would scale with the cap if it were ever raised.
     int used[2];
     uint32_t build_generation;
+    // Bumped, under tap_mutex, each time the set is released for another
+    // window (mob_release_tap_set). A frame records it when clear_taps starts
+    // it and commits only if it is unchanged: a frame resolved for a window
+    // that closed while it was being built must not land in the set the next
+    // window took over, whose number is the same.
+    uint64_t epoch;
 } MobTapSet;
 
 static MobTapSet tap_sets[MOB_SCENE_LIMIT + 1];
-// The set the last clear_taps prepared. Mob.Sender serialises every
-// clear_taps -> register_tap* -> set_root sequence, so one cursor suffices.
+// The set the last clear_taps prepared, and that set's epoch then. Mob.Sender
+// serialises every clear_taps -> register_tap* -> set_root sequence, so one
+// cursor suffices.
 static int tap_build_set = 0;
+static uint64_t tap_build_epoch = 0;
 // Exhausted registrations in the frame being built. Counted rather than logged
 // per call: a dense screen overflows the pool hundreds of times per frame, and
 // NSLog is a synchronous write to the system log.
@@ -1037,6 +1046,9 @@ static void mob_send_scrolled_past(MobEventRef handle) {
 @property(nonatomic, strong) MobViewModel *model;
 @property(nonatomic) int tapSet;
 @property(nonatomic) BOOL attached;
+// Whether mob_notify_window_connected has told this window's router its
+// window exists since the scene last (re)connected.
+@property(nonatomic) BOOL windowNotified;
 @end
 
 @implementation MobSceneEntry
@@ -1143,6 +1155,10 @@ static MobViewModel *mob_scene_model_for_set(int set) {
 // (clear_taps only ever advances it), so a stale event block from the closed
 // window can't resolve against the reused set, by exact match or by the
 // identity fallback.
+//
+// The epoch bump is what stops a frame already in flight for the closed
+// window: set_root commits its table, and the main thread shows its tree, only
+// while the set's epoch is the one clear_taps recorded (mob_tap_set_leased).
 static void mob_release_tap_set(int set) {
     if (!tap_mutex)
         return;
@@ -1157,7 +1173,19 @@ static void mob_release_tap_set(int set) {
     }
     ts->handle_next = 0;
     ts->build_count = 0;
+    ts->epoch++;
     enif_mutex_unlock(tap_mutex);
+}
+
+// Whether `set` has not been released since a frame recorded `epoch` for it.
+// Checked by that frame's tree on the main thread right before it is shown:
+// releases run on the main thread too, so a release either came first (and
+// the tree is dropped) or comes after (and clears what the tree showed).
+static BOOL mob_tap_set_leased(int set, uint64_t epoch) {
+    enif_mutex_lock(tap_mutex);
+    BOOL leased = tap_sets[set].epoch == epoch;
+    enif_mutex_unlock(tap_mutex);
+    return leased;
 }
 
 // Release `set` for the next scene. The shared model outlives its scene; a
@@ -1165,7 +1193,7 @@ static void mob_release_tap_set(int set) {
 static void mob_scene_release_set(int set) {
     mob_release_tap_set(set);
     if (set == 0)
-        [MobViewModel.shared setRoot:nil transition:@"none" replacesStack:NO];
+        [MobViewModel.shared setRoot:nil transition:@"none" replacesStack:NO current:nil];
 }
 
 static ERL_NIF_TERM mob_make_string(ErlNifEnv *env, NSString *string) {
@@ -1385,6 +1413,10 @@ NSObject *mob_scene_attach(UIWindowScene *scene) {
         }
         entry.scene = scene;
         entry.attached = YES;
+        // A window that (re)connects, or a new session taking an entry over,
+        // is news to its router again once the window exists.
+        if (announce)
+            entry.windowNotified = NO;
         hasSet = entry.tapSet >= 0;
     }
 
@@ -1631,20 +1663,46 @@ static ERL_NIF_TERM nif_scene_request(ErlNifEnv *env, int argc, const ERL_NIF_TE
 // keeps its placeholder insets until something incidental repaints it, which on
 // a prewarmed launch means the user's first visible frame is wrong.
 //
-// Sending to :mob_screen reaches the router, whose catch-all forwards to the
-// current screen; Mob.Screen.Server invalidates its cached insets and repaints.
+// The message goes to the router of the window that connected (MOB-245), not
+// to :mob_screen: with the primary's window detached, :mob_screen's screens
+// would re-read their insets from another window. The call has no argument
+// (the generated SceneDelegate makes it), so the window is found as the
+// attached scene whose window now exists and that has not been told yet.
+// The SceneDelegate calls this before MobHostingController attaches its
+// scene (viewIsAppearing) and before UISceneWillConnectNotification arrives,
+// so every application scene with a window is attached here first (attach
+// is idempotent, and announces the scene to Mob.Scenes before this message).
+// Without a tracked scene, :mob_screen as before. The router's catch-all
+// forwards the message to its current screen; Mob.Screen.Server invalidates
+// its cached insets and repaints. Main thread.
 
 void mob_notify_window_connected(void) {
     // Before the BEAM is up there is no screen to tell, and the boot path reads
     // the window's insets itself. Calling into erts here would crash (MOB-199).
     if (!mob_runtime_up())
         return;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes)
+        if (mob_scene_is_application(scene) && ((UIWindowScene *)scene).windows.count > 0)
+            mob_scene_attach((UIWindowScene *)scene);
+    NSMutableArray<NSString *> *connected = [NSMutableArray array];
+    BOOL tracked = NO;
+    @synchronized(mob_scene_lock()) {
+        tracked = g_scene_entries.count > 0;
+        for (MobSceneEntry *entry in g_scene_entries) {
+            if (!entry.attached || entry.tapSet < 0 || entry.windowNotified ||
+                entry.scene.windows.count == 0)
+                continue;
+            entry.windowNotified = YES;
+            [connected addObject:entry.sceneId];
+        }
+    }
+    NSArray *targets = tracked ? connected : @[ [NSNull null] ];
     ErlNifEnv *env = enif_alloc_env();
-    ErlNifPid pid;
-    if (enif_whereis_pid(env, enif_make_atom(env, "mob_screen"), &pid)) {
+    for (id target in targets) {
+        // enif_send clears env, so each message is built afresh.
         ERL_NIF_TERM msg = enif_make_tuple2(env, enif_make_atom(env, "mob_window"),
                                             enif_make_atom(env, "connected"));
-        enif_send(NULL, &pid, env, msg);
+        mob_send_window_message(target == [NSNull null] ? nil : target, env, msg);
     }
     enif_free_env(env);
 }
@@ -3824,6 +3882,19 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     strncpy(transition, g_transition, sizeof(transition) - 1);
     transition[sizeof(transition) - 1] = 0;
     strncpy(g_transition, "none", sizeof(g_transition));
+    // The window this frame was resolved for closed while it was being built,
+    // and its set was released (and may already be another window's): commit
+    // nothing, show nothing. Checked under the lock the release takes, so the
+    // release either came first or frees what is committed here.
+    uint64_t epoch = tap_build_epoch;
+    if (ts->epoch != epoch) {
+        tap_exhausted_count = 0;
+        ts->build_count = 0;
+        enif_mutex_unlock(tap_mutex);
+        LOGE(@"set_root: tap set %d was released while a frame for %@ was built; dropped", set,
+             sceneId ?: @"the default scene");
+        return enif_make_atom(env, "ok");
+    }
     // Commit the freshly-built tap table: register_tap wrote this frame's
     // handlers into 1 - ts->active; make that table active now so events for
     // the new tree resolve against it (readers see a consistent pair under the
@@ -3911,8 +3982,17 @@ static ERL_NIF_TERM nif_set_root(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
     id replacesRaw = ((NSDictionary *)json)[@"replaces_stack"];
     BOOL replacesStack = [replacesRaw isKindOfClass:[NSNumber class]] && [replacesRaw boolValue];
 
+    // Shown only if the set is still leased when the main thread gets to it:
+    // the window can close between the commit above and then, and the next
+    // window to take the set must not come up on this tree (the model looked
+    // up here may already be that window's).
     MobViewModel *model = set == MOB_TAP_SCRATCH_SET ? nil : mob_scene_model_for_set(set);
-    [model setRoot:node transition:transitionStr replacesStack:replacesStack];
+    [model setRoot:node
+           transition:transitionStr
+        replacesStack:replacesStack
+              current:^BOOL {
+                return mob_tap_set_leased(set, epoch);
+              }];
 
     return enif_make_atom(env, "ok");
 }
@@ -8946,13 +9026,14 @@ static ERL_NIF_TERM nif_storage_external_files_dir(ErlNifEnv *env, int argc,
 
 // ── WebView ───────────────────────────────────────────────────────────────────
 // MobWebView (MobRootView.swift) registers every WKWebView it shows with
-// mob_webview_attach; g_webview is the one most recently created or updated.
-// The webview NIFs act on one window's WebView (MOB-245): the arities with a
-// leading scene id take the calling screen's window, the original ones the
-// unbound primary's (tap set 0's window). With no scene attached at all they
-// use g_webview, as before scenes. Swift calls mob_deliver_webview_message /
-// _blocked with the WebView's scene id, and the message goes to the router
-// showing that window.
+// mob_webview_attach, saying each time whether its screen is the one on show
+// or the one the two-slot presenter keeps parked (MOB-129). The webview NIFs
+// act on one window's shown WebView (MOB-245): the arities with a leading
+// scene id take the calling screen's window, the original ones the unbound
+// primary's (tap set 0's window), and with no scene attached at all, any
+// window, as before scenes. Swift calls mob_deliver_webview_message /
+// _blocked with the scene the WebView's tree was built for, and the message
+// goes to the router showing that window.
 
 static void deliver_webview_binary(const char *scene_id, const char *tag, const char *utf8) {
     ErlNifEnv *env = enif_alloc_env();
@@ -8974,33 +9055,45 @@ void mob_deliver_webview_blocked(const char *scene_id, const char *url_utf8) {
     deliver_webview_binary(scene_id, "blocked", url_utf8);
 }
 
-WKWebView *g_webview = nil;
-
-// Every WKWebView MobWebView shows, held weakly. Main thread only.
+// Every WKWebView MobWebView shows, held weakly. Each carries, as an
+// associated object, the order of its latest attach on a shown screen, or 0
+// while parked. Main thread only.
 static NSHashTable<WKWebView *> *g_webviews;
+static uint64_t g_webview_order;
+static char kMobWebViewShownOrder;
 
-void mob_webview_attach(WKWebView *webview) {
+void mob_webview_attach(WKWebView *webview, BOOL shown) {
     if (!g_webviews)
         g_webviews = [NSHashTable weakObjectsHashTable];
     [g_webviews addObject:webview];
-    g_webview = webview;
+    objc_setAssociatedObject(webview, &kMobWebViewShownOrder, @(shown ? ++g_webview_order : 0),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
-// The WebView on screen in scene `sceneId`'s window (nil: the unbound
-// primary's), preferring the most recent one; nil if that window shows none.
-// Main thread.
+// The WebView shown in scene `sceneId`'s window (nil: the unbound primary's),
+// the most recently attached if that screen has several; nil if the window
+// shows none. A parked screen's WebView is never picked: back, JS and posted
+// messages are for the page the user sees. Main thread.
 static WKWebView *mob_webview_in(NSString *sceneId) {
-    if (!sceneId && mob_scene_attached_count() == 0)
-        return g_webview;
-    UIWindowScene *scene = sceneId ? mob_window_scene_for(sceneId) : mob_primary_window_scene();
-    if (!scene)
-        return nil;
-    if (g_webview.window.windowScene == scene)
-        return g_webview;
-    for (WKWebView *webview in g_webviews)
-        if (webview.window.windowScene == scene)
-            return webview;
-    return nil;
+    UIWindowScene *scene = nil;
+    if (sceneId || mob_scene_attached_count() > 0) {
+        scene = sceneId ? mob_window_scene_for(sceneId) : mob_primary_window_scene();
+        if (!scene)
+            return nil;
+    }
+    WKWebView *shown = nil;
+    uint64_t shownOrder = 0;
+    for (WKWebView *webview in g_webviews) {
+        if (scene && webview.window.windowScene != scene)
+            continue;
+        uint64_t order =
+            [objc_getAssociatedObject(webview, &kMobWebViewShownOrder) unsignedLongLongValue];
+        if (order > shownOrder) {
+            shown = webview;
+            shownOrder = order;
+        }
+    }
+    return shown;
 }
 
 // The scene id argument of a webview NIF's scene arity (argc == scene_argc),

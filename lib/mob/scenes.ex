@@ -194,6 +194,8 @@ defmodule Mob.Scenes do
     {:noreply, router_down(state, router, reason)}
   end
 
+  def handle_info({:router_stopped, scene}, state), do: {:noreply, router_stopped(state, scene)}
+
   # Linked further-window routers. Their monitor's :DOWN does the work.
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
@@ -239,36 +241,21 @@ defmodule Mob.Scenes do
     :error, reason when reason in [:undef, :not_loaded] -> []
   end
 
+  # Whether a returning window is news to its router is native's to say: it
+  # sends that window's router {:mob_window, :connected} through
+  # {:mob_scene_event, ...} once the window exists (mob_notify_window_connected),
+  # and only then can its screens re-read their insets from it.
   defp connected(state, scene, default?) do
     state = if default?, do: %{state | default: scene}, else: state
-    already? = scene in state.scenes
-    state = if already?, do: state, else: %{state | scenes: state.scenes ++ [scene]}
+    state = if scene in state.scenes, do: state, else: %{state | scenes: state.scenes ++ [scene]}
 
     cond do
-      router = bound_router(state, scene) ->
-        # The window came back (or this is a repeat): screens re-read insets.
-        if already?, do: state, else: tell_window_connected(state, router)
-
-      default? and unbound_primary?(state) ->
-        # A repeat (the pull that follows register_primary) is not news: the
-        # primary read its window when it mounted.
-        if already?, do: state, else: tell_window_connected(state, state.primary)
-
-      state.template != nil ->
-        start_router(state, scene)
-
-      true ->
-        # The primary has not registered yet; it claims scenes when it does.
-        state
+      bound_router(state, scene) -> state
+      default? and unbound_primary?(state) -> state
+      state.template != nil -> start_router(state, scene)
+      # The primary has not registered yet; it claims scenes when it does.
+      true -> state
     end
-  end
-
-  # Native's SceneDelegate tells `:mob_screen` itself once the window exists
-  # (mob_notify_window_connected), so the router holding that name hears it
-  # from there, once; every other router hears it from here.
-  defp tell_window_connected(state, router) do
-    if router != Process.whereis(:mob_screen), do: send(router, {:mob_window, :connected})
-    state
   end
 
   # Native gave `new` the tap set and model `old` had; whatever showed `old`
@@ -285,7 +272,7 @@ defmodule Mob.Scenes do
 
         if Map.fetch!(state.routers, router).bound,
           do: bind(state, router, new),
-          else: tell_window_connected(state, router)
+          else: state
     end
   end
 
@@ -293,7 +280,10 @@ defmodule Mob.Scenes do
     state = %{state | scenes: List.delete(state.scenes, scene)}
 
     case router_for(state, scene) do
+      # No router shows it (out of restarts, or never started): whatever its
+      # last router left in Mob.Sender goes with the window.
       nil ->
+        Mob.Sender.deactivate_scene(scene)
         state
 
       # The last window, by what native has attached (native decides "last"
@@ -318,7 +308,11 @@ defmodule Mob.Scenes do
           do: state,
           else: stop_router(state, router, scene)
 
-      _none_or_only ->
+      nil ->
+        unless scene in state.scenes, do: Mob.Sender.deactivate_scene(scene)
+        state
+
+      _only ->
         state
     end
   end
@@ -337,18 +331,45 @@ defmodule Mob.Scenes do
         do: %{state | primary: nil} |> start_missing() |> promote(router),
         else: state
 
-    stop_process(router)
-    if info.bound, do: Mob.Sender.deactivate_scene(scene)
+    # An unbound router's frames carry no scene and native commits them into
+    # tap set 0, which the next window to connect may take: nothing more of
+    # its is committed. A bound router's carry its scene, which native has
+    # forgotten; its slot goes once it has stopped (router_stopped/2).
+    unless info.bound, do: Mob.Sender.deactivate_scene(nil)
+    stop_process(router, if(info.bound, do: scene))
     state
   end
 
-  defp stop_process(router) do
+  # Stopped off this process, which routes every window's events: a router
+  # wedged in a callback must not hold the others up for the stop timeout.
+  defp stop_process(router, scene) do
     Process.unlink(router)
-    GenServer.stop(router, :normal, @stop_timeout_ms)
-  catch
-    # Already gone, or wedged past the timeout: either way it must not stay
-    # around showing a window that no longer exists.
-    :exit, _reason -> Process.exit(router, :kill)
+    scenes = self()
+
+    spawn(fn ->
+      ref = Process.monitor(router)
+
+      try do
+        GenServer.stop(router, :normal, @stop_timeout_ms)
+      catch
+        # Already gone, or wedged past the timeout: either way it must not stay
+        # around showing a window that no longer exists.
+        :exit, _reason -> Process.exit(router, :kill)
+      end
+
+      receive do
+        {:DOWN, ^ref, :process, _pid, _reason} -> :ok
+      end
+
+      if scene, do: send(scenes, {:router_stopped, scene})
+    end)
+  end
+
+  # A stopped router's scene slot in Mob.Sender, unless a router serves that
+  # scene again (the same session reconnected while the old one stopped).
+  defp router_stopped(state, scene) do
+    if bound_router(state, scene) == nil, do: Mob.Sender.deactivate_scene(scene)
+    state
   end
 
   # `:mob_screen` must name a live router while any exists: native's

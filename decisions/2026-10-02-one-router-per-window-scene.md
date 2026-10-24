@@ -74,14 +74,14 @@ stall the other. The cost is a registry, which is item 3.
   BEAM before it is up, so `Mob.Scenes` also pulls `mob_nif:scenes/0` when it
   starts; both paths are idempotent, and a scene already recorded is not
   announced to its router again.
-- **A connecting scene** that already has a router is told the window is back
-  (`{:mob_window, :connected}`). Otherwise, if it is native's *default* scene
-  and the primary is unbound, it is the primary's window. Otherwise
-  `Mob.Scenes` starts a new router, bound to the id, from the primary's root
-  module and params. The router mounts its root screen after it has started
-  (`handle_continue`), so `Mob.Scenes` never waits on an app's `mount/3`: a
-  mount may call `Mob.Scene.list/0`, and every window's events pass through
-  `Mob.Scenes`.
+- **A connecting scene** that already has a router keeps it; native tells
+  that router once the window exists (item 5). Otherwise, if it is native's
+  *default* scene and the primary is unbound, it is the primary's window.
+  Otherwise `Mob.Scenes` starts a new router, bound to the id, from the
+  primary's root module and params. The router mounts its root screen after
+  it has started (`handle_continue`), so `Mob.Scenes` never waits on an
+  app's `mount/3`: a mount may call `Mob.Scene.list/0`, and every window's
+  events pass through `Mob.Scenes`.
 - **A session replacing the kept one** (item 6) arrives as `{:mob_scene,
   :replaced, old_id, new_id, default?}` and moves the old id's router to the
   new id. A plain `connected` for an unknown id never adopts a kept router.
@@ -122,10 +122,11 @@ messages and `Mob.Test` without `scene:` always find a live router.
 Native routes the events that belong to a window by the window they came
 from:
 
-- **Back gesture, size class, alert results and WebView messages** come from
-  a known scene (`MobHostingController`, `MobRootView`, the presenting alert
-  and the WebView's window carry it). Whenever the scene id is known and
-  `Mob.Scenes` runs, native sends `{:mob_scene_event, id, message}` to
+- **Back gesture, size class, alert results, WebView messages and the
+  window-connected notice** come from a known scene (`MobHostingController`,
+  `MobRootView`, the presenting alert, the scene a WebView's tree was built
+  for, and the window that just connected carry it). Whenever the scene id is
+  known and `Mob.Scenes` runs, native sends `{:mob_scene_event, id, message}` to
   `Mob.Scenes`, which forwards `message` to the router showing that scene,
   however many windows are attached: with the primary's window kept but
   detached, the one attached window may be a newer one with its own router,
@@ -148,11 +149,19 @@ from:
   `webview_go_back/1`, `dismiss_keyboard/1`); native looks up the WebView or
   first responder in that window only. The original arities are the unbound
   primary's and look only in its window, so a back swipe in one window never
-  steps another window's WebView history.
-- **`{:mob_window, :connected}`** reaches the router holding `:mob_screen`
-  from native's SceneDelegate (`mob_notify_window_connected`), once the
-  window exists; `Mob.Scenes` tells only the other routers, so none hears it
-  twice.
+  steps another window's WebView history. Of a window's WebViews, only one on
+  the shown screen counts: the two-slot presenter keeps the previous screen
+  parked (MOB-129), and its page is not the one back, JS or a posted message
+  is meant for. A WebView's messages and blocked URLs carry the scene its
+  tree was built for, captured when the view is made rather than read from
+  its window, which is nil before the view is attached and while it is torn
+  down.
+- **`{:mob_window, :connected}`** comes from native's SceneDelegate
+  (`mob_notify_window_connected`) once the window exists, as an event of the
+  scene whose window it is, so it reaches that window's router only. Before,
+  it went to `:mob_screen`, and with the primary's window detached a new
+  window's connection made the primary re-read its insets from the new
+  window. `Mob.Scenes` does not send it itself, so no router hears it twice.
 - **Size class and safe area reads** at mount take the scene id
   (`size_class/1`, `safe_area/1`) for a bound screen. The unbound reads
   prefer the default scene's window, so a second window cannot hand the
@@ -177,9 +186,15 @@ discards a background one to reclaim memory; the app cannot tell which at
 that point. When a scene disconnects:
 
 - If other scenes remain attached, its router is stopped. Its screens
-  terminate normally, so persisted screens dump their state. If the scene
-  comes back (same id), `Mob.Scenes` starts a fresh router for it from the
-  root template: navigation inside a discarded secondary window is not
+  terminate normally, so persisted screens dump their state. The stop runs
+  off `Mob.Scenes` (killed after the stop timeout if wedged), so a router
+  slow to stop holds up no other window's events, and the scene's
+  `Mob.Sender` slot goes once it has stopped. An unbound primary's slot goes
+  before it stops: its frames carry no scene and native would commit them
+  into tap set 0, which the next window to connect may take. A scene with no
+  router (out of restarts) has its slot dropped when it disconnects. If the
+  scene comes back (same id), `Mob.Scenes` starts a fresh router for it from
+  the root template: navigation inside a discarded secondary window is not
   restored.
 - If no other scene is attached (decided by attached scenes, as native does,
   not by how many routers exist), its router is kept, bound and alive, so a
@@ -199,7 +214,13 @@ that point. When a scene disconnects:
 
 Native mirrors this: a disconnecting scene with others still attached
 releases its tap set (every per-slot field reset) and model; the last one
-keeps them.
+keeps them. A release bumps the set's epoch, which `clear_taps` records for
+the frame it starts: `set_root` commits the frame's handlers only if the
+epoch is unchanged (checked under the lock the release takes), and the main
+thread shows its tree only if it is still unchanged then (releases run on the
+main thread too). A frame already in flight for a window that closes is
+therefore dropped, not shown with live handlers in the window that takes
+over its set number.
 
 ### 7. `Mob.Test` addresses a scene with `scene:`
 
@@ -247,8 +268,8 @@ existing apps are unaffected until they opt in.
   `share_text`, `files_pick` and `toast_show` present in the first, the
   default or the front window, not the calling screen's, so one opened from
   a second window can appear in another. A picked file still reaches the
-  calling pid. Scene arities like `alert_show/4` are follow-up work
-  (MOB-503).
+  calling pid. Giving them scene arities, as `alert_show/4` does for alerts
+  in this change, is follow-up work (MOB-503).
 - **`on_no_live_screen` applies to the primary only.** A secondary router
   whose screen cannot be restarted leaves that window on its last frame
   instead of ending the app.

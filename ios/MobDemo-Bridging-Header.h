@@ -17,15 +17,17 @@ void mob_handle_back(const char *scene_id);
 NSObject *mob_scene_attach(UIWindowScene *scene);
 
 // Called from MobRootView.swift WebView delegate when JS sends a message or a
-// URL is blocked, with the WebView's window scene id (NULL when it is in no
-// window). Implemented in mob_nif.m; sends the tuple to that window's router.
+// URL is blocked, with the window scene id the WebView's tree was built for
+// (NULL before scenes). Implemented in mob_nif.m; sends the tuple to that
+// window's router.
 void mob_deliver_webview_message(const char *scene_id, const char *json_utf8);
 void mob_deliver_webview_blocked(const char *scene_id, const char *url_utf8);
 
 // Called from MobRootView.swift as a WebView is created or updated: registers
-// it (held weakly), so the webview NIFs find the one in a given window.
-// Main thread. Implemented in mob_nif.m.
-void mob_webview_attach(WKWebView *webview);
+// it (held weakly) with whether its screen is shown or parked, so the webview
+// NIFs find the one shown in a given window. Main thread. Implemented in
+// mob_nif.m.
+void mob_webview_attach(WKWebView *webview, BOOL shown);
 
 // Called from MobNativeViewRegistry.send closure when a native view fires an event.
 // Implemented in mob_nif.m; looks up the component pid by handle and delivers

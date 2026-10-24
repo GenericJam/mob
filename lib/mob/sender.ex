@@ -194,10 +194,11 @@ defmodule Mob.Sender do
   @doc """
   Forget window scene `scene`: its pending tree is dropped and nothing is
   committed to it again until a screen is activated there. `Mob.Scenes` calls
-  this when it stops the router of a scene that went away.
+  this when it stops the router of a scene that went away, and with `nil` when
+  it stops the unbound primary router.
   """
-  @spec deactivate_scene(String.t()) :: :ok
-  def deactivate_scene(scene) when is_binary(scene) do
+  @spec deactivate_scene(scene()) :: :ok
+  def deactivate_scene(scene) when is_binary(scene) or is_nil(scene) do
     if running?(), do: GenServer.cast(__MODULE__, {:deactivate_scene, scene}), else: :ok
   end
 
@@ -338,9 +339,9 @@ defmodule Mob.Sender do
   end
 
   def handle_cast({:deactivate_scene, scene}, state) do
-    {slot, scenes} = Map.pop(scenes(state), scene)
-    pending = if slot, do: discard_pending(state.pending, slot.active), else: state.pending
-    {:noreply, state |> Map.put(:scenes, scenes) |> Map.put(:pending, pending)}
+    %{active: active} = slot(state, scene)
+    pending = if active, do: discard_pending(state.pending, active), else: state.pending
+    {:noreply, state |> drop_slot(scene) |> Map.put(:pending, pending)}
   end
 
   # Staged, not paired: the screen process casts its stats immediately before the
@@ -412,6 +413,9 @@ defmodule Mob.Sender do
 
   defp put_slot(state, scene, slot),
     do: Map.put(state, :scenes, Map.put(scenes(state), scene, slot))
+
+  defp drop_slot(state, nil), do: Map.merge(state, @empty_slot)
+  defp drop_slot(state, scene), do: Map.put(state, :scenes, Map.delete(scenes(state), scene))
 
   defp scenes(state), do: Map.get(state, :scenes, %{})
 

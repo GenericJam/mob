@@ -69,8 +69,14 @@ import QuartzCore
     /// changes independently.
     public var replacesStack: Bool = false
 
-    @objc public func setRoot(_ node: MobNode?, transition: String, replacesStack: Bool) {
+    /// `current`, when given, is asked on the main thread right before the
+    /// tree is applied; `false` drops it. set_root passes whether the tree's
+    /// tap set still belongs to the window it was built for (MOB-245).
+    @objc public func setRoot(
+        _ node: MobNode?, transition: String, replacesStack: Bool, current: (() -> Bool)?
+    ) {
         DispatchQueue.main.async {
+            if let current, !current() { return }
             self.replacesStack = replacesStack
             let measuring = mob_native_stats_enabled() != 0
             let start = measuring ? CACurrentMediaTime() : 0
