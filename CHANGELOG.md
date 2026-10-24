@@ -10,8 +10,6 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
-## [0.9.26] - 2026-10-24
-
 ### Added
 - **Several windows of one app on iPad, one BEAM (MOB-245, iPad half).** Each
   `UIWindowScene` gets its own `Mob.Router`, navigation and screens; the app's
@@ -29,7 +27,9 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   sheet appears in the window of the screen that showed it, even when another
   window is in front. `Mob.WebView`, the back gesture's WebView history step
   and `Mob.Keyboard.dismiss/1` act on the calling screen's window
-  (`webview_*` and `dismiss_keyboard` NIFs gained a scene arity), and on
+  (`webview_*` and `dismiss_keyboard` NIFs gained a scene arity; with window
+  scenes attached, `dismiss_keyboard/0` now looks only in the primary's
+  window, not in any visible one), and on
   that window's shown WebView, never the previous screen's parked one. A
   WebView's messages and blocked URLs carry the scene its tree was built for,
   so they reach that window's screen even before the view is in a window.
@@ -52,18 +52,19 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `UIApplicationSupportsMultipleScenes`). Needs a native rebuild. Run on the
   iPad and iPhone simulators, not yet on a physical iPad. See
   `decisions/2026-10-02-one-router-per-window-scene.md`.
+
+## [0.9.26] - 2026-10-24
+
+### Added
 - **`Mob.Keyboard.dismiss/1` — take the on-screen keyboard down from the
   BEAM.** A screen had no way to dismiss the keyboard from its own handler —
   a Save button, a tap on blank space, a committed value — short of removing
   the field from the tree. The built-in exits are the return key (which the
   decimal and number keyboards don't have, so `on_submit` never fires for
   them), another field taking focus, and the iOS keyboard-toolbar "Done".
-  New `dismiss_keyboard/0` NIF. iOS resigns the first responder and returns
-  once the main thread has done it (IO_BOUND, 2 s bound), so a `value:`
-  assigned in the same handler reaches the field. With no window scene
-  attached it looks in any visible window; with window scenes (MOB-245) only
-  in the primary's, and `dismiss/1` passes a further window's screen's scene
-  to `dismiss_keyboard/1`, which looks only in that window.
+  New `dismiss_keyboard/0` NIF. iOS resigns the first responder in any
+  visible window and returns once the main thread has done it (IO_BOUND,
+  2 s bound), so a `value:` assigned in the same handler reaches the field.
   Android calls `MobBridge.dismissKeyboard()` from the matching mob_new
   template (GenericJam/mob_new#113), which hides the soft keyboard and clears
   focus in the focused field's own window, a sheet's included. On a bridge
