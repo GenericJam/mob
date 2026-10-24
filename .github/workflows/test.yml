@@ -30,6 +30,19 @@ jobs:
           elixir-version: ${{ matrix.elixir }}
           otp-version: ${{ matrix.otp }}
 
+      # `:zig` tests (mob_nif.zig built for Android, MOB-226) need the pinned
+      # Zig; read it from .tool-versions so CI can't drift from it.
+      - name: Zig version from .tool-versions
+        id: zig
+        run: echo "version=$(awk '$1 == "zig" {print $2}' .tool-versions)" >> "$GITHUB_OUTPUT"
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ steps.zig.outputs.version }}
+          # A cached .zig-cache holds configure results that name the zig
+          # binary by its absolute path, which changes every run.
+          use-cache: false
+
       - name: Cache deps + _build
         uses: actions/cache@v4
         with:
@@ -91,17 +104,28 @@ jobs:
             test/native/erts_dir_test.c \
             android/jni/mob_beam.h
 
-      - name: Android init-args tokenizer
+      - name: Zig version from .tool-versions
+        id: zig
+        run: echo "version=$(awk '$1 == "zig" {print $2}' .tool-versions)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.17.0-dev.269+ebff43698
+          version: ${{ steps.zig.outputs.version }}
+          # A cached .zig-cache holds configure results that name the zig
+          # binary by its absolute path, which changes every run.
+          use-cache: false
 
-      - name: Android init-args and ERTS-dir tests
+      - name: Android Zig unit tests (every file with `test` blocks)
         run: |
-          zig test android/jni/mob_init_args.zig
-          zig test android/jni/mob_erts_dir.zig
+          files=$(grep -lE '^\s*test( "|\s*\{)' android/jni/*.zig)
+          [ -n "$files" ] || { echo "no Zig test files found"; exit 1; }
+          for f in $files; do
+            echo "== zig test $f"
+            zig test "$f"
+          done
 
-      - name: Native harness (frame registry MOB-102/MOB-103, dist port MOB-139, dist cookie MOB-348, stored queue MOB-379, init args MOB-406, node host MOB-428, code versions MOB-408)
+      - name: Native harness (frame registry MOB-102/MOB-103, dist port MOB-139, dist cookie MOB-348, stored queue MOB-379, init args MOB-406, node host MOB-428, code versions MOB-408, ERTS dir MOB-493)
         # The frame-registry check is the only automated guard on the
         # element-frame registry's ownership, generation-gating and purge rules.
         # It reproduces the algorithm rather than linking ios/mob_nif.m (which

@@ -24,7 +24,7 @@
 {:ok, _} = Mob.ComponentRegistry.start_link()
 
 # `:zig` tests shell out to a real zig toolchain (MOB-226); skip where none is
-# installed (CI) rather than fail.
+# installed rather than fail. CI installs the pinned Zig, so they run there.
 zig_exclude = if System.find_executable("zig"), do: [], else: [:zig]
 
 ExUnit.start(exclude: [:onboarding, :on_device] ++ zig_exclude)
