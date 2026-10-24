@@ -8,7 +8,8 @@
 
 > Restored 2026-10-24. Originally `docs/decisions/0001-dirty-nifs.md`, removed
 > in the unrelated commit `88532d9` while `ios/mob_nif.m` still cited it. The
-> text below is the original. Since then the input NIFs and many property
+> text below is the original, except the Android "See also" pointer, which now
+> names `mob_nif.zig`'s `nif_funcs` table. Since then the input NIFs and many property
 > queries this record kept on regular schedulers have moved to dirty IO
 > (`2026-09-05-input-nifs-are-dirty-io.md`). The `nif_funcs` tables are the
 > current source of truth. "How to extend" step 3 predates the append-only

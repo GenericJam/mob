@@ -10,7 +10,7 @@
 - Android's native layer was C: `android/jni/mob_nif.c` (~2,570 lines, 74 NIFs)
   and `mob_beam.c` (~540 lines). Native builds were bash `build.sh` templates
   calling `xcrun cc` / NDK clang, and the static-NIF tables were hand-edited
-  `driver_tab_{ios,android}.c` files that drifted between platforms
+  `driver_tab_{ios,android}.c` files that were easy to let drift between platforms
   (`build_system_migration.md` → "Why").
 - A NIF runs inside the VM. A segfault or memory corruption there is not a
   process crash a supervisor restarts — it kills the BEAM, which in Mob is the
@@ -27,7 +27,8 @@
   and `mob_zig.zig` (JNI, libc, liblog, dlfcn, pthreads). Ported incrementally
   and byte-for-byte; `mob_nif.c` deleted in `7f237e7`.
 - **Static-NIF driver tables are Zig** (`driver_tab_android.zig`,
-  `driver_tab_ios.zig`), replacing the hand-edited C tables (`ab9ff59`). The
+  `driver_tab_ios.zig`, introduced in `b361383`), replacing the hand-edited C
+  tables (the `.c` files were deleted in `ab9ff59`). The
   iOS table is comptime-gated through `build_options` instead of `#ifdef`.
 - **`build.zig` orchestrates the native build.** The mob_new templates replace
   the bash scripts: Zig and plain C (OTP glue, sqlite, plugin C NIFs) compile

@@ -1,8 +1,9 @@
 # ACCOMPLISHMENTS.md — hard things agents have already done here
 
-Mob was built largely by AI agents working with its author: 347 of the 686
-commits since the first one (2026-04-04) carry a Claude co-author trailer
-(`git rev-list -i --grep='co-authored-by: claude' --count HEAD`). This file is
+Mob was built largely by AI agents working with its author: as of `8b7f7aa`
+(mob 0.9.26), 347 of the 686 commits since the first one (2026-04-04) carry a
+Claude co-author trailer
+(`git rev-list -i --grep='co-authored-by: claude' --count 8b7f7aa`). This file is
 the evidence of what that work achieved.
 
 **Read it before you conclude a task is impossible, too risky, or should be
@@ -66,13 +67,15 @@ and ask for what's missing.
   `4a10d57`). Metering audio that bypasses `Mob.Audio` turned out not to be
   possible in core on either platform; the probe says so instead of guessing.
 - **Audio input metering** — the agent's "ears" (#67, `3a8660d`).
-- **iOS screenshots in release builds** without shipping the private APIs that
-  get an app rejected from the App Store (#71, `cfb8def`).
+- **iOS screenshots in release builds**, opt-in with `-DMOB_ENABLE_SCREENSHOT`
+  (stripped by default), without shipping the private APIs that get an app
+  rejected from the App Store (#71, `cfb8def`).
 
 ## Device features, verified on hardware
 
-- **Torch**, toggled over dist and lighting the real flash on a moto g power and
-  an iPhone SE (#61, `f95700a`; `decisions/2026-07-04-torch.md`).
+- **Torch**, lighting the real flash on a moto g power (toggled over dist) and
+  an iPhone SE (from an on-device button) (#61, `f95700a`;
+  `decisions/2026-07-04-torch.md`).
 - **Magnetometer / compass** in `Mob.Motion`, real readings on a moto g and an
   iPhone SE, plus graceful degradation on a device without one (#59, `a2b8f69`).
 

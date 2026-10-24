@@ -746,7 +746,7 @@ These are the things we've burned ourselves on. Following them isn't optional.
     user actions hooks there through `Mob.Event.NativeInput.kind/1`, and never
     records the payload: text-field values are user data (MOB-305).
 
-20. **Android native code is Zig; don't add C to `android/jni/`.** Agents
+20. **Core `android/jni/` is Zig; don't add C there.** Agents
     default to C for NIFs because that's what the examples are written in. The
     choice was deliberate: a NIF crash kills the whole VM, and Zig's types,
     `defer` (release on the line after the acquire, run on every return), and
