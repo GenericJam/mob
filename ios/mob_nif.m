@@ -10175,7 +10175,7 @@ static ERL_NIF_TERM nif_post_mortem_android_drain(ErlNifEnv *env, int argc,
     return enif_make_list(env, 0);
 }
 
-// Scheduling notes for nif_funcs[] below — see docs/decisions/0001-dirty-nifs.md
+// Scheduling notes for nif_funcs[] below — see decisions/2026-04-28-dirty-nifs.md
 // for the full rationale. Short version: most NIFs here either dispatch_async
 // to the main queue and return in microseconds, or dispatch_sync but read a
 // single property. Those stay on a regular scheduler.
