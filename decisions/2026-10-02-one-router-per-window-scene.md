@@ -116,23 +116,43 @@ navigating at once each keep their transition.
 primary's window closes for good while other windows remain, `Mob.Scenes`
 first makes sure every remaining window has a router, registers
 `:mob_screen` to the oldest remaining one (which then drains notifications
-native stored meanwhile) and only then stops the primary: as soon as native
-sees one scene attached it sends that window's events to `:mob_screen`.
+native stored meanwhile) and only then stops the primary, so app-wide
+messages and `Mob.Test` without `scene:` always find a live router.
 
 Native routes the events that belong to a window by the window they came
 from:
 
-- **Back gesture, size class and alert results** come from a known scene
-  (`MobHostingController`, `MobRootView` and the presenting alert carry it).
-  With one scene attached native sends them to `:mob_screen` exactly as
-  before. With several it sends `{:mob_scene_event, id, message}` to
-  `Mob.Scenes`, which forwards `message` to that scene's router (or to
-  `:mob_screen` if no router claims the id).
+- **Back gesture, size class, alert results and WebView messages** come from
+  a known scene (`MobHostingController`, `MobRootView`, the presenting alert
+  and the WebView's window carry it). Whenever the scene id is known and
+  `Mob.Scenes` runs, native sends `{:mob_scene_event, id, message}` to
+  `Mob.Scenes`, which forwards `message` to the router showing that scene,
+  however many windows are attached: with the primary's window kept but
+  detached, the one attached window may be a newer one with its own router,
+  and `:mob_screen` would hand its events to the primary. An event for a
+  scene no router shows (a window over the tap-set limit, or one whose router
+  failed to start) is dropped; only before the primary has registered does
+  it go to `:mob_screen`. Without a scene id, or without `Mob.Scenes` (a mob
+  from before this change), native sends to `:mob_screen` as before.
 - **Alerts** and action sheets shown by a screen in a bound scene go through
   `alert_show/4` and `action_sheet_show/3`, which take the scene id, present
   on that scene's window and route the result back to it. Unbound screens
-  use the existing NIFs, which present on the default scene's window, even
-  while another window is in front.
+  use the existing NIFs, which present on the primary's window (the scene
+  holding tap set 0) even while another window is in front, and nowhere
+  while that window is detached and another is attached. With no scene
+  attached at all they present as before scenes.
+- **WebView and keyboard calls** act on the calling screen's window.
+  `Mob.WebView.eval_js/2`, `post_message/2`, `Mob.Keyboard.dismiss/1` and
+  the router's back handling pass a bound screen's scene id
+  (`webview_eval_js/2`, `webview_post_message/2`, `webview_can_go_back/1`,
+  `webview_go_back/1`, `dismiss_keyboard/1`); native looks up the WebView or
+  first responder in that window only. The original arities are the unbound
+  primary's and look only in its window, so a back swipe in one window never
+  steps another window's WebView history.
+- **`{:mob_window, :connected}`** reaches the router holding `:mob_screen`
+  from native's SceneDelegate (`mob_notify_window_connected`), once the
+  window exists; `Mob.Scenes` tells only the other routers, so none hears it
+  twice.
 - **Size class and safe area reads** at mount take the scene id
   (`size_class/1`, `safe_area/1`) for a bound screen. The unbound reads
   prefer the default scene's window, so a second window cannot hand the

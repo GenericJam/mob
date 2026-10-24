@@ -510,10 +510,11 @@ defmodule Mob.Router do
 
   # System back gesture (Android hardware/swipe, iOS edge-pan). Handled here so
   # every screen gets back navigation without implementing anything. If a
-  # WebView is present and has internal history, navigate within it first.
+  # WebView is present in this router's window and has internal history,
+  # navigate within it first.
   def handle_info({:mob, :back}, state) do
-    if state.render_mode == :render && state.nif.webview_can_go_back() do
-      state.nif.webview_go_back()
+    if state.render_mode == :render && webview_can_go_back?(state) do
+      webview_go_back(state)
       {:noreply, state}
     else
       case {Mob.Nav.history(state.nav), Mob.Nav.back_target(state.nav)} do
@@ -651,6 +652,22 @@ defmodule Mob.Router do
     Mob.Sender.note_active_screen(entry.ref, entry.module, scene)
     activation_token = Mob.Sender.activate_frame(entry.ref, transition, scene)
     %{state | current: Map.put(entry, :activation_token, activation_token)}
+  end
+
+  # A bound router asks about the WebView in its own window (MOB-245): the back
+  # gesture of one window must not step another window's page history.
+  defp webview_can_go_back?(state) do
+    case Map.get(state, :scene) do
+      nil -> state.nif.webview_can_go_back()
+      scene -> state.nif.webview_can_go_back(scene)
+    end
+  end
+
+  defp webview_go_back(state) do
+    case Map.get(state, :scene) do
+      nil -> state.nif.webview_go_back()
+      scene -> state.nif.webview_go_back(scene)
+    end
   end
 
   # During a code push modules are loaded independently. Only enter the token

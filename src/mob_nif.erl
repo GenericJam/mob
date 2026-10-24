@@ -19,7 +19,7 @@
     scene_multiple_supported/0,
     %% Device utilities (no permission required)
     haptic/1,
-    dismiss_keyboard/0,
+    dismiss_keyboard/0, dismiss_keyboard/1,
     torch/1,
     clipboard_put/1,
     clipboard_get/0,
@@ -75,10 +75,10 @@
     action_sheet_show/2, action_sheet_show/3,
     toast_show/2,
     %% WebView
-    webview_eval_js/1,
-    webview_post_message/1,
-    webview_can_go_back/0,
-    webview_go_back/0,
+    webview_eval_js/1, webview_eval_js/2,
+    webview_post_message/1, webview_post_message/2,
+    webview_can_go_back/0, webview_can_go_back/1,
+    webview_go_back/0, webview_go_back/1,
     %% Native view components
     register_component/1,
     deregister_component/1,
@@ -167,6 +167,7 @@
     scene_multiple_supported/0,
     haptic/1,
     dismiss_keyboard/0,
+    dismiss_keyboard/1,
     torch/1,
     clipboard_put/1,
     clipboard_get/0,
@@ -252,9 +253,13 @@
     toast_show/2,
     %% WebView
     webview_eval_js/1,
+    webview_eval_js/2,
     webview_post_message/1,
+    webview_post_message/2,
     webview_can_go_back/0,
+    webview_can_go_back/1,
     webview_go_back/0,
+    webview_go_back/1,
     %% Native view components
     register_component/1,
     deregister_component/1,
@@ -321,6 +326,7 @@ scene_request() -> erlang:nif_error(not_loaded).
 scene_multiple_supported() -> erlang:nif_error(not_loaded).
 haptic(_Type) -> erlang:nif_error(not_loaded).
 dismiss_keyboard() -> erlang:nif_error(not_loaded).
+dismiss_keyboard(_SceneId) -> erlang:nif_error(not_loaded).
 torch(_State) -> erlang:nif_error(not_loaded).
 clipboard_put(_Text) -> erlang:nif_error(not_loaded).
 clipboard_get() -> erlang:nif_error(not_loaded).
@@ -459,9 +465,13 @@ action_sheet_show(_Title, _ButtonsJson) -> erlang:nif_error(not_loaded).
 action_sheet_show(_SceneId, _Title, _ButtonsJson) -> erlang:nif_error(not_loaded).
 toast_show(_Message, _Duration) -> erlang:nif_error(not_loaded).
 webview_eval_js(_Code) -> erlang:nif_error(not_loaded).
+webview_eval_js(_SceneId, _Code) -> erlang:nif_error(not_loaded).
 webview_post_message(_Json) -> erlang:nif_error(not_loaded).
+webview_post_message(_SceneId, _Json) -> erlang:nif_error(not_loaded).
 webview_can_go_back() -> erlang:nif_error(not_loaded).
+webview_can_go_back(_SceneId) -> erlang:nif_error(not_loaded).
 webview_go_back() -> erlang:nif_error(not_loaded).
+webview_go_back(_SceneId) -> erlang:nif_error(not_loaded).
 register_component(_Pid) -> erlang:nif_error(not_loaded).
 deregister_component(_Handle) -> erlang:nif_error(not_loaded).
 %% Peripheral.VendorUsb

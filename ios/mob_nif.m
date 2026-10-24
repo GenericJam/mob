@@ -1484,6 +1484,19 @@ static UIWindowScene *mob_window_scene_for(NSString *sceneId) {
     }
 }
 
+// The window the unbound primary router's screens are in: the scene holding
+// tap set 0. nil when that window is detached (kept, or gone) or when no
+// scene is attached at all; callers fall back to their single-window
+// behaviour only for the latter (mob_scene_attached_count() == 0), because
+// with set 0 detached any attached window shows another router's screens
+// (MOB-245). Main thread.
+static UIWindowScene *mob_primary_window_scene(void) {
+    @synchronized(mob_scene_lock()) {
+        MobSceneEntry *entry = mob_scene_entry_for_set_locked(0);
+        return entry.attached ? entry.scene : nil;
+    }
+}
+
 static NSString *mob_scene_id_from_term(ErlNifEnv *env, ERL_NIF_TERM term) {
     ErlNifBinary bin;
     if (!enif_inspect_binary(env, term, &bin) && !enif_inspect_iolist_as_binary(env, term, &bin))
@@ -1492,13 +1505,15 @@ static NSString *mob_scene_id_from_term(ErlNifEnv *env, ERL_NIF_TERM term) {
 }
 
 // Deliver a message that belongs to one window — the back gesture, a size
-// class change, an alert result. With one scene attached it goes to
-// :mob_screen, exactly as before multi-window. With several, Mob.Scenes gets
-// {mob_scene_event, SceneId, Msg} and hands Msg to that scene's router.
+// class change, an alert result, a WebView message. With the window known and
+// Mob.Scenes running, Mob.Scenes gets {mob_scene_event, SceneId, Msg} and
+// hands Msg to the router showing that window, however many windows are
+// attached: with the primary's window kept but detached, the one attached
+// window shows another router (MOB-245). Without a scene id, or without
+// Mob.Scenes (a mob from before scenes), :mob_screen as before.
 static void mob_send_window_message(NSString *sceneId, ErlNifEnv *env, ERL_NIF_TERM msg) {
     ErlNifPid pid;
-    if (sceneId && mob_scene_attached_count() > 1 &&
-        enif_whereis_pid(env, enif_make_atom(env, "Elixir.Mob.Scenes"), &pid)) {
+    if (sceneId && enif_whereis_pid(env, enif_make_atom(env, "Elixir.Mob.Scenes"), &pid)) {
         enif_send(NULL, &pid, env,
                   enif_make_tuple3(env, enif_make_atom(env, "mob_scene_event"),
                                    mob_make_string(env, sceneId), msg));
@@ -7688,12 +7703,18 @@ static ERL_NIF_TERM nif_delete_backward(ErlNifEnv *env, int argc, const ERL_NIF_
                             enif_make_atom(env, "no_first_responder"));
 }
 
-// ─── dismiss_keyboard/0 — take the keyboard down from the BEAM ───────────────
+// ─── dismiss_keyboard/0,1 — take the keyboard down from the BEAM ─────────────
 //
-// Resigns the first responder found in any visible window of a connected
-// scene — the walk delete_backward and key_press use — which is the view the
-// keyboard is up for. Nothing focused is not an error; the keyboard is
-// already down.
+// Resigns the first responder found in a visible window — the walk
+// delete_backward and key_press use — which is the view the keyboard is up
+// for. Nothing focused is not an error; the keyboard is already down.
+//
+// Which windows (MOB-245): dismiss_keyboard/1 takes the scene id of the
+// calling screen and looks only in that window scene. dismiss_keyboard/0 is
+// the unbound primary's: it looks only in the primary's window (tap set 0),
+// and nowhere while that window is detached and another is attached, so one
+// window's handler never closes another window's keyboard. With no scene
+// attached at all it looks in every connected scene, as before scenes.
 //
 // Waits (bounded) for the main thread to do it, so it is IO_BOUND. The caller
 // is a handler that usually re-renders too, and MobTextField adopts a new
@@ -7705,11 +7726,18 @@ static ERL_NIF_TERM nif_delete_backward(ErlNifEnv *env, int argc, const ERL_NIF_
 // {error, timeout} if the main thread did not get to it within 2 s.
 
 static ERL_NIF_TERM nif_dismiss_keyboard(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    NSString *sceneId = argc == 1 ? mob_scene_id_from_term(env, argv[0]) : nil;
+    if (argc == 1 && !sceneId)
+        return enif_make_badarg(env);
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
     dispatch_async(dispatch_get_main_queue(), ^{
+      BOOL everywhere = !sceneId && mob_scene_attached_count() == 0;
+      UIWindowScene *only = sceneId ? mob_window_scene_for(sceneId) : mob_primary_window_scene();
       id fr = nil;
       for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
           if (![scene isKindOfClass:[UIWindowScene class]])
+              continue;
+          if (!everywhere && scene != only)
               continue;
           for (UIWindow *win in [(UIWindowScene *)scene windows]) {
               if (win.isHidden)
@@ -8917,35 +8945,75 @@ static ERL_NIF_TERM nif_storage_external_files_dir(ErlNifEnv *env, int argc,
 }
 
 // ── WebView ───────────────────────────────────────────────────────────────────
-// g_webview is set by MobWebView (MobRootView.swift) when the component is created.
-// mob_deliver_webview_message / _blocked are called from Swift (via bridging header).
+// MobWebView (MobRootView.swift) registers every WKWebView it shows with
+// mob_webview_attach; g_webview is the one most recently created or updated.
+// The webview NIFs act on one window's WebView (MOB-245): the arities with a
+// leading scene id take the calling screen's window, the original ones the
+// unbound primary's (tap set 0's window). With no scene attached at all they
+// use g_webview, as before scenes. Swift calls mob_deliver_webview_message /
+// _blocked with the WebView's scene id, and the message goes to the router
+// showing that window.
 
-static void deliver_webview_binary(const char *tag, const char *utf8) {
+static void deliver_webview_binary(const char *scene_id, const char *tag, const char *utf8) {
     ErlNifEnv *env = enif_alloc_env();
-    ErlNifPid pid;
-    if (!enif_whereis_pid(env, enif_make_atom(env, "mob_screen"), &pid)) {
-        enif_free_env(env);
-        return;
-    }
     size_t len = strlen(utf8);
     ErlNifBinary bin;
     enif_alloc_binary(len, &bin);
     memcpy(bin.data, utf8, len);
     ERL_NIF_TERM msg = enif_make_tuple3(env, enif_make_atom(env, "webview"),
                                         enif_make_atom(env, tag), enif_make_binary(env, &bin));
-    enif_send(NULL, &pid, env, msg);
+    mob_send_window_message(scene_id ? [NSString stringWithUTF8String:scene_id] : nil, env, msg);
     enif_free_env(env);
 }
 
-void mob_deliver_webview_message(const char *json_utf8) {
-    deliver_webview_binary("message", json_utf8);
+void mob_deliver_webview_message(const char *scene_id, const char *json_utf8) {
+    deliver_webview_binary(scene_id, "message", json_utf8);
 }
 
-void mob_deliver_webview_blocked(const char *url_utf8) {
-    deliver_webview_binary("blocked", url_utf8);
+void mob_deliver_webview_blocked(const char *scene_id, const char *url_utf8) {
+    deliver_webview_binary(scene_id, "blocked", url_utf8);
 }
 
 WKWebView *g_webview = nil;
+
+// Every WKWebView MobWebView shows, held weakly. Main thread only.
+static NSHashTable<WKWebView *> *g_webviews;
+
+void mob_webview_attach(WKWebView *webview) {
+    if (!g_webviews)
+        g_webviews = [NSHashTable weakObjectsHashTable];
+    [g_webviews addObject:webview];
+    g_webview = webview;
+}
+
+// The WebView on screen in scene `sceneId`'s window (nil: the unbound
+// primary's), preferring the most recent one; nil if that window shows none.
+// Main thread.
+static WKWebView *mob_webview_in(NSString *sceneId) {
+    if (!sceneId && mob_scene_attached_count() == 0)
+        return g_webview;
+    UIWindowScene *scene = sceneId ? mob_window_scene_for(sceneId) : mob_primary_window_scene();
+    if (!scene)
+        return nil;
+    if (g_webview.window.windowScene == scene)
+        return g_webview;
+    for (WKWebView *webview in g_webviews)
+        if (webview.window.windowScene == scene)
+            return webview;
+    return nil;
+}
+
+// The scene id argument of a webview NIF's scene arity (argc == scene_argc),
+// else nil. *bad is set for a scene argument that is not a string.
+static NSString *mob_webview_scene_arg(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[],
+                                       int scene_argc, BOOL *bad) {
+    *bad = NO;
+    if (argc != scene_argc)
+        return nil;
+    NSString *sceneId = mob_scene_id_from_term(env, argv[0]);
+    *bad = sceneId == nil;
+    return sceneId;
+}
 
 // Camera preview session — OWNED by the mob_camera plugin (its NIF supplies the
 // strong definition and drives start/stop_preview). Defined weak here so core
@@ -9022,21 +9090,18 @@ static UIViewController *root_vc(void) {
 }
 
 // Where an alert or action sheet shown for `sceneId` is presented: a bound
-// screen's own window. The unbound primary router's screens (nil) get their
-// results through :mob_screen, i.e. in the default scene, so with several
-// windows attached their alert goes to the default scene's window even while
-// another window is in front (MOB-245); presenting it in the front window
-// would answer one window's screen from another's. With one window, root_vc()
-// as before.
+// screen's own window. The unbound primary router's screens (nil) are in tap
+// set 0's window, so their alert goes there even while another window is in
+// front, and nowhere while that window is detached and another is attached:
+// presenting it in another window would answer one window's screen from
+// another's (MOB-245). With no scene attached at all, root_vc() as before.
 static UIViewController *mob_alert_presenter(NSString *sceneId) {
     if (sceneId)
         return mob_top_vc_in(mob_window_scene_for(sceneId));
-    if (mob_scene_attached_count() > 1) {
-        UIViewController *vc = mob_top_vc_in(mob_default_window_scene());
-        if (vc)
-            return vc;
-    }
-    return root_vc();
+    if (mob_scene_attached_count() == 0)
+        return root_vc();
+    UIWindowScene *primary = mob_primary_window_scene();
+    return primary ? mob_top_vc_in(primary) : nil;
 }
 
 // ── NIF: alert_show/3, alert_show/4 ──────────────────────────────────────────
@@ -9231,24 +9296,32 @@ static ERL_NIF_TERM nif_toast_show(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
     return enif_make_atom(env, "ok");
 }
 
+// webview_eval_js/1,2, webview_post_message/1,2, webview_can_go_back/0,1 and
+// webview_go_back/0,1: the scene arity takes the calling screen's scene id
+// first; see mob_webview_in.
+
 static ERL_NIF_TERM nif_webview_eval_js(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    BOOL bad;
+    NSString *sceneId = mob_webview_scene_arg(env, argc, argv, 2, &bad);
     ErlNifBinary bin;
-    if (!enif_inspect_binary(env, argv[0], &bin) &&
-        !enif_inspect_iolist_as_binary(env, argv[0], &bin))
+    if (bad || (!enif_inspect_binary(env, argv[argc - 1], &bin) &&
+                !enif_inspect_iolist_as_binary(env, argv[argc - 1], &bin)))
         return enif_make_badarg(env);
     NSString *code = [[NSString alloc] initWithBytes:bin.data
                                               length:bin.size
                                             encoding:NSUTF8StringEncoding];
     dispatch_async(dispatch_get_main_queue(), ^{
-      [g_webview evaluateJavaScript:code completionHandler:nil];
+      [mob_webview_in(sceneId) evaluateJavaScript:code completionHandler:nil];
     });
     return enif_make_atom(env, "ok");
 }
 
 static ERL_NIF_TERM nif_webview_post_message(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    BOOL bad;
+    NSString *sceneId = mob_webview_scene_arg(env, argc, argv, 2, &bad);
     ErlNifBinary bin;
-    if (!enif_inspect_binary(env, argv[0], &bin) &&
-        !enif_inspect_iolist_as_binary(env, argv[0], &bin))
+    if (bad || (!enif_inspect_binary(env, argv[argc - 1], &bin) &&
+                !enif_inspect_iolist_as_binary(env, argv[argc - 1], &bin)))
         return enif_make_badarg(env);
     NSString *json = [[NSString alloc] initWithBytes:bin.data
                                               length:bin.size
@@ -9258,26 +9331,34 @@ static ERL_NIF_TERM nif_webview_post_message(ErlNifEnv *env, int argc, const ERL
     escaped = [escaped stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
     NSString *js = [NSString stringWithFormat:@"window.mob&&window.mob._dispatch('%@')", escaped];
     dispatch_async(dispatch_get_main_queue(), ^{
-      [g_webview evaluateJavaScript:js completionHandler:nil];
+      [mob_webview_in(sceneId) evaluateJavaScript:js completionHandler:nil];
     });
     return enif_make_atom(env, "ok");
 }
 
 static ERL_NIF_TERM nif_webview_can_go_back(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    BOOL bad;
+    NSString *sceneId = mob_webview_scene_arg(env, argc, argv, 1, &bad);
+    if (bad)
+        return enif_make_badarg(env);
     // dispatch_sync blocks this BEAM scheduler thread until the main queue drains.
     // Intentional — the caller (Mob.Screen back handler) needs the boolean before deciding
     // whether to pop the nav stack. Same pattern as clipboard_get and safe_area.
     // The main thread is expected to be idle during a back gesture.
     __block BOOL result = NO;
     dispatch_sync(dispatch_get_main_queue(), ^{
-      result = g_webview ? [g_webview canGoBack] : NO;
+      result = [mob_webview_in(sceneId) canGoBack];
     });
     return enif_make_atom(env, result ? "true" : "false");
 }
 
 static ERL_NIF_TERM nif_webview_go_back(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    BOOL bad;
+    NSString *sceneId = mob_webview_scene_arg(env, argc, argv, 1, &bad);
+    if (bad)
+        return enif_make_badarg(env);
     dispatch_async(dispatch_get_main_queue(), ^{
-      [g_webview goBack];
+      [mob_webview_in(sceneId) goBack];
     });
     return enif_make_atom(env, "ok");
 }
@@ -10102,6 +10183,7 @@ static ErlNifFunc nif_funcs[] = {
     {"scene_multiple_supported", 0, nif_scene_multiple_supported, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"haptic", 1, nif_haptic, 0},
     {"dismiss_keyboard", 0, nif_dismiss_keyboard, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"dismiss_keyboard", 1, nif_dismiss_keyboard, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"torch", 1, nif_torch, 0},
     {"clipboard_put", 1, nif_clipboard_put, 0},
     {"clipboard_get", 0, nif_clipboard_get, ERL_NIF_DIRTY_JOB_IO_BOUND},
@@ -10141,9 +10223,13 @@ static ErlNifFunc nif_funcs[] = {
     {"action_sheet_show", 3, nif_action_sheet_show, 0},
     {"toast_show", 2, nif_toast_show, 0},
     {"webview_eval_js", 1, nif_webview_eval_js, 0},
+    {"webview_eval_js", 2, nif_webview_eval_js, 0},
     {"webview_post_message", 1, nif_webview_post_message, 0},
+    {"webview_post_message", 2, nif_webview_post_message, 0},
     {"webview_can_go_back", 0, nif_webview_can_go_back, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"webview_can_go_back", 1, nif_webview_can_go_back, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"webview_go_back", 0, nif_webview_go_back, 0},
+    {"webview_go_back", 1, nif_webview_go_back, 0},
     {"register_component", 1, nif_register_component, 0},
     {"deregister_component", 1, nif_deregister_component, 0},
     // ── Mob.Peripheral.VendorUsb (iOS stubs — emit :unsupported) ──────────────

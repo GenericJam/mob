@@ -31,9 +31,12 @@ defmodule Mob.Scenes do
       the app switcher) arrives as `{:mob_scene, :discarded, id}`: its router
       stops, unless it is the app's only one.
     * **Window events** native can attribute to a scene — the back gesture,
-      size class changes, alert results — arrive as `{:mob_scene_event, id,
-      message}` while more than one scene is attached, and are forwarded to
-      that scene's router.
+      size class changes, alert results, WebView messages — arrive as
+      `{:mob_scene_event, id, message}` and are forwarded to that scene's
+      router. One no router shows (a window over native's limit, or one whose
+      router failed to start) is dropped: no other window's router may act
+      on it. Only before the primary has registered does it go to
+      `:mob_screen`, the one router there can be.
 
   Scene ids are `UISceneSession.persistentIdentifier` strings, `nil` on
   platforms without scenes. `Mob.Test.screens/1` reads `screens/0`. See
@@ -92,10 +95,14 @@ defmodule Mob.Scenes do
     if Process.whereis(__MODULE__), do: GenServer.call(__MODULE__, :list), else: []
   end
 
-  @doc "The router showing window scene `scene`, or `nil`."
+  @doc """
+  The router showing window scene `scene`, or `nil`. `nil` names the primary
+  while it is unbound: its screens' `Mob.Scene.of/1` is `nil`, even though
+  `list/0` reports the id of native's default scene for it.
+  """
   @spec router(scene_id()) :: pid() | nil
   def router(scene) do
-    Enum.find_value(list(), fn {id, pid} -> if id == scene, do: pid end)
+    if Process.whereis(__MODULE__), do: GenServer.call(__MODULE__, {:router, scene})
   end
 
   @doc """
@@ -134,6 +141,17 @@ defmodule Mob.Scenes do
   @impl GenServer
   def handle_call(:list, _from, state), do: {:reply, ordered(state), state}
 
+  def handle_call({:router, scene}, _from, state) do
+    router =
+      cond do
+        router = router_for(state, scene) -> router
+        scene == nil and unbound_primary?(state) -> state.primary
+        true -> nil
+      end
+
+    {:reply, if(router && Process.alive?(router), do: router), state}
+  end
+
   @impl GenServer
   def handle_cast({:register_primary, router, module, params, nif}, state) do
     state = %{state | nif: nif, template: {module, params}, primary: router}
@@ -164,8 +182,8 @@ defmodule Mob.Scenes do
   end
 
   def handle_info({:mob_scene_event, scene, message}, state) do
-    case router_for(state, scene) || Process.whereis(:mob_screen) do
-      nil -> :ok
+    case router_for(state, scene) do
+      nil -> unclaimed_event(state, scene, message)
       router -> send(router, message)
     end
 
@@ -180,6 +198,23 @@ defmodule Mob.Scenes do
   def handle_info({:EXIT, _pid, _reason}, state), do: {:noreply, state}
 
   def handle_info(_message, state), do: {:noreply, state}
+
+  # No router shows `scene`. Before the primary registers, `:mob_screen` is the
+  # one router there can be (it is mounting). After, the scene is a window no
+  # router serves — over native's limit, or its router failed to start or is
+  # out of restarts — and another window's router must not act on its event.
+  defp unclaimed_event(%{primary: nil}, _scene, message) do
+    case Process.whereis(:mob_screen) do
+      nil -> :ok
+      router -> send(router, message)
+    end
+  end
+
+  defp unclaimed_event(_state, scene, message) do
+    Logger.debug(
+      "[mob] dropped #{inspect(message)} from window scene #{inspect(scene)}: no router shows it"
+    )
+  end
 
   # ── Scene lifecycle ───────────────────────────────────────────────────────
 
@@ -228,8 +263,11 @@ defmodule Mob.Scenes do
     end
   end
 
+  # Native's SceneDelegate tells `:mob_screen` itself once the window exists
+  # (mob_notify_window_connected), so the router holding that name hears it
+  # from there, once; every other router hears it from here.
   defp tell_window_connected(state, router) do
-    send(router, {:mob_window, :connected})
+    if router != Process.whereis(:mob_screen), do: send(router, {:mob_window, :connected})
     state
   end
 

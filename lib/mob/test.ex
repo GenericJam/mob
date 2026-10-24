@@ -64,6 +64,10 @@ defmodule Mob.Test do
       Mob.Test.tap(node, :open_detail, scene: second)
       Mob.Test.screen(node, scene: second)  #=> MyApp.DetailScreen
 
+  `scene:` takes an id from `screens/1`, or what `Mob.Scene.of/1` returns for
+  a screen: `nil` for the screens of the window the app started in, so
+  `scene: nil` addresses that window.
+
   With one window nothing changes: no `scene:` needed. `settle/2` settles
   every window.
 

@@ -27,8 +27,14 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `scene_multiple_supported/0`. Only application-role window scenes count,
   so an AirPlay or cable display is not a second window. An alert or action
   sheet appears in the window of the screen that showed it, even when another
-  window is in front. Launch notifications and links (`Mob.Link`) go to the
-  root router only, and to whichever router takes over `:mob_screen`. A
+  window is in front. `Mob.WebView`, the back gesture's WebView history step
+  and `Mob.Keyboard.dismiss/1` act on the calling screen's window
+  (`webview_*` and `dismiss_keyboard` NIFs gained a scene arity), and WebView
+  messages reach that window's screen. Every window event with a known scene
+  goes through `Mob.Scenes`, which drops one no router shows. `scene: nil` in
+  `Mob.Test` addresses the window the app started in. Launch notifications
+  and links (`Mob.Link`) go to the root router only, and to whichever router
+  takes over `:mob_screen`. A
   further window's router mounts its root screen after starting, so a
   `mount/3` may call `Mob.Scene.list/0`; `:mob_screen` moves to a remaining
   window before the closing primary stops; a new session takes over a kept

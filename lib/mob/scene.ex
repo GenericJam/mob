@@ -55,6 +55,9 @@ defmodule Mob.Scene do
     are often different classes.
   * Alerts and action sheets (`Mob.Alert`) shown by a screen appear in that
     screen's window, and their results come back to it.
+  * `Mob.WebView` calls and `Mob.Keyboard.dismiss/1` act on the screen's own
+    window, WebView messages come back to it, and the back gesture steps only
+    that window's WebView history.
 
   Shared by every window: the app's processes, `Mob.State`, persisted screen
   state (one `Mob.ScreenState` entry per screen module, last write wins), and

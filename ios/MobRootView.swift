@@ -1757,7 +1757,7 @@ private struct MobWKWebView: UIViewRepresentable {
         config.userContentController.addUserScript(shim)
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.navigationDelegate = context.coordinator
-        g_webview = wv
+        mob_webview_attach(wv)
         if let urlStr = node.webViewUrl, let url = URL(string: urlStr) {
             wv.load(URLRequest(url: url))
         }
@@ -1765,7 +1765,7 @@ private struct MobWKWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ wv: WKWebView, context: Context) {
-        g_webview = wv
+        mob_webview_attach(wv)
         context.coordinator.node = node
     }
 
@@ -1773,12 +1773,15 @@ private struct MobWKWebView: UIViewRepresentable {
         var node: MobNode
         init(node: MobNode) { self.node = node }
 
-        // JS → Elixir: window.mob.send(data) arrives here.
-        // Delegates to mob_deliver_webview_message() in mob_nif.m.
+        // JS → Elixir: window.mob.send(data) arrives here. Delegates to
+        // mob_deliver_webview_message() in mob_nif.m with this WebView's window
+        // scene, so the message reaches that window's screen (MOB-245).
         func userContentController(_ ucc: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
             guard message.name == "mob", let json = message.body as? String else { return }
-            mob_deliver_webview_message(json)
+            mobWithSceneId(message.webView?.window?.windowScene?.session.persistentIdentifier) {
+                mob_deliver_webview_message($0, json)
+            }
         }
 
         // URL whitelist enforcement.
@@ -1795,7 +1798,9 @@ private struct MobWKWebView: UIViewRepresentable {
                 decisionHandler(.allow)
             } else {
                 decisionHandler(.cancel)
-                mob_deliver_webview_blocked(url)
+                mobWithSceneId(wv.window?.windowScene?.session.persistentIdentifier) {
+                    mob_deliver_webview_blocked($0, url)
+                }
             }
         }
     }

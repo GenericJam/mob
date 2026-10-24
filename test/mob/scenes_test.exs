@@ -84,6 +84,9 @@ defmodule Mob.ScenesTest do
     end
 
     def webview_can_go_back, do: false
+    # Window "W" shows a WebView with page history; no other window does.
+    def webview_can_go_back(scene), do: scene == "W"
+    def webview_go_back(scene), do: send(state().test, {:webview_go_back, scene})
     def exit_app, do: :ok
     def safe_area, do: {10.0, 0.0, 0.0, 0.0}
     def safe_area("B"), do: {20.0, 0.0, 0.0, 0.0}
@@ -240,6 +243,22 @@ defmodule Mob.ScenesTest do
       refute_received {:mob_window, :connected}
     end
 
+    test "a returning window's router that holds :mob_screen is told once, by native" do
+      Nif.configure(self(), [{"A", true}])
+      Mob.Scenes.ensure_started(nif: Nif)
+      # Standing in for the primary router, as :mob_screen, which native's
+      # SceneDelegate tells when the window is back (mob_notify_window_connected).
+      Process.register(self(), :mob_screen)
+      Mob.Scenes.register_primary(self(), HomeScreen, %{test: self()}, Nif)
+
+      send(Mob.Scenes, {:mob_scene, :disconnected, "A"})
+      send(Mob.Scenes, {:mob_scene, :connected, "A", true})
+      :sys.get_state(Mob.Scenes)
+
+      assert Mob.Scenes.list() == [{"A", self()}]
+      refute_received {:mob_window, :connected}
+    end
+
     test "a later window's root screen can ask Mob.Scene.list/0 while it mounts" do
       primary = boot(["A"], %{list_scenes: true})
       assert_received {:scenes_seen, _}
@@ -357,6 +376,38 @@ defmodule Mob.ScenesTest do
       in_b = screen_pid("B")
       assert_receive {:alert, ^in_b, :confirmed}
       refute_receive {:alert, _, _}, 50
+    end
+
+    test "an event from a window no router shows reaches no other window's router" do
+      boot(["A"])
+      connect("B")
+
+      # "C": a window over native's limit, never announced, or one whose router
+      # could not start.
+      send(Mob.Scenes, {:mob_scene_event, "C", {:alert, :confirmed}})
+      settle()
+
+      refute_receive {:alert, _, _}, 50
+    end
+
+    test "the back gesture steps the WebView history of its own window only" do
+      boot(["A"])
+      connect("W")
+      :ok = Mob.Test.navigate(node(), DetailScreen, %{}, scene: "A")
+      :ok = Mob.Test.navigate(node(), DetailScreen, %{}, scene: "W")
+
+      send(Mob.Scenes, {:mob_scene_event, "W", {:mob, :back}})
+      settle()
+
+      assert_received {:webview_go_back, "W"}
+      assert module("W") == DetailScreen
+
+      # "A" shows no WebView with history: its back pops its stack.
+      send(Mob.Scenes, {:mob_scene_event, "A", {:mob, :back}})
+      settle()
+
+      refute_received {:webview_go_back, _}
+      assert module("A") == HomeScreen
     end
   end
 
@@ -543,6 +594,18 @@ defmodule Mob.ScenesTest do
       error = assert_raise ArgumentError, fn -> Mob.Test.screen(node(), scene: "Z") end
       assert Exception.message(error) =~ ~s(no window scene "Z")
       assert Exception.message(error) =~ ~s(["A"])
+    end
+
+    test "scene: nil addresses the window the app started in, whose screens' scene is nil" do
+      primary = boot(["A"])
+      connect("B")
+      in_a = Mob.Router.get_screen_pid(primary)
+      assert Mob.Scene.of(Mob.Router.get_socket(primary)) == nil
+
+      :ok = Mob.Test.tap(node(), :hello, scene: nil)
+
+      assert_receive {:tapped, ^in_a}
+      refute_receive {:tapped, _}, 50
     end
   end
 
