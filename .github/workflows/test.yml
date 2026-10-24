@@ -112,7 +112,9 @@ jobs:
 
       - name: Android Zig unit tests (every file with `test` blocks)
         run: |
-          for f in $(grep -l '^test "' android/jni/*.zig); do
+          files=$(grep -lE '^\s*test( "|\s*\{)' android/jni/*.zig)
+          [ -n "$files" ] || { echo "no Zig test files found"; exit 1; }
+          for f in $files; do
             echo "== zig test $f"
             zig test "$f"
           done
