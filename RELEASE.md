@@ -192,6 +192,9 @@ Per-repo extras:
   repo that ships the scanner. The `hex_deps` layer applies to
   mob_dev itself; the gradle / swift / bundled_runtime layers no-op
   (mob_dev has no native surface).
+- **`mob`**: also run `make -C test/native ios-nif` on a Mac. It compiles
+  `ios/mob_nif.m` in its release variants, which nothing else builds
+  before an app's own release build (MOB-504).
 - **`mob_new`**: generator tests need `MOB_DIR=/Users/kevin/code/mob`
   when running from a worktree; the path resolver looks for `mob`
   alongside the project.

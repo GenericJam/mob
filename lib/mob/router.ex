@@ -559,6 +559,22 @@ defmodule Mob.Router do
     {:noreply, state}
   end
 
+  # mob_dev sends a deploy's reload as a bare message to :mob_screen, which
+  # names one window's router. Every window repaints with the new code: this
+  # router's screens, and every other window's router (MOB-245). Asked from a
+  # separate process so this router never waits on Mob.Scenes.
+  def handle_info(:__mob_hot_reload__, state) do
+    me = self()
+
+    spawn(fn ->
+      for {_scene, router} <- Mob.Scenes.list(),
+          router != me,
+          do: GenServer.cast(router, :__mob_hot_reload__)
+    end)
+
+    handle_cast(:__mob_hot_reload__, state)
+  end
+
   # Anything else addressed to :mob_screen — device events, notifications,
   # plugin messages — belongs to the screen the user is looking at.
   def handle_info(message, state) do

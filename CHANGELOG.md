@@ -47,11 +47,21 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   window only when that window's session is gone (`{:mob_scene, :replaced,
   ...}`), and a kept window whose session is discarded stops
   (`{:mob_scene, :discarded, id}`). The by-tag press helpers
-  (`press_in/3`, `press_out/3`, `hold/4`) take `scene:` too. Opt in with
+  (`press_in/3`, `press_out/3`, `hold/4`) take `scene:` too. The reload
+  `mix mob.deploy` sends to `:mob_screen` after a hot push repaints every
+  window, not only the one whose router holds the name. Opt in with
   `config :mob_dev, multi_window: true` (mob_dev#114 stamps
   `UIApplicationSupportsMultipleScenes`). Needs a native rebuild. Run on the
   iPad and iPhone simulators, not yet on a physical iPad. See
   `decisions/2026-10-02-one-router-per-window-scene.md`.
+
+### Fixed
+- **iOS release builds compile again (MOB-504).** In 0.9.26, `nif_dismiss_keyboard` and
+  the first-responder walk it uses were defined inside the debug-only test-harness block
+  (`#if !MOB_RELEASE`), while their `nif_funcs` entries were not, so every iOS release
+  build failed with "use of undeclared identifier 'nif_dismiss_keyboard'". Both now sit
+  outside the harness block. CI now compiles `ios/mob_nif.m` in debug, release, and
+  release with `MOB_ENABLE_SCREENSHOT` (`make -C test/native ios-nif`).
 
 ## [0.9.26] - 2026-10-24
 

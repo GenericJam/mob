@@ -1,6 +1,8 @@
 # Native-side checks that can run on the host (no simulator, no XCTest target).
 #
-#   make run    build + run everything here
+#   make run      build + run everything here
+#   make ios-nif  compile ios/mob_nif.m in its debug and release variants
+#                 (needs Xcode and Erlang; see ios_nif_compile.sh)
 #   make clean
 #
 # Each test file's header says what it does and does not cover.
@@ -11,9 +13,12 @@ LDFLAGS ?= -framework Foundation
 
 BINS := frame_registry_test dist_port_test dist_cookie_test stored_queue_test init_args_test node_host_test code_versions_test erts_dir_test
 
-.PHONY: run clean
+.PHONY: run ios-nif clean
 run: $(BINS)
 	@for b in $(BINS); do echo "== $$b"; ./$$b || exit 1; done
+
+ios-nif:
+	./ios_nif_compile.sh
 
 frame_registry_test: frame_registry_test.m
 	$(CC) $(CFLAGS) $(LDFLAGS) $< -o $@
