@@ -47,7 +47,9 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   window only when that window's session is gone (`{:mob_scene, :replaced,
   ...}`), and a kept window whose session is discarded stops
   (`{:mob_scene, :discarded, id}`). The by-tag press helpers
-  (`press_in/3`, `press_out/3`, `hold/4`) take `scene:` too. Opt in with
+  (`press_in/3`, `press_out/3`, `hold/4`) take `scene:` too. The reload
+  `mix mob.deploy` sends to `:mob_screen` after a hot push repaints every
+  window, not only the one whose router holds the name. Opt in with
   `config :mob_dev, multi_window: true` (mob_dev#114 stamps
   `UIApplicationSupportsMultipleScenes`). Needs a native rebuild. Run on the
   iPad and iPhone simulators, not yet on a physical iPad. See

@@ -16,7 +16,7 @@ defmodule Mob.Test do
       Mob.Test.tree(node)                 #=> %{type: :column, ...}
       Mob.Test.find(node, "Save")         #=> [{[0, 2], %{...}}]
       Mob.Test.inspect(node)              #=> %{screen: ..., assigns: ..., tree: ...}
-      Mob.Test.screens(node)              #=> [{nil, MyApp.HomeScreen, #PID<...>}]
+      Mob.Test.screens(node)              #=> [{"8A3F…", MyApp.HomeScreen, #PID<...>}]
 
       # Interaction
       Mob.Test.tap(node, :increment)      # tap a button by tag

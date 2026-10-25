@@ -396,6 +396,18 @@ defmodule Mob.ScenesTest do
       refute_receive {:alert, _, _}, 50
     end
 
+    test "a deploy's reload, sent to :mob_screen, repaints every window" do
+      boot(["A"])
+      connect("B")
+      flush_frames()
+
+      # What mob_dev's deployer sends after a hot push.
+      send(:mob_screen, :__mob_hot_reload__)
+
+      assert_receive {:frame, :default, nil, %{"props" => %{"text" => "home 0"}}}
+      assert_receive {:frame, "B", "B", %{"props" => %{"text" => "home 0"}}}
+    end
+
     test "the back gesture steps the WebView history of its own window only" do
       boot(["A"])
       connect("W")
