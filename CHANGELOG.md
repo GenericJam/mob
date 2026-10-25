@@ -53,6 +53,14 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   iPad and iPhone simulators, not yet on a physical iPad. See
   `decisions/2026-10-02-one-router-per-window-scene.md`.
 
+### Fixed
+- **iOS release builds compile again (MOB-504).** In 0.9.26, `nif_dismiss_keyboard` and
+  the first-responder walk it uses were defined inside the debug-only test-harness block
+  (`#if !MOB_RELEASE`), while their `nif_funcs` entries were not, so every iOS release
+  build failed with "use of undeclared identifier 'nif_dismiss_keyboard'". Both now sit
+  outside the harness block. CI now compiles `ios/mob_nif.m` in debug, release, and
+  release with `MOB_ENABLE_SCREENSHOT` (`make -C test/native ios-nif`).
+
 ## [0.9.26] - 2026-10-24
 
 ### Added

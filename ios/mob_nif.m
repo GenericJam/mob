@@ -5840,6 +5840,75 @@ void mob_notify_set_screen_pid(ErlNifPid pid) {
     });
 }
 
+// Shared with the debug-only harness below (delete_backward, key_press), but
+// outside its guard: dismiss_keyboard is public API and ships in release
+// builds (MOB-504).
+static id find_first_responder_in(UIView *view) {
+    if (view.isFirstResponder)
+        return view;
+    for (UIView *sub in view.subviews) {
+        id fr = find_first_responder_in(sub);
+        if (fr)
+            return fr;
+    }
+    return nil;
+}
+
+// ─── dismiss_keyboard/0,1 — take the keyboard down from the BEAM ─────────────
+//
+// Resigns the first responder found in a visible window — the walk
+// delete_backward and key_press use — which is the view the keyboard is up
+// for. Nothing focused is not an error; the keyboard is already down.
+//
+// Which windows (MOB-245): dismiss_keyboard/1 takes the scene id of the
+// calling screen and looks only in that window scene. dismiss_keyboard/0 is
+// the unbound primary's: it looks only in the primary's window (tap set 0),
+// and nowhere while that window is detached and another is attached, so one
+// window's handler never closes another window's keyboard. With no scene
+// attached at all it looks in every connected scene, as before scenes.
+//
+// Waits (bounded) for the main thread to do it, so it is IO_BOUND. The caller
+// is a handler that usually re-renders too, and MobTextField adopts a new
+// `value:` only once it is no longer focused. Queued fire-and-forget, the
+// handler's render reached the field while SwiftUI still had it focused, and
+// the value assigned next to the dismiss was dropped in most runs after an
+// edit (iPhone Air simulator, iOS 27.0). Returning once the resign has run
+// queues the re-render behind it, and the value then landed every time.
+// {error, timeout} if the main thread did not get to it within 2 s.
+
+static ERL_NIF_TERM nif_dismiss_keyboard(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    NSString *sceneId = argc == 1 ? mob_scene_id_from_term(env, argv[0]) : nil;
+    if (argc == 1 && !sceneId)
+        return enif_make_badarg(env);
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+      BOOL everywhere = !sceneId && mob_scene_attached_count() == 0;
+      UIWindowScene *only = sceneId ? mob_window_scene_for(sceneId) : mob_primary_window_scene();
+      id fr = nil;
+      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+          if (![scene isKindOfClass:[UIWindowScene class]])
+              continue;
+          if (!everywhere && scene != only)
+              continue;
+          for (UIWindow *win in [(UIWindowScene *)scene windows]) {
+              if (win.isHidden)
+                  continue;
+              fr = find_first_responder_in(win);
+              if (fr)
+                  break;
+          }
+          if (fr)
+              break;
+      }
+      [fr resignFirstResponder];
+      dispatch_semaphore_signal(done);
+    });
+    dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC));
+    if (dispatch_semaphore_wait(done, deadline) != 0)
+        return enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_atom(env, "timeout"));
+    return enif_make_atom(env, "ok");
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // TEST HARNESS — compiled out of release builds (MOB_RELEASE).
 // ════════════════════════════════════════════════════════════════════════════
@@ -7737,17 +7806,6 @@ static ERL_NIF_TERM nif_tap_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 #endif
 }
 
-static id find_first_responder_in(UIView *view) {
-    if (view.isFirstResponder)
-        return view;
-    for (UIView *sub in view.subviews) {
-        id fr = find_first_responder_in(sub);
-        if (fr)
-            return fr;
-    }
-    return nil;
-}
-
 // ─── delete_backward/0 — delete one character behind the cursor ──────────────
 //
 // Calls deleteBackward: on the current first responder. Equivalent to pressing
@@ -7784,61 +7842,6 @@ static ERL_NIF_TERM nif_delete_backward(ErlNifEnv *env, int argc, const ERL_NIF_
                                 enif_make_atom(env, "not_text_input"));
     return enif_make_tuple2(env, enif_make_atom(env, "error"),
                             enif_make_atom(env, "no_first_responder"));
-}
-
-// ─── dismiss_keyboard/0,1 — take the keyboard down from the BEAM ─────────────
-//
-// Resigns the first responder found in a visible window — the walk
-// delete_backward and key_press use — which is the view the keyboard is up
-// for. Nothing focused is not an error; the keyboard is already down.
-//
-// Which windows (MOB-245): dismiss_keyboard/1 takes the scene id of the
-// calling screen and looks only in that window scene. dismiss_keyboard/0 is
-// the unbound primary's: it looks only in the primary's window (tap set 0),
-// and nowhere while that window is detached and another is attached, so one
-// window's handler never closes another window's keyboard. With no scene
-// attached at all it looks in every connected scene, as before scenes.
-//
-// Waits (bounded) for the main thread to do it, so it is IO_BOUND. The caller
-// is a handler that usually re-renders too, and MobTextField adopts a new
-// `value:` only once it is no longer focused. Queued fire-and-forget, the
-// handler's render reached the field while SwiftUI still had it focused, and
-// the value assigned next to the dismiss was dropped in most runs after an
-// edit (iPhone Air simulator, iOS 27.0). Returning once the resign has run
-// queues the re-render behind it, and the value then landed every time.
-// {error, timeout} if the main thread did not get to it within 2 s.
-
-static ERL_NIF_TERM nif_dismiss_keyboard(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
-    NSString *sceneId = argc == 1 ? mob_scene_id_from_term(env, argv[0]) : nil;
-    if (argc == 1 && !sceneId)
-        return enif_make_badarg(env);
-    dispatch_semaphore_t done = dispatch_semaphore_create(0);
-    dispatch_async(dispatch_get_main_queue(), ^{
-      BOOL everywhere = !sceneId && mob_scene_attached_count() == 0;
-      UIWindowScene *only = sceneId ? mob_window_scene_for(sceneId) : mob_primary_window_scene();
-      id fr = nil;
-      for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-          if (![scene isKindOfClass:[UIWindowScene class]])
-              continue;
-          if (!everywhere && scene != only)
-              continue;
-          for (UIWindow *win in [(UIWindowScene *)scene windows]) {
-              if (win.isHidden)
-                  continue;
-              fr = find_first_responder_in(win);
-              if (fr)
-                  break;
-          }
-          if (fr)
-              break;
-      }
-      [fr resignFirstResponder];
-      dispatch_semaphore_signal(done);
-    });
-    dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC));
-    if (dispatch_semaphore_wait(done, deadline) != 0)
-        return enif_make_tuple2(env, enif_make_atom(env, "error"), enif_make_atom(env, "timeout"));
-    return enif_make_atom(env, "ok");
 }
 
 // ─── key_press/1 — send a special key to the focused text input ───────────────

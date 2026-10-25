@@ -137,6 +137,14 @@ jobs:
         # themselves. Same toolchain as the clang-format step.
         run: make -C test/native run
 
+      - name: Install Erlang (erl_nif.h for the iOS NIF compile)
+        run: brew install erlang
+
+      - name: iOS NIF compiles in debug and release (MOB-504)
+        # mob 0.9.26 shipped a release nif_funcs entry for a function defined
+        # only in debug builds. Only compiling the release variant catches that.
+        run: make -C test/native ios-nif
+
       - name: Install swiftlint
         run: brew install swiftlint
 
