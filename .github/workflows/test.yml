@@ -143,7 +143,15 @@ jobs:
       - name: iOS NIF compiles in debug and release (MOB-504)
         # mob 0.9.26 shipped a release nif_funcs entry for a function defined
         # only in debug builds. Only compiling the release variant catches that.
-        run: make -C test/native ios-nif
+        # The Swift sources need the iOS 26 SDK (glassEffect), and the runner's
+        # default Xcode is older, so pick its newest Xcode 26.
+        run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$xcode" ]; then
+            echo "::error::no Xcode 26 on this runner"; ls -d /Applications/Xcode*.app; exit 1
+          fi
+          echo "Using $xcode"
+          DEVELOPER_DIR="$xcode/Contents/Developer" make -C test/native ios-nif
 
       - name: Install swiftlint
         run: brew install swiftlint
