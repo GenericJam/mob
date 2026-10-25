@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.27] - 2026-10-24
+
 ### Added
 - **Several windows of one app on iPad, one BEAM (MOB-245, iPad half).** Each
   `UIWindowScene` gets its own `Mob.Router`, navigation and screens; the app's
