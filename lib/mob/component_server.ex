@@ -115,7 +115,8 @@ defmodule Mob.ComponentServer do
            id: id,
            handle: handle,
            nif: nif,
-           screen_monitor: screen_monitor
+           screen_monitor: screen_monitor,
+           rendered: nil
          }}
 
       {:error, reason} ->
@@ -167,8 +168,11 @@ defmodule Mob.ComponentServer do
       @no_handle
   end
 
+  # Map.put/Map.get for :rendered: a component started before it existed keeps
+  # its state map across `mix mob.push`.
   defp do_handle_call(:render_props, _from, %{module: module, socket: socket} = state) do
-    {:reply, module.render(socket.assigns), state}
+    props = module.render(socket.assigns)
+    {:reply, props, Map.put(state, :rendered, props)}
   end
 
   defp do_handle_call(:get_handle, _from, %{handle: handle} = state) do
@@ -182,25 +186,20 @@ defmodule Mob.ComponentServer do
     end
   end
 
-  defp do_handle_cast(
-         {:event, event, payload},
-         %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state
-       ) do
+  defp do_handle_cast({:event, event, payload}, %{module: module, socket: socket} = state) do
     {:noreply, new_socket} = module.handle_event(event, payload, socket)
-    send(screen_pid, {:component_changed, id, module})
-    {:noreply, %{state | socket: new_socket}}
+    notify_if_changed(new_socket, state)
   end
 
   defp do_handle_info(
          {:component_event, event, payload_json},
-         %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state
+         %{module: module, socket: socket} = state
        ) do
     event = to_binary(event)
     payload = decode_payload(payload_json)
 
     {:noreply, new_socket} = module.handle_event(event, payload, socket)
-    send(screen_pid, {:component_changed, id, module})
-    {:noreply, %{state | socket: new_socket}}
+    notify_if_changed(new_socket, state)
   end
 
   defp do_handle_info(
@@ -216,12 +215,28 @@ defmodule Mob.ComponentServer do
     {:stop, reason, state}
   end
 
-  defp do_handle_info(
-         message,
-         %{module: module, socket: socket, screen_pid: screen_pid, id: id} = state
-       ) do
+  defp do_handle_info(message, %{module: module, socket: socket} = state) do
     {:noreply, new_socket} = module.handle_info(message, socket)
-    send(screen_pid, {:component_changed, id, module})
+    notify_if_changed(new_socket, state)
+  end
+
+  # The screen repaints on `{:component_changed, ...}` and commits the whole
+  # native tree, so it is sent only when the props the native view would get
+  # differ from the ones the screen last fetched. A native view emits an event
+  # per key press or knob move, and most of them change nothing the view draws;
+  # telling the screen anyway cost a full BEAM render plus a native commit and
+  # recomposition per event. A change made while an earlier notice is still
+  # unanswered is not missed: answering it fetches the props as they are then.
+  #
+  # Untouched assigns skip the comparison render: `render/1` is a function of
+  # assigns. A render that reads anything else picks it up on the next screen
+  # paint, not on a callback that changed no assign.
+  defp notify_if_changed(new_socket, %{socket: socket} = state) do
+    if new_socket.assigns !== socket.assigns and
+         state.module.render(new_socket.assigns) !== Map.get(state, :rendered) do
+      send(state.screen_pid, {:component_changed, state.id, state.module})
+    end
+
     {:noreply, %{state | socket: new_socket}}
   end
 

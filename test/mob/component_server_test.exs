@@ -147,6 +147,109 @@ defmodule Mob.ComponentServerTest do
     end
   end
 
+  describe "telling the screen to repaint" do
+    # The screen commits its whole native tree on `{:component_changed, ...}`.
+    # A native view sends an event per key press or knob move, and most change
+    # nothing it draws: on a Moto G each one cost a full commit and 10-20 ms of
+    # Compose recomposition.
+    #
+    # `get_handle/1` is the barrier: it queues behind the message under test
+    # and, unlike `render_props/1`, does not change what the component last
+    # handed the screen.
+    defmodule Selective do
+      use Mob.Component
+
+      def mount(_props, socket), do: {:ok, Mob.Socket.assign(socket, shown: 0, hidden: 0)}
+
+      def render(assigns), do: %{shown: assigns.shown}
+
+      def handle_event("noop", _payload, socket), do: {:noreply, socket}
+
+      def handle_event("reassign", _payload, socket),
+        do: {:noreply, Mob.Socket.assign(socket, :shown, socket.assigns.shown)}
+
+      def handle_event("hidden", _payload, socket),
+        do: {:noreply, Mob.Socket.update(socket, :hidden, &(&1 + 1))}
+
+      def handle_event("shown", _payload, socket),
+        do: {:noreply, Mob.Socket.update(socket, :shown, &(&1 + 1))}
+
+      def handle_info(:noop, socket), do: {:noreply, socket}
+
+      def handle_info(:shown, socket),
+        do: {:noreply, Mob.Socket.update(socket, :shown, &(&1 + 1))}
+    end
+
+    setup do
+      {:ok, pid} =
+        Mob.ComponentServer.start(
+          module: Selective,
+          id: :sel,
+          screen_pid: self(),
+          props: %{},
+          platform: :no_render
+        )
+
+      # What the screen does when it first draws the component.
+      %{shown: 0} = Mob.ComponentServer.render_props(pid)
+      {:ok, pid: pid}
+    end
+
+    defp after_event(pid, event) do
+      send(pid, {:component_event, event, "{}"})
+      Mob.ComponentServer.get_handle(pid)
+    end
+
+    test "an event that returns the socket unchanged does not", %{pid: pid} do
+      after_event(pid, "noop")
+      refute_received {:component_changed, :sel, Selective}
+    end
+
+    test "re-assigning the same value does not", %{pid: pid} do
+      after_event(pid, "reassign")
+      refute_received {:component_changed, :sel, Selective}
+    end
+
+    test "changing an assign render/1 does not read does not", %{pid: pid} do
+      after_event(pid, "hidden")
+      refute_received {:component_changed, :sel, Selective}
+    end
+
+    test "an event that changes the rendered props does", %{pid: pid} do
+      after_event(pid, "shown")
+      assert_received {:component_changed, :sel, Selective}
+    end
+
+    test "an event that only matches what the screen last fetched does not", %{pid: pid} do
+      after_event(pid, "shown")
+      assert_received {:component_changed, :sel, Selective}
+      %{shown: 1} = Mob.ComponentServer.render_props(pid)
+
+      after_event(pid, "hidden")
+      refute_received {:component_changed, :sel, Selective}
+    end
+
+    test "handle_info follows the same rule", %{pid: pid} do
+      send(pid, :noop)
+      Mob.ComponentServer.get_handle(pid)
+      refute_received {:component_changed, :sel, Selective}
+
+      send(pid, :shown)
+      Mob.ComponentServer.get_handle(pid)
+      assert_received {:component_changed, :sel, Selective}
+    end
+
+    test "dispatch/3 follows the same rule", %{pid: pid} do
+      Mob.ComponentServer.dispatch(pid, "noop", %{})
+      Mob.ComponentServer.get_handle(pid)
+      refute_received {:component_changed, :sel, Selective}
+
+      Mob.ComponentServer.dispatch(pid, "shown", %{})
+      Mob.ComponentServer.get_handle(pid)
+      assert_received {:component_changed, :sel, Selective}
+    end
+  end
+
   describe "to_binary/1" do
     test "a binary passes through unchanged" do
       assert Mob.ComponentServer.to_binary("x") == "x"

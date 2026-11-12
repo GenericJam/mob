@@ -10,6 +10,22 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **A native view event that changes nothing no longer commits the whole
+  tree.** Before, every `Mob.Component` `handle_event/3` and `handle_info/2`
+  sent `{:component_changed, ...}`, and the screen repainted and called
+  `set_root` without checking anything. A native view that sends an event per
+  key press or knob move therefore committed twice per press. On a Moto G Power
+  2021 that was 5-15 ms of BEAM work plus 10-20 ms of Compose recomposition per
+  commit. Now a component tells its screen only when `render/1` returns props
+  that differ from the ones the screen last fetched. If assigns are unchanged
+  (`!==`), the component does not render to check. The screen repaints on that
+  notice through the same unchanged-tree skip its own messages use, so several
+  notices queued behind one paint commit once. Behaviour change: a component's
+  `render/1` is treated as a function of its assigns. Anything else it reads is
+  picked up on the next screen paint, not by a callback that changed no assign.
+  Decision: `decisions/2026-11-12-component-events-repaint-only-on-changed-props.md`.
+
 ## [0.9.27] - 2026-10-24
 
 ### Added

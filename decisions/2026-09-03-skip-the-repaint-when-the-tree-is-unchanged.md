@@ -64,6 +64,11 @@ background screen's fingerprint may describe a tree that was never committed,
 but it cannot act on that, because becoming active goes through the router and
 therefore through an unconditional paint.
 
+> **Note (2026-11-12):** `{:component_changed, ...}` now skips the same way, so
+> "only `forward/2`" no longer holds. It is still message-driven only, and the
+> unconditional list above is unchanged. See
+> `2026-11-12-component-events-repaint-only-on-changed-props.md`.
+
 **A hash, not the tree.** Retaining the expanded tree per live screen roughly
 doubles steady-state footprint on a list screen — `Mob.List` materialises a
 wrapper plus the rendered row per item — for screens the user cannot see, and
