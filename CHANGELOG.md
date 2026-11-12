@@ -24,6 +24,12 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   notices queued behind one paint commit once. Behaviour change: a component's
   `render/1` is treated as a function of its assigns. Anything else it reads is
   picked up on the next screen paint, not by a callback that changed no assign.
+  A native view that relied on an identical-props re-commit to undo input the
+  BEAM rejected (an update block that resets its text from props every time)
+  no longer gets that commit and keeps the typed text; to force one, have the
+  component bump an assign its `render/1` returns (a revision counter) when it
+  rejects input. Component crash reports and `:sys.get_status/1`
+  redact the last rendered props as they do the assigns.
   Decision: `decisions/2026-11-12-component-events-repaint-only-on-changed-props.md`.
 
 ## [0.9.27] - 2026-10-24

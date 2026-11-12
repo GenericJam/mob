@@ -173,7 +173,8 @@ defmodule Mob.ScreenRepaintTest do
     # back to a resident screen whose tree has not changed must not be skipped:
     # the user would tap back and keep looking at the screen they left.
     #
-    # Only forward/2 may skip. This pins that.
+    # Only message-driven repaint_if_changed/1 paths may skip. This explicit
+    # render request must remain unconditional.
     before = renders()
     Mob.Screen.Server.render(screen, :none)
     settle(screen)

@@ -111,7 +111,7 @@ defmodule Mob.Screen.CrashRedactionTest do
       :ok
     end
 
-    def render(_assigns), do: %{}
+    def render(assigns), do: %{value: assigns.password}
     def handle_event("noop", _payload, socket), do: {:noreply, socket}
   end
 
@@ -357,6 +357,16 @@ defmodule Mob.Screen.CrashRedactionTest do
         end)
 
       assert_redacted(logs, ["FunctionClauseError", "Component.handle_event/3"])
+    end
+
+    test ":sys.get_status/1 keeps the props it last rendered out", %{router: router} do
+      component = start_component(screen_pid(router))
+      assert %{value: @secret} = Mob.ComponentServer.render_props(component)
+
+      status = inspect(:sys.get_status(component), limit: :infinity)
+
+      assert status =~ "rendered: %{value: :redacted}"
+      refute status =~ @secret
     end
 
     # A component on a crashing screen is usually stopped with :shutdown

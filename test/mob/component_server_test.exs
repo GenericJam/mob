@@ -220,6 +220,14 @@ defmodule Mob.ComponentServerTest do
       assert_received {:component_changed, :sel, Selective}
     end
 
+    test "a component started before :rendered existed survives hot code push", %{pid: pid} do
+      :sys.replace_state(pid, &Map.delete(&1, :rendered))
+
+      after_event(pid, "shown")
+      assert_received {:component_changed, :sel, Selective}
+      assert %{shown: 1} = Mob.ComponentServer.render_props(pid)
+    end
+
     test "an event that only matches what the screen last fetched does not", %{pid: pid} do
       after_event(pid, "shown")
       assert_received {:component_changed, :sel, Selective}

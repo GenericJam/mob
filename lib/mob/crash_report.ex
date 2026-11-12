@@ -202,7 +202,9 @@ defmodule Mob.CrashReport do
   @doc """
   `format_status/1` for a server whose state holds a `Mob.Socket` under
   `:socket`. Applies to OTP's crash report and to `:sys.get_status/1`; the
-  assigns keep their keys, so a report still says what the screen held.
+  assigns keep their keys, so a report still says what the screen held. A
+  component's `:rendered` (the props its `render/1` last returned, drawn from
+  the assigns) is redacted the same way.
   """
   @spec format_status(map()) :: map()
   def format_status(status) do
@@ -219,14 +221,26 @@ defmodule Mob.CrashReport do
 
   defp redact_state(%{socket: %Mob.Socket{assigns: assigns, __mob__: mob}} = state) do
     socket = %Mob.Socket{
-      assigns: Map.new(assigns, fn {key, _value} -> {key, :redacted} end),
+      assigns: redact_values(assigns),
       __mob__: Map.take(mob, [:screen, :platform])
     }
 
-    %{state | socket: socket}
+    redact_rendered(%{state | socket: socket})
   end
 
   defp redact_state(state), do: state
+
+  defp redact_rendered(%{rendered: rendered} = state) when is_map(rendered),
+    do: %{state | rendered: redact_values(rendered)}
+
+  # `render/1` returning something other than a map is a bug, and its value is
+  # still app data.
+  defp redact_rendered(%{rendered: rendered} = state) when not is_nil(rendered),
+    do: %{state | rendered: :redacted}
+
+  defp redact_rendered(state), do: state
+
+  defp redact_values(map), do: Map.new(map, fn {key, _value} -> {key, :redacted} end)
 
   # Idempotent, so a reason redacted at the source survives `reason/1` again.
   defp redact_exception(%Redacted{} = redacted, _stacktrace), do: redacted
