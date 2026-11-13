@@ -10,6 +10,22 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **Gesture timestamps and throttles are right on 32-bit Android.** The Zig
+  bindings declared bionic's `struct timespec` as two `i64`s, but its fields
+  are `long`, 32-bit on armeabi-v7a. There `clock_gettime` filled half the
+  struct, so the `ts` on scroll, drag, pinch, rotate and pointer-move events
+  was garbage and the per-handle throttle compared garbage; and the 50 ms
+  `nanosleep` in the launcher's wait for window focus slept 0 ms, so a cold
+  start gave up on focus almost at once instead of after 3 s. The fields are
+  `c_long` now, and `mob_zig.zig` checks its hand-declared libc structs
+  against Zig's own per-target C layouts at compile time, so a mismatch fails
+  the build for that ABI. The `mob_nif.zig` compile test now builds for
+  armeabi-v7a and x86_64 as well as arm64. The same audit gave `mkdir` bionic's
+  16-bit `mode_t` on 32-bit ABIs, `Stat` its 8-byte alignment, and the NIF
+  entry a per-ABI `sizeof(ErlNifResourceTypeInit)` (it was the 64-bit 40
+  bytes everywhere); none of those misbehaved in practice. (MOB-523)
+
 ## [0.9.29] - 2026-11-13
 
 ### Added

@@ -10,6 +10,11 @@
 # libc dependency reintroduced anywhere in the module fails here, not on a
 # user's `mix mob.deploy --native --android`.
 #
+# It builds for every ABI mob ships (the triples mob_new's build.zig uses), not
+# just arm64: mob_zig.zig checks its hand-declared libc structs against the
+# target's C layout at comptime, and a struct that is only wrong on 32-bit
+# (MOB-523: Timespec as two i64s on armeabi-v7a) fails only the armv7 build.
+#
 # Needs a `zig` on PATH (the same toolchain `mix mob.deploy` uses); tagged
 # `:zig` and excluded by test_helper.exs when none is found.
 defmodule Mob.AndroidLibcFreeTest do
@@ -19,25 +24,31 @@ defmodule Mob.AndroidLibcFreeTest do
 
   @jni_dir Path.expand("../../android/jni", __DIR__)
 
-  @tag :tmp_dir
-  test "mob_nif.zig compiles for aarch64 Android without link_libc", %{tmp_dir: tmp} do
-    {out, status} =
-      System.cmd(
-        System.find_executable("zig"),
-        [
-          "build-obj",
-          "-target",
-          "aarch64-linux.24.0-android",
-          "-fPIC",
-          "-OReleaseSmall",
-          "-Mroot=" <> Path.join(@jni_dir, "mob_nif.zig"),
-          "--cache-dir",
-          Path.join(tmp, "zig-cache"),
-          "-femit-bin=" <> Path.join(tmp, "mob_nif.o")
-        ],
-        stderr_to_stdout: true
-      )
+  for {abi, target} <- [
+        {"arm64-v8a", "aarch64-linux.24.0-android"},
+        {"armeabi-v7a", "arm-linux.24.0-androideabi"},
+        {"x86_64", "x86_64-linux.24.0-android"}
+      ] do
+    @tag :tmp_dir
+    test "mob_nif.zig compiles for #{abi} Android without link_libc", %{tmp_dir: tmp} do
+      {out, status} =
+        System.cmd(
+          System.find_executable("zig"),
+          [
+            "build-obj",
+            "-target",
+            unquote(target),
+            "-fPIC",
+            "-OReleaseSmall",
+            "-Mroot=" <> Path.join(@jni_dir, "mob_nif.zig"),
+            "--cache-dir",
+            Path.join(tmp, "zig-cache"),
+            "-femit-bin=" <> Path.join(tmp, "mob_nif.o")
+          ],
+          stderr_to_stdout: true
+        )
 
-    assert status == 0, "zig build-obj of mob_nif.zig without libc failed:\n#{out}"
+      assert status == 0, "zig build-obj of mob_nif.zig for #{unquote(abi)} failed:\n#{out}"
+    end
   end
 end

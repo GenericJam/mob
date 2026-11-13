@@ -86,10 +86,18 @@ pub const ERL_NIF_MINOR_VERSION: c_int = 18;
 pub const ERL_NIF_MIN_ERTS_VERSION: [*:0]const u8 = "erts-14.0";
 pub const ERL_NIF_VM_VARIANT: [*:0]const u8 = "beam.vanilla";
 
-/// ErlNifResourceTypeInit — declared opaque (we never construct one; only
-/// its size is read from the entry to gate ABI compatibility). Size on
-/// aarch64-linux: 5 pointers = 40 bytes (dtor/stop/down/dyncall + int).
-pub const SIZEOF_ErlNifResourceTypeInit: usize = 40;
+/// ErlNifResourceTypeInit — we never construct one; only its size goes in the
+/// entry, the way ERL_NIF_INIT emits `sizeof(ErlNifResourceTypeInit)`. Layout
+/// from erl_nif.h (dtor, stop, down, int members, dyncall), so the size is
+/// 40 bytes on 64-bit Android and 20 on armeabi-v7a.
+const ErlNifResourceTypeInit = extern struct {
+    dtor: ?*const anyopaque,
+    stop: ?*const anyopaque,
+    down: ?*const anyopaque,
+    members: c_int,
+    dyncall: ?*const anyopaque,
+};
+pub const SIZEOF_ErlNifResourceTypeInit: usize = @sizeOf(ErlNifResourceTypeInit);
 
 pub const ErlNifLoadFn = ?*const fn (env: ?*ErlNifEnv, priv_data: *?*anyopaque, load_info: ERL_NIF_TERM) callconv(.c) c_int;
 pub const ErlNifReloadFn = ?*const fn (env: ?*ErlNifEnv, priv_data: *?*anyopaque, load_info: ERL_NIF_TERM) callconv(.c) c_int;

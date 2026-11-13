@@ -71,6 +71,12 @@ narrowest way to unbreak every existing app.
   dependency reintroduced anywhere in the module fails it. It is tagged
   `:zig` and excluded when no `zig` is on PATH (CI has none), so it runs on
   developer machines that build Android.
+  (Updated 2026-11-13, MOB-523: the test now builds for armeabi-v7a and
+  x86_64 as well, and CI installs the pinned Zig, so it runs there too;
+  "CI has none" above is no longer true. Libc *structs* declared in
+  `mob_zig.zig` are checked against `std.c`'s per-target layouts by a
+  comptime block there, which only the 32-bit build exercises for the
+  types whose C fields are `long`.)
 - `link_libc = true` in `mob_new`'s Android `build.zig.eex` (MOB-196) is
   now redundant — new apps do not need it either. Not removed here: it
   costs nothing, and if a future addition genuinely does need libc the
