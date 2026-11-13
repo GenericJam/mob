@@ -10,6 +10,40 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Changed
+- **A component callback repaints its screen only when the component's
+  rendered props change.** Before, every `Mob.Component` `handle_event/3` and
+  `handle_info/2` repainted the screen, whatever it returned. What an app
+  upgrading from 0.9.27 should know:
+  - A component's `render/1` is treated as a function of its assigns, as in
+    LiveView. Anything else it reads (a clock, ETS) is picked up on the next
+    screen paint, not by a callback that changed no assign.
+  - A component event that leaves the component's props alone no longer
+    re-renders the parent screen. A screen whose `render/1` reads state a
+    component writes outside messages (ETS, an Agent) and relied on component
+    events to refresh it should be sent a message instead.
+  - A native view is no longer re-committed with identical props. A view
+    whose update block reset rejected input from props on every commit now
+    keeps the typed text; to force a commit, have the component bump an assign
+    its `render/1` returns (a revision counter) when it rejects input.
+
+  Decision: `decisions/2026-11-12-component-events-repaint-only-on-changed-props.md`.
+
+### Fixed
+- **A native view event that changes nothing no longer commits the whole
+  tree.** Every component callback used to send `{:component_changed, ...}`,
+  and the screen repainted and called `set_root` without checking anything. A
+  native view that sends an event per key press or knob move therefore
+  committed twice per press: on a Moto G Power 2021, 5-15 ms of BEAM work plus
+  10-20 ms of Compose recomposition per commit. Now a component notifies its
+  screen only when `render/1` returns props that differ from the ones the
+  screen last fetched, and does not render to check if its assigns are
+  unchanged (`!==`). The screen repaints through the same unchanged-tree skip
+  its own messages use, so several notices queued behind one paint commit
+  once. Verified on a Moto G Power 2021 and an iPhone SE (3rd gen). The last
+  rendered props a component keeps for this are redacted in its crash report
+  and `:sys.get_status/1`, as its assigns are (MOB-310).
+
 ## [0.9.27] - 2026-10-24
 
 ### Added

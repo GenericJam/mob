@@ -455,8 +455,10 @@ defmodule Mob.Screen.Server do
   end
 
   # A component's state changed — repaint so the native view gets fresh props.
+  # Skippable like a forwarded message: several events queued behind one paint
+  # each send this, and every paint after the first draws the same tree.
   defp do_handle_info({:component_changed, _id, _module}, state) do
-    {:noreply, %{state | socket: paint(state, :none)}}
+    {:noreply, %{state | socket: repaint_if_changed(state)}}
   end
 
   # The window now exists, so the insets this screen is holding may be a
@@ -691,8 +693,10 @@ defmodule Mob.Screen.Server do
   defp paint(state, transition, mode \\ :async, activation_token \\ nil),
     do: do_paint(state, transition, mode, activation_token, false)
 
-  # The ONLY path that may skip. Everything else — mount, activation, every
-  # navigation, hot reload, a :sync caller — paints unconditionally.
+  # The ONLY path that may skip, taken by a screen's own messages (forwarded
+  # handle_info, handle_async, size class) and by `{:component_changed, ...}`.
+  # Everything else — mount, activation, every navigation, hot reload, a :sync
+  # caller — paints unconditionally.
   #
   # That restriction is what makes this safe rather than clever. The router
   # paints with `transition: :none` on every push, pop and reset (the transition

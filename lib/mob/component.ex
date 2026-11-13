@@ -13,8 +13,14 @@ defmodule Mob.Component do
   3. `render/1` is called to get the props map forwarded to the native factory
   4. On subsequent renders, `update/2` is called with new props from the parent
   5. When the native view fires an event, `handle_event/3` is called
-  6. After any state change, `render/1` is re-called and native props are updated
+  6. After `handle_event/3` or `handle_info/2`, if `render/1` now returns different
+     props, the screen repaints and the native view gets them. A callback that
+     changes no assign, or only assigns `render/1` does not read, repaints nothing.
   7. When the component leaves the tree, the process is stopped and `terminate/2` is called
+
+  `render/1` must be a function of assigns. It runs again only when assigns
+  change or the parent screen repaints, so anything else it reads (a clock, an
+  ETS table) is not picked up by a callback that leaves assigns alone.
 
   ## Usage
 
