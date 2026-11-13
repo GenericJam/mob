@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.29] - 2026-11-13
+
 ### Added
 - **`on_touch`: per-finger touch on any node, with the position inside it.**
   `on_touch: {pid, tag}` delivers `{:touch, tag, %{phase, pointer_id, x, y,
@@ -24,7 +26,10 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   press, press in/out and scrolling keep working. `Mob.Event.Touch`,
   `Mob.Test.touch/4` and `Mob.ScreenCase.render_touch/4` build the same
   message for tests. See the components guide, "Per-finger touch", and
-  `decisions/2026-11-12-per-node-multi-pointer-on-touch.md`. (MOB-518)
+  `decisions/2026-11-12-per-node-multi-pointer-on-touch.md`. Checked on a
+  Moto G Power 2021 (Android 11: two fingers on two nodes, two on one node,
+  drag capture, taps, cancel) and an iPhone SE (two real fingers on two
+  nodes, drag capture, taps). (MOB-518)
 
 ### Changed
 - **A tap on a node that also declares `on_touch` resolves

@@ -4,7 +4,7 @@ defmodule Mob.MixProject do
   def project do
     [
       app: :mob,
-      version: "0.9.28",
+      version: "0.9.29",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
