@@ -15,8 +15,8 @@ defmodule Mob.Event.NativeInput do
 
   | Kind | Messages | Receipt | Trace |
   |---|---|---|---|
-  | `:discrete` | `:tap` (list-row select included), `:focus`, `:blur`, `:submit`, `:select`, `:dismiss`, `:long_press`, `:double_tap`, `:press_in`, `:press_out`, `:swipe_left`/`_right`/`_up`/`_down`, `{:swipe, tag, direction}`, `{:change, tag, value}` except a float | yes | yes |
-  | `:stream` | `:scroll`, `:drag`, `:pinch`, `:rotate`, `:pointer_move`, `:compose`, a float `:change`, and the scroll lifecycle (`:scroll_began`, `:scroll_ended`, `:scroll_settled`, `:top_reached`, `:scrolled_past`) | no | yes |
+  | `:discrete` | `:tap` (list-row select included), `:focus`, `:blur`, `:submit`, `:select`, `:dismiss`, `:long_press`, `:double_tap`, `:press_in`, `:press_out`, `:swipe_left`/`_right`/`_up`/`_down`, `{:swipe, tag, direction}`, `{:change, tag, value}` except a float, `{:touch, tag, payload}` except a move | yes | yes |
+  | `:stream` | `:scroll`, `:drag`, `:pinch`, `:rotate`, `:pointer_move`, `:compose`, a float `:change`, a `:touch` move, and the scroll lifecycle (`:scroll_began`, `:scroll_ended`, `:scroll_settled`, `:top_reached`, `:scrolled_past`) | no | yes |
 
   A stream fires at up to display rate, or several times per gesture. The
   receipt store keeps 256, so one scroll would evict the tap an agent is about
@@ -70,6 +70,8 @@ defmodule Mob.Event.NativeInput do
   @doc "Whether `message` is discrete native input, a stream, or not native input."
   @spec kind(term()) :: kind()
   def kind({:change, _tag, value}) when is_float(value), do: :stream
+  def kind({:touch, _tag, %{phase: :move}}), do: :stream
+  def kind({:touch, _tag, %{phase: _}}), do: :discrete
   def kind({event, _tag}) when event in @discrete, do: :discrete
   def kind({event, _tag, _payload}) when event in @discrete_with_payload, do: :discrete
   def kind({event, _tag}) when event in @stream, do: :stream

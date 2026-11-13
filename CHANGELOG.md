@@ -10,6 +10,34 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **`on_touch`: per-finger touch on any node, with the position inside it.**
+  `on_touch: {pid, tag}` delivers `{:touch, tag, %{phase, pointer_id, x, y,
+  width, height, ts}}` for every finger that lands on the node: `:down`,
+  `:up` or `:cancel`, plus `:move` with `moves: true` (throttled per finger,
+  16 ms / 1 dp by default, `throttle:` and `delta:` to tune). A finger
+  belongs to the node it landed on until it lifts, so sliding onto another
+  `on_touch` node sends that node nothing; several fingers on several nodes
+  are independent, and every `:down` gets exactly one `:up` or `:cancel`
+  however often the screen re-renders. The down isn't delayed by slop or a
+  double-tap wait, and it observes without consuming, so `on_tap`, long
+  press, press in/out and scrolling keep working. `Mob.Event.Touch`,
+  `Mob.Test.touch/4` and `Mob.ScreenCase.render_touch/4` build the same
+  message for tests. See the components guide, "Per-finger touch", and
+  `decisions/2026-11-12-per-node-multi-pointer-on-touch.md`. (MOB-518)
+
+### Changed
+- **A tap on a node that also declares `on_touch` resolves
+  identity-tolerantly**, as a press node's already does: the touch-down
+  usually re-renders the screen, and the strict lookup dropped the tap whose
+  handle came from the render before (seen on an iPhone SE). (MOB-518)
+
+### Upgrading
+- `on_touch` needs iOS 18 or newer (iOS 17 ignores it and logs once). On
+  Android it needs the `MobBridge.kt` / `beam_jni.c` from the `mob_new`
+  release that includes MOB-518; an app generated earlier must port those
+  changes (listed in mob_new's CHANGELOG). (MOB-518)
+
 ## [0.9.28] - 2026-11-12
 
 ### Changed

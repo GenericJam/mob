@@ -274,6 +274,185 @@ final class MobPressRecognizer: UIGestureRecognizer {
     }
 }
 
+// Per-pointer touch (MOB-518): every finger that lands on the node, with its
+// position inside the node. Built like the press recognizer above: a UIKit
+// recognizer that never recognizes, recognizes simultaneously with everything
+// and neither cancels nor delays touches, so on_tap, on_long_press, press
+// in/out and an enclosing ScrollView's pan keep working on the same node.
+//
+// UIKit binds a UITouch to the recognizers it reached at touchesBegan, so a
+// finger that slides onto another on_touch node never reaches that node's
+// recognizer: the pointer stays captured by the node it went down on.
+//
+// The sends happen native-side (MobNode.onTouch / mob_touch_down): the down
+// returns one sink per pointer, carrying that pointer's copied routing and
+// move throttle. This side only has to end every sink exactly once, whichever
+// way its touch ends, the view leaving the tree included.
+//
+// iOS 18+ only: iOS 17 has no UIGestureRecognizerRepresentable, and a
+// DragGesture has no pointer identity and sees one finger per view.
+struct MobTouchModifier: ViewModifier {
+    let down: (Int64, CGFloat, CGFloat, CGFloat, CGFloat, Int64) -> MobTouchSink?
+
+    // Plain class in @State: survives node rebuilds without publishing a view
+    // invalidation per touch (same reasoning as MobPressModifier).
+    @State private var tracker = MobTouchTracker()
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content
+                .contentShape(Rectangle())
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                    tracker.frame = frame
+                }
+                .gesture(MobTouchObserverGesture(tracker: tracker, down: down))
+                .onDisappear { tracker.cancelAll() }
+        } else {
+            content.onAppear { MobTouchTracker.reportUnsupported() }
+        }
+    }
+}
+
+/// The pointers down on one node and their sinks. Main thread only.
+final class MobTouchTracker {
+    /// The node's frame in window coordinates, where `UITouch.location(in: nil)`
+    /// reports.
+    var frame: CGRect = .zero
+    var down: ((Int64, CGFloat, CGFloat, CGFloat, CGFloat, Int64) -> MobTouchSink?)?
+
+    private struct Pointer {
+        let sink: MobTouchSink
+        var last: CGPoint
+    }
+
+    private var pointers: [ObjectIdentifier: Pointer] = [:]
+    // Shared by every node, so two pointers down at once never share an id.
+    private static var lastPointerId: Int64 = 0
+    private static var reportedUnsupported = false
+
+    var isEmpty: Bool { pointers.isEmpty }
+
+    static func reportUnsupported() {
+        guard !reportedUnsupported else { return }
+        reportedUnsupported = true
+        NSLog("[Mob] on_touch needs iOS 18 or newer; this node's touches are not reported")
+    }
+
+    func began(_ touch: UITouch) {
+        let key = ObjectIdentifier(touch)
+        guard pointers[key] == nil, let down else { return }
+        Self.lastPointerId += 1
+        let point = local(touch)
+        if let sink = down(Self.lastPointerId, point.x, point.y, frame.width, frame.height,
+                           Self.ms(touch.timestamp)) {
+            pointers[key] = Pointer(sink: sink, last: point)
+        }
+    }
+
+    func moved(_ touch: UITouch) {
+        let key = ObjectIdentifier(touch)
+        guard let pointer = pointers[key] else { return }
+        let point = local(touch)
+        pointers[key]?.last = point
+        pointer.sink(0, point.x, point.y, frame.width, frame.height, Self.ms(touch.timestamp))
+    }
+
+    func ended(_ touch: UITouch, cancelled: Bool) {
+        guard let pointer = pointers.removeValue(forKey: ObjectIdentifier(touch)) else { return }
+        let point = local(touch)
+        pointer.sink(cancelled ? 2 : 1, point.x, point.y, frame.width, frame.height,
+                     Self.ms(touch.timestamp))
+    }
+
+    /// Cancels every pointer still down, at its last known position: the view
+    /// left the tree, or UIKit abandoned the recognizer mid-touch.
+    func cancelAll() {
+        let ts = Self.ms(ProcessInfo.processInfo.systemUptime)
+        let live = pointers
+        pointers.removeAll()
+        for pointer in live.values {
+            pointer.sink(2, pointer.last.x, pointer.last.y, frame.width, frame.height, ts)
+        }
+    }
+
+    private func local(_ touch: UITouch) -> CGPoint {
+        let p = touch.location(in: nil)
+        return CGPoint(x: p.x - frame.minX, y: p.y - frame.minY)
+    }
+
+    // UITouch.timestamp and systemUptime share one clock: seconds since boot,
+    // not counting sleep.
+    private static func ms(_ seconds: TimeInterval) -> Int64 {
+        Int64((seconds * 1000).rounded())
+    }
+}
+
+@available(iOS 18.0, *)
+struct MobTouchObserverGesture: UIGestureRecognizerRepresentable {
+    let tracker: MobTouchTracker
+    let down: (Int64, CGFloat, CGFloat, CGFloat, CGFloat, Int64) -> MobTouchSink?
+
+    func makeUIGestureRecognizer(context: Context) -> MobTouchRecognizer {
+        let recognizer = MobTouchRecognizer()
+        recognizer.delegate = context.coordinator
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: MobTouchRecognizer, context: Context) {
+        // The latest render's node: its handle is the current generation. A
+        // pointer already down keeps sending through the sink it got at its down.
+        recognizer.tracker = tracker
+        tracker.down = down
+    }
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> MobPressObserverGesture.Coordinator {
+        MobPressObserverGesture.Coordinator()
+    }
+}
+
+/// Reports every touch it is given and never recognizes. It fails once its
+/// last touch is gone, as the press recognizer does at its lift, so UIKit
+/// resets it for the next touch and nothing ever waits on it.
+final class MobTouchRecognizer: UIGestureRecognizer {
+    var tracker: MobTouchTracker?
+
+    init() {
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        for touch in touches { tracker?.began(touch) }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        for touch in touches { tracker?.moved(touch) }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        for touch in touches { tracker?.ended(touch, cancelled: false) }
+        failIfIdle()
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        for touch in touches { tracker?.ended(touch, cancelled: true) }
+        failIfIdle()
+    }
+
+    private func failIfIdle() {
+        if tracker?.isEmpty ?? true { state = .failed }
+    }
+
+    // After .failed, and whenever UIKit abandons the recognizer: any pointer
+    // still tracked then is cancelled rather than left without an end.
+    override func reset() {
+        super.reset()
+        tracker?.cancelAll()
+    }
+}
+
 extension MobNode {
     /// `resolvedFont` for the UIKit field (`caret: "end"`, `on_compose`,
     /// single-line `max_length`), from the same props. A custom font is

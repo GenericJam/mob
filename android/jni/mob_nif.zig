@@ -41,6 +41,7 @@ const std = @import("std");
 const jni = @import("mob_zig.zig");
 const erts = @import("mob_erts.zig");
 const tap_handle_codec = @import("tap_handle_codec.zig");
+const touch_throttle = @import("touch_throttle.zig");
 const stored_queue = @import("mob_stored_queue.zig");
 
 // ── Logging tag for NIFs that log to Android logcat ──────────────────────
@@ -1248,6 +1249,7 @@ pub export fn mob_nif_init_state() callconv(.c) c_int {
     tap_mutex = erts.enif_mutex_create("mob_tap_mutex") orelse return -1;
     component_mutex = erts.enif_mutex_create("mob_component_mutex") orelse return -1;
     press_mutex = erts.enif_mutex_create("mob_press_mutex") orelse return -1;
+    touch_mutex = erts.enif_mutex_create("mob_touch_mutex") orelse return -1;
     return 0;
 }
 
@@ -1583,6 +1585,166 @@ pub export fn mob_press_end(token: c_int) callconv(.c) void {
     const msg = erts.makeTuple(slot.env, .{ erts.enif_make_atom(slot.env, "press_out"), slot.tag });
     var pid = slot.pid;
     _ = erts.enif_send(null, &pid, slot.env, msg);
+}
+
+// ── Per-pointer touch (MOB-518) ──────────────────────────────────────────
+// One slot per pointer that is down on an on_touch node, shared by every node.
+// Like press_out, a pointer's routing is resolved once, at its down, and the
+// rest of its stream is sent from that copy: a pad re-renders on every hit,
+// and a handle looked up again at the lift could be stale by then. The down
+// itself resolves identity-tolerantly, because a second finger can land
+// between the BEAM's set_root and Compose applying the tree it describes.
+// The slot also holds the pointer's move throttle (touch_throttle.zig): the
+// per-handle throttle fields are one position per node and clear_taps zeroes
+// them on every render.
+//
+// A token is `generation << 5 | slot`, so a token kept past its pointer's end
+// can't drive whichever pointer reuses the slot.
+const MAX_TOUCHES: usize = 32;
+const TOUCH_SLOT_BITS = 5;
+const TOUCH_GEN_MASK: u32 = (1 << (31 - TOUCH_SLOT_BITS)) - 1;
+const TouchSlot = struct {
+    env: ?*erts.ErlNifEnv = null,
+    pid: erts.ErlNifPid = undefined,
+    tag: erts.ERL_NIF_TERM = 0,
+    pointer_id: i64 = 0,
+    generation: u32 = 0,
+    gate: touch_throttle.State = undefined,
+};
+var touch_slots: [MAX_TOUCHES]TouchSlot = @splat(TouchSlot{});
+var touch_mutex: ?*erts.ErlNifMutex = null;
+
+fn touchSlotLocked(token: c_int) ?*TouchSlot {
+    if (token < 0) return null;
+    const raw: u32 = @intCast(token);
+    const slot = &touch_slots[raw & (MAX_TOUCHES - 1)];
+    if (slot.env == null or slot.generation != raw >> TOUCH_SLOT_BITS) return null;
+    return slot;
+}
+
+fn sendTouch(
+    env: ?*erts.ErlNifEnv,
+    pid: erts.ErlNifPid,
+    tag: erts.ERL_NIF_TERM,
+    phase: [*:0]const u8,
+    pointer_id: i64,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    ts: i64,
+) void {
+    const keys = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_atom(env, "phase"),
+        erts.enif_make_atom(env, "pointer_id"),
+        erts.enif_make_atom(env, "x"),
+        erts.enif_make_atom(env, "y"),
+        erts.enif_make_atom(env, "width"),
+        erts.enif_make_atom(env, "height"),
+        erts.enif_make_atom(env, "ts"),
+    };
+    const vals = [_]erts.ERL_NIF_TERM{
+        erts.enif_make_atom(env, phase),
+        erts.enif_make_int64(env, pointer_id),
+        erts.enif_make_double(env, x),
+        erts.enif_make_double(env, y),
+        erts.enif_make_double(env, w),
+        erts.enif_make_double(env, h),
+        erts.enif_make_int64(env, ts),
+    };
+    const payload = erts.makeMap(env, &keys, &vals) orelse return;
+    const msg = erts.makeTuple(env, .{ erts.enif_make_atom(env, "touch"), tag, payload });
+    var to = pid;
+    _ = erts.enif_send(null, &to, env, msg);
+}
+
+/// A pointer went down on a node with on_touch `handle`. Copies the routing,
+/// sends `{:touch, tag, %{phase: :down, ...}}` and returns the token for
+/// mob_touch_move / mob_touch_end, or -1 when nothing was sent (handle not
+/// resolvable, or every slot in use). `move_throttle_ms` < 0 turns moves off.
+pub export fn mob_touch_down(
+    handle: c_int,
+    pointer_id: i64,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    ts: i64,
+    move_throttle_ms: c_int,
+    move_delta: f64,
+) callconv(.c) c_int {
+    const keep = erts.enif_alloc_env() orelse return -1;
+    const snap = snapChangeTap(handle, keep) orelse {
+        erts.enif_free_env(keep);
+        return -1;
+    };
+    const env = erts.enif_alloc_env() orelse {
+        erts.enif_free_env(keep);
+        return -1;
+    };
+    defer erts.enif_free_env(env);
+    const tag = erts.enif_make_copy(env, snap.tag);
+
+    var token: c_int = -1;
+    erts.enif_mutex_lock(touch_mutex);
+    for (&touch_slots, 0..) |*slot, i| {
+        if (slot.env == null) {
+            const generation = ((slot.generation + 1) & TOUCH_GEN_MASK) | @intFromBool(slot.generation == TOUCH_GEN_MASK);
+            slot.* = .{
+                .env = keep,
+                .pid = snap.pid,
+                .tag = snap.tag,
+                .pointer_id = pointer_id,
+                .generation = generation,
+                .gate = touch_throttle.State.init(move_throttle_ms, move_delta, ts, x, y),
+            };
+            token = @intCast((generation << TOUCH_SLOT_BITS) | @as(u32, @intCast(i)));
+            break;
+        }
+    }
+    erts.enif_mutex_unlock(touch_mutex);
+    if (token < 0) {
+        erts.enif_free_env(keep);
+        logd_nif("touch slots exhausted; dropping pointer {d} on handle {d}", .{ pointer_id, handle });
+        return -1;
+    }
+    sendTouch(env, snap.pid, tag, "down", pointer_id, x, y, w, h, ts);
+    return token;
+}
+
+/// The pointer moved. Sent only when its move throttle lets it through.
+pub export fn mob_touch_move(token: c_int, x: f64, y: f64, w: f64, h: f64, ts: i64) callconv(.c) void {
+    const env = erts.enif_alloc_env() orelse return;
+    defer erts.enif_free_env(env);
+    erts.enif_mutex_lock(touch_mutex);
+    const slot = touchSlotLocked(token) orelse {
+        erts.enif_mutex_unlock(touch_mutex);
+        return;
+    };
+    if (!slot.gate.moveDue(ts, x, y)) {
+        erts.enif_mutex_unlock(touch_mutex);
+        return;
+    }
+    const pid = slot.pid;
+    const pointer_id = slot.pointer_id;
+    const tag = erts.enif_make_copy(env, slot.tag);
+    erts.enif_mutex_unlock(touch_mutex);
+    sendTouch(env, pid, tag, "move", pointer_id, x, y, w, h, ts);
+}
+
+/// The pointer lifted (`cancelled` 0) or was cancelled: sends `:up` or
+/// `:cancel` and frees the slot. A token ends at most once.
+pub export fn mob_touch_end(token: c_int, cancelled: c_int, x: f64, y: f64, w: f64, h: f64, ts: i64) callconv(.c) void {
+    erts.enif_mutex_lock(touch_mutex);
+    const found = touchSlotLocked(token) orelse {
+        erts.enif_mutex_unlock(touch_mutex);
+        return;
+    };
+    const slot = found.*;
+    found.env = null;
+    erts.enif_mutex_unlock(touch_mutex);
+    defer erts.enif_free_env(slot.env);
+    sendTouch(slot.env, slot.pid, slot.tag, if (cancelled != 0) "cancel" else "up", slot.pointer_id, x, y, w, h, ts);
 }
 
 pub export fn mob_send_swipe_with_direction(handle: c_int, direction: [*:0]const u8) callconv(.c) void {
@@ -5308,7 +5470,7 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
         return -1;
     }
 
-    // tap_mutex, component_mutex and press_mutex are created here (mob_nif_init_state is
+    // tap_mutex, component_mutex, press_mutex and touch_mutex are created here (mob_nif_init_state is
     // a Zig-side export, but for the all-Zig finale we just call the
     // initialiser directly — no C boundary to cross).
     if (mob_nif_init_state() != 0) {

@@ -204,6 +204,19 @@ defmodule Mob.ScreenCase do
   end
 
   @doc """
+  Deliver a `{:touch, tag, payload}` to the screen's `handle_info/2`, shaped
+  as a pointer on an `on_touch` node delivers it, and return the updated
+  `View`. `fields` are `Mob.Event.Touch.message/3`'s. In-BEAM only.
+
+      view = render_touch(view, :pad_3, :down, pointer_id: 1, y: 0.0, height: 100.0)
+      assert assigns(view).hits == [{:pad_3, 127}]
+  """
+  @spec render_touch(View.t(), term(), Mob.Event.Touch.phase(), keyword()) :: View.t()
+  def render_touch(%View{source: :beam} = view, tag, phase, fields \\ []) do
+    render_info(view, Mob.Event.Touch.message(tag, phase, fields))
+  end
+
+  @doc """
   Wait for every task the screen started with `Mob.Socket.start_async/3`,
   deliver each outcome to its `handle_async/3`, and return the updated `View`.
   The in-BEAM equivalent of the results arriving on device; mirrors

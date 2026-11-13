@@ -414,6 +414,47 @@ defmodule Mob.RendererTest do
       assert {pid, :mic_up} in registered
     end
 
+    test "on_touch registers its tag; moves stay off unless asked for" do
+      pid = self()
+
+      tree = %{
+        type: :column,
+        props: %{},
+        children: [
+          %{type: :box, props: %{on_touch: {pid, :pad_a}}, children: []},
+          %{type: :box, props: %{on_touch: {pid, :pad_b, moves: true}}, children: []},
+          %{
+            type: :box,
+            props: %{on_touch: {pid, :pad_c, moves: true, throttle: 0, delta: 0.5}},
+            children: []
+          }
+        ]
+      }
+
+      Renderer.render(tree, :android, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      [a, b, c] = Enum.map(:json.decode(json)["children"], & &1["props"])
+
+      assert is_integer(a["on_touch"])
+      # Native reads an absent "touch_moves" as moves off.
+      refute Map.has_key?(a, "touch_moves")
+      assert b["touch_moves"] == %{"throttle_ms" => 16, "delta" => 1.0}
+      assert c["touch_moves"] == %{"throttle_ms" => 0, "delta" => 0.5}
+
+      registered = for {:register_tap, [target]} <- MockNIF.calls(), do: target
+      assert {pid, :pad_a} in registered
+      assert {pid, :pad_b} in registered
+      assert {pid, :pad_c} in registered
+    end
+
+    test "on_touch throttle without moves: true fails the render instead of doing nothing" do
+      tree = %{type: :box, props: %{on_touch: {self(), :pad, throttle: 8}}, children: []}
+
+      assert_raise ArgumentError, ~r/add moves: true/, fn ->
+        Renderer.render(tree, :android, MockNIF)
+      end
+    end
+
     test "on_swipe and directional swipes are replaced by integer handles" do
       pid = self()
 

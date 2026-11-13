@@ -37,6 +37,7 @@ extern char *dlerror(void) __attribute__((weak));
 #import "MobDemo-Bridging-Header.h"
 #include "erl_nif.h"
 #include "mob_stored_queue.h"
+#include "mob_touch_throttle.h"
 #import <AVFoundation/AVFoundation.h>
 #import <Accelerate/Accelerate.h>
 #import <CoreMotion/CoreMotion.h>
@@ -773,6 +774,107 @@ static void (^mob_begin_press(MobEventRef in_handle, MobEventRef out_handle))(vo
         return nil;
     return ^{
       mob_send_pending_press_out(pending);
+    };
+}
+
+// ── Per-pointer touch (MOB-518) ─────────────────────────────────────────────
+// One MobTouchPointer per pointer down on an on_touch node, owned by the sink
+// block SwiftUI keeps for that UITouch. Like press_out, the rest of a
+// pointer's stream is sent from routing copied at its down: a pad re-renders
+// on every hit, and a handle looked up again at the lift could be stale. The
+// down resolves identity-tolerantly (mob_snap_change_tap) because a second
+// finger can land between the BEAM's set_root and the main thread applying
+// the tree it describes. The pointer also holds its own move throttle
+// (mob_touch_throttle.h): the per-handle throttle fields are one position per
+// node, and clear_taps zeroes them on every render.
+
+@interface MobTouchPointer : NSObject {
+  @public
+    ErlNifEnv *env; // owns `tag`; NULL once the pointer has ended
+    ErlNifPid pid;
+    ERL_NIF_TERM tag;
+    int64_t pointer_id;
+    MobTouchGate gate;
+}
+@end
+
+@implementation MobTouchPointer
+- (void)dealloc {
+    // The sink was dropped without an end: free, don't send. The Swift side
+    // ends every pointer it tracks on lift, cancel, reset and disappear.
+    if (env)
+        enif_free_env(env);
+}
+@end
+
+static void mob_send_touch(ErlNifEnv *env, ErlNifPid *pid, ERL_NIF_TERM tag, const char *phase,
+                           int64_t pointer_id, double x, double y, double w, double h, int64_t ts) {
+    ERL_NIF_TERM keys[7] = {
+        enif_make_atom(env, "phase"), enif_make_atom(env, "pointer_id"),
+        enif_make_atom(env, "x"),     enif_make_atom(env, "y"),
+        enif_make_atom(env, "width"), enif_make_atom(env, "height"),
+        enif_make_atom(env, "ts"),
+    };
+    ERL_NIF_TERM vals[7] = {
+        enif_make_atom(env, phase), enif_make_int64(env, pointer_id), enif_make_double(env, x),
+        enif_make_double(env, y),   enif_make_double(env, w),         enif_make_double(env, h),
+        enif_make_int64(env, ts),
+    };
+    ERL_NIF_TERM payload;
+    enif_make_map_from_arrays(env, keys, vals, 7, &payload);
+    ERL_NIF_TERM msg = enif_make_tuple3(env, enif_make_atom(env, "touch"), tag, payload);
+    enif_send(NULL, pid, env, msg);
+}
+
+// Main thread only (SwiftUI's recognizer callbacks), which is what makes the
+// sink's check-and-clear of `env` safe without a lock. move_throttle_ms < 0
+// turns moves off for the pointer.
+static MobTouchSink _Nullable mob_touch_down(MobEventRef handle, int move_throttle_ms,
+                                             double move_delta, int64_t pointer_id, double x,
+                                             double y, double w, double h, int64_t ts) {
+    ErlNifEnv *keep = enif_alloc_env();
+    if (!keep)
+        return nil;
+    TapSnap snap;
+    if (!mob_snap_change_tap(handle, keep, &snap)) {
+        enif_free_env(keep);
+        return nil;
+    }
+    MobTouchPointer *pointer = [MobTouchPointer new];
+    pointer->env = keep;
+    pointer->pid = snap.pid;
+    pointer->tag = snap.tag;
+    pointer->pointer_id = pointer_id;
+    pointer->gate = mob_touch_gate_init(move_throttle_ms, move_delta, ts, x, y);
+
+    ErlNifEnv *msg_env = enif_alloc_env();
+    if (!msg_env)
+        return nil;
+    mob_note_ui_event();
+    mob_send_touch(msg_env, &snap.pid, enif_make_copy(msg_env, snap.tag), "down", pointer_id, x, y,
+                   w, h, ts);
+    enif_free_env(msg_env);
+
+    return ^(NSInteger phase, CGFloat px, CGFloat py, CGFloat pw, CGFloat ph, int64_t pts) {
+      if (!pointer->env)
+          return;
+      if (phase == 0) {
+          if (!mob_touch_move_due(&pointer->gate, pts, px, py))
+              return;
+          ErlNifEnv *move_env = enif_alloc_env();
+          if (!move_env)
+              return;
+          mob_send_touch(move_env, &pointer->pid, enif_make_copy(move_env, pointer->tag), "move",
+                         pointer->pointer_id, px, py, pw, ph, pts);
+          enif_free_env(move_env);
+          return;
+      }
+      ErlNifEnv *end_env = pointer->env;
+      pointer->env = NULL;
+      mob_note_ui_event();
+      mob_send_touch(end_env, &pointer->pid, pointer->tag, phase == 1 ? "up" : "cancel",
+                     pointer->pointer_id, px, py, pw, ph, pts);
+      enif_free_env(end_env);
     };
 }
 
@@ -1914,6 +2016,7 @@ typedef NS_ENUM(NSUInteger, MobPropKey) {
     MOB_PROP_on_tab_select,
     MOB_PROP_on_tap,
     MOB_PROP_on_top_reached,
+    MOB_PROP_on_touch,
     MOB_PROP_padding,
     MOB_PROP_padding_bottom,
     MOB_PROP_padding_left,
@@ -1941,6 +2044,7 @@ typedef NS_ENUM(NSUInteger, MobPropKey) {
     MOB_PROP_text_size,
     MOB_PROP_thickness,
     MOB_PROP_title,
+    MOB_PROP_touch_moves,
     MOB_PROP_uniforms,
     MOB_PROP_url,
     MOB_PROP_value,
@@ -2056,6 +2160,7 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
           [MOB_PROP_on_tab_select] = @"on_tab_select",
           [MOB_PROP_on_tap] = @"on_tap",
           [MOB_PROP_on_top_reached] = @"on_top_reached",
+          [MOB_PROP_on_touch] = @"on_touch",
           [MOB_PROP_padding] = @"padding",
           [MOB_PROP_padding_bottom] = @"padding_bottom",
           [MOB_PROP_padding_left] = @"padding_left",
@@ -2093,6 +2198,7 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
           [MOB_PROP_text_size] = @"text_size",
           [MOB_PROP_thickness] = @"thickness",
           [MOB_PROP_title] = @"title",
+          [MOB_PROP_touch_moves] = @"touch_moves",
           [MOB_PROP_uniforms] = @"uniforms",
           [MOB_PROP_url] = @"url",
           [MOB_PROP_value] = @"value",
@@ -2359,10 +2465,12 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         id onTap = pv[MOB_PROP_on_tap];
         if (onTap && [onTap isKindOfClass:[NSNumber class]]) {
             MobEventRef handle = mob_event_ref([onTap intValue]);
-            // A node that observes press in/out re-renders mid-touch, so its
-            // tap resolves identity-tolerantly; every other tap stays strict.
+            // A node that observes press in/out or on_touch re-renders
+            // mid-touch (its down usually changes the screen), so its tap
+            // resolves identity-tolerantly; every other tap stays strict.
             BOOL pressNode = [pv[MOB_PROP_on_press_in] isKindOfClass:[NSNumber class]] ||
-                             [pv[MOB_PROP_on_press_out] isKindOfClass:[NSNumber class]];
+                             [pv[MOB_PROP_on_press_out] isKindOfClass:[NSNumber class]] ||
+                             [pv[MOB_PROP_on_touch] isKindOfClass:[NSNumber class]];
             if (pressNode) {
                 node.onTap = ^{
                   mob_send_press_tap(handle);
@@ -2464,6 +2572,26 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
             MobEventRef outHandle = mob_event_ref(hasPressOut ? [onPressOut intValue] : 0);
             node.onPress = ^void(^_Nullable(void))(void) {
                 return mob_begin_press(inHandle, outHandle);
+            };
+        }
+
+        id onTouch = pv[MOB_PROP_on_touch];
+        if (onTouch && [onTouch isKindOfClass:[NSNumber class]]) {
+            MobEventRef handle = mob_event_ref([onTouch intValue]);
+            // Absent means moves are off; the renderer sends both fields when on.
+            int moveThrottleMs = -1;
+            double moveDelta = 0;
+            id moves = pv[MOB_PROP_touch_moves];
+            if ([moves isKindOfClass:[NSDictionary class]]) {
+                id throttle = moves[@"throttle_ms"];
+                id delta = moves[@"delta"];
+                moveThrottleMs =
+                    [throttle isKindOfClass:[NSNumber class]] ? [throttle intValue] : 16;
+                moveDelta = [delta isKindOfClass:[NSNumber class]] ? [delta doubleValue] : 1.0;
+            }
+            node.onTouch = ^MobTouchSink _Nullable(int64_t pointerId, CGFloat x, CGFloat y,
+                                                   CGFloat w, CGFloat h, int64_t ts) {
+                return mob_touch_down(handle, moveThrottleMs, moveDelta, pointerId, x, y, w, h, ts);
             };
         }
 

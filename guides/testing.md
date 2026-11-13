@@ -199,6 +199,25 @@ iOS has no in-process touch injection that reaches SwiftUI, so the `_xy`
 functions return `{:error, :not_supported}` there; use the by-tag functions, or
 a real touch through the simulator (mobile-mcp / agent-device).
 
+### Per-finger touch
+
+`on_touch` handlers take `{:touch, tag, payload}`. Build that message exactly
+as native sends it with `Mob.Event.Touch.message/3`, or let the helpers do it:
+
+```elixir
+# Host test (Mob.ScreenCase): pad 3 hit near its top edge.
+view = render_touch(view, :pad_3, :down, pointer_id: 1, y: 4.0, height: 100.0)
+
+# Device, any platform, by tag: no finger involved.
+Mob.Test.touch(node, :pad_3, :down, pointer_id: 1, y: 4.0, height: 100.0)
+Mob.Test.touch(node, :pad_3, :up, pointer_id: 1, y: 4.0, height: 100.0)
+```
+
+A real finger: on Android, `Mob.Test.press_down_xy/4` … `press_up_xy/3` is a
+single genuine pointer and reaches `on_touch`; on iOS, agent-device's
+`press` / `gesture pan` reach it on a physical device too (XCTest touches),
+while two simultaneous fingers need the simulator or a person.
+
 ### Navigation
 
 Navigation functions are **synchronous** — they block until the navigation and re-render are complete, so it is safe to read state immediately after:

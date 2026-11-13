@@ -65,6 +65,15 @@ void mob_send_swipe_with_direction(int handle, const char *direction);
 // -1 when there is no press_out to deliver. End sends {:press_out, tag} once.
 int mob_press_begin(int in_handle, int out_handle);
 void mob_press_end(int token);
+// on_touch (MOB-518). Down resolves the node's handle, copies its routing,
+// sends {:touch, tag, %{phase: :down, ...}} and returns a token (-1: nothing
+// sent). Move and End send from that copy; End sends :up (cancelled 0) or
+// :cancel and retires the token. Positions and sizes are dp, ts is ms.
+// move_throttle_ms < 0 turns moves off for that pointer.
+int mob_touch_down(int handle, int64_t pointer_id, double x, double y, double w, double h,
+                   int64_t ts, int move_throttle_ms, double move_delta);
+void mob_touch_move(int token, double x, double y, double w, double h, int64_t ts);
+void mob_touch_end(int token, int cancelled, double x, double y, double w, double h, int64_t ts);
 
 // ── Batch 5 Tier 1: high-frequency scroll/drag/pinch/rotate/pointer ─────
 // Throttling and delta-thresholding are applied native-side BEFORE these

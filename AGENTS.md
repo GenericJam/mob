@@ -608,13 +608,15 @@ These are the things we've burned ourselves on. Following them isn't optional.
    can route a callback from an old native tree into the current screen. A sender
    must also copy the tag into its delivery environment while holding that
    mutex; the table's `tag_env` may be freed as soon as the lock is released.
-   Change events, animation-delayed dismissals, press in/out, and taps on a
-   node that also declares `on_press_in` / `on_press_out` may cross renders
+   Change events, animation-delayed dismissals, press in/out, on_touch
+   streams, and taps on a node that also declares `on_press_in` /
+   `on_press_out` / `on_touch` may cross renders
    when both retained registrations have identical PID and tag identity; plain
    taps and the other gestures stay generation-strict. A plain tap must stay
    strict because a positional tag (Mob.List's `{:select, id, index}`) from an
    old tree would select a different row after the list changes. A press
-   node re-renders between a finger's down and up (`on_press_in`), so its tap
+   node re-renders between a finger's down and up (`on_press_in`, an
+   `on_touch` down), so its tap
    goes through the tolerant `mob_send_press_tap`. A press_out's routing is
    copied at touch-down and sent from the copy, so the pair survives any number
    of renders (`decisions/2026-10-03-press-in-out-and-held-press.md`).

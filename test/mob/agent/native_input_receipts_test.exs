@@ -101,6 +101,27 @@ defmodule Mob.Agent.NativeInputReceiptsTest do
     assert {:press_out, %Address{screen: Screen, id: :mic}} = recent().event
   end
 
+  test "a touch's down, up and cancel are receipted; its moves are only traced",
+       %{screen: screen} do
+    # A pad hit is a person's action; a held finger's moves are a stream that
+    # would evict it from the 256-entry store.
+    Mob.Event.Trace.subscribe()
+
+    deliver(screen, Mob.Event.Touch.message(:pad, :down, pointer_id: 1))
+    assert {:touch, %Address{screen: Screen, widget: :touch, id: :pad}} = recent().event
+
+    Receipts.reset()
+    deliver(screen, Mob.Event.Touch.message(:pad, :move, pointer_id: 1, y: 4))
+    assert_received {:mob_trace, %Address{widget: :touch, id: :pad}, :touch, %{phase: :move}}
+    assert Receipts.recent(1) == []
+
+    deliver(screen, Mob.Event.Touch.message(:pad, :up, pointer_id: 1))
+    assert {:touch, %Address{id: :pad}} = recent().event
+
+    deliver(screen, Mob.Event.Touch.message(:pad, :cancel, pointer_id: 2))
+    assert {:touch, %Address{id: :pad}} = recent().event
+  end
+
   test "a raising tap handler is recorded on the way out", %{screen: screen} do
     ref = Process.monitor(screen)
 

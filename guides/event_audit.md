@@ -29,6 +29,7 @@ registrations. Each is opt-in per widget; absence means no event delivery.
 | `on_double_tap` | `{pid, tag}` | `{:double_tap, tag}` | Same |
 | `on_press_in` | `{pid, tag}` | `{:press_in, tag}` | Finger down on the node. Observes without consuming; any node type. iOS + Android (bridge from `mob_new` 0.6.5+) (MOB-380) |
 | `on_press_out` | `{pid, tag}` | `{:press_out, tag}` | That finger lifted or its touch was cancelled; on a node declaring both, always follows its `press_in`. Routing is snapshotted at touch-down so a re-render can't drop it (MOB-380) |
+| `on_touch` | `{pid, tag}` or `{pid, tag, moves: true, throttle:, delta:}` | `{:touch, tag, %{phase, pointer_id, x, y, width, height, ts}}` | One stream per finger, captured by the node it landed on; moves opt-in and throttled per finger natively. Observes without consuming; any node type. iOS 18+ and Android (bridge from the `mob_new` release with MOB-518) |
 | `on_swipe` | `{pid, tag}` | `{:swipe, tag, direction}` | Direction is `:left \| :right \| :up \| :down` |
 | `on_swipe_left` | `{pid, tag}` | `{:swipe_left, tag}` | Specific direction only |
 | `on_swipe_right` | `{pid, tag}` | `{:swipe_right, tag}` | |
