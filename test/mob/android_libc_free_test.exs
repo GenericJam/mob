@@ -14,6 +14,8 @@
 # just arm64: mob_zig.zig checks its hand-declared libc structs against the
 # target's C layout at comptime, and a struct that is only wrong on 32-bit
 # (MOB-523: Timespec as two i64s on armeabi-v7a) fails only the armv7 build.
+# mob_beam.zig is built too: it is the other user of those bindings (the
+# focus-wait nanosleep, mkdir), and it has no `zig test` of its own.
 #
 # Needs a `zig` on PATH (the same toolchain `mix mob.deploy` uses); tagged
 # `:zig` and excluded by test_helper.exs when none is found.
@@ -31,24 +33,42 @@ defmodule Mob.AndroidLibcFreeTest do
       ] do
     @tag :tmp_dir
     test "mob_nif.zig compiles for #{abi} Android without link_libc", %{tmp_dir: tmp} do
-      {out, status} =
-        System.cmd(
-          System.find_executable("zig"),
+      build_obj!(unquote(target), tmp, ["-Mroot=" <> Path.join(@jni_dir, "mob_nif.zig")])
+    end
+
+    @tag :tmp_dir
+    test "mob_beam.zig compiles for #{abi} Android without link_libc", %{tmp_dir: tmp} do
+      # build.zig hands mob_beam.zig these two through b.addOptions().
+      options = Path.join(tmp, "build_options.zig")
+
+      File.write!(options, """
+      pub const no_beam: bool = false;
+      pub const beam_flags_mode: []const u8 = "untuned";
+      """)
+
+      build_obj!(unquote(target), tmp, [
+        "--dep",
+        "build_options",
+        "-Mroot=" <> Path.join(@jni_dir, "mob_beam.zig"),
+        "-Mbuild_options=" <> options
+      ])
+    end
+  end
+
+  defp build_obj!(target, tmp, module_args) do
+    {out, status} =
+      System.cmd(
+        System.find_executable("zig"),
+        ["build-obj", "-target", target, "-fPIC", "-OReleaseSmall"] ++
+          module_args ++
           [
-            "build-obj",
-            "-target",
-            unquote(target),
-            "-fPIC",
-            "-OReleaseSmall",
-            "-Mroot=" <> Path.join(@jni_dir, "mob_nif.zig"),
             "--cache-dir",
             Path.join(tmp, "zig-cache"),
-            "-femit-bin=" <> Path.join(tmp, "mob_nif.o")
+            "-femit-bin=" <> Path.join(tmp, "out.o")
           ],
-          stderr_to_stdout: true
-        )
+        stderr_to_stdout: true
+      )
 
-      assert status == 0, "zig build-obj of mob_nif.zig for #{unquote(abi)} failed:\n#{out}"
-    end
+    assert status == 0, "zig build-obj for #{target} failed:\n#{out}"
   end
 end
