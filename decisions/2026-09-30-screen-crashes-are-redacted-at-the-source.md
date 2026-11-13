@@ -61,6 +61,12 @@ the last message, the queue, and the formatted `:sys` debug log, for
 gen_server's crash report. The router's log lines go through
 `Mob.CrashReport.format/1`, which is idempotent, so a reason that did not come
 through the wrapper (a screen killed from outside) is still reduced.
+(Note added 2026-11-12: "redacts the state" overstated it. `redact_state/1`
+rewrites only the fields it names, the socket's assigns and, since
+`2026-11-12-component-events-repaint-only-on-changed-props.md`, a component's
+`:rendered`; every other state field prints as is. That change first stored
+render output in component state and leaked it until review caught it. A new
+state field that holds app data must be added to `redact_state/1`.)
 
 **proc_lib's crash report is a second channel** that `format_status/1` never
 sees: it reads the dying process's mailbox and dictionary directly. Elixir

@@ -58,7 +58,9 @@ an ordinary message, and becoming active still goes through the router.
   input whose handler returns the old value) no longer gets one. Screens have
   behaved this way since 2026-09-03. Compose and SwiftUI do not reset local
   state when props are equal anyway, so such a view was relying on a redundant
-  commit.
+  commit. A component that needs the reset bumps an assign its `render/1`
+  returns (a revision counter) when it rejects input; that is a props change,
+  so it commits.
 - A notice that does go out now costs one extra `render/1` in the component,
   for the comparison. A component render is a props map, far cheaper than the
   screen render and commit it can save.
@@ -69,6 +71,15 @@ an ordinary message, and becoming active still goes through the router.
 - `:rendered` is read with `Map.get/2` and written with `Map.put/3`, so a
   component started before this change keeps working after `mix mob.push`. With
   no fetch recorded, its first change notifies, as it did before.
+- `:rendered` is render output, so it holds app data the same as the assigns
+  do. `Mob.CrashReport.format_status/1` redacts it (keys kept, values
+  `:redacted`; a non-map value becomes `:redacted`), so neither a component
+  crash report nor `:sys.get_status/1` prints it (MOB-310). Any further
+  component state derived from assigns needs the same treatment.
+- Verified on devices, not only in host tests: on a Moto G Power 2021
+  (Android 11) and an iPhone SE (3rd gen), a native view's no-op events, an
+  unrendered-assign change and a rejected controlled input caused no screen
+  render, and a rendered change caused exactly one.
 - What this does not do: a screen still runs `render/1` and its expansion
   passes for every message it gets, even one that changed no assign. Only the
   commit is skipped. Skipping the render too would need every render input
