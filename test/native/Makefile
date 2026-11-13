@@ -11,7 +11,7 @@ CC      ?= clang
 CFLAGS  ?= -fobjc-arc -Wall -Wextra -Wno-unused-parameter
 LDFLAGS ?= -framework Foundation
 
-BINS := frame_registry_test dist_port_test dist_cookie_test stored_queue_test init_args_test node_host_test code_versions_test erts_dir_test
+BINS := frame_registry_test dist_port_test dist_cookie_test stored_queue_test init_args_test node_host_test code_versions_test erts_dir_test touch_throttle_test
 
 .PHONY: run ios-nif clean
 run: $(BINS)
@@ -42,6 +42,9 @@ code_versions_test: code_versions_test.c ../../ios/mob_code_versions.h
 	$(CC) -Wall -Wextra -Werror $< -o $@
 
 erts_dir_test: erts_dir_test.c ../../ios/mob_erts_dir.h
+	$(CC) -Wall -Wextra -Werror $< -o $@
+
+touch_throttle_test: touch_throttle_test.c ../../ios/mob_touch_throttle.h
 	$(CC) -Wall -Wextra -Werror $< -o $@
 
 clean:

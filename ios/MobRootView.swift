@@ -651,14 +651,17 @@ struct MobNodeView: View {
         // carrying an :id, so the agent can read positions via the
         // element_frames NIF without a screenshot.
         .modifier(MobFrameTracker(node: node))
-        // Pinch, rotation, pointer hover and press in/out (MOB-380) belong to
-        // the rendered node as a whole. Keeping them outside the type switch
-        // covers every primitive — buttons, fields, sliders and toggles, which
-        // never get mobGestures(), and GPU/native views — with one attachment
-        // point instead of one per case.
+        // Pinch, rotation, pointer hover, press in/out (MOB-380) and per-pointer
+        // touch (MOB-518) belong to the rendered node as a whole. Keeping them
+        // outside the type switch covers every primitive — buttons, fields,
+        // sliders and toggles, which never get mobGestures(), and GPU/native
+        // views — with one attachment point instead of one per case.
         .modifier(MobContinuousInputModifier(node: node))
         .ifLet(node.onPress) { view, begin in
             view.modifier(MobPressModifier(begin: begin))
+        }
+        .ifLet(node.onTouch) { view, down in
+            view.modifier(MobTouchModifier(down: down))
         }
         // In a Row, flexible Spacer views yield only after direct text labels
         // reach their ideal width. Without this priority, SwiftUI compresses

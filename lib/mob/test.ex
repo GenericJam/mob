@@ -1422,6 +1422,24 @@ defmodule Mob.Test do
     press_out(node, tag, opts)
   end
 
+  # ── Per-pointer touch (MOB-518) ───────────────────────────────────────────────
+
+  @doc """
+  Send `{:touch, tag, payload}` to the current screen, as a pointer on a node
+  with `on_touch: {pid, tag}` would. `fields` sets the payload's `pointer_id`,
+  `x`, `y`, `width`, `height` and `ts` (see `Mob.Event.Touch.message/3` for the
+  defaults). Works on every platform; no touch is involved, so it tests the
+  screen's handling, not the native detector. Takes `scene:` in `opts`.
+
+      Mob.Test.touch(node, :pad_3, :down, pointer_id: 7, y: 12.0, height: 96.0)
+      Mob.Test.touch(node, :pad_3, :up, pointer_id: 7, y: 12.0, height: 96.0)
+  """
+  @spec touch(node(), term(), Mob.Event.Touch.phase(), keyword(), [{:scene, Mob.Scene.id()}]) ::
+          :ok
+  def touch(node, tag, phase, fields \\ [], opts \\ []) do
+    send_to(node, Mob.Event.Touch.message(tag, phase, fields), opts, "touch/4")
+  end
+
   @default_max_hold_ms 30_000
 
   @doc """

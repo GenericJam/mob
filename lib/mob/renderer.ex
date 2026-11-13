@@ -492,6 +492,25 @@ defmodule Mob.Renderer do
       {:on_press_out, {pid, tag}} when is_pid(pid) ->
         [{"on_press_out", register_handler(nif, {pid, tag})}]
 
+      # Per-pointer touch (MOB-518): `{:touch, tag, %{phase, pointer_id, x, y,
+      # width, height, ts}}`. Observes without consuming, like press in/out.
+      # Moves are opt-in; their per-pointer throttle travels as "touch_moves"
+      # and native applies it at the C level (see Mob.Event.Touch).
+      {:on_touch, {pid, tag}} when is_pid(pid) ->
+        [{"on_touch", register_handler(nif, {pid, tag})}]
+
+      {:on_touch, {pid, tag, opts}} when is_pid(pid) and is_list(opts) ->
+        case Mob.Event.Touch.parse_opts(opts) do
+          %{moves: false} ->
+            [{"on_touch", register_handler(nif, {pid, tag})}]
+
+          %{moves: true, throttle_ms: throttle_ms, delta: delta} ->
+            [
+              {"on_touch", register_handler(nif, {pid, tag})},
+              {"touch_moves", %{"throttle_ms" => throttle_ms, "delta" => delta}}
+            ]
+        end
+
       {:on_swipe, {pid, tag}} when is_pid(pid) ->
         [{"on_swipe", register_handler(nif, {pid, tag})}]
 

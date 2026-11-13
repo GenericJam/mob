@@ -2185,6 +2185,12 @@ column(id: :archive,
 
 #### Multi-touch tracking
 
+**Shipped as `on_touch` (MOB-518)** on any node, not only canvas, with
+`{:touch, tag, %{phase, pointer_id, ...}}` rather than the shape sketched
+below (the tag has to be the tuple's second element for `Mob.Listener`). See
+`decisions/2026-11-12-per-node-multi-pointer-on-touch.md` and the components
+guide. Pressure, tilt and azimuth are still open (Stylus below).
+
 **Use cases:** drawing apps, custom gesture surfaces, music apps, games.
 Niche — most touch interactions are well-served by `on_tap`, `on_pinch`,
 `on_drag`. Real apps that need raw multi-touch want pressure, tilt,

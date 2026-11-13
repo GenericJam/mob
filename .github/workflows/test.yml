@@ -95,6 +95,7 @@ jobs:
             ios/mob_node_host.h \
             ios/mob_code_versions.h \
             ios/mob_erts_dir.h \
+            ios/mob_touch_throttle.h \
             test/native/dist_port_test.c \
             test/native/dist_cookie_test.c \
             test/native/stored_queue_test.c \
@@ -102,6 +103,7 @@ jobs:
             test/native/node_host_test.c \
             test/native/code_versions_test.c \
             test/native/erts_dir_test.c \
+            test/native/touch_throttle_test.c \
             android/jni/mob_beam.h
 
       - name: Zig version from .tool-versions
@@ -125,7 +127,7 @@ jobs:
             zig test "$f"
           done
 
-      - name: Native harness (frame registry MOB-102/MOB-103, dist port MOB-139, dist cookie MOB-348, stored queue MOB-379, init args MOB-406, node host MOB-428, code versions MOB-408, ERTS dir MOB-493)
+      - name: Native harness (frame registry MOB-102/MOB-103, dist port MOB-139, dist cookie MOB-348, stored queue MOB-379, init args MOB-406, node host MOB-428, code versions MOB-408, ERTS dir MOB-493, touch throttle MOB-518)
         # The frame-registry check is the only automated guard on the
         # element-frame registry's ownership, generation-gating and purge rules.
         # It reproduces the algorithm rather than linking ios/mob_nif.m (which

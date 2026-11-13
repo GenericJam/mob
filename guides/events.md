@@ -83,6 +83,27 @@ They observe without consuming, on any node type, and a quick tap delivers
 `press_in`, `press_out`, then `tap`. See the components guide,
 "Press and release".
 
+### Touch — every finger, with its position in the node
+
+For drum pads, keyboards and anything several fingers play at once:
+
+```elixir
+box(on_touch: {self(), :pad})                     # down, up, cancel
+box(on_touch: {self(), :pad, moves: true})        # plus moves (16 ms / 1 dp per finger)
+
+def handle_info({:touch, :pad, %{phase: :down, pointer_id: id, y: y, height: h}}, socket) do
+  velocity = round(127 * (1 - 0.85 * y / h))
+  ...
+end
+```
+
+Each finger is its own `:down` → (`:move`…) → `:up`/`:cancel` stream with a
+`pointer_id`, and it belongs to the node it landed on until it lifts: sliding
+onto another `on_touch` node sends that node nothing. The down arrives at
+touch-down, with no slop or double-tap wait, and like press in/out it
+observes without consuming. See the components guide, "Per-finger touch", and
+`Mob.Event.Touch`.
+
 ### Scroll — three tiers
 
 **Tier 1 — raw deltas** (rarely needed; throttle defaults to 30 Hz):
@@ -265,6 +286,21 @@ Same shape minus `velocity_x`/`velocity_y`.
 ```elixir
 %{x: 320.0, y: 480.0, ts: ..., seq: ...}
 ```
+
+### `{:touch, tag, payload}`
+```elixir
+%{
+  phase: :down | :move | :up | :cancel,
+  pointer_id: 7,      # one finger, from its down to its up/cancel
+  x: 42.0,            # dp from the node's top-left corner
+  y: 18.5,
+  width: 120.0,       # the node's size in dp
+  height: 96.0,
+  ts: 7615376         # ms, the platform's monotonic input clock
+}
+```
+Moves only with `moves: true`, throttled per finger: `throttle:` ms (default
+16, `0` for every move) and `delta:` dp of |dx| + |dy| (default 1).
 
 ### `{:swipe, tag, direction}`
 `direction` is `:left | :right | :up | :down`.

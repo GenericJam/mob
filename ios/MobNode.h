@@ -45,6 +45,13 @@ typedef NS_ENUM(NSInteger, MobNodeType) {
 
 NS_ASSUME_NONNULL_BEGIN
 
+// on_touch (MOB-518): the rest of one pointer's stream after its down. Phase
+// 0 is a move (sent only if that pointer's move throttle lets it through), 1
+// the lift, 2 a cancel; after 1 or 2 the sink does nothing. Positions and
+// sizes are points relative to the node, ts is milliseconds of UITouch time.
+typedef void (^MobTouchSink)(NSInteger phase, CGFloat x, CGFloat y, CGFloat w, CGFloat h,
+                             int64_t ts);
+
 @interface MobNode : NSObject
 
 // Layout
@@ -93,6 +100,14 @@ NS_ASSUME_NONNULL_BEGIN
 // on_press_out-only node gets press_out alone. The pairing lives native-side; see
 // mob_begin_press in mob_nif.m for why it can't be two independent callbacks.
 @property(nonatomic, copy, nullable) void (^_Nullable (^onPress)(void))(void);
+
+// on_touch (MOB-518). Set by mob_nif.m when the prop is registered; SwiftUI
+// calls it at each pointer's touch-down. It sends {:touch, tag, %{phase:
+// :down}} and returns that pointer's sink, or nil when nothing was sent (the
+// handle no longer resolves), in which case the pointer is ignored. The
+// routing is copied at the down, so the sink outlives re-renders.
+@property(nonatomic, copy, nullable) MobTouchSink _Nullable (^onTouch)
+    (int64_t pointerId, CGFloat x, CGFloat y, CGFloat w, CGFloat h, int64_t ts);
 
 // ── Batch 5 Tier 1: high-frequency scroll/drag/pinch/rotate/pointer ──
 // These callbacks are wired by mob_nif.m. Throttling and delta-thresholding

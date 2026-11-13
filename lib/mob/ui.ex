@@ -181,6 +181,9 @@ defmodule Mob.UI do
       `{:tap, tag}` to `handle_info/2`
     * `:on_drag` — `{pid, tag}` or `{pid, tag, throttle_opts}`; finger drags
       deliver `{:drag, tag, payload}` (see the events guide for the payload)
+    * `:on_touch` — `{pid, tag}` or `{pid, tag, opts}`; every finger's down,
+      up and cancel (and moves with `moves: true`) as `{:touch, tag, payload}`,
+      in canvas-local dp. See `Mob.Event.Touch`
 
   Color tokens inside draw ops are resolved against the active theme
   by `Mob.Renderer` before serialisation, exactly like top-level color
@@ -206,7 +209,7 @@ defmodule Mob.UI do
   def canvas(%{} = props) do
     %{
       type: :canvas,
-      props: Map.take(props, [:width, :height, :draw, :on_tap, :on_drag]),
+      props: Map.take(props, [:width, :height, :draw, :on_tap, :on_drag, :on_touch]),
       children: []
     }
   end
@@ -296,7 +299,8 @@ defmodule Mob.UI do
           :uniforms,
           :on_tap,
           :on_drag,
-          :on_pinch
+          :on_pinch,
+          :on_touch
         ]),
       children: []
     }

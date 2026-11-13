@@ -168,6 +168,12 @@ defmodule Mob.Event.Bridge do
     legacy_hf_event(:pointer_move, :pointer_move, tag, payload, screen_id, opts)
   end
 
+  # on_touch (MOB-518) goes on any node type, and native doesn't say which, so
+  # the widget kind is the event, as for the other payload streams.
+  def legacy_to_canonical({:touch, tag, %{} = payload}, screen_id, opts) when not is_nil(tag) do
+    legacy_hf_event(:touch, :touch, tag, payload, screen_id, opts)
+  end
+
   # ── Batch 5 Tier 2: semantic single-fire scroll events ─────────────────
   for ev <- [:scroll_began, :scroll_ended, :scroll_settled, :top_reached, :scrolled_past] do
     def legacy_to_canonical({unquote(ev), tag}, screen_id, opts) when not is_nil(tag) do
