@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.28] - 2026-11-12
+
 ### Changed
 - **A component callback repaints its screen only when the component's
   rendered props change.** Before, every `Mob.Component` `handle_event/3` and
