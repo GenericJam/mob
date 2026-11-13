@@ -53,6 +53,11 @@ an ordinary message, and becoming active still goes through the router.
   no longer sees it change on a callback that leaves assigns alone. It still
   sees it on the next screen paint, because `render_props/1` always renders
   again and is never served from a cache. The moduledoc says so.
+- The parent screen is no longer re-rendered by a component event that leaves
+  the component's props alone. A screen whose `render/1` reads state a
+  component writes outside messages (ETS, an Agent) used to be refreshed by
+  that event as a side effect; it now needs a message of its own, which goes
+  through the screen's usual `repaint_if_changed/1`.
 - Identical props are no longer re-sent to the native view. A native view that
   depended on a re-commit to drop local state the BEAM rejected (a "controlled"
   input whose handler returns the old value) no longer gets one. Screens have
