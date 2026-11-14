@@ -17,6 +17,7 @@
 //! `android/log.h`, `dlfcn.h`, etc.).
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 // ── Android log ────────────────────────────────────────────────────────────
 
@@ -71,7 +72,7 @@ pub extern fn __errno() *c_int;
 pub extern fn strerror(errnum: c_int) [*:0]const u8;
 pub extern fn strncmp(s1: [*]const u8, s2: [*]const u8, n: usize) c_int;
 pub extern fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
-pub extern fn mkdir(pathname: [*:0]const u8, mode: u32) c_int;
+pub extern fn mkdir(pathname: [*:0]const u8, mode: ModeT) c_int;
 pub extern fn unlink(pathname: [*:0]const u8) c_int;
 pub extern fn symlink(target: [*:0]const u8, linkpath: [*:0]const u8) c_int;
 pub extern fn stat(pathname: [*:0]const u8, statbuf: *Stat) c_int;
@@ -101,11 +102,12 @@ pub const CLOCK_MONOTONIC: c_int = 1;
 pub extern fn clock_gettime(clk_id: c_int, tp: *Timespec) c_int;
 
 /// Monotonic nanoseconds since boot. Wrapper that hides the timespec
-/// dance. Used by the throttle path in the senders.
+/// dance. Used by the throttle path in the senders. The fields are
+/// `c_long`, 32-bit on armeabi-v7a, so widen before multiplying.
 pub fn nowNs() i64 {
     var ts: Timespec = .{ .tv_sec = 0, .tv_nsec = 0 };
     _ = clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec * 1_000_000_000 + ts.tv_nsec;
+    return @as(i64, ts.tv_sec) * 1_000_000_000 + ts.tv_nsec;
 }
 
 // libc allocator. We use `std.heap.c_allocator` in only one spot (test
@@ -147,12 +149,25 @@ pub const Dirent = extern struct {
 pub const Stat = extern struct {
     // Layout we don't fully care about — we only call stat() for existence
     // check. Opaque-sized buffer is safer than getting field offsets wrong.
-    _opaque: [256]u8,
+    // 256 bytes covers every ABI (bionic's struct stat is 96–144 bytes); the
+    // alignment matches its `long long` / `unsigned long` members.
+    _opaque: [256]u8 align(8),
 };
 
+/// Bionic's `struct timespec` is `{ time_t tv_sec; long tv_nsec; }` and
+/// `time_t` is `long`, so both fields are 32-bit on armeabi-v7a and x86.
+/// Declaring them `i64` made clock_gettime fill only the first 8 of 16
+/// bytes there, and nanosleep read `{0, 0}` out of a 50 ms request (MOB-523).
 pub const Timespec = extern struct {
-    tv_sec: i64,
-    tv_nsec: i64,
+    tv_sec: c_long,
+    tv_nsec: c_long,
+};
+
+/// Bionic's `mode_t` is the kernel's `__kernel_mode_t`: `unsigned short` on
+/// arm and x86, `unsigned int` on arm64 and x86_64.
+pub const ModeT = switch (builtin.cpu.arch) {
+    .arm, .armeb, .thumb, .thumbeb, .x86 => c_ushort,
+    else => c_uint,
 };
 
 pub extern fn pthread_create(
@@ -168,8 +183,12 @@ pub const PthreadT = usize; // Android: pthread_t is a long unsigned int
 
 // ── dlfcn ──────────────────────────────────────────────────────────────────
 
-pub const RTLD_NOW: c_int = 2;
-pub const RTLD_GLOBAL: c_int = 0x00100;
+// Bionic keeps glibc's values on LP64 only. 32-bit Android has RTLD_NOW 0 and
+// RTLD_GLOBAL 2 ("LP32 has historical ABI breakage", dlfcn.h), and its dlopen
+// rejects 0x102 with "invalid flags to dlopen".
+const lp64 = @sizeOf(c_long) == 8;
+pub const RTLD_NOW: c_int = if (lp64) 2 else 0;
+pub const RTLD_GLOBAL: c_int = if (lp64) 0x00100 else 2;
 
 pub extern fn dlopen(filename: [*:0]const u8, flags: c_int) ?*anyopaque;
 pub extern fn dlerror() ?[*:0]const u8;
@@ -233,6 +252,38 @@ pub extern fn getaddrinfo(
 ) c_int;
 
 pub extern fn freeaddrinfo(res: ?*AddrInfo) void;
+
+// ── Layout guard ───────────────────────────────────────────────────────────
+// The structs above are hand-declared, so nothing ties them to the target's
+// C layout. Zig's std.c declares the same types per Android ABI from its own
+// source, which makes it an independent check: an ABI where the two disagree
+// fails to build instead of handing bionic a buffer of the wrong shape
+// (MOB-523: Timespec was two i64s, which is wrong on armeabi-v7a and x86).
+// `Stat` (std.c has none for Android) and `ModeT` (std.c says 4 bytes on
+// arm, bionic says 2) have no oracle there; see their declarations.
+comptime {
+    if (builtin.abi.isAndroid()) {
+        expectCLayout(Timespec, std.c.timespec, .{ .{ "tv_sec", "sec" }, .{ "tv_nsec", "nsec" } });
+        expectCLayout(Dirent, std.c.dirent, .{ .{ "d_ino", "ino" }, .{ "d_off", "off" }, .{ "d_reclen", "reclen" }, .{ "d_type", "type" }, .{ "d_name", "name" } });
+        expectCLayout(AddrInfo, std.c.addrinfo, .{ .{ "ai_flags", "flags" }, .{ "ai_family", "family" }, .{ "ai_socktype", "socktype" }, .{ "ai_protocol", "protocol" }, .{ "ai_addrlen", "addrlen" }, .{ "ai_canonname", "canonname" }, .{ "ai_addr", "addr" }, .{ "ai_next", "next" } });
+        expectCLayout(SockAddr, std.c.sockaddr, .{.{ "sa_family", "family" }});
+        expectCLayout(SockAddrIn, std.c.sockaddr.in, .{ .{ "sin_family", "family" }, .{ "sin_port", "port" }, .{ "sin_addr", "addr" }, .{ "sin_zero", "zero" } });
+        if (@sizeOf(PthreadT) != @sizeOf(std.c.pthread_t)) @compileError("PthreadT is not the size of the target's pthread_t");
+    }
+}
+
+fn expectCLayout(comptime Ours: type, comptime C: type, comptime fields: anytype) void {
+    if (@sizeOf(Ours) != @sizeOf(C) or @alignOf(Ours) != @alignOf(C)) @compileError(std.fmt.comptimePrint(
+        "{s} is {d} bytes (align {d}) but the target's C struct is {d} bytes (align {d})",
+        .{ @typeName(Ours), @sizeOf(Ours), @alignOf(Ours), @sizeOf(C), @alignOf(C) },
+    ));
+    inline for (fields) |f| {
+        if (@offsetOf(Ours, f[0]) != @offsetOf(C, f[1])) @compileError(std.fmt.comptimePrint(
+            "{s}.{s} is at offset {d} but the target's C field is at {d}",
+            .{ @typeName(Ours), f[0], @offsetOf(Ours, f[0]), @offsetOf(C, f[1]) },
+        ));
+    }
+}
 
 // ── JNI ────────────────────────────────────────────────────────────────────
 // AOSP source: frameworks/native/include/jni.h. We only declare the vtable

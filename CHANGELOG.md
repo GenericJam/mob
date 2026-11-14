@@ -10,6 +10,27 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **Gesture timestamps and throttles are right on 32-bit Android.** The Zig
+  bindings declared bionic's `struct timespec` as two `i64`s, but its fields
+  are `long`, 32-bit on armeabi-v7a. There `clock_gettime` filled half the
+  struct, so the `ts` on scroll, drag, pinch, rotate and pointer-move events
+  was garbage and the per-handle throttle compared garbage; and the 50 ms
+  `nanosleep` in the launcher's wait for window focus slept 0 ms, so a cold
+  start without focus gave up after about half a second while logging "focus
+  timeout (3000 ms)". The fields are `c_long` now, and `mob_zig.zig` checks
+  its hand-declared libc structs against Zig's own per-target C layouts at
+  compile time, so a mismatch fails the build for that ABI. The compile test
+  now builds `mob_nif.zig` and `mob_beam.zig` for armeabi-v7a and x86_64 as
+  well as arm64. (MOB-523)
+- **The launcher's `dlopen(self, RTLD_NOW | RTLD_GLOBAL)` works on 32-bit
+  Android.** `RTLD_NOW` and `RTLD_GLOBAL` had their 64-bit values; bionic's
+  are 0 and 2 on 32-bit ABIs, so armeabi-v7a logged `dlopen failed: invalid
+  flags to dlopen: 102` at every start. The same audit gave `mkdir` bionic's
+  16-bit `mode_t` on 32-bit ABIs, `Stat` its 8-byte alignment, and the NIF
+  entry a per-ABI `sizeof(ErlNifResourceTypeInit)` (it was 40, the 64-bit
+  size, everywhere); none of those three misbehaved in practice. (MOB-523)
+
 ## [0.9.29] - 2026-11-13
 
 ### Added
