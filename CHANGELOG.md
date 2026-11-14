@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.30] - 2026-11-13
+
 ### Fixed
 - **Gesture timestamps and throttles are right on 32-bit Android.** The Zig
   bindings declared bionic's `struct timespec` as two `i64`s, but its fields
