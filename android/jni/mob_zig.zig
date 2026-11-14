@@ -183,8 +183,12 @@ pub const PthreadT = usize; // Android: pthread_t is a long unsigned int
 
 // ── dlfcn ──────────────────────────────────────────────────────────────────
 
-pub const RTLD_NOW: c_int = 2;
-pub const RTLD_GLOBAL: c_int = 0x00100;
+// Bionic keeps glibc's values on LP64 only. 32-bit Android has RTLD_NOW 0 and
+// RTLD_GLOBAL 2 ("LP32 has historical ABI breakage", dlfcn.h), and its dlopen
+// rejects 0x102 with "invalid flags to dlopen".
+const lp64 = @sizeOf(c_long) == 8;
+pub const RTLD_NOW: c_int = if (lp64) 2 else 0;
+pub const RTLD_GLOBAL: c_int = if (lp64) 0x00100 else 2;
 
 pub extern fn dlopen(filename: [*:0]const u8, flags: c_int) ?*anyopaque;
 pub extern fn dlerror() ?[*:0]const u8;
