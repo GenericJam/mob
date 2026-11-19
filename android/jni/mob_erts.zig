@@ -152,6 +152,10 @@ pub extern fn enif_make_map_from_arrays(
     map_out: *ERL_NIF_TERM,
 ) c_int;
 
+// Raw NIF allocator (BEAM-managed, no libc dependency).
+pub extern fn enif_alloc(size: usize) ?*anyopaque;
+pub extern fn enif_free(ptr: ?*anyopaque) void;
+
 // Binary allocation (iter 3b). Returns 1 on success, 0 on OOM. The caller
 // owns `bin.data` until it's wrapped via `enif_make_binary`, after which
 // BEAM owns it.
