@@ -99,6 +99,10 @@ defmodule Mob.Share do
     derived case-insensitively from the file extension, falling back to
     `"application/octet-stream"`.
   - `:title` — non-empty share title string. Defaults to `Path.basename(path)`.
+    It titles the Android chooser and becomes the subject where the target
+    has one (Mail, Gmail). It does not rename the file: what the recipient
+    sees, and what the iOS share sheet shows, is the file's own name, so
+    name the file for the reader before sharing it.
   """
   @spec file(Mob.Socket.t(), Path.t(), keyword()) :: Mob.Socket.t()
   def file(socket, path, opts \\ []) do
