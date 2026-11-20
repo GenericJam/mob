@@ -60,9 +60,10 @@ copy. An issue that names the apps that need the capability is enough.
   the per-platform sections of a plugin manifest say where the real
   implementation is. A platform without one answers
   `{:error, :unsupported}` from a stub, and the moduledoc has a support table
-  that says so. `mob_audio_capture` is the example: Android only, and the iOS
-  stub is documented as permanent because the platform forbids the
-  capability.
+  that says so. `mob_midi`'s C ABI is Android-only, and its iOS stubs answer
+  `:unsupported`. `mob_audio_capture` shows how to document a stub that is
+  permanent because the platform forbids the capability; it predates the
+  convention and answers `{:error, :unsupported_on_platform}`.
 - **The host is a platform too.** On the host (`mix test`, dev) the NIF isn't
   loaded. Answer `{:error, :unsupported}` there instead of raising
   `:nif_not_loaded` (`MobMidi.Platform` does this), and ship a fake (below).
@@ -78,17 +79,19 @@ Agents verify Mob apps by asking the running BEAM, not by reading
 screenshots (see [Agentic Coding](agentic_coding.md)). An upstreamed
 capability is done when the agent can see it through the same channels as the
 rest of Mob. This is what exists, and what a NIF, view or plugin has to do to
-show up in each.
+show up in each. Sloppy Joe, the on-device agent app, exposes several of these
+as MCP tools; its tool names are in the table next to the `Mob.Test` call
+each one corresponds to.
 
 | Mechanism | Where it lives | What the agent gets | How a capability opts in |
 |--|--|--|--|
 | Render tree / `ui_tree` | `Mob.Test.find/2`, `inspect/1`, `ui_tree/1`, `view_tree/1`; Sloppy Joe `render_tree` | The nodes the screen rendered, with props and tap tags | Put state the user can see into assigns and render it. Props on a native view (`Mob.UI.native_view/2`) appear in the tree; state held only inside Swift or Kotlin does not |
 | Assigns | `Mob.Test.assigns/1`, `Mob.Test.screen/1` | The screen's live state | Deliver results to the screen process as messages, so `handle_info/2` puts them in assigns |
-| Element frames and tap by id | `Mob.Test.element_frames/1`, `frame/2`, `tap_id/2`; Sloppy Joe `element_frames` | On-screen position of every node with an `:id` | Accept an `:id` on the component. Native views registered with `MobNativeViewRegistry` are tracked by the same frame registry on iOS as built-in nodes |
-| Synthetic input and message injection | `Mob.Test.tap/2`, `send_message/2`, `settle/2`; Sloppy Joe `tap` | Drive the screen without hardware | Results arrive as documented message tuples (`{:midi, …}`, `{:sensor, …}`), so `send_message/2` can stand in for the hardware. Document each tuple in the moduledoc |
+| Element frames and tap by id | `Mob.Test.element_frames/1`, `frame/2`, `tap_id/2`; Sloppy Joe `element_frames` | On-screen position of every node with an `:id` | Give the node an `:id` (`Mob.UI.native_view/2` already requires one). On iOS a native view registered with `MobNativeViewRegistry` gets a frame like a built-in node. On Android it gets none yet (MOB-534), so `tap_id/2` answers `{:error, :not_found}` there |
+| Synthetic input and message injection | `Mob.Test.tap/2`, `send_message/2`, `settle/2`; Sloppy Joe `tap` | Drive the screen without hardware | Results arrive at the screen as documented message tuples (`{:mob_sensors, :reading, type, map}`, `{:mob_sensors, :error, type, reason}`), so `send_message/2` can stand in for the hardware. Document each tuple in the moduledoc |
 | Probe discovery | `Mob.Test.capabilities/1` (`mob_nif:capabilities/0`) | Which harness probes this build actually has | Core harness only. A plugin readback that may be missing on a platform answers `{:error, :unsupported}`, never raises |
-| Action receipts | `Mob.Agent.Receipts`, `[:mob, :action, :stop]` telemetry | Which stage an action reached: dispatched, handled, assigns changed | Free for `Mob.Screen.dispatch/3` and the discrete native input in `Mob.Event.NativeInput`. Plugin-defined messages get no receipt, so their effect must show in assigns or a readback |
-| Event trace | `Mob.Event.Trace.subscribe/2` | Every event reaching a handler, payload included | Same scope as receipts |
+| Action receipts | `Mob.Agent.Receipts`, `[:mob, :action, :stop]` telemetry | Which stage an action reached: dispatched, handled, assigns changed | Free for `Mob.Screen.dispatch/3` and the discrete native input in `Mob.Event.NativeInput`. Plugin-defined messages get no receipt, and neither do native view events, which go to the component process (`{:component_event, …}`), not the screen. Their effect must show in the owning screen's assigns or a readback |
+| Event trace | `Mob.Event.Trace.subscribe/2` | Every event reaching a handler, payload included | What receipts cover, plus display-rate streams (scroll, drag, slider). Plugin-defined messages and native view events are not traced |
 | Logger | `Mob.NativeLogger` → logcat / unified log; Sloppy Joe `logs` (an OTP `:logger` ring buffer) | What happened, with a timestamp, on and off the device | Log from Elixir with a bracketed prefix: `Logger.info("[mob_midi] opened …")`. Lines printed from C, Kotlin or Swift reach logcat or the unified log but **not** Sloppy Joe's `logs`; send native errors up to Elixir and log them there |
 | Dist / RPC | `mix mob.connect`, `:rpc.call/4`; Sloppy Joe `eval` | Call any function on the device | Public functions are reachable already. Add a readback: a `status/0` or `info/0` that returns a plain map (open streams, sample rate, underruns, last error). FMutate's `FMutate.Audio.stats/0` and Humdinger's `info/0` are the shape |
 | Self-test | `Mob.Plugin.SelfTest`, `selftest:` in the manifest; `mix mob.selftest`; mob_ci nightly | Proof that the native side linked and answers on this device | Implement `run/1`. It must get a real answer from native code; loading a module is not a pass |
@@ -97,7 +100,9 @@ show up in each.
 | Post-mortems | `Mob.PostMortem.sweep/0` | Native crashes, ANRs, OOM kills, `erl_crash.dump`, MetricKit | Free: a crash in a NIF or a native view is captured with the rest of the app's |
 | Render timing | `Mob.RenderStats` | Time per frame stage, BEAM and native | Core only |
 | Push attestation | `mix mob.attest`, `mix mob.deploy --json` | Whether the device runs the code you pushed | Free for the Elixir half. Native code needs `mix mob.deploy --native` |
-| Manifest checks | `mix mob.validate_plugin`, cross-plugin conflict checks, `mix mob.audit_plugins` | Missing files, one-platform components, name clashes, a missing `selftest` | Use the manifest for everything native. Code in an app's `c_src/` gets none of these checks |
+| Manifest checks | `mix mob.validate_plugin`, cross-plugin conflict checks at build time | Missing files, one-platform components, name clashes, a missing `selftest` | Use the manifest for everything native. Code in an app's `c_src/` gets none of these checks |
+| Plugin audit | `mix mob.audit_plugins` | Risky calls in plugin Elixir and NIF C source (`Code.eval_string`, `binary_to_term/1`, `system(3)`, sockets) | Free for manifest plugins; app-local code isn't audited |
+| Cross-platform agreement | `Mob.Differential.compare/3`, `MobDev.Differential.run/3` | The first divergence between the iOS and Android `view_tree/1`, also put on the defect bus | Free for anything in the render tree. State held inside Swift or Kotlin can't be compared |
 | Docs | Mob's `guides/` (Sloppy Joe `read_guide`, served at the device's mob version), moduledocs (`h/1`, hexdocs, Sloppy Joe `read_doc`) | The API and its rules | `@moduledoc` with the support table, the message tuples and the error atoms. `read_guide` serves only Mob's own `guides/`; a plugin's guide reaches agents through hexdocs and `deps/<plugin>/` |
 | Host tests | `mix test`, `Mob.ScreenCase` | The Elixir half, without a device | A behaviour with a native and a fake implementation |
 
@@ -125,10 +130,11 @@ new capability there. Each line names the mechanism above it feeds.
       branches in app code.
 - [ ] Each platform is real or answers `{:error, :unsupported}`. `:archs` and
       the manifest match, and the moduledoc has a support table.
-- [ ] Results reach the owner as documented message tuples, and the screen can
-      keep them in assigns. *(assigns, render tree, `send_message/2`)*
-- [ ] Native views take an `:id` and expose their state as props or events,
-      not only inside Swift or Kotlin. *(element frames, render tree)*
+- [ ] Results reach the screen as documented message tuples, and the screen
+      can keep them in assigns. *(assigns, render tree, `send_message/2`)*
+- [ ] Native views take an `:id` and report their state to the owning
+      screen, so it shows in assigns or props, not only inside Swift or
+      Kotlin. *(element frames, render tree, differential)*
 - [ ] Every failure is a tagged tuple or an error message to the owner, and
       is logged from Elixir with a `[plugin_name]` prefix. *(Logger, Sloppy
       Joe `logs`)*
@@ -148,8 +154,9 @@ new capability there. Each line names the mechanism above it feeds.
       `Mob.Test`, not by a screenshot alone.
 
 If a mechanism doesn't fit (the agent needs state that none of the above can
-show), add a readback and file it, as described in Mob's `AGENTS.md` under
-"When the ladder can't be climbed, propose the missing readback".
+show), add a readback and file it, as described in
+[Mob's `AGENTS.md`](https://github.com/GenericJam/mob/blob/master/AGENTS.md)
+under "When the ladder can't be climbed, propose the missing readback".
 
 ## Examples
 
