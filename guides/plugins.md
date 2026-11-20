@@ -65,6 +65,11 @@ What each kind costs:
 If you can do it in Elixir, do. A plugin can start BEAM-only and grow a NIF
 later.
 
+If the native code you're about to write in an app is a platform API
+wrapper with no app semantics, it probably belongs in a plugin. See
+[Upstream First](upstream_first.md) for when to upstream and for the agent
+feedback checklist a native plugin should meet.
+
 ### Where the tiers fit
 
 Older docs and the tooling describe plugins in tiers 0 to 4.
@@ -683,6 +688,10 @@ The shipped first-party packages are full-size references. BEAM-only:
 [First-Party Packages catalog](packages.md).
 
 ## For coding agents
+
+A native plugin should also meet the feedback checklist in
+[Upstream First](upstream_first.md): Logger lines with a prefix, a readback
+over RPC, a fake for `mix test`, and errors as tagged tuples.
 
 ### Checklist
 

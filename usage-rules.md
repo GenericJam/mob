@@ -54,6 +54,14 @@ app (the version in `mix.lock`), or https://hexdocs.pm/mob/<name>.html.
   `switch_tab/2` return a socket; the navigation happens after the callback
   returns. See `deps/mob/guides/navigation.md`.
 
+## Native code
+
+- Before adding a NIF, a native view or a bridge to the app, check whether it
+  belongs in Mob or a Mob plugin: needed by more than one app, a platform API
+  wrapper, no app semantics. Upstreamed code keeps one Elixir API for both
+  platforms and wires into `Mob.Test`, Logger and a self-test. See
+  `deps/mob/guides/upstream_first.md`.
+
 ## Testing
 
 - Unit-test screens with `Mob.ScreenCase`, no device needed: `mount_screen/4`,

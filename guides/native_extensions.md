@@ -22,6 +22,10 @@ can have many of. `enable` toggles *singleton features* with fixed
 implementations (`pythonx`, `mlx`, `camera`, `notifications`) — each
 exists at most once per app.
 
+`add_nif` puts native code in the app. Before you run it, check whether the
+capability belongs in Mob or a plugin instead, so the next app doesn't write
+it again: see [Upstream First](upstream_first.md).
+
 ## `mix mob.add_nif <name>`
 
 Scaffolds a statically-linked NIF: Elixir stub, native skeleton
