@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.31] - 2026-11-19
+
 ### Added
 - **`Mob.Share.file/3` — share a local file through the system share sheet.**
   Accepts `mime:` (defaulting case-insensitively from the extension, else
