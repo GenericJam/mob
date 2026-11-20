@@ -10,6 +10,17 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **`Mob.Share.file/3` — share a local file through the system share sheet.**
+  Accepts `mime:` (defaulting case-insensitively from the extension, else
+  `"application/octet-stream"`) and `title:` (defaulting to
+  `Path.basename(path)`), returns the socket unchanged, and delivers setup
+  failures as `{:mob_share, :error, reason}` (`:not_found`, `:no_activity`,
+  `:no_app`, `:failed`, `:unsupported`). On Android, requires `mob_new`'s
+  `MobBridge.shareFile` and a file under the host's `FileProvider` roots
+  (generated apps cover `:cache`); older hosts without `MobBridge.shareFile`
+  still boot and report `:unsupported`.
+
 ## [0.9.30] - 2026-11-13
 
 ### Fixed

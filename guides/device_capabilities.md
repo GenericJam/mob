@@ -98,16 +98,41 @@ end
 
 ## Share sheet
 
-Opens the platform's native share sheet (iOS: `UIActivityViewController`, Android: `ACTION_SEND` via `Intent.createChooser`). Fire-and-forget — no response arrives in the BEAM.
+Opens the platform's native share sheet (iOS: `UIActivityViewController`, Android: `Intent.ACTION_SEND` via `Intent.createChooser`). Both `Mob.Share.text/2` and `Mob.Share.file/3` are fire-and-forget — they always return the socket unchanged, and success or user cancellation is never reported.
 
 ```elixir
-def handle_info({:tap, :share}, socket) do
-  socket = Mob.Share.text(socket, "Check out this app! https://example.com")
-  {:noreply, socket}
+def handle_info({:tap, :share_text}, socket) do
+  {:noreply, Mob.Share.text(socket, "Check out this app! https://example.com")}
+end
+
+def handle_info({:tap, :share_file}, socket) do
+  path = Path.join(Mob.Storage.dir(:cache), "exports/report.pdf")
+  {:noreply, Mob.Share.file(socket, path, title: "Quarterly Report")}
+end
+
+def handle_info({:mob_share, :error, reason}, socket) do
+  # reason :: :not_found | :no_activity | :no_app | :failed | :unsupported
+  {:noreply, Mob.Alert.toast(socket, "Share failed: #{reason}")}
 end
 ```
 
-Plain text only. URLs go inside the text; iOS auto-detects and offers URL-appropriate share targets. If you need multi-part sharing (title/url/image separately), file a ticket describing the use case.
+`Mob.Share.file/3` options and defaults:
+
+- `:mime` — non-empty MIME type string containing `"/"`. Defaults from the file extension (case-insensitive, e.g. `.pdf`, `.txt`, `.png`, `.mp3`, `.mid`, `.mp4`, `.zip`, `.musicxml`, `.mxl`), falling back to `"application/octet-stream"`.
+- `:title` — non-empty title string passed as the chooser title / email subject. Defaults to `Path.basename(path)`.
+
+`path` accepts binaries or chardata and is resolved with `Path.absname/1`. Setup errors arrive at `self()` as `{:mob_share, :error, reason}`:
+
+- `:not_found` — the file does not exist, is a directory, or cannot be read.
+- `:no_activity` — no foreground activity (Android) or active window scene presenter (iOS) is available.
+- `:no_app` — no installed app can handle the share intent (Android).
+- `:failed` — FileProvider URI lookup or native share setup failed.
+- `:unsupported` — the Android host `MobBridge` predates `shareFile`.
+
+**Platform notes:**
+
+- **Android** shares the file via `androidx.core.content.FileProvider` with read permission granted to the target. The file must live under a root declared in the host's `res/xml/file_provider_paths.xml`; generated `mob_new` apps cover the whole cache directory (`Mob.Storage.dir(:cache)`), so write exports under `:cache`. Sharing a file outside any configured root sends `{:mob_share, :error, :failed}`. Older hosts built before `mob_new` added `MobBridge.shareFile` still boot and send `{:mob_share, :error, :unsupported}`.
+- **iOS** passes a `file://` `NSURL`, subject title, and UTI type identifier (derived from `:mime`) via a `UIActivityItemSource` item to `UIActivityViewController`, anchored in a centered popover on iPad.
 
 ## Camera
 

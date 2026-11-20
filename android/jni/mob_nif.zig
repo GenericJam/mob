@@ -25,7 +25,7 @@
 //!     to create the mutexes during BEAM init.
 //!   * iter 3d (this iter): the finale. Remaining feature NIFs (color
 //!     scheme, exit_app, safe_area, haptic, torch, clipboard, open_url,
-//!     share_text, launch notification, request_permission,
+//!     share_text, share_file, launch notification, request_permission,
 //!     files_pick,
 //!     audio ×5, motion ×2, scanner, notifications ×3, storage ×4,
 //!     alert/action_sheet/toast, webview ×4, background ×2,
@@ -248,6 +248,7 @@ pub const BridgeMethods = extern struct {
     tts_stop: jni.JMethodID = null,
     tts_voices: jni.JMethodID = null,
     share_text: jni.JMethodID = null,
+    share_file: jni.JMethodID = null,
     open_url: jni.JMethodID = null,
     open_settings: jni.JMethodID = null,
     request_permission: jni.JMethodID = null,
@@ -3012,6 +3013,98 @@ export fn nif_share_text(
     return erts.ok(env);
 }
 
+fn clearPendingException(jenv: *jni.JNIEnv) bool {
+    // ExceptionOccurred is opaque in mob_zig, so give it its JNI signature here.
+    const exception_occurred: *align(1) const fn (*jni.JNIEnv) callconv(.c) jni.JObject =
+        @ptrCast(jenv.*.ExceptionOccurred.?);
+    const thrown = exception_occurred(jenv);
+    if (thrown == null) return false;
+    jni.exceptionClear(jenv);
+    jni.deleteLocalRef(jenv, thrown);
+    return true;
+}
+
+const ArgStringResult = union(enum) {
+    ok: jni.JString,
+    badarg,
+    failed,
+};
+
+// Marshal a UTF-8 binary across JNI as UTF-16 via NewString so non-BMP
+// characters (e.g. emoji in titles) are preserved without modified-UTF-8
+// corruption. Uses BEAM's enif_alloc/enif_free since mob_nif.zig compiles
+// without libc.
+fn argString(env: ?*erts.ErlNifEnv, jenv: *jni.JNIEnv, term: erts.ERL_NIF_TERM) ArgStringResult {
+    var bin: erts.ErlNifBinary = undefined;
+    if (erts.enif_inspect_binary(env, term, &bin) == 0) return .badarg;
+
+    // NewString is opaque in mob_zig, so cast it to its JNI signature here.
+    const new_string: *align(1) const fn (*jni.JNIEnv, [*]const u16, jni.JSize) callconv(.c) jni.JString =
+        @ptrCast(jenv.*.NewString.?);
+
+    if (bin.size == 0) {
+        const empty = [_]u16{0};
+        const jstr = new_string(jenv, &empty, 0);
+        if (clearPendingException(jenv) or jstr == null) {
+            if (jstr != null) jni.deleteLocalRef(jenv, jstr);
+            return .failed;
+        }
+        return .{ .ok = jstr };
+    }
+
+    // UTF-16 never needs more code units than UTF-8 has bytes.
+    const alloc_bytes = std.math.mul(usize, bin.size, @sizeOf(u16)) catch return .failed;
+    const raw = erts.enif_alloc(alloc_bytes) orelse return .failed;
+    defer erts.enif_free(raw);
+
+    const units: [*]u16 = @ptrCast(@alignCast(raw));
+    const len = std.unicode.utf8ToUtf16Le(units[0..bin.size], bin.data[0..bin.size]) catch return .badarg;
+    if (len > std.math.maxInt(jni.JSize)) return .failed;
+
+    const jstr = new_string(jenv, units, @intCast(len));
+    if (clearPendingException(jenv) or jstr == null) {
+        if (jstr != null) jni.deleteLocalRef(jenv, jstr);
+        return .failed;
+    }
+    return .{ .ok = jstr };
+}
+
+// nif_share_file/3 — system share sheet for a local file (Intent ACTION_SEND).
+// Not exported: reached only through nif_funcs, and plugins (e.g. Humdinger's
+// humdinger_file_share) export their own `nif_share_file` into the same .so.
+fn nif_share_file(
+    env: ?*erts.ErlNifEnv,
+    argc: c_int,
+    argv: [*]const erts.ERL_NIF_TERM,
+) callconv(.c) erts.ERL_NIF_TERM {
+    _ = argc;
+    if (Bridge.share_file == null) return erts.errorTuple(env, erts.atom(env, "unsupported"));
+
+    var pid: erts.ErlNifPid = undefined;
+    _ = erts.enif_self(env, &pid);
+
+    var attached: c_int = 0;
+    const jenv = get_jenv(&attached) orelse return erts.errorTuple(env, erts.atom(env, "failed"));
+    defer detachIfAttached(attached);
+
+    var jargs = [_]jni.JString{ null, null, null };
+    defer for (jargs) |a| {
+        if (a != null) jni.deleteLocalRef(jenv, a);
+    };
+
+    for (0..3) |i| {
+        switch (argString(env, jenv, argv[i])) {
+            .ok => |s| jargs[i] = s,
+            .badarg => return erts.badarg(env),
+            .failed => return erts.errorTuple(env, erts.atom(env, "failed")),
+        }
+    }
+
+    jenv.*.CallStaticVoidMethod.?(jenv, Bridge.cls, Bridge.share_file, pidToJlong(pid), jargs[0], jargs[1], jargs[2]);
+    if (clearPendingException(jenv)) return erts.errorTuple(env, erts.atom(env, "failed"));
+    return erts.ok(env);
+}
+
 // ── Stored for the router ────────────────────────────────────────────────
 // Notifications and opened links both reach the BEAM through the :mob_screen
 // router. When it can't take one yet — the BEAM not up, as for the
@@ -5512,6 +5605,8 @@ fn nifLoad(env: ?*erts.ErlNifEnv, priv: *?*anyopaque, info: erts.ERL_NIF_TERM) c
     cacheOptional(jenv, "ttsSpeakFor", "(JLjava/lang/String;Ljava/lang/String;)V", &Bridge.tts_speak_for);
     cacheOptional(jenv, "ttsVoices", "()Ljava/lang/String;", &Bridge.tts_voices);
     if (!cacheRequired(jenv, "shareText", "(Ljava/lang/String;)V", &Bridge.share_text)) return -1;
+    // Optional: apps generated before Mob.Share.file/3 lack MobBridge.shareFile.
+    cacheOptional(jenv, "shareFile", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", &Bridge.share_file);
     if (!cacheRequired(jenv, "openUrl", "(Ljava/lang/String;)V", &Bridge.open_url)) return -1;
     cacheOptional(jenv, "openSettings", "(Ljava/lang/String;)V", &Bridge.open_settings);
 
@@ -5735,6 +5830,7 @@ const nif_funcs = [_]erts.ErlNifFunc{
     .{ .name = "tts_stop", .arity = 0, .fptr = nif_tts_stop, .flags = 0 },
     .{ .name = "tts_voices", .arity = 0, .fptr = nif_tts_voices, .flags = erts.ERL_NIF_DIRTY_JOB_IO_BOUND },
     .{ .name = "share_text", .arity = 1, .fptr = nif_share_text, .flags = 0 },
+    .{ .name = "share_file", .arity = 3, .fptr = nif_share_file, .flags = 0 },
     .{ .name = "open_url", .arity = 1, .fptr = nif_open_url, .flags = 0 },
     .{ .name = "open_settings", .arity = 1, .fptr = nif_open_settings, .flags = 0 },
     .{ .name = "request_permission", .arity = 1, .fptr = nif_request_permission, .flags = 0 },

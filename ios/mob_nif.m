@@ -4648,6 +4648,105 @@ static ERL_NIF_TERM nif_share_text(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
     return enif_make_atom(env, "ok");
 }
 
+// ── NIF: share_file/3 ─────────────────────────────────────────────────────────
+// Opens the iOS share sheet for a local file. Returns :ok or {:error, :not_found};
+// missing presenter arrives asynchronously as {:mob_share, :error, :no_activity}.
+
+@interface MobShareFileItem : NSObject <UIActivityItemSource>
+@property(nonatomic, strong) NSURL *url;
+@property(nonatomic, copy) NSString *mime;
+@property(nonatomic, copy) NSString *title;
+@end
+
+@implementation MobShareFileItem
+- (id)activityViewControllerPlaceholderItem:(UIActivityViewController *)activityViewController {
+    (void)activityViewController;
+    return self.url;
+}
+
+- (id)activityViewController:(UIActivityViewController *)activityViewController
+         itemForActivityType:(UIActivityType)activityType {
+    (void)activityViewController;
+    (void)activityType;
+    return self.url;
+}
+
+- (NSString *)activityViewController:(UIActivityViewController *)activityViewController
+              subjectForActivityType:(UIActivityType)activityType {
+    (void)activityViewController;
+    (void)activityType;
+    return self.title;
+}
+
+- (NSString *)activityViewController:(UIActivityViewController *)activityViewController
+    dataTypeIdentifierForActivityType:(UIActivityType)activityType {
+    (void)activityViewController;
+    (void)activityType;
+    return [UTType typeWithMIMEType:self.mime].identifier;
+}
+@end
+
+static UIViewController *root_vc(void);
+static void mob_send3(const ErlNifPid *pid, const char *a1, const char *a2, const char *a3);
+
+static ERL_NIF_TERM nif_share_file(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    ErlNifBinary path_bin, mime_bin, title_bin;
+    if (!enif_inspect_binary(env, argv[0], &path_bin) ||
+        !enif_inspect_binary(env, argv[1], &mime_bin) ||
+        !enif_inspect_binary(env, argv[2], &title_bin))
+        return enif_make_badarg(env);
+
+    NSString *path = [[NSString alloc] initWithBytes:path_bin.data
+                                              length:path_bin.size
+                                            encoding:NSUTF8StringEncoding];
+    NSString *mime = [[NSString alloc] initWithBytes:mime_bin.data
+                                              length:mime_bin.size
+                                            encoding:NSUTF8StringEncoding];
+    NSString *title = [[NSString alloc] initWithBytes:title_bin.data
+                                               length:title_bin.size
+                                             encoding:NSUTF8StringEncoding];
+    if (!path || !mime || !title)
+        return enif_make_badarg(env);
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    BOOL isDir = NO;
+    if (![fm fileExistsAtPath:path isDirectory:&isDir] || isDir ||
+        ![fm isReadableFileAtPath:path]) {
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "not_found"));
+    }
+
+    ErlNifPid pid;
+    enif_self(env, &pid);
+
+    // Capture NSString objects (never UTF8String pointers) across dispatch_async.
+    dispatch_async(dispatch_get_main_queue(), ^{
+      UIViewController *presenter = root_vc();
+      if (!presenter) {
+          mob_send3(&pid, "mob_share", "error", "no_activity");
+          return;
+      }
+      MobShareFileItem *item = [[MobShareFileItem alloc] init];
+      item.url = [NSURL fileURLWithPath:path isDirectory:NO];
+      item.mime = mime;
+      item.title = title;
+
+      UIActivityViewController *vc =
+          [[UIActivityViewController alloc] initWithActivityItems:@[ item ]
+                                            applicationActivities:nil];
+      if (vc.popoverPresentationController) {
+          vc.popoverPresentationController.sourceView = presenter.view;
+          CGRect r = presenter.view.bounds;
+          vc.popoverPresentationController.sourceRect =
+              CGRectMake(CGRectGetMidX(r), CGRectGetMidY(r), 0, 0);
+          vc.popoverPresentationController.permittedArrowDirections = 0;
+      }
+      [presenter presentViewController:vc animated:YES completion:nil];
+    });
+    return enif_make_atom(env, "ok");
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Device capability NIFs
 // ════════════════════════════════════════════════════════════════════════════
@@ -10415,6 +10514,7 @@ static ErlNifFunc nif_funcs[] = {
     {"clipboard_put", 1, nif_clipboard_put, 0},
     {"clipboard_get", 0, nif_clipboard_get, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"share_text", 1, nif_share_text, 0},
+    {"share_file", 3, nif_share_file, 0},
     {"open_url", 1, nif_open_url, 0},
     {"open_settings", 1, nif_open_settings, 0},
     {"request_permission", 1, nif_request_permission, 0},
