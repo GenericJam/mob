@@ -102,7 +102,7 @@ each one corresponds to.
 | Push attestation | `mix mob.attest`, `mix mob.deploy --json` | Whether the device runs the code you pushed | Free for the Elixir half. Native code needs `mix mob.deploy --native` |
 | Manifest checks | `mix mob.validate_plugin`, cross-plugin conflict checks at build time | Missing files, one-platform components, name clashes, a missing `selftest` | Use the manifest for everything native. Code in an app's `c_src/` gets none of these checks |
 | Plugin audit | `mix mob.audit_plugins` | Risky calls in plugin Elixir and NIF C source (`Code.eval_string`, `binary_to_term/1`, `system(3)`, sockets) | Free for manifest plugins; app-local code isn't audited |
-| Cross-platform agreement | `Mob.Differential.compare/3`, `MobDev.Differential.run/3` | The first divergence between the iOS and Android `view_tree/1`, also put on the defect bus | Free for anything in the render tree. State held inside Swift or Kotlin can't be compared |
+| Cross-platform agreement | `Mob.Differential.compare/3`, `MobDev.Differential.run/3` | The first divergence between the iOS and Android `view_tree/1`; `run/3` also puts it on the defect bus | Free for anything in the render tree. State held inside Swift or Kotlin can't be compared |
 | Docs | Mob's `guides/` (Sloppy Joe `read_guide`, served at the device's mob version), moduledocs (`h/1`, hexdocs, Sloppy Joe `read_doc`) | The API and its rules | `@moduledoc` with the support table, the message tuples and the error atoms. `read_guide` serves only Mob's own `guides/`; a plugin's guide reaches agents through hexdocs and `deps/<plugin>/` |
 | Host tests | `mix test`, `Mob.ScreenCase` | The Elixir half, without a device | A behaviour with a native and a fake implementation |
 
