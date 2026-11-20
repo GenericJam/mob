@@ -10,6 +10,14 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Docs
+- **Upstream First** (`guides/upstream_first.md`): when native code belongs
+  in mob core, a plugin or the app, and the agent feedback checklist an
+  upstreamed capability must meet (render tree and assigns, element frames,
+  `Mob.Test.send_message/2`, Logger with a prefix, an RPC readback,
+  `Mob.Plugin.SelfTest`, a fake for `mix test`, docs). Linked from
+  `usage-rules.md`, the plugin and native extension guides and `AGENTS.md`.
+
 ## [0.9.31] - 2026-11-19
 
 ### Added

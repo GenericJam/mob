@@ -532,6 +532,36 @@ introspection surface up front. The question is not "does this render", it's
 "can an agent verify this rendered". If the answer needs a screenshot, add a
 readback.
 
+## Upstream first: native capabilities belong in mob or a plugin
+
+Apps built on mob keep growing their own native layers. FMutate, Humdinger,
+Magpie and Choir Coach each carry an audio engine that opens AAudio by hand,
+and only two of them have an iOS side. Every copy is one more thing an agent
+can't see through `Mob.Test`, `read_guide`, `mix mob.selftest` or the
+manifest checks.
+
+- **Before adding native code to an app** (a `:static_nifs` entry, `c_src/`,
+  a Kotlin or Swift view, a bridge), check whether it belongs in mob core or a
+  `mob_*` plugin. Upstream it when more than one app needs it (or it is
+  obviously generic), it wraps a platform API, and it carries no app
+  semantics. App-local is right for the app's own domain, for a spike, and
+  for vendor-tied code.
+- **When you upstream, wire it into the feedback loops the rest of mob
+  has:** one Elixir API for iOS, Android and the host; `:archs` and the
+  manifest saying where the real implementation is; results as message
+  tuples that land in assigns (so `Mob.Test` and the render tree see them);
+  errors as tagged tuples, logged from Elixir with a `[plugin_name]` prefix
+  (native `NSLog`/logcat lines never reach Sloppy Joe's `logs`); a
+  `status/0` or `info/0` readback over RPC; a `Mob.Plugin.SelfTest`; a fake
+  for `mix test`; and docs in moduledocs and `guides/`. Plugin and app NIF
+  sources are compiled without `MOB_RELEASE`, so test-only native code can't
+  be stripped from a release; keep test hooks in Elixir.
+
+The full rule, the mechanism inventory and the checklist are in
+[`guides/upstream_first.md`](guides/upstream_first.md). Sloppy Joe's
+`read_guide` serves it to device agents once a mob release tag includes it.
+Keep that guide current when you add a feedback mechanism here.
+
 ## Trust the instrument last
 
 Every rung of the fidelity ladder assumes the thing measuring is honest. When it
@@ -1129,6 +1159,7 @@ semantics.
 | Question | File |
 |---|---|
 | Round-trip workflow + MCP setup | `guides/agentic_coding.md` |
+| Should this native code be in an app, mob core, or a plugin? What must it wire up for agents? | `guides/upstream_first.md` |
 | System architecture / native cocoon model | `AGENTS.md` → "Native App Test Harness — Vision", `ARCHITECTURE.md` |
 | "I hit error X — has this happened before?" | `common_fixes.md` |
 | "Does this user-facing setup issue ring a bell?" | `user_issues.md` |

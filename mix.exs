@@ -164,6 +164,9 @@ defmodule Mob.MixProject do
         "guides/permissions.md": [title: "Permissions"],
         "guides/native_extensions.md": [title: "Native Extensions (NIFs, features)"],
         "guides/plugins.md": [title: "Writing a Plugin"],
+        "guides/upstream_first.md": [
+          title: "Upstream First: Native Code in Mob or a Plugin (agent feedback checklist)"
+        ],
         "guides/dns_on_ios.md": [title: "DNS on iOS"],
         "guides/push_notifications.md": [title: "Push Notifications"],
         "guides/data.md": [title: "Data & Persistence"],
