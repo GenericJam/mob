@@ -465,9 +465,10 @@ side of it stays, including whatever the node draws past its own bounds on
 that side, and an axis you don't name is not cut at all: with `clip_width`
 alone, anything the node draws above or below its bounds still shows.
 
-On a `:sheet` the clip cuts the presented sheet's content. The floating panel
-of an `:anchored` is drawn above the screen rather than inside the node, so
-only its anchor is clipped.
+On a `:sheet` the clip cuts the content inside the presented sheet, not the
+sheet's own background or drag handle. The floating panel of an `:anchored` is
+drawn above the screen rather than inside the node, so only its anchor is
+clipped.
 
 A half star in a rating is a filled glyph stacked over an empty one, with the
 filled one (the later child of the `:box`, so drawn on top) cut to half its
