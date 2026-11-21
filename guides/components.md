@@ -457,9 +457,17 @@ The clip is applied when the node is drawn, not when it is measured. The node
 keeps its full size, so its parent and siblings lay out exactly as without the
 clip; only what the node draws (its background, border and children) is cut.
 Absent or `1` (or more) draws everything, `0` (or less) draws nothing, and
-setting both keeps the corner where the two meet. Only the axis you name is
-cut: with `clip_width` alone, anything the node draws above or below its
-bounds still shows.
+setting both keeps the corner where the two meet.
+
+The cut is a single line, `clip_width` of the width in from the leading edge
+(or `clip_height` of the height down from the top). Everything on the kept
+side of it stays, including whatever the node draws past its own bounds on
+that side, and an axis you don't name is not cut at all: with `clip_width`
+alone, anything the node draws above or below its bounds still shows.
+
+On a `:sheet` the clip cuts the presented sheet's content. The floating panel
+of an `:anchored` is drawn above the screen rather than inside the node, so
+only its anchor is clipped.
 
 A half star in a rating is a filled glyph stacked over an empty one, with the
 filled one (the later child of the `:box`, so drawn on top) cut to half its

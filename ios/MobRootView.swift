@@ -645,8 +645,11 @@ struct MobNodeView: View {
         .modifier(MobLayoutWeight(node: node, axis: layoutWeightAxis))
         // `clip_width` / `clip_height` (MOB-536) clip the node's own drawing —
         // background and border included, so after MobLayoutWeight repaints
-        // them — and before `.offset`, so the clip travels with the node.
-        .modifier(MobDrawClip(node: node))
+        // them — and before `.offset`, so the clip travels with the node. Not
+        // a sheet's: its view here is a zero-size anchor, and a clip toggling
+        // on it would remount MobSheetView and re-present the sheet.
+        // MobSheetView clips the presented content instead.
+        .modifier(MobDrawClip(node: node.nodeType == .sheet ? nil : node))
         // Per-node offset — applied uniformly to every node type. Default is
         // (0, 0) which is a no-op. Used by SquareTriangle's hexagonal
         // snowflake to position rings absolutely within a center-aligned box.
@@ -725,11 +728,11 @@ private struct MobLayoutWeight: ViewModifier {
 // draw-time: measurement, the parent's layout and the siblings are unchanged.
 // See decisions/2026-11-20-clip-width-height-is-draw-time.md.
 private struct MobDrawClip: ViewModifier {
-    let node: MobNode
+    let node: MobNode?
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if node.clipWidth < 1 || node.clipHeight < 1 {
+        if let node, node.clipWidth < 1 || node.clipHeight < 1 {
             content.clipShape(MobLeadingFractionShape(
                 widthFraction: node.clipWidth,
                 heightFraction: node.clipHeight
@@ -740,29 +743,30 @@ private struct MobDrawClip: ViewModifier {
     }
 }
 
-// The path keeps the left part of the rect and must not resolve RTL itself:
-// under `layoutDirection == .rightToLeft` SwiftUI mirrors a clip shape along
-// with the layout, so the left part of the path lands on the leading (right)
-// side. Flipping it here as well puts the clip back on the trailing side.
+// The cut is a single line: `widthFraction` of the width from the left edge,
+// `heightFraction` of the height from the top. Everything on the left of /
+// above it stays, including what the node draws past its bounds on that side
+// (the outer half of a centred border stroke, a glyph's overhang), and an
+// axis without a clip is not cut at all.
+//
+// The path is built for left-to-right and must not resolve RTL itself: under
+// `layoutDirection == .rightToLeft` SwiftUI mirrors a clip shape along with
+// the layout, so the kept side lands on the leading (right) side. Flipping it
+// here as well puts the clip back on the trailing side.
 private struct MobLeadingFractionShape: Shape {
     let widthFraction: CGFloat
     let heightFraction: CGFloat
 
     func path(in rect: CGRect) -> Path {
-        // Only the axis that has a clip is cut. Along the other, whatever the
-        // node draws past its bounds (a glyph's overhang, an offset child)
-        // stays visible, as it does with no clip at all.
+        if widthFraction <= 0 || heightFraction <= 0 {
+            return Path()
+        }
         let unbounded: CGFloat = 1_000_000
-        var clip = rect.insetBy(dx: -unbounded, dy: -unbounded)
-        if widthFraction < 1 {
-            clip.origin.x = rect.minX
-            clip.size.width = rect.width * max(widthFraction, 0)
-        }
-        if heightFraction < 1 {
-            clip.origin.y = rect.minY
-            clip.size.height = rect.height * max(heightFraction, 0)
-        }
-        return Path(clip)
+        let minX = rect.minX - unbounded
+        let minY = rect.minY - unbounded
+        let maxX = widthFraction < 1 ? rect.minX + rect.width * widthFraction : rect.maxX + unbounded
+        let maxY = heightFraction < 1 ? rect.minY + rect.height * heightFraction : rect.maxY + unbounded
+        return Path(CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY))
     }
 }
 
@@ -2528,6 +2532,9 @@ private struct MobSheetView: View {
                 sheetBody
             }
         }
+        // The sheet node's `clip_width` / `clip_height` cut its presented
+        // content (MobNodeView skips the sheet's zero-size anchor).
+        .modifier(MobDrawClip(node: node))
         // Screen readers should treat the sheet as a self-contained modal —
         // VoiceOver focus stays inside it until dismissed, matching
         // .presentationDetents/.sheet's own system-modal behavior.

@@ -26,9 +26,15 @@ platforms already do it: Android's `RatingBar` fills stars with a
 - **Draw time only.** The node measures and places at full size, so its parent
   and siblings lay out as if the prop were absent. It cuts everything the node
   draws — its background, border and children — and nothing outside it.
-- **Only the named axis is cut.** With `clip_width` alone, anything the node
-  draws above or below its bounds (a glyph's overhang, an offset child) stays
-  visible; along a cut axis the band is measured from the node's own bounds.
+- **The cut is one line per named axis.** `clip_width` cuts at the line
+  `f × width` in from the leading edge, `clip_height` at `f × height` down
+  from the top. Everything on the kept side stays, including what the node
+  draws past its own leading or top bound, and an axis without a prop is not
+  cut: with `clip_width` alone, anything drawn above or below the bounds (a
+  glyph's overhang, an offset child) stays visible. A band starting at the
+  leading bound was tried first and rejected: iOS strokes borders centred on
+  the bounds, so it halved the leading border of a clipped bordered box while
+  the top and bottom borders kept their full width.
 - **`clip_width` keeps the leading part**: the left in a left-to-right layout,
   the right in a right-to-left one, so a half star fills from the side the
   rating is read from. `clip_height` keeps the top.
@@ -36,12 +42,17 @@ platforms already do it: Android's `RatingBar` fills stars with a
   one `.clipShape` attached in `MobNodeView.body`, the path every node type
   passes through, after `MobLayoutWeight` (which repaints a weighted node's
   background and border) and before `.offset` (so the clip travels with the
-  node). The shape's path keeps the *left* part of the rect: SwiftUI mirrors
-  a clip shape when `layoutDirection` is `.rightToLeft`, so the left part of
-  the path lands on the leading side. Resolving RTL inside the shape as well
-  flips it back to the trailing side; an `ImageRenderer` probe on macOS showed
-  exactly that before the shape was simplified. Nodes without a clip get no
-  `.clipShape` at all.
+  node). The shape's path is built for left-to-right: SwiftUI mirrors a clip
+  shape when `layoutDirection` is `.rightToLeft`, so the kept side lands on
+  the leading edge. Resolving RTL inside the shape as well flips it back to
+  the trailing side; an `ImageRenderer` probe on macOS showed exactly that
+  before the shape was simplified. Nodes without a clip get no `.clipShape`
+  at all.
+- A `:sheet`'s own view in `MobNodeView` is a zero-size anchor, so the clip
+  goes on the presented content in `MobSheetView` instead. Toggling a clip on
+  the anchor would also have remounted `MobSheetView` and re-presented the
+  sheet. An `:anchored` panel is drawn above the screen (iOS) or in a `Popup`
+  (Android), outside the node, so only the anchor is clipped.
 - Android (mob_new's `MobBridge.kt`, `mobFractionClip`): a `drawWithContent`
   with a `clipRect` at the head of `nodeModifier`, reading the DrawScope's
   `layoutDirection`.
