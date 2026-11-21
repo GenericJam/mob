@@ -443,6 +443,52 @@ tab moves per-tab state on Android and not on iOS.
 An app that upgrades `mob` without regenerating from `mob_new` gets the iOS half
 only.
 
+## Clipping what a node draws: `clip_width` / `clip_height`
+
+Every node type takes `clip_width` and `clip_height`: the fraction of the
+node's own laid-out width or height that stays visible.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `clip_width` | number, `0`–`1` | Keep the leading part of the node's width: the left in a left-to-right layout, the right in a right-to-left one |
+| `clip_height` | number, `0`–`1` | Keep the top part of the node's height |
+
+The clip is applied when the node is drawn, not when it is measured. The node
+keeps its full size, so its parent and siblings lay out exactly as without the
+clip; only what the node draws (its background, border and children) is cut.
+Absent or `1` (or more) draws everything, `0` (or less) draws nothing, and
+setting both keeps the corner where the two meet.
+
+The cut is a single line, `clip_width` of the width in from the leading edge
+(or `clip_height` of the height down from the top). Everything on the kept
+side of it stays, including whatever the node draws past its own bounds on
+that side, and an axis you don't name is not cut at all: with `clip_width`
+alone, anything the node draws above or below its bounds still shows.
+
+On a `:sheet` the clip cuts the content inside the presented sheet, not the
+sheet's own background or drag handle. The floating panel of an `:anchored` is
+drawn above the screen rather than inside the node, so only its anchor is
+clipped.
+
+A half star in a rating is a filled glyph stacked over an empty one, with the
+filled one (the later child of the `:box`, so drawn on top) cut to half its
+width:
+
+```elixir
+~MOB"""
+<Box fill_width={false}>
+  <Icon name="star" text_color={:muted} />
+  <Icon name="star_filled" text_color={:amber_500} clip_width={0.5} />
+</Box>
+"""
+```
+
+Pass the fraction in braces: `clip_width="0.5"` is a string, and both
+renderers ignore a string there.
+
+On Android this needs the `MobBridge.kt` from the mob_new release that adds
+`clip_width`/`clip_height`; an app generated before it ignores both props.
+
 ## List components
 
 ### `:list`
@@ -558,7 +604,7 @@ An editable text input. Has defaults injected by the renderer (surface_raised ba
 | `on_focus` | `{pid, tag}` | Fires when the field gains focus. Delivers `{:focus, tag}`. |
 | `on_blur` | `{pid, tag}` | Fires when the field loses focus. Delivers `{:blur, tag}`. |
 | `secure` | boolean | Password masking |
-| `keyboard_type` | `:default` / `:email` / `:number` / `:phone` | Keyboard variant |
+| `keyboard` | `:default` / `:number` / `:decimal` / `:email` / `:phone` / `:url` | Keyboard variant (see the [styling guide](styling.md#input-props-text_field) for the native keyboard each maps to) |
 | `background` | color | Background (default `:surface_raised`) |
 | `text_color` | color | Input text color (default `:on_surface`) |
 | `placeholder_color` | color | Placeholder color (default `:muted`) |

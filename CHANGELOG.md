@@ -10,6 +10,20 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Added
+- **`clip_width` / `clip_height` on every node: draw only part of it.** The
+  value is the fraction (0–1) of the node's own laid-out width or height
+  that stays visible; `clip_width` keeps the leading part (the left in
+  left-to-right, the right in right-to-left), `clip_height` the top. It is
+  applied when the node is drawn, not measured, so the node keeps its size
+  and its parent and siblings don't move; everything the node draws
+  (background, border, children) is cut, and only along the named axis.
+  This is what makes a half star in mishka_chelekom's `MishkaRating` (a
+  filled glyph at `clip_width: 0.5` over an empty one) render as half a
+  star instead of a full one. iOS uses one `.clipShape` on every node; see
+  the components guide, "Clipping what a node draws", and
+  `decisions/2026-11-20-clip-width-height-is-draw-time.md`. (MOB-536)
+
 ### Docs
 - **Upstream First** (`guides/upstream_first.md`): when native code belongs
   in mob core, a plugin or the app, and the agent feedback checklist an
@@ -17,6 +31,15 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `Mob.Test.send_message/2`, Logger with a prefix, an RPC readback,
   `Mob.Plugin.SelfTest`, a fake for `mix test`, docs). Linked from
   `usage-rules.md`, the plugin and native extension guides and `AGENTS.md`.
+- **`:text_field`'s keyboard prop is `keyboard`, not `keyboard_type`.** The
+  components guide named `keyboard_type`, which neither renderer reads, and
+  listed four of its six values; it now documents `keyboard:` with
+  `:default`, `:number`, `:decimal`, `:email`, `:phone` and `:url`. (MOB-536)
+
+### Upgrading
+- `clip_width` / `clip_height` on Android need the `MobBridge.kt` from the
+  mob_new release that adds `clip_width`/`clip_height`. An app generated
+  before it ignores both props there and draws the node whole. (MOB-536)
 
 ## [0.9.31] - 2026-11-19
 

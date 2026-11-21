@@ -43,6 +43,8 @@ These props apply to every component via `nodeModifier` (Android) and view modif
 | `padding_top/right/bottom/left` | `.padding(EdgeInsets)` | `Modifier.padding(top=, end=, bottom=, start=)` | Per-edge; falls back to `padding` for unset edges |
 | `corner_radius` | `.clipShape(RoundedRectangle(cornerRadius:))` | `RoundedCornerShape(dp)` applied to background + clip | Applied after background, before children render |
 | `fill_width` | `.frame(maxWidth: .infinity)` | `Modifier.fillMaxWidth()` | Defaults `true` on `:button` and `:box`; `false` on others unless set. Explicit `false` makes a box hug its content. |
+| `clip_width` | `.clipShape` of the leading fraction of the frame (SwiftUI mirrors it in right-to-left) | `drawWithContent` + `clipRect` | Number `0`–`1`; draw-time only, so the node's size and its siblings' layout are unchanged. Keeps the left in LTR, the right in RTL. See [Clipping](components.md#clipping-what-a-node-draws-clip_width-clip_height) |
+| `clip_height` | `.clipShape` of the top fraction of the frame | `drawWithContent` + `clipRect` | Number `0`–`1`; keeps the top part. Both set: the corner where they meet |
 
 `wrap` greedily packs children in source order using their measured native size.
 `spacing` controls horizontal item spacing and `run_spacing` controls vertical

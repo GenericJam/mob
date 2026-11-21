@@ -211,6 +211,13 @@ typedef void (^MobTouchSink)(NSInteger phase, CGFloat x, CGFloat y, CGFloat w, C
 @property(nonatomic) CGFloat offsetX;
 @property(nonatomic) CGFloat offsetY;
 
+// `clip_width` / `clip_height`: the fraction of the node's laid-out width
+// (from the leading edge) / height (from the top) that is drawn. Draw-time
+// only: measurement and layout ignore it. >= 1 means no clip (default 1),
+// <= 0 draws nothing. See decisions/2026-11-20-clip-width-height-is-draw-time.md.
+@property(nonatomic) CGFloat clipWidth;
+@property(nonatomic) CGFloat clipHeight;
+
 // Spacer — fixedSize == 0 means fill available space
 @property(nonatomic) CGFloat fixedSize;
 

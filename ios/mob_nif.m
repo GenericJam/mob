@@ -2065,6 +2065,9 @@ typedef NS_ENUM(NSUInteger, MobPropKey) {
     MOB_PROP_double_tap_zoom,
     MOB_PROP_max_zoom,
     MOB_PROP_zoomable,
+    // draw-time clip (MOB-536)
+    MOB_PROP_clip_height,
+    MOB_PROP_clip_width,
     MOB_PROP__COUNT
 };
 
@@ -2206,7 +2209,9 @@ static NSDictionary<NSString *, NSNumber *> *mob_prop_slots(void) {
           [MOB_PROP_width] = @"width",
           [MOB_PROP_double_tap_zoom] = @"double_tap_zoom",
           [MOB_PROP_max_zoom] = @"max_zoom",
-          [MOB_PROP_zoomable] = @"zoomable"};
+          [MOB_PROP_zoomable] = @"zoomable",
+          [MOB_PROP_clip_height] = @"clip_height",
+          [MOB_PROP_clip_width] = @"clip_width"};
       NSMutableDictionary *m = [NSMutableDictionary dictionaryWithCapacity:MOB_PROP__COUNT];
       for (NSUInteger i = 0; i < MOB_PROP__COUNT; i++) {
           // A gap means an enum entry with no name: that prop would never
@@ -2421,6 +2426,17 @@ static MobNode *mob_node_from_dict(NSDictionary *dict) {
         id offsetY = pv[MOB_PROP_offset_y];
         if (offsetY)
             node.offsetY = [offsetY doubleValue];
+
+        // A JSON boolean also decodes as an NSNumber; `clip_width: false`
+        // must not read as 0 and hide the node.
+        id clipWidth = pv[MOB_PROP_clip_width];
+        if ([clipWidth isKindOfClass:[NSNumber class]] &&
+            CFGetTypeID((__bridge CFTypeRef)clipWidth) != CFBooleanGetTypeID())
+            node.clipWidth = [clipWidth doubleValue];
+        id clipHeight = pv[MOB_PROP_clip_height];
+        if ([clipHeight isKindOfClass:[NSNumber class]] &&
+            CFGetTypeID((__bridge CFTypeRef)clipHeight) != CFBooleanGetTypeID())
+            node.clipHeight = [clipHeight doubleValue];
 
         // anchored — all read off THIS node, never off a child (MOB-190).
         id anchoredSide = pv[MOB_PROP_side];

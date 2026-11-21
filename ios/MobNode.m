@@ -37,6 +37,8 @@
         _anchoredFlip = YES;
         _anchoredClamp = YES;
         _offsetY = 0.0;
+        _clipWidth = 1.0;
+        _clipHeight = 1.0;
         _keyboardTypeStr = @"default";
         _returnKeyStr = @"done";
         _textContentTypeStr = @""; // empty = no hint (default UITextContentType behaviour)
