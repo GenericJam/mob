@@ -2492,6 +2492,11 @@ private struct MobSheetView: View {
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(node.paddingEdgeInsets)
+        // The sheet node's `clip_width` / `clip_height` cut its content
+        // (MobNodeView skips the sheet's zero-size anchor). On the content
+        // itself, inside any ScrollView, so the fraction is of the content's
+        // height and the cut scrolls with it, as on Android.
+        .modifier(MobDrawClip(node: node))
     }
 
     @ViewBuilder
@@ -2532,9 +2537,6 @@ private struct MobSheetView: View {
                 sheetBody
             }
         }
-        // The sheet node's `clip_width` / `clip_height` cut its presented
-        // content (MobNodeView skips the sheet's zero-size anchor).
-        .modifier(MobDrawClip(node: node))
         // Screen readers should treat the sheet as a self-contained modal —
         // VoiceOver focus stays inside it until dismissed, matching
         // .presentationDetents/.sheet's own system-modal behavior.
