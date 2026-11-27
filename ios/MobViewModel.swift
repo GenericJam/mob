@@ -37,6 +37,13 @@ import QuartzCore
     /// the model meets a scene. Read on the main thread to tag what the window
     /// reports (back gesture, size class) with the scene it came from.
     @objc public var sceneId: String?
+    /// The safe area of the window this model is shown in, written by
+    /// `MobHostingController` whenever UIKit changes it (rotation, a new
+    /// window). Anchored panels pad their clamp by it (MOB-563): SwiftUI only
+    /// says how much safe area a view's frame already excludes, and the root
+    /// view ignores the bottom and horizontal edges, so no view inside it can
+    /// read the home indicator's inset.
+    @Published public var windowSafeArea: UIEdgeInsets = .zero
 
     override convenience init() {
         self.init(watchdog: true)
@@ -191,7 +198,14 @@ public class MobHostingController: UIHostingController<MobRootView> {
     override public func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
         mobAdoptSceneModel()
+        mobSceneModelAdopted = true
+        mobPublishSafeArea()
     }
+
+    // Until viewIsAppearing every window's controller shows the shared model,
+    // and UIKit reports a window's insets before that: publishing then would
+    // write a second window's insets into the default window's model.
+    private var mobSceneModelAdopted = false
 
     /// Show the model mob_nif's scene registry holds for this window. Also
     /// called by mob_nif (`mob_scene_show_model`) when a window that opened
@@ -203,6 +217,20 @@ public class MobHostingController: UIHostingController<MobRootView> {
             model !== rootView.model
         else { return }
         rootView = MobRootView(model: model)
+        mobPublishSafeArea()
+    }
+
+    override public func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        mobPublishSafeArea()
+    }
+
+    private func mobPublishSafeArea() {
+        guard mobSceneModelAdopted else { return }
+        let insets = view.safeAreaInsets
+        if rootView.model.windowSafeArea != insets {
+            rootView.model.windowSafeArea = insets
+        }
     }
 
     @objc private func handleEdgePan(_ gesture: UIScreenEdgePanGestureRecognizer) {

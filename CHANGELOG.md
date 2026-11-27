@@ -27,6 +27,15 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   underline falls below the strip and is clipped away. The next mob release
   is gated on MOB-564. (MOB-562,
   `decisions/2026-11-27-ios-text-fixed-vertical-size.md`)
+- **iOS: anchored panels (tooltip, popover, preview card, menus) sit next to
+  their trigger.** The panel's size was read from its max-width cap
+  instead of its content, so it measured as the whole window. Nothing fitted
+  on either side, and every open panel was clamped to the top-left corner,
+  where it stayed while the trigger scrolled away. Panels now sit
+  `side_offset` from their trigger, flip when the requested side has no room,
+  and scroll with the page. The clamp also counted the status bar twice and
+  ignored the home indicator. It now pads by the window's own safe area, as
+  Android does. (MOB-563)
 
 ## [0.9.33] - 2026-11-27
 
