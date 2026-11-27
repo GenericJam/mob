@@ -298,10 +298,12 @@ struct MobNodeView: View {
                 MobEitherStack(
                     lazy: lazyContainer,
                     alignment: .leading,
-                    spacing: CGFloat(node.gap)
+                    spacing: CGFloat(node.gap),
+                    weighted: mobHasStackWeights(node.childNodes, axis: .vertical)
                 ) {
                     ForEach(mobIdentifiedChildren(node.childNodes)) { item in
                         MobNodeView(node: item.node, layoutWeightAxis: .vertical)
+                            .layoutValue(key: MobStackWeightKey.self, value: mobStackWeight(item.node, axis: .vertical))
                     }
                 }
                 // MOB-181: honor fixed_width / fixed_height on columns.
@@ -364,13 +366,20 @@ struct MobNodeView: View {
                 let prioritizesText = node.childNodes.contains { child in
                     child.nodeType == .spacer && child.fixedSize <= 0
                 }
-                HStack(alignment: alignment, spacing: CGFloat(node.gap)) {
+                // A weighted child switches the row to MobWeightedRowLayout,
+                // which splits the leftover width by ratio (MOB-569). AnyLayout
+                // keeps the children's identity across that switch.
+                let rowLayout = mobHasStackWeights(node.childNodes, axis: .horizontal)
+                    ? AnyLayout(MobWeightedRowLayout(alignment: alignment, spacing: CGFloat(node.gap)))
+                    : AnyLayout(HStackLayout(alignment: alignment, spacing: CGFloat(node.gap)))
+                rowLayout {
                     ForEach(mobIdentifiedChildren(node.childNodes)) { item in
                         MobNodeView(
                             node: item.node,
                             layoutWeightAxis: .horizontal,
                             prioritizeHorizontalText: prioritizesText
                         )
+                        .layoutValue(key: MobStackWeightKey.self, value: mobStackWeight(item.node, axis: .horizontal))
                     }
                 }
                 // MOB-181: honor fixed_width / fixed_height on rows. Same
@@ -2205,7 +2214,10 @@ private struct MobToggle: View {
                     isOn = fromBeam
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // No label (MOB-569): only the switch, hugging it. The stock Toggle
+            // keeps its label + spacer layout even for "", so it filled the row.
+            .ifLet(label.isEmpty ? () : nil) { view, _ in view.labelsHidden() }
+            .frame(maxWidth: label.isEmpty ? nil : .infinity, alignment: .leading)
             // issues.md #8: SwiftUI's Toggle("Label", …) initializer does
             // not propagate the label string into the underlying control's
             // accessibilityLabel — the AX tree exposes the visual Text as
@@ -3553,36 +3565,5 @@ struct MobScrollBottomAnchor: ViewModifier {
                     position.scrollTo(edge: .bottom)
                 }
             }
-    }
-}
-
-// A VStack that can be lazy without duplicating the call site. SwiftUI has no
-// way to pick between VStack and LazyVStack at runtime inside one expression,
-// and @ViewBuilder's `if` produces two different view identities — which is
-// fine here because `lazy` is fixed for a given node's position in the tree.
-struct MobEitherStack<Content: View>: View {
-    let lazy: Bool
-    let alignment: HorizontalAlignment
-    let spacing: CGFloat
-    @ViewBuilder let content: Content
-
-    init(
-        lazy: Bool,
-        alignment: HorizontalAlignment,
-        spacing: CGFloat,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.lazy = lazy
-        self.alignment = alignment
-        self.spacing = spacing
-        self.content = content()
-    }
-
-    var body: some View {
-        if lazy {
-            LazyVStack(alignment: alignment, spacing: spacing) { content }
-        } else {
-            VStack(alignment: alignment, spacing: spacing) { content }
-        }
     }
 }

@@ -22,11 +22,13 @@ defmodule Mob.NativeColumnRowLayoutTest do
              "                MobEitherStack(\n" <>
                "                    lazy: lazyContainer,\n" <>
                "                    alignment: .leading,\n" <>
-               "                    spacing: CGFloat(node.gap)\n" <>
+               "                    spacing: CGFloat(node.gap),\n" <>
+               "                    weighted: mobHasStackWeights(node.childNodes, axis: .vertical)\n" <>
                "                ) {"
 
-    assert source =~ "LazyVStack(alignment: alignment, spacing: spacing) { content }"
-    assert source =~ "VStack(alignment: alignment, spacing: spacing) { content }"
+    stack = File.read!(Path.join(@root, "ios/MobWeightedStack.swift"))
+    assert stack =~ "LazyVStack(alignment: alignment, spacing: spacing) { content }"
+    assert stack =~ "AnyLayout(VStackLayout(alignment: alignment, spacing: spacing))"
 
     assert source =~
              "                .frame(\n" <>
@@ -67,7 +69,8 @@ defmodule Mob.NativeColumnRowLayoutTest do
     source = File.read!(Path.join(@root, "ios/MobRootView.swift"))
 
     assert source =~
-             "                HStack(alignment: alignment, spacing: CGFloat(node.gap)) {"
+             "                    : AnyLayout(HStackLayout(alignment: alignment, spacing: CGFloat(node.gap)))\n" <>
+               "                rowLayout {"
 
     assert source =~
              "                .frame(\n" <>

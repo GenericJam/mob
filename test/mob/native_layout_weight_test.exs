@@ -35,4 +35,58 @@ defmodule Mob.NativeLayoutWeightTest do
     assert source =~ "frame(maxWidth: .infinity, alignment: .leading)"
     assert source =~ ".mobBoxBackground(node: node)"
   end
+
+  # MOB-569. The ratio arithmetic is exercised for real by
+  # test/native/weighted_stack_test.swift; what it cannot see is the renderer
+  # handing rows and columns to that layout. Without this wiring every weight
+  # is an even split again, with that native test still green.
+  test "iOS rows and columns with a weighted child use the weighted layouts" do
+    source =
+      @ios
+      |> Path.join("MobRootView.swift")
+      |> File.read!()
+      |> Mob.Test.NativeSource.code_only()
+
+    row = Mob.Test.NativeSource.region(source, "case .row:", "case .wrap:")
+    assert row =~ "mobHasStackWeights(node.childNodes, axis: .horizontal)"
+
+    assert row =~
+             "AnyLayout(MobWeightedRowLayout(alignment: alignment, spacing: CGFloat(node.gap)))"
+
+    assert row =~ "rowLayout {"
+
+    assert row =~
+             ".layoutValue(key: MobStackWeightKey.self, value: mobStackWeight(item.node, axis: .horizontal))"
+
+    column = Mob.Test.NativeSource.region(source, "case .column:", "case .row:")
+    assert column =~ "weighted: mobHasStackWeights(node.childNodes, axis: .vertical)"
+
+    assert column =~
+             ".layoutValue(key: MobStackWeightKey.self, value: mobStackWeight(item.node, axis: .vertical))"
+
+    stack =
+      @ios
+      |> Path.join("MobWeightedStack.swift")
+      |> File.read!()
+      |> Mob.Test.NativeSource.code_only()
+      |> Mob.Test.NativeSource.region("struct MobEitherStack<Content: View>: View {", "\n}\n")
+
+    assert stack =~ "AnyLayout(MobWeightedColumnLayout(alignment: alignment, spacing: spacing))"
+  end
+
+  # MOB-569. With an empty label the stock Toggle keeps its label + spacer
+  # layout, and the maxWidth frame made it greedy: in a Row it took half the
+  # width and drew the switch mid-row.
+  test "iOS toggle without a label hugs its switch" do
+    toggle =
+      @ios
+      |> Path.join("MobRootView.swift")
+      |> File.read!()
+      |> Mob.Test.NativeSource.code_only()
+      |> Mob.Test.NativeSource.region("private struct MobToggle: View {", "\n}\n")
+
+    assert toggle =~ ".ifLet(label.isEmpty ? () : nil) { view, _ in view.labelsHidden() }"
+    assert toggle =~ ".frame(maxWidth: label.isEmpty ? nil : .infinity, alignment: .leading)"
+    refute toggle =~ ".frame(maxWidth: .infinity, alignment: .leading)"
+  end
 end

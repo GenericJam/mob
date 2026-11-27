@@ -11,7 +11,7 @@ CC      ?= clang
 CFLAGS  ?= -fobjc-arc -Wall -Wextra -Wno-unused-parameter
 LDFLAGS ?= -framework Foundation
 
-BINS := frame_registry_test dist_port_test dist_cookie_test stored_queue_test init_args_test node_host_test code_versions_test erts_dir_test touch_throttle_test
+BINS := frame_registry_test dist_port_test dist_cookie_test stored_queue_test init_args_test node_host_test code_versions_test erts_dir_test touch_throttle_test weighted_stack_test
 
 .PHONY: run ios-nif clean
 run: $(BINS)
@@ -46,6 +46,11 @@ erts_dir_test: erts_dir_test.c ../../ios/mob_erts_dir.h
 
 touch_throttle_test: touch_throttle_test.c ../../ios/mob_touch_throttle.h
 	$(CC) -Wall -Wextra -Werror $< -o $@
+
+# Lays real SwiftUI views out with the shipped ios/MobWeightedStack.swift on
+# macOS (MOB-569); the test file stubs the renderer types it reads.
+weighted_stack_test: weighted_stack_test.swift ../../ios/MobWeightedStack.swift
+	xcrun swiftc -parse-as-library -O ../../ios/MobWeightedStack.swift $< -o $@
 
 clean:
 	rm -f $(BINS)

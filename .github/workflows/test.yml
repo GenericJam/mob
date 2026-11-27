@@ -127,7 +127,7 @@ jobs:
             zig test "$f"
           done
 
-      - name: Native harness (frame registry MOB-102/MOB-103, dist port MOB-139, dist cookie MOB-348, stored queue MOB-379, init args MOB-406, node host MOB-428, code versions MOB-408, ERTS dir MOB-493, touch throttle MOB-518)
+      - name: Native harness (frame registry MOB-102/MOB-103, dist port MOB-139, dist cookie MOB-348, stored queue MOB-379, init args MOB-406, node host MOB-428, code versions MOB-408, ERTS dir MOB-493, touch throttle MOB-518, weighted stack MOB-569)
         # The frame-registry check is the only automated guard on the
         # element-frame registry's ownership, generation-gating and purge rules.
         # It reproduces the algorithm rather than linking ios/mob_nif.m (which
@@ -136,7 +136,9 @@ jobs:
         # stored-queue, init-args, node-host and code-versions checks compile
         # ios/mob_dist_port.h, ios/mob_dist_cookie.h, ios/mob_stored_queue.h,
         # ios/mob_init_args.h, ios/mob_node_host.h and ios/mob_code_versions.h
-        # themselves. Same toolchain as the clang-format step.
+        # themselves. The weighted-stack check compiles ios/MobWeightedStack.swift
+        # and lays SwiftUI views out with it on macOS. Same toolchain as the
+        # clang-format step.
         run: make -C test/native run
 
       - name: Install Erlang (erl_nif.h for the iOS NIF compile)

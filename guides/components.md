@@ -216,9 +216,12 @@ cancel_tap = {self(), :cancel}
 """
 ```
 
-A single weighted child expands into the parent's remaining main-axis space. Multiple
-weighted children divide that space evenly on iOS; Android additionally honors unequal
-numeric ratios. Weight values must be positive. Use equal weights for cross-platform layouts.
+A weighted child expands into the parent's remaining main-axis space. The children
+without a weight are measured first, at their natural size; what is left is divided
+between the weighted children by ratio, so `weight={1}` and `weight={2}` take a third
+and two thirds. Both platforms do this. A flexible `<Spacer />` in a row or column that
+has a weighted child counts as `weight={1}`. Weight values must be positive; a fixed
+`width` (in a row) or `height` (in a column) wins over `weight`.
 
 ### `:wrap`
 
@@ -698,7 +701,7 @@ A boolean switch. Delivers `{:change, tag, value}` to `handle_info/2` where `val
 | Prop | Type | Description |
 |------|------|-------------|
 | `value` | boolean | Current checked state |
-| `label` | string | Label text displayed beside the toggle |
+| `label` | string | Label text displayed beside the toggle, which then fills the row. Without a label the toggle is just the switch, at its own width |
 | `on_change` | `{pid, tag}` | Fires when toggled. Delivers `{:change, tag, bool}`. |
 | `color` | color | Thumb/track tint color |
 
