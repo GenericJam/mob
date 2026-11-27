@@ -14,9 +14,10 @@ Include what you can of:
 - steps or a proof of concept that reproduce it;
 - what it lets the attacker do.
 
-The same address covers the related packages: `mob_dev`, `mob_new` and the
-`mob_*` plugins. If a problem spans several of them, send one report and I'll
-coordinate the fixes.
+The same address covers the related packages I maintain: `mob_dev`, `mob_new`
+and the `mob_*` plugins published from
+[github.com/GenericJam](https://github.com/GenericJam). If a problem spans
+several of them, send one report and I'll coordinate the fixes.
 
 ## What happens next
 
@@ -54,7 +55,9 @@ world, so the boundaries that matter are where outside data enters the app.
   - development access left enabled in a release build.
 
   Binding to loopback is not authentication: other apps on the same device can
-  connect to it.
+  connect to it. On a physical iPhone, a development build's distribution is
+  reachable from the local network by design and is protected by the app's
+  private cookie; getting in without that cookie is a vulnerability.
 - App data exposed through files, screen state, logs or crash output.
 
 **Not vulnerabilities on their own:**
@@ -68,4 +71,6 @@ world, so the boundaries that matter are where outside data enters the app.
   point of distribution.
 - Bugs in Erlang/OTP, Elixir, Android, iOS or a third-party library. Report
   those upstream. Do tell me if mob ships an affected version and needs to move
-  to a fixed one.
+  to a fixed one. Mob builds its own OTP runtimes with a few patches (in
+  `mob_dev`'s `scripts/release/`); a bug those patches or our build settings
+  introduce belongs here.
