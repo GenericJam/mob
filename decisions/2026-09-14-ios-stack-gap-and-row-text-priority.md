@@ -3,6 +3,7 @@
 - Date: 2026-09-14
 - Status: accepted
 - Linear: MOB-234
+- See also: `2026-11-27-ios-text-fixed-vertical-size.md` (Text keeps its wrapped height; vertical only, so this record's width rule stands)
 
 ## Context
 

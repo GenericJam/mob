@@ -80,10 +80,15 @@ narrows could overflow a constrained Row. That concern is about width.
   (`MobDrawClip` only clips below 1), and something like 0.999 works only by
   accident.
 - A Text whose width is squeezed by an unrelated bug now shows it by
-  wrapping taller instead of ending in "…" on one line. MishkaTabs labels get
-  an even split of the strip's width because every trigger is a Column that
-  fills on iOS (MOB-564). They now wrap below the horizontal Scroll's height
-  and are clipped by it. Fixing the Column fill removes the wrap.
+  wrapping taller instead of ending in "…" on one line. This is a regression
+  until MOB-564 lands, and the next mob release is gated on MOB-564.
+  MishkaTabs labels get an even split of the strip's width, because every
+  trigger is a Column and a Column always fills on iOS (MOB-564). A long label
+  wraps to two lines, but the strip's horizontal Scroll stays one line tall.
+  So the labels are cut off mid-glyph, and the active tab's underline (the
+  wrapper's 2dp bottom gap under the label) is pushed below the strip and
+  clipped away entirely. Fixing the Column fill removes the wrap, and both
+  come back.
 - Buttons are a separate case (`.lineLimit(1)` in their label) and do not
   change.
 
