@@ -86,14 +86,17 @@ any other prop. That gap predates this change and is left alone.
 ## Verification
 
 iPhone 18 Pro simulator, mishka_ios_demo (mob_new 0.6.21, mob_mishka 0.1.6)
-built against this change on top of MOB-562. All 66 gallery pages toured
-with `scripts/ios_tour.exs` and compared pixel by pixel with the MOB-562
-(#251) build's tour: 60 pages are identical. Changed, all for the better:
-tabs (labels on one line, underline under the active label), empty_state
-(indicator and actions centred; "Leading" text beside the indicator),
-nav_link (anchor underline as wide as "mishka.tools"), calendar (agenda
-time cell no longer takes half the row), toolbar (burger bars centred in
-their box), tooltip (a few stray pixels of a mispositioned bubble gone).
-The demo's other screens (home, gallery, list, audio, storage, text,
-webview) are identical; the dice screen's stat cards shrank to their text
-until the mob_new change above.
+built against this change on top of master at MOB-563 (e6dc1d9, which
+includes MOB-562). All 66 gallery pages toured with `scripts/ios_tour.exs`
+and compared pixel by pixel with a tour of e6dc1d9 alone: 60 pages are
+identical. Changed, all for the better: tabs (labels on one line, underline
+under the active label), empty_state (indicator and actions centred;
+"Leading" text beside the indicator), nav_link (anchor underline as wide as
+"mishka.tools"), calendar (agenda time cell no longer takes half the row),
+toolbar (burger bars centred in their box), tooltip (open bubbles land where
+`side`/`align` put them against their trigger instead of clamped to the
+screen's leading edge: a bubble Column used to fill the anchored panel's
+width cap, so the panel measured window-wide). The demo's other screens
+(home, gallery, list, audio, storage, text, webview) are identical; the
+dice screen's stat cards shrank to their text until the mob_new change
+above.
