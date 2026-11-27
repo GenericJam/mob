@@ -549,7 +549,7 @@ Displays a string.
 |------|------|-------------|
 | `text` | string | The text to display (required) |
 | `text_size` | number / token | Font size |
-| `text_color` | color | Text color |
+| `text_color` | color | Text color (default `:on_surface`) |
 | `font` | token / string | A named font token from `Mob.Theme`'s `fonts:` map (e.g. `:heading`), or a raw platform font name. See [Styling → Custom fonts](styling.md#custom-fonts). |
 | `font_weight` | `"regular"` / `"medium"` / `"bold"` | Font weight |
 | `text_align` | `"left"` / `"center"` / `"right"` | Horizontal alignment |

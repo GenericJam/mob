@@ -36,7 +36,7 @@ defmodule Mob.Screen do
         def render(assigns) do
           %{
             type: :column,
-            props: %{},
+            props: %{background: :background, fill_width: true, fill_height: true},
             children: [
               %{type: :text, props: %{text: "Count: \#{assigns.count}"}, children: []}
             ]

@@ -1131,6 +1131,80 @@ defmodule Mob.RendererTest do
       # default border → :gray_700 → 0xFF616161
       assert :json.decode(json)["props"]["color"] == 0xFF616161
     end
+
+    # MOB-567: an uncoloured Text drew in the platform's colour (iOS
+    # Color.primary, Android LocalContentColor), not the theme's.
+    defp rendered_props(tree, platform) do
+      Renderer.render(tree, platform, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      :json.decode(json)["props"]
+    end
+
+    defp on_surface(platform) do
+      rendered_props(%{type: :box, props: %{background: :on_surface}, children: []}, platform)[
+        "background"
+      ]
+    end
+
+    test "a Text with no text_color draws in the theme's on_surface" do
+      Mob.Theme.set(on_surface: 0xFF123456)
+
+      for platform <- [:ios, :android] do
+        props = rendered_props(%{type: :text, props: %{text: "hi"}, children: []}, platform)
+        assert props["text_color"] == 0xFF123456
+      end
+    end
+
+    test "an uncoloured Text and Icon follow a dark and a light theme" do
+      colours =
+        for theme <- [Mob.Theme.Dark, Mob.Theme.Light] do
+          Mob.Theme.set(theme)
+          expected = on_surface(:ios)
+          text = rendered_props(%{type: :text, props: %{text: "hi"}, children: []}, :ios)
+          icon = rendered_props(%{type: :icon, props: %{name: "star"}, children: []}, :ios)
+          assert text["text_color"] == expected
+          assert icon["text_color"] == expected
+          expected
+        end
+
+      assert Enum.uniq(colours) == colours
+    end
+
+    test "an explicit text_color beats the default" do
+      props =
+        rendered_props(
+          %{type: :text, props: %{text: "hi", text_color: :red_500}, children: []},
+          :ios
+        )
+
+      assert props["text_color"] == 0xFFF44336
+    end
+
+    test "a platform block's text_color beats the default" do
+      tree = %{type: :text, props: %{text: "hi", ios: %{text_color: :red_500}}, children: []}
+      assert rendered_props(tree, :ios)["text_color"] == 0xFFF44336
+      assert rendered_props(tree, :android)["text_color"] == on_surface(:android)
+    end
+
+    test "a style's text_color beats the default" do
+      style = %Mob.Style{props: %{text_color: :red_500}}
+      tree = %{type: :text, props: %{text: "hi", style: style}, children: []}
+      assert rendered_props(tree, :ios)["text_color"] == 0xFFF44336
+    end
+
+    test "a style's props beat a button's defaults too" do
+      style = %Mob.Style{props: %{background: :red_500, text_color: :black}}
+      tree = %{type: :button, props: %{text: "Go", style: style}, children: []}
+      props = rendered_props(tree, :ios)
+      assert props["background"] == 0xFFF44336
+      assert props["text_color"] == 0xFF000000
+    end
+
+    test "a button keeps its on_primary label" do
+      Mob.Theme.set(on_primary: 0xFF654321, on_surface: 0xFF123456)
+      props = rendered_props(%{type: :button, props: %{text: "Go"}, children: []}, :ios)
+      assert props["text_color"] == 0xFF654321
+    end
   end
 
   # ── Component type name serialization ────────────────────────────────────

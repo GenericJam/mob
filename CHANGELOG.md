@@ -56,6 +56,28 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   are reached, since its scrim covers the rest. Its `accessibilityActivate`
   fallback, which tapped instead of long-pressing and reported `:ok` either
   way, is gone. Give a long-press node an `:id` to drive it by coordinates.
+- **A Text or Icon with no `text_color` follows `Mob.Theme`** (MOB-567). The
+  renderer now gives `:text` and `:icon` a default `text_color: :on_surface`,
+  as `:text_field` already had. iOS drew them in `Color.primary`, which
+  follows the system appearance rather than the theme, and Android in
+  Compose's `LocalContentColor`, black outside a Material surface, so a
+  dark theme on a light-mode phone (or the reverse) drew unreadable labels
+  such as MishkaCard's string `title`. An explicit `text_color` still wins.
+  Text that should sit on a different fill (`:on_primary` over a
+  `:primary` box, `:on_background` straight on the page) still needs its
+  own `text_color`.
+- **A `%Mob.Style{}` now beats the component defaults.** The defaults were
+  merged into the node's props before the style was, so a style's
+  `background` or `text_color` on a `:button` (the `Mob.Style` moduledoc's
+  own `@btn_primary` example) lost to `background: :primary` /
+  `text_color: :on_primary`. Inline props still beat the style. The theme's
+  injections now see the style too: under a glass theme a `:box` whose
+  `background` comes from a style gets `glass: true`, a style's
+  `glass: false` is honoured, and a style's `font` beats the theme's default
+  font.
+- On iOS a screen whose root has no `background` sits on the system
+  background, which the new text default does not follow: give the root
+  `background: :background` (the generated screens do).
 
 ## [0.9.33] - 2026-11-27
 
