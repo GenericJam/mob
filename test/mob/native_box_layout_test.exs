@@ -31,4 +31,22 @@ defmodule Mob.NativeBoxLayoutTest do
     assert source =~
              ~r/else if node\.fillHeight \{.*?if node\.fillWidthSet && !node\.fillWidth \{\s*stack\.frame\(maxHeight: \.infinity, alignment: alignment\)/s
   end
+
+  # MOB-568. The fixed-width branch is taken before any fill_height check, so
+  # a `width` + `fill_height` box (MishkaSeparator's vertical rule) used to come
+  # out 0pt tall. fill_height must apply there too, unless a height is pinned.
+  test "iOS box with a fixed width still fills height" do
+    source =
+      @root
+      |> Path.join("ios/MobRootView.swift")
+      |> File.read!()
+      |> Mob.Test.NativeSource.code_only()
+      |> Mob.Test.NativeSource.region(
+        "private struct MobBox: View {",
+        "} else if node.fixedHeight > 0 {"
+      )
+
+    assert source =~ "width: CGFloat(node.fixedWidth)"
+    assert source =~ "maxHeight: (node.fillHeight && node.fixedHeight <= 0) ? .infinity : nil"
+  end
 end

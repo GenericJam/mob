@@ -666,11 +666,13 @@ are strings, and iOS ignores a string there.
 
 ### `:divider`
 
-A horizontal rule. Default color is `:border`.
+A horizontal rule that fills the width it is given, in a column or a row alike.
+Default color is `:border`.
 
 | Prop | Type | Description |
 |------|------|-------------|
 | `color` | color | Line color (default `:border`) |
+| `thickness` | number | Line height in dp/pt (default `1`) |
 
 ### `:progress`
 
