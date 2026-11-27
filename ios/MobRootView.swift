@@ -3059,7 +3059,7 @@ public struct MobRootView: View {
         // Every open `:anchored` panel on the active screen is drawn here, at
         // the root, so no Box or Scroll between it and its anchor can clip it.
         .overlayPreferenceValue(MobAnchoredKey.self) { entries in
-            MobAnchoredPanelHost(entries: entries)
+            MobAnchoredPanelHost(entries: entries, windowSafeArea: model.windowSafeArea)
         }
         // Only the default scene's window takes part in the element frame
         // registry (MOB-245). Applied after the anchored-panel overlay so it

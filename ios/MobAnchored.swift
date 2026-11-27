@@ -84,6 +84,13 @@ struct MobAnchoredView: View {
 
 struct MobAnchoredPanelHost: View {
     let entries: [MobAnchoredEntry]
+    /// The window's safe area, from UIKit (`MobViewModel.windowSafeArea`). A
+    /// GeometryProxy cannot supply it: its `safeAreaInsets` are the insets the
+    /// reader's frame already EXCLUDES, so reading them inside the root (which
+    /// respects the top and ignores the bottom) counted the status bar twice
+    /// and the home indicator not at all — and a reader that ignores the safe
+    /// area, as this one does, reports zero on every edge.
+    let windowSafeArea: UIEdgeInsets
     @Environment(\.layoutDirection) private var layoutDirection
 
     var body: some View {
@@ -110,12 +117,20 @@ struct MobAnchoredPanelHost: View {
                             entry: entry,
                             anchorRect: proxy[entry.bounds],
                             container: proxy.size,
-                            safeArea: proxy.safeAreaInsets,
+                            safeArea: windowSafeArea,
                             rightToLeft: layoutDirection == .rightToLeft
                         )
                     }
                 }
             }
+            // The whole window, the frame Android's provider works in (the real
+            // display, with safeDrawing added per edge): anchors resolve in
+            // window coordinates, "on screen" means on the display, and the
+            // clamp pads by the window's own insets. `.container` only: the
+            // keyboard region stays respected, so with the keyboard up the host
+            // ends at its top edge and a panel flips or clamps above it — the
+            // part of safeDrawing that view.safeAreaInsets does not carry.
+            .ignoresSafeArea(.container)
         }
     }
 }
@@ -124,7 +139,7 @@ private struct MobAnchoredPanel: View {
     let entry: MobAnchoredEntry
     let anchorRect: CGRect
     let container: CGSize
-    let safeArea: EdgeInsets
+    let safeArea: UIEdgeInsets
     let rightToLeft: Bool
 
     @State private var panelSize: CGSize = .zero
@@ -148,20 +163,56 @@ private struct MobAnchoredPanel: View {
             rightToLeft: rightToLeft
         )
 
-        MobNodeView(node: entry.panel)
-            .frame(maxWidth: maxWidth, maxHeight: maxHeight, alignment: .topLeading)
-            .background(
-                GeometryReader { geo in
-                    Color.clear.onChange(of: geo.size, initial: true) { _, size in
-                        panelSize = size
-                    }
+        // Measure the PANEL. The cap used to be a max-only `.frame`, and the
+        // size was read off that frame — but a max-only frame takes the size it
+        // is offered (clamped to the max), not its child's: the host offers the
+        // whole window, so every panel read as the window minus the edges.
+        // Nothing then fitted on either side, nothing flipped, and the clamp
+        // pinned every panel to the top-left corner while its trigger scrolled
+        // away (MOB-563). `MobAnchoredCap` caps what the panel is offered and
+        // takes the panel's own size, so what is measured, offset and drawn is
+        // one rectangle, whatever the layout direction.
+        MobAnchoredCap(maxWidth: maxWidth, maxHeight: maxHeight) {
+            MobNodeView(node: entry.panel)
+        }
+        .background(
+            GeometryReader { geo in
+                Color.clear.onChange(of: geo.size, initial: true) { _, size in
+                    panelSize = size
                 }
-            )
-            // Hidden until measured: the first pass positions a zero-size
-            // panel, and showing it would flash the content at the wrong spot.
-            .opacity(panelSize == .zero ? 0 : 1)
-            .offset(x: origin.x, y: origin.y)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        )
+        // Hidden until measured: the first pass positions a zero-size
+        // panel, and showing it would flash the content at the wrong spot.
+        .opacity(panelSize == .zero ? 0 : 1)
+        .offset(x: origin.x, y: origin.y)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// Android's `Modifier.widthIn(max)` / `heightIn(max)` inside the anchored
+/// Popup: offer the panel no more than the cap, and be exactly the panel's own
+/// size. A max-only `.frame` caps the offer too, but sizes ITSELF to the offer,
+/// which is the size MOB-563 mistook for the panel's.
+private struct MobAnchoredCap: Layout {
+    let maxWidth: CGFloat
+    let maxHeight: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        subviews.first?.sizeThatFits(capped(proposal)) ?? .zero
+    }
+
+    func placeSubviews(
+        in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()
+    ) {
+        subviews.first?.place(at: bounds.origin, proposal: capped(proposal))
+    }
+
+    private func capped(_ proposal: ProposedViewSize) -> ProposedViewSize {
+        ProposedViewSize(
+            width: min(proposal.width ?? maxWidth, maxWidth),
+            height: min(proposal.height ?? maxHeight, maxHeight)
+        )
     }
 }
 
@@ -185,7 +236,7 @@ enum MobAnchoredPosition {
         let flip: Bool
         let clamp: Bool
 
-        init(owner: MobNode, edge: CGFloat, safeArea: EdgeInsets) {
+        init(owner: MobNode, edge: CGFloat, safeArea: UIEdgeInsets) {
             side = owner.anchoredSide ?? "bottom"
             // `align` lands in boxAlign for every node; anchored only knows
             // start / end, and anything else (including the box default
@@ -196,9 +247,11 @@ enum MobAnchoredPosition {
             nudgeX = CGFloat(owner.anchoredPanelOffsetX)
             nudgeY = CGFloat(owner.anchoredPanelOffsetY)
             // The safe area is added per edge; it is zero on edges without a bar.
-            padLeft = edge + safeArea.leading
+            // UIKit's left/right, not leading/trailing: the arithmetic below is
+            // absolute, and mirrors side and align for RTL itself.
+            padLeft = edge + safeArea.left
             padTop = edge + safeArea.top
-            padRight = edge + safeArea.trailing
+            padRight = edge + safeArea.right
             padBottom = edge + safeArea.bottom
             flip = owner.anchoredFlip
             clamp = owner.anchoredClamp

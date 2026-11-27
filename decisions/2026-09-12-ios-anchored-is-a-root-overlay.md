@@ -47,6 +47,13 @@ then clamp to the window (edge padding plus the safe area) only while the
 anchor is on screen. `on_tap` on the node is the outside-tap dismiss request:
 a clear full-window shape under the panel reports it; nothing closes itself.
 
+Correction 2026-11-27 (MOB-563): the panel was never measured. The size read
+back was the max-capped frame around it, which on iOS is the window minus the
+edges. Every panel was clamped to the top-left. The padding was also wrong: it
+used `GeometryProxy.safeAreaInsets` inside the root, which counted the status
+bar twice and missed the home indicator. See
+`2026-11-27-ios-anchored-measures-the-panel-in-window-coordinates.md`.
+
 The code lives in `ios/MobAnchored.swift`. `MobRootView.swift` crossed swiftlint's 3000-line limit with #158, and the generated `build.zig` globs every
 `ios/*.swift`, so a new file costs nothing downstream.
 
@@ -58,6 +65,9 @@ The code lives in `ios/MobAnchored.swift`. `MobRootView.swift` crossed swiftlint
   iOS uses the root container for both, and that container starts below the
   status bar. An anchor scrolled up into the status-bar band is on screen to
   Android and off screen to iOS, which then skips the clamp for it.
+  Correction 2026-11-27 (MOB-563): no longer true. The host now spans the
+  window and pads by the window's own safe area, so iOS tests "on screen"
+  against the display the way Android does.
 - A screen parked behind a push (depth-1 retention) publishes no entries: the
   view reads `mobScreenIsActive` and returns `[]` while inactive, the way
   `MobSheetView` hides a parked sheet. Without that, a panel left open on the
