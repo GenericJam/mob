@@ -10,6 +10,27 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Changed
+- **iOS: a Column is as wide as its widest child unless it sets
+  `fill_width={true}`, as on Android.** It used to fill its parent whenever
+  it had no `width`, and ignored `fill_width={false}`. So a parent could
+  never centre a Column, and Columns side by side in a Row split it evenly.
+  In mob_mishka this wrapped MishkaTabs labels mid-word ("Overvie/w"), left
+  the MishkaEmptyState indicator and actions at the leading edge, ran the
+  MishkaAnchor underline across the whole card, and split calendar agenda
+  rows in half. A screen's root Column still spans the screen's width
+  (Android hosts it with `fillMaxSize`), and a Column still widens to its
+  parent when any child fills it (a Box, a Button, a Divider, a centred Text,
+  a `fill_width` Row or Text), so most screens look the same. The Column
+  directly under a `lazy: true` Scroll is a lazy stack and still fills.
+  **Migration (iOS):** a Column that paints a `background` or carries an
+  `on_tap`, and holds only content-sized children (plain Text, Rows without
+  `fill_width`, fixed-size items), now covers only that content: the
+  background and the tap area shrink to it. Add `fill_width={true}` to it;
+  Android already needed it. Columns placed side by side in a Row that
+  should share it need `weight={1}`. (MOB-564,
+  `decisions/2026-11-27-ios-column-hugs-unless-fill-width.md`)
+
 ### Fixed
 - **iOS: wrapping Text is no longer cut to one line with "…" inside a
   Column.** A Column placed at its own ideal height shared that height out by
@@ -20,12 +41,10 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   on an ancestor, a `weight` share, a screen that does not scroll) now draws
   past that bound instead of ending in "…". `max_lines` caps it only if that
   many lines fit in the bound. And a Text whose width is squeezed now wraps
-  taller instead of ending in "…": **regression until MOB-564 (a Column
-  always fills its parent's width) lands.** On iOS, MishkaTabs labels get an
-  even split of the strip and wrap to two lines inside the strip's one-line
-  horizontal Scroll. The labels are cut off mid-glyph, and the active tab's
-  underline falls below the strip and is clipped away. The next mob release
-  is gated on MOB-564. (MOB-562,
+  taller instead of ending in "…". MishkaTabs labels were squeezed that way
+  by the even split described under MOB-564 above, which this release also
+  fixes; with both, the labels sit on one line with the active tab's
+  underline under them. (MOB-562,
   `decisions/2026-11-27-ios-text-fixed-vertical-size.md`)
 - **iOS: anchored panels (tooltip, popover, preview card, menus) sit next to
   their trigger.** The panel's size was read from its max-width cap

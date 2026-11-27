@@ -244,6 +244,7 @@ extension MobNodeView: Equatable {
             && lhs.layoutWeightAxis == rhs.layoutWeightAxis
             && lhs.lazyContainer == rhs.lazyContainer
             && lhs.prioritizeHorizontalText == rhs.prioritizeHorizontalText
+            && lhs.screenRoot == rhs.screenRoot
     }
 }
 
@@ -264,17 +265,24 @@ struct MobNodeView: View {
     // True only for direct children of a Row containing a flexible Spacer.
     // This lets labels claim the Spacer's slack before they are compressed.
     private let prioritizeHorizontalText: Bool
+    // True only for the node a screen slot hosts. Android composes that node
+    // with `Modifier.fillMaxSize()`, so a root Column spans the screen there
+    // even without `fill_width`; this keeps the iOS root Column doing the same
+    // now that other Columns hug (MOB-564).
+    private let screenRoot: Bool
 
     init(
         node: MobNode,
         layoutWeightAxis: MobLayoutWeightAxis? = nil,
         lazyContainer: Bool = false,
-        prioritizeHorizontalText: Bool = false
+        prioritizeHorizontalText: Bool = false,
+        screenRoot: Bool = false
     ) {
         self.node = node
         self.layoutWeightAxis = layoutWeightAxis
         self.lazyContainer = lazyContainer
         self.prioritizeHorizontalText = prioritizeHorizontalText
+        self.screenRoot = screenRoot
     }
 
     var body: some View {
@@ -299,15 +307,27 @@ struct MobNodeView: View {
                 // MOB-181: honor fixed_width / fixed_height on columns.
                 // The inner .frame pins whichever fixed dim is set (nil for
                 // unset dims leaves the child's own size intact). The outer
-                // .frame keeps the default fill-width behavior and adds
-                // fill_height, but suppresses the outer growth on whichever
-                // axis is already pinned — otherwise a fixed dim would fight
-                // maxWidth/maxHeight: .infinity and read as ignored. Fixed
-                // beats fill on iOS for internal consistency (SwiftUI would
-                // apply the outer maxWidth after the inner width, effectively
-                // overriding it). See decisions/2026-09-11-column-row-fixed-dims-precedence.md.
+                // .frame adds fill_width / fill_height, but suppresses the
+                // outer growth on whichever axis is already pinned — otherwise
+                // a fixed dim would fight maxWidth/maxHeight: .infinity and
+                // read as ignored. Fixed beats fill on iOS for internal
+                // consistency (SwiftUI would apply the outer maxWidth after the
+                // inner width, effectively overriding it). See
+                // decisions/2026-09-11-column-row-fixed-dims-precedence.md.
                 // `MobLayoutWeight` below is also fixed-dim-aware so weight
                 // on the pinned axis is likewise suppressed.
+                //
+                // MOB-564: a Column hugs its widest child unless it sets
+                // `fill_width: true`, as Compose's Column does. It used to take
+                // maxWidth: .infinity unconditionally, so a Column could never
+                // be centred by its parent (empty_state, anchor underline) and
+                // every Column in an HStack was equally greedy (tab triggers
+                // split the strip evenly and wrapped mid-word). A child that is
+                // itself greedy (a Box, a fill_width Row or Text, a Divider)
+                // still widens the VStack to the proposal, as fillMaxWidth does
+                // inside a wrapping Compose Column. The screen root keeps
+                // filling: Android hosts it with fillMaxSize. See
+                // decisions/2026-11-27-ios-column-hugs-unless-fill-width.md.
                 //
                 // fill_height: true lets a column flex to fill its parent so children
                 // with Spacer() or fill_height of their own can pin to the bottom
@@ -321,7 +341,7 @@ struct MobNodeView: View {
                     alignment: .topLeading
                 )
                 .frame(
-                    maxWidth: node.fixedWidth > 0 ? nil : .infinity,
+                    maxWidth: ((node.fillWidth || screenRoot) && node.fixedWidth <= 0) ? .infinity : nil,
                     maxHeight: (node.fillHeight && node.fixedHeight <= 0) ? .infinity : nil,
                     alignment: .topLeading
                 )
@@ -3108,7 +3128,7 @@ public struct MobRootView: View {
     @ViewBuilder
     private func screenSlot(_ index: Int) -> some View {
         if let root = slots[index] {
-            MobNodeView(node: root)
+            MobNodeView(node: root, screenRoot: true)
                 .equatable()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .offset(x: slotOffset[index])
