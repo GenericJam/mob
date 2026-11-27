@@ -2,8 +2,11 @@
 
 ## Reporting a vulnerability
 
-Email **genericjam@gmail.com** with `[mob security]` in the subject. Please
-don't open a public issue, pull request or discussion for a vulnerability.
+Report it privately on GitHub with
+[**Report a vulnerability**](https://github.com/GenericJam/mob/security/advisories/new)
+(the repository's Security tab), or email **genericjam@gmail.com** with
+`[mob security]` in the subject. Please don't open a public issue, pull request
+or discussion for a vulnerability.
 
 Include what you can of:
 
