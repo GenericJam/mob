@@ -57,7 +57,9 @@ world, so the boundaries that matter are where outside data enters the app.
   Binding to loopback is not authentication: other apps on the same device can
   connect to it. On a physical iPhone, a development build's distribution is
   reachable from the local network by design and is protected by the app's
-  private cookie; getting in without that cookie is a vulnerability.
+  private cookie; getting in without that cookie is a vulnerability. The
+  connection is not encrypted, so development builds assume a local network you
+  trust; an attacker who can intercept traffic on it is outside that protection.
 - App data exposed through files, screen state, logs or crash output.
 
 **Not vulnerabilities on their own:**
