@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.33] - 2026-11-27
+
 ### Changed
 - **iOS boot screen: the app's own icon with three pulsing dots under it.**
   It was a white spinner and the startup phase on black. Now it is the app
@@ -21,6 +23,10 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   otherwise the app icon itself. The startup phase stays readable as the
   accessibility label, and a failed boot still shows the error, now in the
   system's colours.
+
+### Security
+- **db_connection 2.10.3** in `mix.lock`, for EEF-CVE-2026-133555 (high;
+  2.10.1 was affected), which failed the osv-scanner check. (#248)
 
 ## [0.9.32] - 2026-11-21
 
