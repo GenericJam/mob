@@ -1,10 +1,11 @@
 # Mob fonts
 
 Status (2026-08-24): **implemented, compile-verified, not yet
-device-verified.** All five design points below shipped — named font
+device-verified.** The first five design points below shipped — named font
 tokens, app-wide default injection, plugin-declared defaults with
 conflict detection, an explicit fallback chain, and the cross-platform
-name-resolution fix. What's *not* done yet:
+name-resolution fix. The sixth (generic names on iOS, MOB-566, 2026-11-27)
+was checked on the iOS simulator. What's *not* done yet:
 
 - **Native fallback-chain behavior hasn't been confirmed on a physical
   device** — only that the iOS (Swift/ObjC) and Android (Kotlin template)
@@ -52,7 +53,8 @@ frozen proposal.
 | Cross-plugin font *file* collision detection | ✅ shipped | `assets.ex` (raises on basename collision) |
 | App-wide default font | ✅ shipped | `Mob.Theme.fonts[:default]` + `Mob.Renderer.inject_font_default/2` |
 | Plugin-declared default font | ✅ shipped | `default_font: %{family:, file:}` manifest field, `Mob.Plugins.apply_default_font/0` |
-| Declared fallback font/chain | ✅ shipped, compile-verified only | `Mob.Theme.font_fallback` pushed via `notify_native/1`; iOS `MobNode.resolveFontName` / Android `fontFamilyProp` walk it — **not yet confirmed on a physical device** |
+| Declared fallback font/chain | ✅ shipped, compile-verified only | `Mob.Theme.font_fallback` pushed via `notify_native/1`; iOS `MobNode.resolveFontFace` / Android `fontFamilyProp` walk it — **not yet confirmed on a physical device** |
+| Generic family names (`monospace`, `serif`, `sans-serif`, `rounded`) | ✅ shipped (iOS: MOB-566) | iOS `MobFontFace.genericDesigns` (`ios/MobFonts.swift`) → system font design; Android `Typeface.create` — see §6 |
 | Named font tokens (`font: :heading`) | ✅ shipped | `Mob.Renderer.resolve_font/3` |
 | Cross-platform font-name consistency | ✅ fixed | see below |
 
@@ -268,11 +270,13 @@ resort:
 - **iOS**: `nif_set_theme` (`ios/mob_nif.m`) parses the JSON and caches
   `_font_fallback` in a static `NSArray`, exposed to Swift via
   `mob_font_fallback()` (declared in the bridging header). `MobNode`'s
-  new `resolveFontName(primary:)` walks `[primary] + mob_font_fallback()`,
-  checking `UIFont(name:size:) != nil` before using each candidate
+  `resolveFontFace(primary:)` walks `[primary] + mob_font_fallback()`,
+  taking a generic family name (§6) as the system font in that design and
+  checking `UIFont(name:size:) != nil` before using any other candidate
   (`Font.custom` itself has no "did this resolve" signal the way
-  `UIFont` does) — `resolvedFont` calls it instead of going straight to
-  `Font.custom`. Logs via `NSLog(@"[mob/font] ...")` when the primary
+  `UIFont` does) — `resolvedFont` and the UIKit field's `resolvedUIFont`
+  call it instead of going straight to `Font.custom` / `UIFont(name:)`.
+  Logs via `NSLog(@"[mob/font] ...")` when the primary
   choice misses, so a missing font is diagnosable instead of silently
   "just looks like the wrong font."
 - **Android**: `MobBridge.setTheme` now also parses `_font_fallback`
@@ -329,6 +333,32 @@ A plugin's `default_font: %{family:, file:}` manifest field goes
 through the equivalent conversion in `mob_dev` — `RuntimeManifest`
 builds the exact same `%{ios:, android:}` shape from the plugin's
 declared family + file before it ever reaches `Mob.Plugins`.
+
+### 6. Generic family names
+
+`font: "monospace"`, `"serif"`, `"sans-serif"` and `"rounded"` name a
+design of the system font rather than a font file, so they need no bundled
+asset and work as a primary `font` or inside `font_fallback`:
+
+| Name | iOS (`resolvedFont` / `resolvedUIFont`) | Android (`resolveOneFontName`) |
+|---|---|---|
+| `monospace` | `.system(design: .monospaced)` — SF Mono | `Typeface.create("monospace")` |
+| `serif` | `.serif` — New York | `Typeface.create("serif")` |
+| `sans-serif` | `.default` — SF | `Typeface.create("sans-serif")` is `Typeface.DEFAULT`, which `resolveOneFontName` treats as unresolved: the chain moves on, ending at the default face (sans-serif) |
+| `rounded` | `.rounded` — SF Rounded | no such family: the chain moves on, ending at the default face |
+
+`font_weight` and `italic` apply on top, as they do for a named face. On
+iOS the generic names are matched exactly (lower case, as Android's
+`Typeface.create` takes them) and before `UIFont(name:)`, which never loads
+them: before MOB-566 "monospace" logged `[mob/font] none of (monospace)
+resolved` and drew the proportional system font. Android also takes its
+other system families (`serif-monospace`, `cursive`, `casual`, …); iOS has
+no matching design for those and treats them as unresolved names.
+
+The two platforms part ways when `sans-serif` or `rounded` is followed by
+more names: iOS stops at the generic name, Android skips it and draws the
+next name that loads. `font: "sans-serif"` with `font_fallback: ["Inter"]`
+is SF on iOS and Inter on Android.
 
 ### Where font files come from
 

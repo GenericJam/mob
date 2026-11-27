@@ -36,6 +36,14 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   and scroll with the page. The clamp also counted the status bar twice and
   ignored the home indicator. It now pads by the window's own safe area, as
   Android does. (MOB-563)
+- **iOS: generic font names resolve** (MOB-566). `font: "monospace"`,
+  `"serif"`, `"sans-serif"` and `"rounded"` draw the system font's
+  monospaced, serif, default and rounded designs, in Text and in the UIKit
+  text field, with `font_weight` and `italic` still applied. They went to
+  `UIFont(name:)`, which loads no such font, so iOS logged
+  `[mob/font] none of (monospace) resolved` and drew the proportional system
+  font. Android draws `monospace` and `serif` through `Typeface.create`
+  already; `sans-serif` and `rounded` give its default face there.
 
 ## [0.9.33] - 2026-11-27
 
