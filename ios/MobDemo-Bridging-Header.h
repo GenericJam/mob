@@ -76,7 +76,7 @@ uint64_t mob_frame_generation(void);
 // the same :id.
 void mob_unregister_frame(const char *id, uint64_t seq);
 
-// Called from MobRootView.swift's resolvedFont to get the ordered fallback
+// Called from MobFonts.swift's resolveFontFace to get the ordered fallback
 // font names from the last Mob.Theme.set/1 (nif_set_theme in mob_nif.m
 // stores it). Empty (never nil) when no theme has set font_fallback.
 NSArray<NSString *> *mob_font_fallback(void);

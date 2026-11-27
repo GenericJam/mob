@@ -471,7 +471,8 @@ extension MobNode {
             }
         }()
         let base: UIFont
-        if let name = MobNode.resolveFontName(primary: fontFamily), let custom = UIFont(name: name, size: size) {
+        let face = MobNode.resolveFontFace(primary: fontFamily)
+        if case .named(let name)? = face, let custom = UIFont(name: name, size: size) {
             // No `font_weight`: the named face as-is, so `font: "Inter-Bold"`
             // stays bold rather than matching the family at regular weight.
             if fontWeight == "regular" {
@@ -482,6 +483,12 @@ extension MobNode {
                     .traits: [UIFontDescriptor.TraitKey.weight: weight]
                 ]), size: size)
             }
+        } else if case .system(let design)? = face,
+                  let descriptor = UIFont.systemFont(ofSize: size, weight: weight)
+                      .fontDescriptor.withDesign(design.uiKitDesign) {
+            // A generic family ("monospace"): the system font in that design,
+            // as `resolvedFont` draws it.
+            base = UIFont(descriptor: descriptor, size: size)
         } else {
             base = .systemFont(ofSize: size, weight: weight)
         }

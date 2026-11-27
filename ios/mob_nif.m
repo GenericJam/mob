@@ -3908,7 +3908,7 @@ static ERL_NIF_TERM nif_set_transition(ErlNifEnv *env, int argc, const ERL_NIF_T
 // Material 3's NavigationBar / Button colour scheme.
 //
 // `_font_fallback` IS read: it's the ordered list of font names
-// MobRootView.swift's `resolvedFont` walks when a node's own font can't be
+// MobFonts.swift's `MobNode.resolveFontFace` walks when a node's own font can't be
 // loaded (see mob_font_fallback() below and MOB_FONTS.md).
 static NSArray<NSString *> *g_font_fallback = nil;
 
@@ -3949,7 +3949,7 @@ static ERL_NIF_TERM nif_set_theme(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
     return enif_make_atom(env, "ok");
 }
 
-// Read from MobRootView.swift's resolvedFont — see nif_set_theme above.
+// Read from MobFonts.swift's resolveFontFace — see nif_set_theme above.
 // Never nil; empty when no theme has set a font_fallback (the default).
 NSArray<NSString *> *mob_font_fallback(void) {
     return g_font_fallback ?: @[];

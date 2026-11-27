@@ -122,6 +122,15 @@ make sure that exact string is valid on both platforms; there's no
 automatic normalisation for a literal string the way there is for a
 `Mob.Theme.font/2`-built token.
 
+**Generic families:** `font: "monospace"` and `"serif"` are the system
+font's monospaced and serif designs on both platforms (SF Mono / New York on
+iOS, `Typeface.create` on Android). `"sans-serif"` is SF on iOS and
+Android's default face; `"rounded"` is SF Rounded on iOS, and Android, which
+has no rounded family, draws its default face. `font_weight` and `italic`
+still apply. On Android `"sans-serif"` and `"rounded"` count as unresolved,
+so a `font_fallback` list after them is still tried there — see
+`MOB_FONTS.md` §6.
+
 **Fallback:** set `Mob.Theme.font_fallback` (same value shape as a `fonts`
 entry) to an ordered list of names tried when the resolved font can't be
 loaded on-device. Empty by default — the platform's own system font is
