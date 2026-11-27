@@ -243,9 +243,13 @@ defmodule Mob.Test do
     nothing by design.
 
   - **◇** On the simulator `long_press_xy/4` calls the `on_long_press` of the
-    innermost node with an `:id` whose frame contains the point, and its `:ok`
+    `column`, `row`, `wrap`, `box`, `text`, `icon` or `anchored` node with an
+    `:id` whose frame is the smallest containing the point, and its `:ok`
     means the event reached the BEAM (MOB-572). A node without an `:id` is
-    not found. See `long_press_xy/4`.
+    not found. A presented sheet and the scrim of an open `:anchored` panel
+    with `on_tap` are honoured; other things drawn over the node are not: a
+    panel without a scrim, a fixed header over a scrolled row, the keyboard.
+    See `long_press_xy/4`.
 
   - **✱** These report `:ok` when the OS *accepted* the input, not when the app
     was observed to react — they have not been converted to the observation
@@ -1379,13 +1383,26 @@ defmodule Mob.Test do
   **iOS simulator.** SwiftUI's long-press gesture has no UIKit recognizer to
   drive and the simulator drops synthetic touches, so the NIF finds the Mob
   node at the point and calls its `on_long_press` handler directly. That node
-  is the innermost one with both `on_long_press` and an `:id` whose frame (the
-  one `element_frames/1` reports) contains the point. **Give the node an
-  `:id`**: without one it has no frame to find. A UIKit long-press recognizer
-  under the point (a text field's, a native view's) is fired instead when
-  there is one. A point on a presented sheet only reaches nodes inside the
-  `:sheet`, and a point on the screen never reaches them. The press fires at
-  once; `duration_ms` is not waited.
+  is a `column`, `row`, `wrap`, `box`, `text`, `icon` or `anchored` with both
+  `on_long_press` and an `:id`, the one whose frame (the one
+  `element_frames/1` reports) is the smallest containing the point; of equal
+  frames the later node in the tree wins. Those are the types that take a
+  long press on iOS: a `button`, `text_field`, `slider`, `toggle`, `image` or
+  `scroll` with `on_long_press` never runs it, and is not found. **Give the
+  node an `:id`**: without one it has no frame to find. A UIKit long-press
+  recognizer under the point (a text field's, a native view's) is fired
+  instead when there is one. A point on a presented sheet only reaches nodes
+  inside the `:sheet`, and a point on the screen never reaches them. While an
+  `:anchored` panel whose node has `on_tap` is open, its dismiss scrim covers
+  the screen, so only nodes inside the open panels are reached. Only the
+  default window is searched. The press fires at once; `duration_ms` is not
+  waited.
+
+  Anything else drawn over a node is not seen, and the node under it is
+  still pressed: an open `:anchored` panel without `on_tap` (no scrim), a
+  fixed header over a row scrolled under it, the keyboard. Nor is the node's
+  hit shape: a press inside its frame where a real touch would miss (a clear
+  background) still fires it.
 
   The result reports an observed effect, as `tap_xy/3` does:
 

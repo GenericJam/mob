@@ -25,12 +25,50 @@ defmodule Mob.NativeIOSLongPressXYTest do
     assert body =~ "target.onLongPress();"
 
     helper =
-      NativeSource.region(@nif, "static void mob_long_press_target_in(", "static ERL_NIF_TERM")
+      NativeSource.region(
+        @nif,
+        "static void mob_long_press_target_in(",
+        "static BOOL mob_open_panels_in("
+      )
 
     assert helper =~
              ~r/node\.onLongPress && node\.nativeViewId && sheet == wantSheet &&\s*mob_node_type_long_presses\(node\.nodeType\)/
 
     assert helper =~ "CGRectContainsPoint(r, pt) && area <= *bestArea"
+  end
+
+  test "a hit view outside the root controller's view searches the sheets" do
+    body = simulator_branch()
+    assert body =~ "UIView *rootView = hitWindow.rootViewController.view;"
+    assert body =~ "BOOL onPresented = rootView && ![hitView isDescendantOfView:rootView];"
+  end
+
+  test "with an anchored dismiss scrim open, only the open panels are searched" do
+    body = simulator_branch()
+
+    assert body =~
+             ~r/if \(!onPresented && mob_open_panels_in\(root, panels\)\) \{\s*for \(MobNode \*panel in panels\)\s*mob_long_press_target_in\(panel, pt, NO, NO, frames, &target, &area\);\s*\} else \{\s*mob_long_press_target_in\(root, pt, onPresented, NO, frames, &target, &area\);/
+
+    panels = NativeSource.region(@nif, "static BOOL mob_open_panels_in(", "#endif")
+    assert panels =~ "if (node.nodeType == MobNodeTypeSheet)\n        return NO;"
+
+    assert panels =~
+             "node.nodeType == MobNodeTypeAnchored && node.children.count > 1"
+
+    assert panels =~ "[panels addObject:node.children[1]];"
+    assert panels =~ "scrim = node.onTap != nil;"
+    assert panels =~ "scrim = mob_open_panels_in(child, panels) || scrim;"
+  end
+
+  test "a point in another scene's window is not matched against the shared tree" do
+    body = simulator_branch()
+    assert body =~ "NSString *sceneId = MobViewModel.shared.sceneId;"
+
+    assert body =~
+             "if (!sceneId || ![hitWindow.windowScene.session.persistentIdentifier isEqualToString:sceneId])\n          return NO;"
+
+    assert NativeSource.index_of(body, "MobViewModel.shared.sceneId") <
+             NativeSource.index_of(body, "MobViewModel.shared.displayedRoot")
   end
 
   test "only node types that get mobGestures are long-press targets" do
