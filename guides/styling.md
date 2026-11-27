@@ -287,8 +287,12 @@ props always win, and so do a `%Mob.Style{}`'s props and a platform block's
 | `:text_field` | `background: :surface_raised`, `text_color: :on_surface`, `placeholder_color: :muted`, `border_color: :border`, `padding: :space_sm`, `corner_radius: :radius_sm`, `text_size: :base` |
 | `:divider` | `color: :border` |
 | `:progress` | `color: :primary` |
+| `:sheet` | `background: :surface` |
 
 All other components have no injected defaults — unstyled components use the platform's own defaults.
+
+Both platforms paint the theme's `background` behind every screen, so a
+screen or list with no `background` of its own sits on the page colour.
 
 ---
 

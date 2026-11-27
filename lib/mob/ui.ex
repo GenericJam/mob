@@ -363,7 +363,8 @@ defmodule Mob.UI do
       or outside tap) — the same `{atom, tag}` wire shape as `on_focus`,
       `on_blur`, `on_submit`, and `on_select` elsewhere in `Mob.UI`.
     * `:background` — container color: a theme token atom or a
-      `0x00000000..0xFFFFFFFF` ARGB integer.
+      `0x00000000..0xFFFFFFFF` ARGB integer. Defaults to the theme's
+      `:surface`.
     * `:scrim` — dimming-layer color, same value shape as `:background`.
       **iOS cannot honor this exactly** — see the note below.
     * `:corner_radius` — top-corner radius: a theme radius token atom or

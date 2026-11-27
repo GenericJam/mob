@@ -1531,6 +1531,36 @@ defmodule Mob.RendererTest do
       tree = set_root_json()
       assert tree["props"]["glass"] == true
     end
+
+    test "a Box whose background comes from a style gets glass: true" do
+      Mob.Theme.set(glass: true)
+
+      Renderer.render(
+        %{type: :box, props: %{style: %Mob.Style{props: %{background: :surface}}}, children: []},
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      assert tree["props"]["glass"] == true
+    end
+
+    test "a style's glass: false survives a glass theme" do
+      Mob.Theme.set(glass: true)
+
+      Renderer.render(
+        %{
+          type: :box,
+          props: %{background: :surface, style: %Mob.Style{props: %{glass: false}}},
+          children: []
+        },
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      assert tree["props"]["glass"] == false
+    end
   end
 
   describe "font token resolution" do
@@ -1602,6 +1632,24 @@ defmodule Mob.RendererTest do
       Renderer.render(tree, :ios, MockNIF)
       refute Map.has_key?(set_root_json()["props"], "font")
     end
+
+    test "a style's font beats the theme's :default font" do
+      Mob.Theme.set(
+        fonts: %{
+          default: %{ios: "Inter-Regular", android: "inter_regular"},
+          heading: %{ios: "Inter-Bold", android: "inter_bold"}
+        }
+      )
+
+      tree = %{
+        type: :text,
+        props: %{text: "hi", style: %Mob.Style{props: %{font: :heading}}},
+        children: []
+      }
+
+      Renderer.render(tree, :ios, MockNIF)
+      assert set_root_json()["props"]["font"] == "Inter-Bold"
+    end
   end
 
   describe "sheet serialization" do
@@ -1622,6 +1670,16 @@ defmodule Mob.RendererTest do
     test "type serializes as the string \"sheet\"" do
       Renderer.render(sheet_tree(%{}), :android, MockNIF)
       assert set_root_json()["type"] == "sheet"
+    end
+
+    test "a sheet with no background gets the theme's :surface; an explicit one wins" do
+      Mob.Theme.set(surface: :gray_700)
+      Renderer.render(sheet_tree(%{}), :ios, MockNIF)
+      assert set_root_json()["props"]["background"] == 0xFF616161
+
+      MockNIF.reset()
+      Renderer.render(sheet_tree(%{background: :primary}), :ios, MockNIF)
+      assert set_root_json()["props"]["background"] == 0xFF2196F3
     end
 
     test "children serialize recursively like normal children" do

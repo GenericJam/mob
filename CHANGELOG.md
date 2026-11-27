@@ -75,9 +75,17 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `background` comes from a style gets `glass: true`, a style's
   `glass: false` is honoured, and a style's `font` beats the theme's default
   font.
-- On iOS a screen whose root has no `background` sits on the system
-  background, which the new text default does not follow: give the root
-  `background: :background` (the generated screens do).
+- **iOS paints the theme's `background` behind every screen**, as Android's
+  MainActivity already did, so the new text default is readable on a screen,
+  `:list` or `:box` with no `background` of its own whatever the phone's
+  appearance. The root sat on the system background, white on a light-mode
+  phone under the dark default theme. It follows `Mob.Theme.set/1` and an
+  adaptive theme's light/dark flip live, in every window. A `:sheet` with no
+  `background` now defaults to `background: :surface` on both platforms:
+  iOS presented it on the system material and Android on Material's own
+  `surfaceContainerLow`, neither of them the theme's. So no sheet gets the
+  system material (iOS 26's Liquid Glass sheet) any more, glass themes
+  included; give it an explicit `background` for another fill.
 
 ## [0.9.33] - 2026-11-27
 

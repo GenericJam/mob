@@ -24,7 +24,8 @@ was dark-on-dark whatever the phone's setting.
 `Mob.Renderer`'s `@component_defaults` gives `:text` and `:icon`
 `text_color: :on_surface`, the same token `:text_field` already defaulted to.
 Both platforms then receive a resolved ARGB colour from the active theme and
-neither native renderer changes.
+neither native renderer's text drawing changes. The one native change is the
+iOS root paint under Consequences, which keeps the default readable.
 
 The style merge moved ahead of the defaults (`merge_style/1` in `prepare/4`):
 inline props > `%Mob.Style{}` props > component defaults. Before, defaults were
@@ -47,15 +48,30 @@ differ still needs `text_color: :on_background`.
   non-surface theme colour such as `:primary` (such Text needs
   `text_color: :on_primary`), or when a theme's `on_background` and
   `on_surface` differ (no shipped theme's do).
-- **iOS limit: the page must be painted.** The iOS root does not paint the
-  theme's `background` (Android's MainActivity does), and a `:sheet` or
-  `:list` with no `background` is transparent. `Color.primary` was readable
-  on the system background whatever the theme; `:on_surface` is not when the
-  theme and the phone's appearance disagree (a dark theme's light text on a
-  light-mode phone's white). A screen should set `background: :background`
-  on its root, as mob_new's generated screens and the `Mob` / `Mob.Screen`
-  moduledoc examples do. Painting the theme background at the iOS root and
-  defaulting a sheet's background would remove the need; not done here.
+- **iOS: the root paints the theme's background.** `Color.primary` was
+  readable on the system background whatever the theme; `:on_surface` is not
+  when the theme and the phone's appearance disagree (a dark theme's light
+  text on a light-mode phone's white), and the iOS root used to show the
+  system background under a screen with no `background`. So `MobRootView`
+  now paints the theme's `background` behind every screen, as Android's
+  MainActivity paints `colorScheme.background`. `nif_set_theme` reads
+  `background` from the palette `Mob.Theme.set/1` already pushed and hands
+  it to every window's view model (`MobViewModel.themeBackground`), so a
+  theme change or an adaptive theme's light/dark flip repaints live. A `:list`
+  with no `background` is clear and shows the same paint.
+- **A `:sheet` defaults to `background: :surface`** in `@component_defaults`
+  rather than being painted natively. A sheet is presented above the root,
+  so the root paint does not reach it: iOS drew one with no `background` on
+  the system sheet material, Android on Material's `surfaceContainerLow`
+  (`BottomSheetDefaults.ContainerColor`), which Mob's colour scheme does not
+  set. One renderer default gives both platforms the theme's surface, the
+  fill `:on_surface` is meant for, and an explicit `background` still wins.
+  The cost: no theme gets the system sheet material any more, the Liquid
+  Glass sheet on iOS 26 included, glass themes too, and there is no prop that
+  asks for it back (`background: :transparent` is see-through, not the
+  material). That material follows the phone's appearance, not the theme,
+  which is the mismatch this record removes; a glass theme that wants a
+  translucent sheet would need a sheet-level `glass` flag, not done here.
 - `:button` draws its own label from its own `text_color` and is a leaf, so no
   Text sits inside a button's content colour.
 - A composite that wanted "whatever the platform's default is" can no longer

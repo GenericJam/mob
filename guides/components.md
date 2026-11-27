@@ -789,7 +789,7 @@ before either platform sees it.
 |------|------|-------------|
 | `detents` | list | Stops the sheet can rest at: a subset of `[:medium, :large]`, or the exclusive content-height detent `[:content]` / `[{:content, max_height: n}]`. Default `[:medium, :large]`. Invalid detents raise, both in `Mob.UI.sheet/2` and again at render time. |
 | `on_dismiss` | `{pid, tag}` | Delivered as `{:dismiss, tag}` to `handle_info/2`, exactly once, when the user dismisses the sheet (swipe-down, back gesture, outside tap) |
-| `background` | color | Sheet container color |
+| `background` | color | Sheet container color. Default `:surface` |
 | `scrim` | color | Dimming-layer color. Applied exactly on Android; **iOS cannot set the system dimming opacity** and stays system-black |
 | `corner_radius` | number / token | Top-corner radius |
 | `drag_indicator_color` / `_width` / `_height` / `_rail_height` | color / numbers | Custom drag-indicator capsule. All four together, or omit all four for the platform default |

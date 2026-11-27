@@ -52,15 +52,19 @@ defmodule Mob.Renderer do
   ## Component defaults
 
   When a component's props omit styling keys, the renderer injects sensible
-  defaults from the active theme. Explicit props always win over defaults.
+  defaults from the active theme. Inline props win over a `%Mob.Style{}`'s
+  props, and both win over the defaults. The theme's own injections (a glass
+  theme's `glass: true` on a `:box` with a `background`, the `:default` font)
+  see the inline and style props together.
 
       # Gets primary background, white text, medium radius automatically:
       %{type: :button, props: %{text: "Save", on_tap: {self(), :save}}, children: []}
 
   ## Style structs
 
-  A `%Mob.Style{}` value under the `:style` key is merged into the node's
-  own props before serialisation. Inline props override style values.
+  A `%Mob.Style{}` value under the `:style` key is merged under the node's own
+  props, and over the component defaults, before serialisation. Inline props
+  override style values.
 
   ## Platform blocks
 
@@ -198,6 +202,10 @@ defmodule Mob.Renderer do
   # follows `Mob.Theme`, not the platform: iOS drew it in `Color.primary` (the
   # system appearance) and Android in Compose's `LocalContentColor`, black
   # outside a Material surface — dark text on a dark theme's surfaces (MOB-567).
+  # A `:sheet` carries `background: :surface`, the fill that text is readable
+  # on: iOS presented a sheet with no `background` on the system material,
+  # which follows the phone's appearance, and Android on Material's own
+  # `surfaceContainerLow`, not the theme's.
 
   @component_defaults %{
     text: %{
@@ -230,6 +238,9 @@ defmodule Mob.Renderer do
     },
     progress: %{
       color: :primary
+    },
+    sheet: %{
+      background: :surface
     }
   }
 

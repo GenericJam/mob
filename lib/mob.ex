@@ -17,7 +17,7 @@ defmodule Mob do
         def render(assigns) do
           %{
             type:  :column,
-            props: %{padding: :space_md, background: :background, fill_width: true, fill_height: true},
+            props: %{padding: :space_md},
             children: [
               %{type: :text, props: %{text: assigns.title, text_size: :xl}, children: []}
             ]
