@@ -3012,34 +3012,8 @@ public struct MobRootView: View {
                 screenSlot(0)
                 screenSlot(1)
             } else {
-                ZStack {
-                    Color.black.ignoresSafeArea()
-                    VStack(spacing: 20) {
-                        if let error = model.startupError {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 44))
-                                .foregroundColor(Color.orange)
-                            Text("Startup Error")
-                                .font(.system(size: 20, weight: .bold))
-                                .foregroundColor(.white)
-                            Text(error)
-                                .font(.system(size: 13, design: .monospaced))
-                                .foregroundColor(Color(red: 0.9, green: 0.5, blue: 0.5))
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 28)
-                        } else {
-                            ProgressView()
-                                .progressViewStyle(.circular)
-                                .tint(.white)
-                                .scaleEffect(1.3)
-                            Text(model.startupPhase)
-                                .font(.system(size: 17, weight: .medium))
-                                .foregroundColor(.white.opacity(0.75))
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .transition(.opacity)
+                MobBootScreen(model: model)
+                    .transition(.opacity)
             }
         }
         // Live root height, published so a content-detent sheet can cap itself

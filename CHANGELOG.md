@@ -10,6 +10,18 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Changed
+- **iOS boot screen: the app's own icon with three pulsing dots under it.**
+  It was a white spinner and the startup phase on black. Now it is the app
+  icon, 96 pt, at the centre of the screen on the system background (white
+  or black), with the dots under it until the first screen renders; nothing
+  of Mob's shows. The icon is `MobLaunchIcon` when the bundle has it
+  (mob_dev makes it at build time, and mob_new apps show it on the launch
+  screen), so the handover from the launch screen keeps the icon in place;
+  otherwise the app icon itself. The startup phase stays readable as the
+  accessibility label, and a failed boot still shows the error, now in the
+  system's colours.
+
 ## [0.9.32] - 2026-11-21
 
 ### Added

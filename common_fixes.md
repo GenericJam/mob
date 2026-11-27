@@ -383,6 +383,11 @@ visually disappears and snaps back.
    With a white background the flash is highly visible. Changing it to black makes it
    imperceptible (matches the app's dark default background).
 
+   Since mob_new#127 the window background is the boot screen's (the launcher icon on
+   the system's white or black) only until `Mob.Theme.set` runs at boot; from then on
+   `MainActivity` sets it to the theme's background colour, which is what keeps the
+   resume gap invisible now, for light themes as well as dark ones.
+
 2. **Missing `android:configChanges`**: Without this, any system configuration change
    (rotation, font scale, display density, keyboard availability, etc.) destroys and
    recreates the Activity. This calls `nativeStartBeam()` a second time on an already-
