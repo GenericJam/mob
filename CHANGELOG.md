@@ -56,6 +56,36 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   are reached, since its scrim covers the rest. Its `accessibilityActivate`
   fallback, which tapped instead of long-pressing and reported `:ok` either
   way, is gone. Give a long-press node an `:id` to drive it by coordinates.
+- **A Text or Icon with no `text_color` follows `Mob.Theme`** (MOB-567). The
+  renderer now gives `:text` and `:icon` a default `text_color: :on_surface`,
+  as `:text_field` already had. iOS drew them in `Color.primary`, which
+  follows the system appearance rather than the theme, and Android in
+  Compose's `LocalContentColor`, black outside a Material surface, so a
+  dark theme on a light-mode phone (or the reverse) drew unreadable labels
+  such as MishkaCard's string `title`. An explicit `text_color` still wins.
+  Text that should sit on a different fill (`:on_primary` over a
+  `:primary` box, `:on_background` straight on the page) still needs its
+  own `text_color`.
+- **A `%Mob.Style{}` now beats the component defaults.** The defaults were
+  merged into the node's props before the style was, so a style's
+  `background` or `text_color` on a `:button` (the `Mob.Style` moduledoc's
+  own `@btn_primary` example) lost to `background: :primary` /
+  `text_color: :on_primary`. Inline props still beat the style. The theme's
+  injections now see the style too: under a glass theme a `:box` whose
+  `background` comes from a style gets `glass: true`, a style's
+  `glass: false` is honoured, and a style's `font` beats the theme's default
+  font.
+- **iOS paints the theme's `background` behind every screen**, as Android's
+  MainActivity already did, so the new text default is readable on a screen,
+  `:list` or `:box` with no `background` of its own whatever the phone's
+  appearance. The root sat on the system background, white on a light-mode
+  phone under the dark default theme. It follows `Mob.Theme.set/1` and an
+  adaptive theme's light/dark flip live, in every window. A `:sheet` with no
+  `background` now defaults to `background: :surface` on both platforms:
+  iOS presented it on the system material and Android on Material's own
+  `surfaceContainerLow`, neither of them the theme's. So no sheet gets the
+  system material (iOS 26's Liquid Glass sheet) any more, glass themes
+  included; give it an explicit `background` for another fill.
 
 ## [0.9.33] - 2026-11-27
 

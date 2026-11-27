@@ -52,15 +52,19 @@ defmodule Mob.Renderer do
   ## Component defaults
 
   When a component's props omit styling keys, the renderer injects sensible
-  defaults from the active theme. Explicit props always win over defaults.
+  defaults from the active theme. Inline props win over a `%Mob.Style{}`'s
+  props, and both win over the defaults. The theme's own injections (a glass
+  theme's `glass: true` on a `:box` with a `background`, the `:default` font)
+  see the inline and style props together.
 
       # Gets primary background, white text, medium radius automatically:
       %{type: :button, props: %{text: "Save", on_tap: {self(), :save}}, children: []}
 
   ## Style structs
 
-  A `%Mob.Style{}` value under the `:style` key is merged into the node's
-  own props before serialisation. Inline props override style values.
+  A `%Mob.Style{}` value under the `:style` key is merged under the node's own
+  props, and over the component defaults, before serialisation. Inline props
+  override style values.
 
   ## Platform blocks
 
@@ -191,9 +195,25 @@ defmodule Mob.Renderer do
 
   # ── Component defaults ────────────────────────────────────────────────────
   # Injected for missing styling props. Use semantic tokens so they inherit
-  # the active theme automatically. Explicit props always win.
+  # the active theme automatically. Explicit props, and a `%Mob.Style{}`'s,
+  # always win.
+  #
+  # `:text` and `:icon` carry `text_color: :on_surface` so an uncoloured label
+  # follows `Mob.Theme`, not the platform: iOS drew it in `Color.primary` (the
+  # system appearance) and Android in Compose's `LocalContentColor`, black
+  # outside a Material surface — dark text on a dark theme's surfaces (MOB-567).
+  # A `:sheet` carries `background: :surface`, the fill that text is readable
+  # on: iOS presented a sheet with no `background` on the system material,
+  # which follows the phone's appearance, and Android on Material's own
+  # `surfaceContainerLow`, not the theme's.
 
   @component_defaults %{
+    text: %{
+      text_color: :on_surface
+    },
+    icon: %{
+      text_color: :on_surface
+    },
     button: %{
       background: :primary,
       text_color: :on_primary,
@@ -218,6 +238,9 @@ defmodule Mob.Renderer do
     },
     progress: %{
       color: :primary
+    },
+    sheet: %{
+      background: :surface
     }
   }
 
@@ -343,7 +366,7 @@ defmodule Mob.Renderer do
 
   defp prepare(%{type: type, props: props, children: children}, nif, platform, ctx) do
     defaults = Map.get(@component_defaults, type, %{})
-    with_defaults = Map.merge(defaults, props)
+    with_defaults = Map.merge(defaults, merge_style(props))
     with_theme_flags = inject_theme_flags(type, with_defaults, ctx)
     with_font_default = inject_font_default(with_theme_flags, ctx)
 
@@ -352,6 +375,16 @@ defmodule Mob.Renderer do
       "props" => prepare_props(type, with_font_default, nif, platform, ctx),
       "children" => Enum.map(children, &prepare(&1, nif, platform, ctx))
     }
+  end
+
+  # A `%Mob.Style{}` under `:style` merges under the node's inline props, and
+  # both over the component defaults: merged after the defaults, a default
+  # (`text_color: :on_surface`) would beat the style's own value.
+  defp merge_style(props) do
+    case Map.pop(props, :style) do
+      {%Style{props: style_props}, inline} -> Map.merge(style_props, inline)
+      {nil, inline} -> inline
+    end
   end
 
   # When the active theme has `glass: true`, mark surface-style nodes so the
@@ -391,27 +424,19 @@ defmodule Mob.Renderer do
   defp inject_font_default(props, _ctx), do: props
 
   defp prepare_props(type, props, nif, platform, ctx) do
-    # 1. Merge any %Mob.Style{} under the :style key (inline props win)
-    {style, base} = Map.pop(props, :style)
-
-    merged =
-      case style do
-        %Style{props: sp} -> Map.merge(sp, base)
-        nil -> base
-      end
-
-    # 2. Resolve platform blocks (:ios / :android)
-    ios_extras = Map.get(merged, :ios, %{})
-    android_extras = Map.get(merged, :android, %{})
+    # 1. Resolve platform blocks (:ios / :android). The style is already
+    #    merged in (merge_style/1).
+    ios_extras = Map.get(props, :ios, %{})
+    android_extras = Map.get(props, :android, %{})
     platform_extra = if platform == :ios, do: ios_extras, else: android_extras
 
     final =
-      merged
+      props
       |> Map.delete(:ios)
       |> Map.delete(:android)
       |> Map.merge(platform_extra)
 
-    # 3. Serialize: convert atom keys, register taps/changes, resolve tokens.
+    # 2. Serialize: convert atom keys, register taps/changes, resolve tokens.
     # on_tap with a tagged tuple also emits "accessibility_id" so test tooling
     # can locate elements by tag name without relying on screen coordinates.
     final

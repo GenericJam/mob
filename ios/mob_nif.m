@@ -1158,6 +1158,10 @@ static void mob_send_scrolled_past(MobEventRef handle) {
 
 static NSMutableArray<MobSceneEntry *> *g_scene_entries = nil; // connection order
 
+// The active theme's `background` (nif_set_theme), handed to a window's view
+// model when the window connects. Main thread only.
+static UIColor *g_theme_background = nil;
+
 static NSObject *mob_scene_lock(void) {
     static NSObject *lock;
     static dispatch_once_t once;
@@ -1501,6 +1505,7 @@ NSObject *mob_scene_attach(UIWindowScene *scene) {
             entry.model =
                 set == 0 ? MobViewModel.shared : [[MobViewModel alloc] initWithWatchdog:NO];
             entry.model.sceneId = sceneId;
+            [entry.model applyThemeBackground:g_theme_background];
             if (set < 0) {
                 LOGE(@"scene %@: more than %d windows; this one shows nothing", sceneId,
                      MOB_SCENE_LIMIT);
@@ -3901,11 +3906,18 @@ static ERL_NIF_TERM nif_set_transition(ErlNifEnv *env, int argc, const ERL_NIF_T
 // SwiftUI view model. Runs on the BEAM thread — MobViewModel dispatches to main.
 
 // nif_set_theme/1 — accept the resolved theme palette (as JSON) from
-// Mob.Theme.set/1. iOS doesn't use system chrome whose appearance depends
-// on a global theme (we render every surface via mob's primitives with
-// explicit color props), so the palette itself is unused here — kept for
-// symmetry with the Android implementation, which needs it to drive
-// Material 3's NavigationBar / Button colour scheme.
+// Mob.Theme.set/1. Every node arrives with its colours already resolved, so
+// most of the palette is unused here — kept for symmetry with the Android
+// implementation, which needs it to drive Material 3's NavigationBar /
+// Button colour scheme.
+//
+// `background` IS read: the root paints it behind every screen, as Android's
+// MainActivity paints `colorScheme.background`, so a screen or list with no
+// `background` of its own sits on the theme's page colour, which the
+// default `text_color: :on_surface` is readable on, rather than on the
+// system background, which follows the phone's appearance (MOB-567). It goes
+// to every window's view model; a window that connects later takes
+// g_theme_background in mob_scene_attach.
 //
 // `_font_fallback` IS read: it's the ordered list of font names
 // MobFonts.swift's `MobNode.resolveFontFace` walks when a node's own font can't be
@@ -3945,6 +3957,26 @@ static ERL_NIF_TERM nif_set_theme(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
           g_font_fallback = resolved;
         });
     }
+
+    id background = json[@"background"];
+    UIColor *themeBackground = [background isKindOfClass:[NSNumber class]]
+                                   ? color_from_argb((long)[background longLongValue])
+                                   : nil;
+    // Async: the models publish to SwiftUI, and nothing here waits on it. The
+    // models are gathered on the main thread, where mob_scene_attach runs, so
+    // a window either connects before this block and is in g_scene_entries,
+    // or after it and takes the new g_theme_background.
+    dispatch_async(dispatch_get_main_queue(), ^{
+      g_theme_background = themeBackground;
+      NSMutableArray<MobViewModel *> *models = [NSMutableArray arrayWithObject:MobViewModel.shared];
+      @synchronized(mob_scene_lock()) {
+          for (MobSceneEntry *entry in g_scene_entries)
+              if (entry.model && ![models containsObject:entry.model])
+                  [models addObject:entry.model];
+      }
+      for (MobViewModel *model in models)
+          [model applyThemeBackground:themeBackground];
+    });
 
     return enif_make_atom(env, "ok");
 }

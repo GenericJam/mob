@@ -275,16 +275,24 @@ The unmatched platform's block is silently dropped before serialisation. Use thi
 
 ## Component defaults
 
-The renderer injects these defaults for missing styling props. Explicit props always win.
+The renderer injects these defaults for missing styling props. Explicit
+props always win, and so do a `%Mob.Style{}`'s props and a platform block's
+(`ios:` / `android:`).
 
 | Component | Default props |
 |---|---|
+| `:text` | `text_color: :on_surface` |
+| `:icon` | `text_color: :on_surface` |
 | `:button` | `background: :primary`, `text_color: :on_primary`, `padding: :space_md`, `corner_radius: :radius_md`, `text_size: :base`, `font_weight: "medium"`, `fill_width: true`, `text_align: :center` |
 | `:text_field` | `background: :surface_raised`, `text_color: :on_surface`, `placeholder_color: :muted`, `border_color: :border`, `padding: :space_sm`, `corner_radius: :radius_sm`, `text_size: :base` |
 | `:divider` | `color: :border` |
 | `:progress` | `color: :primary` |
+| `:sheet` | `background: :surface` |
 
 All other components have no injected defaults — unstyled components use the platform's own defaults.
+
+Both platforms paint the theme's `background` behind every screen, so a
+screen or list with no `background` of its own sits on the page colour.
 
 ---
 

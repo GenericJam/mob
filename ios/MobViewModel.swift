@@ -47,6 +47,22 @@ import QuartzCore
     /// view ignores the bottom and horizontal edges, so no view inside it can
     /// read the home indicator's inset.
     @Published public var windowSafeArea: UIEdgeInsets = .zero
+    /// The active `Mob.Theme`'s `background`, written on the main thread by
+    /// `nif_set_theme` whenever `Mob.Theme.set/1` runs (an adaptive theme's
+    /// light/dark flip included), and by `mob_scene_attach` for a window that
+    /// connects later. `MobRootView` paints it behind every
+    /// screen, as Android's MainActivity paints `colorScheme.background`, so
+    /// a screen whose root sets no `background` sits on the theme's page
+    /// colour rather than the system's (MOB-567). Nil until the first theme
+    /// arrives; the root shows the system background until then.
+    @Published public var themeBackground: UIColor?
+
+    /// ObjC entry point for `nif_set_theme`. Main thread only.
+    @objc public func applyThemeBackground(_ color: UIColor?) {
+        if themeBackground != color {
+            themeBackground = color
+        }
+    }
 
     override convenience init() {
         self.init(watchdog: true)

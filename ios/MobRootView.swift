@@ -3006,6 +3006,18 @@ public struct MobRootView: View {
                     .transition(.opacity)
             }
         }
+        // The theme's page colour behind every screen, as Android's
+        // MainActivity paints `colorScheme.background`: a screen, list or
+        // Box with no `background` shows it, not the system background, so
+        // the default `text_color: :on_surface` stays readable when the
+        // theme and the phone's appearance disagree (MOB-567). Nil until the
+        // first `Mob.Theme.set/1`, which `use Mob.App` makes before the first
+        // render. The boot screen paints its own background over it.
+        .background {
+            if let background = model.themeBackground {
+                Color(background).ignoresSafeArea()
+            }
+        }
         // Live root height, published so a content-detent sheet can cap itself
         // against real geometry rather than a guess. Read in a `.background`
         // so it costs no layout, and `initial: true` so the first value lands

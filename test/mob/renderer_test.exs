@@ -1131,6 +1131,80 @@ defmodule Mob.RendererTest do
       # default border → :gray_700 → 0xFF616161
       assert :json.decode(json)["props"]["color"] == 0xFF616161
     end
+
+    # MOB-567: an uncoloured Text drew in the platform's colour (iOS
+    # Color.primary, Android LocalContentColor), not the theme's.
+    defp rendered_props(tree, platform) do
+      Renderer.render(tree, platform, MockNIF)
+      {:set_root, [json]} = Enum.find(MockNIF.calls(), fn {f, _} -> f == :set_root end)
+      :json.decode(json)["props"]
+    end
+
+    defp on_surface(platform) do
+      rendered_props(%{type: :box, props: %{background: :on_surface}, children: []}, platform)[
+        "background"
+      ]
+    end
+
+    test "a Text with no text_color draws in the theme's on_surface" do
+      Mob.Theme.set(on_surface: 0xFF123456)
+
+      for platform <- [:ios, :android] do
+        props = rendered_props(%{type: :text, props: %{text: "hi"}, children: []}, platform)
+        assert props["text_color"] == 0xFF123456
+      end
+    end
+
+    test "an uncoloured Text and Icon follow a dark and a light theme" do
+      colours =
+        for theme <- [Mob.Theme.Dark, Mob.Theme.Light] do
+          Mob.Theme.set(theme)
+          expected = on_surface(:ios)
+          text = rendered_props(%{type: :text, props: %{text: "hi"}, children: []}, :ios)
+          icon = rendered_props(%{type: :icon, props: %{name: "star"}, children: []}, :ios)
+          assert text["text_color"] == expected
+          assert icon["text_color"] == expected
+          expected
+        end
+
+      assert Enum.uniq(colours) == colours
+    end
+
+    test "an explicit text_color beats the default" do
+      props =
+        rendered_props(
+          %{type: :text, props: %{text: "hi", text_color: :red_500}, children: []},
+          :ios
+        )
+
+      assert props["text_color"] == 0xFFF44336
+    end
+
+    test "a platform block's text_color beats the default" do
+      tree = %{type: :text, props: %{text: "hi", ios: %{text_color: :red_500}}, children: []}
+      assert rendered_props(tree, :ios)["text_color"] == 0xFFF44336
+      assert rendered_props(tree, :android)["text_color"] == on_surface(:android)
+    end
+
+    test "a style's text_color beats the default" do
+      style = %Mob.Style{props: %{text_color: :red_500}}
+      tree = %{type: :text, props: %{text: "hi", style: style}, children: []}
+      assert rendered_props(tree, :ios)["text_color"] == 0xFFF44336
+    end
+
+    test "a style's props beat a button's defaults too" do
+      style = %Mob.Style{props: %{background: :red_500, text_color: :black}}
+      tree = %{type: :button, props: %{text: "Go", style: style}, children: []}
+      props = rendered_props(tree, :ios)
+      assert props["background"] == 0xFFF44336
+      assert props["text_color"] == 0xFF000000
+    end
+
+    test "a button keeps its on_primary label" do
+      Mob.Theme.set(on_primary: 0xFF654321, on_surface: 0xFF123456)
+      props = rendered_props(%{type: :button, props: %{text: "Go"}, children: []}, :ios)
+      assert props["text_color"] == 0xFF654321
+    end
   end
 
   # ── Component type name serialization ────────────────────────────────────
@@ -1457,6 +1531,36 @@ defmodule Mob.RendererTest do
       tree = set_root_json()
       assert tree["props"]["glass"] == true
     end
+
+    test "a Box whose background comes from a style gets glass: true" do
+      Mob.Theme.set(glass: true)
+
+      Renderer.render(
+        %{type: :box, props: %{style: %Mob.Style{props: %{background: :surface}}}, children: []},
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      assert tree["props"]["glass"] == true
+    end
+
+    test "a style's glass: false survives a glass theme" do
+      Mob.Theme.set(glass: true)
+
+      Renderer.render(
+        %{
+          type: :box,
+          props: %{background: :surface, style: %Mob.Style{props: %{glass: false}}},
+          children: []
+        },
+        :ios,
+        MockNIF
+      )
+
+      tree = set_root_json()
+      assert tree["props"]["glass"] == false
+    end
   end
 
   describe "font token resolution" do
@@ -1528,6 +1632,24 @@ defmodule Mob.RendererTest do
       Renderer.render(tree, :ios, MockNIF)
       refute Map.has_key?(set_root_json()["props"], "font")
     end
+
+    test "a style's font beats the theme's :default font" do
+      Mob.Theme.set(
+        fonts: %{
+          default: %{ios: "Inter-Regular", android: "inter_regular"},
+          heading: %{ios: "Inter-Bold", android: "inter_bold"}
+        }
+      )
+
+      tree = %{
+        type: :text,
+        props: %{text: "hi", style: %Mob.Style{props: %{font: :heading}}},
+        children: []
+      }
+
+      Renderer.render(tree, :ios, MockNIF)
+      assert set_root_json()["props"]["font"] == "Inter-Bold"
+    end
   end
 
   describe "sheet serialization" do
@@ -1548,6 +1670,16 @@ defmodule Mob.RendererTest do
     test "type serializes as the string \"sheet\"" do
       Renderer.render(sheet_tree(%{}), :android, MockNIF)
       assert set_root_json()["type"] == "sheet"
+    end
+
+    test "a sheet with no background gets the theme's :surface; an explicit one wins" do
+      Mob.Theme.set(surface: :gray_700)
+      Renderer.render(sheet_tree(%{}), :ios, MockNIF)
+      assert set_root_json()["props"]["background"] == 0xFF616161
+
+      MockNIF.reset()
+      Renderer.render(sheet_tree(%{background: :primary}), :ios, MockNIF)
+      assert set_root_json()["props"]["background"] == 0xFF2196F3
     end
 
     test "children serialize recursively like normal children" do
