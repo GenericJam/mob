@@ -10,6 +10,20 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+### Fixed
+- **iOS: wrapping Text is no longer cut to one line with "…" inside a
+  Column.** A Column placed at its own ideal height shared that height out by
+  flexibility, so a Text could lose lines depending on its siblings, leaving
+  a blank strip lower in the card. Text now always gets the height its lines
+  need at the width it is given; it still wraps by width. Two visible
+  changes follow. A Text whose height is genuinely bounded (a fixed `height`
+  on an ancestor, a `weight` share, a screen that does not scroll) now draws
+  past that bound instead of ending in "…"; set `max_lines` to cap it. And a
+  Text whose width is squeezed now wraps taller rather than ellipsising: until
+  MOB-564 (a Column always fills its parent's width) lands, MishkaTabs labels
+  wrap and are clipped by the strip's horizontal Scroll. (MOB-562,
+  `decisions/2026-11-27-ios-text-fixed-vertical-size.md`)
+
 ## [0.9.33] - 2026-11-27
 
 ### Changed

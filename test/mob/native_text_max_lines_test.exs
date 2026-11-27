@@ -54,4 +54,22 @@ defmodule Mob.NativeTextMaxLinesTest do
     assert label =~ ".ifLet(node.maxLines > 0 ? node.maxLines : nil) { view, lines in"
     assert label =~ "view.lineLimit(lines).truncationMode(.tail)"
   end
+
+  # MOB-562. Without a fixed vertical size, a Column laid out at its ideal
+  # height shared that height out by flexibility and squeezed wrapping labels
+  # to one line with "…". Vertical only: the label must still wrap to the width
+  # it is given (decisions/2026-09-14-ios-stack-gap-and-row-text-priority.md).
+  test "iOS keeps every label at its wrapped height, wrapping by width" do
+    label =
+      @swift
+      |> NativeSource.region("case .label:", "case .icon:")
+      |> NativeSource.code_only()
+
+    [_, after_limit] =
+      String.split(label, "view.lineLimit(lines).truncationMode(.tail)", parts: 2)
+
+    assert after_limit =~ ~r/\A\s*\}\s*\.fixedSize\(horizontal: false, vertical: true\)/
+    refute label =~ "fixedSize(horizontal: true"
+    refute label =~ ".fixedSize()"
+  end
 end

@@ -435,6 +435,16 @@ struct MobNodeView: View {
                     .ifLet(node.maxLines > 0 ? node.maxLines : nil) { view, lines in
                         view.lineLimit(lines).truncationMode(.tail)
                     }
+                    // MOB-562: height is always what the lines need at the width
+                    // given. A Text without this counts as vertically flexible
+                    // (it can drop lines and end in "…"), and a Column placed at
+                    // exactly its ideal height offers each child an equal share
+                    // of what is left, least flexible first: a child that needs
+                    // more than its share lost lines, and the height it gave up
+                    // was left blank after the last child. Width still wraps;
+                    // horizontal fixedSize stays rejected. See
+                    // decisions/2026-11-27-ios-text-fixed-vertical-size.md.
+                    .fixedSize(horizontal: false, vertical: true)
                     .ifLet(textShouldFill ? () : nil) { view, _ in
                         view.frame(maxWidth: .infinity, alignment: node.frameTextAlignment)
                     }
