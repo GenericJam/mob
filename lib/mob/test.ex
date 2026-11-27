@@ -157,7 +157,7 @@ defmodule Mob.Test do
   | `dismiss_alert/2`            | ⚠️ AX active§ | ⚠️ AX active§ | ❌ ui_tree_unavailable |
   | `adjust_slider/4`            | ⚠️ AX active§ | ⚠️ AX active§ | ❌ ui_tree_unavailable |
   | `tap_xy/3`                   | ⚠️ AX-activatable only¶ | ❌ no_effect¶ | ✅ ⊕  |
-  | `long_press_xy/4`            | ⚠️ acceptance only✱| ⚠️ acceptance only✱| ✅ ⊕  |
+  | `long_press_xy/4`            | ⚠️ `:id` nodes◇| ⚠️ acceptance only✱| ✅ ⊕  |
   | `press_down_xy/4`, `press_move_xy/3`, `press_up_xy/3`, `hold_xy/4` | ❌ not_supported | ❌ not_supported | ✅ ⊕ |
   | `swipe/5`                    | ⚠️ scroll only| ⚠️ acceptance only✱| ✅ ⊕      |
   | `type_text/2`                | ⚠️ acceptance only✱| ⚠️ acceptance only✱| ✅ ASCII only⊕ |
@@ -242,14 +242,19 @@ defmodule Mob.Test do
     `box` — not `button`, matching iOS — so a long press on a `button` does
     nothing by design.
 
+  - **◇** On the simulator `long_press_xy/4` calls the `on_long_press` of the
+    innermost node with an `:id` whose frame contains the point, and its `:ok`
+    means the event reached the BEAM (MOB-572). A node without an `:id` is
+    not found. See `long_press_xy/4`.
+
   - **✱** These report `:ok` when the OS *accepted* the input, not when the app
     was observed to react — they have not been converted to the observation
     model `tap_xy/3` uses. Treat their `:ok` as "sent", not "worked".
 
     Two different reasons sit behind that, and they lead to different bugs.
     `swipe/5` and `long_press_xy/4` ride the same IOHID injection path as
-    `tap_xy/3`, which on a physical device is accepted and never delivered —
-    so their `:ok` there is actively misleading. `type_text/2`,
+    `tap_xy/3` on a physical device, where it is accepted and never delivered
+    — so their `:ok` there is actively misleading. `type_text/2`,
     `delete_backward/1` and `clear_text/1` do NOT touch that path; they
     `dispatch_sync` and message the first responder directly, so they do
     something real, and merely fail to confirm it.
@@ -1370,6 +1375,31 @@ defmodule Mob.Test do
 
       Mob.Test.long_press_xy(node, 195.0, 400.0)
       Mob.Test.long_press_xy(node, 195.0, 400.0, 1200)
+
+  **iOS simulator.** SwiftUI's long-press gesture has no UIKit recognizer to
+  drive and the simulator drops synthetic touches, so the NIF finds the Mob
+  node at the point and calls its `on_long_press` handler directly. That node
+  is the innermost one with both `on_long_press` and an `:id` whose frame (the
+  one `element_frames/1` reports) contains the point. **Give the node an
+  `:id`**: without one it has no frame to find. A UIKit long-press recognizer
+  under the point (a text field's, a native view's) is fired instead when
+  there is one. A point on a presented sheet only reaches nodes inside the
+  `:sheet`, and a point on the screen never reaches them. The press fires at
+  once; `duration_ms` is not waited.
+
+  The result reports an observed effect, as `tap_xy/3` does:
+
+    * `:ok` — a UI event reached the BEAM (normally `{:long_press, tag}`).
+    * `{:error, :no_long_press_recognizer}` — nothing at the point takes a
+      long press: no node with `on_long_press` and an `:id` there, and no
+      UIKit recognizer.
+    * `{:error, :no_effect}` — something was fired and no event arrived,
+      e.g. a stale handle from a tree that has since been replaced.
+
+  **Physical iOS device.** The press is injected through IOHID and `:ok`
+  means only that it was accepted (the ✱ note on the platform matrix);
+  `{:error, :no_view_at_point}` means the point is outside every window.
+  **Android** dispatches real `MotionEvent`s and holds for `duration_ms`.
   """
   @spec long_press_xy(node(), number(), number(), non_neg_integer()) :: :ok | {:error, atom()}
   def long_press_xy(node, x, y, duration_ms \\ 800) do

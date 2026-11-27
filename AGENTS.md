@@ -1234,9 +1234,11 @@ Coordinate-driven input is *not* finished, whatever the list above implies.
 `tap_xy/2` now returns `:ok` only when the app demonstrably reacted; on the
 simulator that limits it to `Button`s and text fields, and on a physical device
 the injected IOHID touch is accepted but never delivered, so every coordinate
-returns `{:error, :no_effect}`. `swipe_xy/4` and `long_press_xy/3` still report
-on acceptance and their `:ok` is unverified. Drive Mob screens with
-`Mob.Test.tap/2` (by tag). See
+returns `{:error, :no_effect}`. `swipe_xy/4` still reports on acceptance and
+its `:ok` is unverified. `long_press_xy/3` on the simulator calls the
+`on_long_press` of the `:id`'d node under the point and reports `:ok` only when
+the event reached the BEAM (MOB-572); on a device it reports on acceptance.
+Drive Mob screens with `Mob.Test.tap/2` (by tag). See
 `decisions/2026-08-09-tap-xy-reports-observed-effect.md` and
 `decisions/2026-08-09-ios-device-tap-injection-has-no-effect.md`.
 

@@ -44,6 +44,18 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `[mob/font] none of (monospace) resolved` and drew the proportional system
   font. Android draws `monospace` and `serif` through `Typeface.create`
   already; `sans-serif` and `rounded` give its default face there.
+- **`Mob.Test.long_press_xy/4` reaches Mob nodes on the iOS simulator**
+  (MOB-572). It only looked for a UIKit `UILongPressGestureRecognizer`, which
+  SwiftUI's `onLongPressGesture` never creates, so every Mob node answered
+  `{:error, :no_long_press_recognizer}`. It now calls the `on_long_press` of
+  the node with the smallest frame (`element_frames/1`) containing the point,
+  among the `column`, `row`, `wrap`, `box`, `text`, `icon` and `anchored`
+  nodes that have an `:id`, and reports `:ok` only when the event reached the
+  BEAM, `{:error, :no_effect}` when it did not. While an `:anchored` panel
+  with an `on_tap` dismiss handler is open, only nodes inside the open panels
+  are reached, since its scrim covers the rest. Its `accessibilityActivate`
+  fallback, which tapped instead of long-pressing and reported `:ok` either
+  way, is gone. Give a long-press node an `:id` to drive it by coordinates.
 
 ## [0.9.33] - 2026-11-27
 
