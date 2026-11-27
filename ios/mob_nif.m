@@ -7032,8 +7032,8 @@ typedef BOOL (^MobRetryBlock)(void);
 // SwiftUI needs to finish building the tree, guaranteeing the wait never
 // resolves.
 //
-// Use when "found" and "succeeded" are the same signal (tap_xy,
-// long_press_xy's atomic find+act-or-fallback). See
+// Use when "found" and "succeeded" are the same signal (tap_xy, and
+// long_press_xy, which acts on what it finds in the same attempt). See
 // mob_retry_main_thread_found_action below when they need to be told apart
 // — e.g. ax_action_at_xy, where "found an element that doesn't support this
 // action" is a stable outcome that retrying won't change, unlike "nothing
@@ -8205,14 +8205,96 @@ static ERL_NIF_TERM nif_clear_text(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 
 // ─── long_press_xy/3 — hold touch at (x, y) for duration_ms milliseconds ─────
 //
-// Simulator: finds UILongPressGestureRecognizer on the hit view or its ancestors
-// and forces state transitions via the private _setState: selector, which fires
-// the target/action pairs without needing HID events.
+// Simulator (MOB-572): first a UIKit UILongPressGestureRecognizer on the hit
+// view or its ancestors (a UIKit view drawn over the SwiftUI tree, a text
+// field), forced through the private _setState: selector. Otherwise the Mob
+// node under the point: SwiftUI's onLongPressGesture creates no UIKit
+// recognizer, and the simulator drops synthetic touches, so the harness calls
+// the node's own onLongPress block, the one mobGestures hands that gesture.
+// The node is the one with the smallest frame (MobFrameTracker's element frame
+// registry) containing the point among the long-pressable types (below) that
+// have both on_long_press and an :id; a node with no :id has no frame to
+// find. Fires at once; duration_ms is not waited.
+//
+// What is drawn over a node is only partly known. A presented sheet and the
+// dismiss scrim of an open :anchored panel are honoured (below); a panel
+// without a scrim, a fixed header over a scrolled row and the keyboard are
+// not, so a point under them still reaches the node beneath.
 //
 // Real device: emits Began → sleep(duration_ms) → Ended via IOHIDEvent, same
 // path as tap_xy.
 //
 // Returns: ok | {error, no_view_at_point} | {error, no_long_press_recognizer}
+// | {error, no_effect}. On the simulator, ok means a UI event reached the BEAM
+// (mob_note_ui_event), as for tap_xy; no_long_press_recognizer means nothing at
+// the point takes a long press; no_effect means something was fired and the
+// app saw no event.
+
+#if TARGET_OS_SIMULATOR
+// The node types whose view gets mobGestures (MobRootView.swift,
+// MobAnchored.swift), so a real press runs onLongPress. A button, field,
+// slider, toggle, image or scroll carries the block but never the gesture.
+static BOOL mob_node_type_long_presses(MobNodeType type) {
+    switch (type) {
+    case MobNodeTypeColumn:
+    case MobNodeTypeRow:
+    case MobNodeTypeWrap:
+    case MobNodeTypeBox:
+    case MobNodeTypeLabel:
+    case MobNodeTypeIcon:
+    case MobNodeTypeAnchored:
+        return YES;
+    default:
+        return NO;
+    }
+}
+
+// The long-pressable node (above) with the smallest registered frame containing
+// `pt` among those with both on_long_press and an :id, into *best. `wantSheet`
+// picks nodes inside a :sheet (shown in a presented controller) or outside one,
+// so a point on a sheet never reaches the row under it and a point on the
+// screen never reaches a sheet's. Equal frames go to the later, deeper node.
+// Nothing drawn on top is seen here; the caller narrows the search for that.
+static void mob_long_press_target_in(MobNode *node, CGPoint pt, BOOL wantSheet, BOOL inSheet,
+                                     NSDictionary *frames, MobNode *__strong *best,
+                                     CGFloat *bestArea) {
+    BOOL sheet = inSheet || node.nodeType == MobNodeTypeSheet;
+    if (node.onLongPress && node.nativeViewId && sheet == wantSheet &&
+        mob_node_type_long_presses(node.nodeType)) {
+        NSArray<NSNumber *> *f = frames[node.nativeViewId];
+        if ([f isKindOfClass:[NSArray class]] && f.count == 4) {
+            CGRect r =
+                CGRectMake(f[0].doubleValue, f[1].doubleValue, f[2].doubleValue, f[3].doubleValue);
+            CGFloat area = r.size.width * r.size.height;
+            if (CGRectContainsPoint(r, pt) && area <= *bestArea) {
+                *best = node;
+                *bestArea = area;
+            }
+        }
+    }
+    for (MobNode *child in node.children)
+        mob_long_press_target_in(child, pt, wantSheet, sheet, frames, best, bestArea);
+}
+
+// Every open :anchored panel (children[1]) outside a :sheet into `panels`,
+// returning whether one of them has a dismiss scrim: an owner with on_tap.
+// MobAnchoredPanelHost draws that scrim over the whole window and every open
+// panel above all scrims, so while one is up a press reaches only the panels.
+// Panels inside a :sheet are left out: the caller only asks for a point on the
+// screen, which a presented sheet's own dimming would cover anyway.
+static BOOL mob_open_panels_in(MobNode *node, NSMutableArray<MobNode *> *panels) {
+    if (node.nodeType == MobNodeTypeSheet)
+        return NO;
+    BOOL scrim = NO;
+    if (node.nodeType == MobNodeTypeAnchored && node.children.count > 1) {
+        [panels addObject:node.children[1]];
+        scrim = node.onTap != nil;
+    }
+    for (MobNode *child in node.children)
+        scrim = mob_open_panels_in(child, panels) || scrim;
+    return scrim;
+}
+#endif
 
 static ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     double x, y;
@@ -8224,13 +8306,16 @@ static ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TE
     CGPoint pt = CGPointMake((CGFloat)x, (CGFloat)y);
 
 #if TARGET_OS_SIMULATOR
-    // Already atomic (hitTest, GR search, and the accessibility fallback all
-    // ran inside one dispatch_sync pre-MOB-99) — the gap this closes is that
-    // it never retried, so the exact "screen just mounted, tree/GR list not
-    // settled yet" race this whole file works around elsewhere could still
-    // produce a false no_long_press_recognizer here.
+    // Sampled before anything fires, so the result says whether the app saw
+    // an event, not whether a recognizer or block was found (see tap_xy).
+    const uint64_t seq_before = mob_ui_event_seq();
+
+    // hitTest, the recognizer search and the node lookup run inside one
+    // dispatch_sync per attempt, retried for the "screen just mounted, tree
+    // and frames not settled yet" race (MOB-99).
     BOOL fired = mob_retry_main_thread_bool("long_press_xy(sim)", ^BOOL {
       UIView *hitView = nil;
+      UIWindow *hitWindow = nil;
       for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
           if (![scene isKindOfClass:[UIWindowScene class]])
               continue;
@@ -8240,6 +8325,7 @@ static ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TE
               UIView *h = [win hitTest:pt withEvent:nil];
               if (h) {
                   hitView = h;
+                  hitWindow = win;
                   break;
               }
           }
@@ -8249,7 +8335,7 @@ static ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TE
       if (!hitView)
           return NO;
 
-      // Walk up the responder chain looking for any UILongPressGestureRecognizer
+      // A UIKit long-press recognizer on the hit view or an ancestor.
       SEL setStateSel = NSSelectorFromString(@"_setState:");
       for (UIView *v = hitView; v; v = v.superview) {
           for (UIGestureRecognizer *gr in v.gestureRecognizers) {
@@ -8266,22 +8352,49 @@ static ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TE
           }
       }
 
-      // SwiftUI onLongPressGesture may also surface as an accessibility custom action.
-      // Try accessibilityActivate as a fallback — limited but better than nothing.
-      id elem = find_a11y_at_point(hitView, pt, 0);
-      if (elem && [elem respondsToSelector:@selector(accessibilityActivate)]) {
-          LOGI(@"long_press_xy(sim): fallback to accessibilityActivate on %@",
-               NSStringFromClass(object_getClass(elem)));
-          [elem accessibilityActivate];
-          return YES;
+      // A Mob node, from the shared model's tree and the element frame
+      // registry, which only the default scene's window fills (MOB-245). A
+      // point in another scene's window has no frames to match.
+      NSString *sceneId = MobViewModel.shared.sceneId;
+      if (!sceneId || ![hitWindow.windowScene.session.persistentIdentifier isEqualToString:sceneId])
+          return NO;
+      MobNode *root = MobViewModel.shared.displayedRoot;
+      if (!root)
+          return NO;
+      // Its view sits in the root controller's view, or, inside a :sheet, in a
+      // controller presented over it.
+      UIView *rootView = hitWindow.rootViewController.view;
+      BOOL onPresented = rootView && ![hitView isDescendantOfView:rootView];
+      NSMutableDictionary *reg = mob_frame_registry();
+      NSDictionary *frames = nil;
+      @synchronized(reg) {
+          frames = [reg copy];
       }
-      return NO;
+      MobNode *target = nil;
+      CGFloat area = CGFLOAT_MAX;
+      NSMutableArray<MobNode *> *panels = [NSMutableArray array];
+      if (!onPresented && mob_open_panels_in(root, panels)) {
+          // A scrim covers the screen: only the panels are above it. A panel
+          // nested in another is searched twice, to the same result.
+          for (MobNode *panel in panels)
+              mob_long_press_target_in(panel, pt, NO, NO, frames, &target, &area);
+      } else {
+          mob_long_press_target_in(root, pt, onPresented, NO, frames, &target, &area);
+      }
+      if (!target)
+          return NO;
+      LOGI(@"long_press_xy(sim): on_long_press of node id=%@", target.nativeViewId);
+      target.onLongPress();
+      return YES;
     });
 
-    if (fired)
-        return enif_make_atom(env, "ok");
-    return enif_make_tuple2(env, enif_make_atom(env, "error"),
-                            enif_make_atom(env, "no_long_press_recognizer"));
+    if (!fired)
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "no_long_press_recognizer"));
+    if (!mob_await_ui_event(seq_before, MOB_TAP_SETTLE_MS))
+        return enif_make_tuple2(env, enif_make_atom(env, "error"),
+                                enif_make_atom(env, "no_effect"));
+    return enif_make_atom(env, "ok");
 
 #else
     // Real device: Began → hold → Ended
@@ -8328,10 +8441,11 @@ static ERL_NIF_TERM nif_long_press_xy(ErlNifEnv *env, int argc, const ERL_NIF_TE
 // A finger that goes down, optionally moves, and lifts in separate calls, so a
 // test can hold a node (on_press_in / on_press_out) for as long as it likes and
 // assert in between. Android injects real in-process MotionEvents. iOS does
-// not implement split touch injection (yet): the simulator branches above fire
-// gestures by forcing UIKit recognizer states or accessibility actions, not by
-// delivering a held touch stream. So these return {error, not_supported}
-// rather than pretending to have held anything.
+// not implement split touch injection (yet): the simulator branches above act
+// through accessibility activation, forced UIKit recognizer states or a Mob
+// node's own on_long_press block, not by delivering a held touch stream. So
+// these return {error, not_supported} rather than pretending to have held
+// anything.
 // Mob.Test.press_in/2, press_out/2 and hold/3 cover iOS at the tag level, and
 // capabilities/0 reports these three as false so an agent can tell up front.
 //

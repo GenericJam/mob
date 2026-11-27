@@ -16,6 +16,9 @@ import QuartzCore
     private static let bootWatchdogSeconds: TimeInterval = 15
 
     @Published public var root: MobNode?
+    /// `root` for Objective-C, which can't see a `@Published` property. The
+    /// harness's `long_press_xy` (mob_nif.m) reads it on the main thread.
+    @objc public var displayedRoot: MobNode? { root }
     /// Increments on every setRoot call; views use onChange(of: rootVersion) to
     /// trigger withAnimation rather than watching root directly (root identity
     /// may change even for same-screen re-renders).
