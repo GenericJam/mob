@@ -86,6 +86,14 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   `surfaceContainerLow`, neither of them the theme's. So no sheet gets the
   system material (iOS 26's Liquid Glass sheet) any more, glass themes
   included; give it an explicit `background` for another fill.
+- **iOS `<Divider>` is a horizontal rule inside a Row too.** It was SwiftUI's
+  `Divider()`, which takes its stack's axis, so in a Row it drew a 1×1 tick;
+  a labelled separator (line — label — line) lost both lines. It is now a
+  filled rect `thickness` tall across the full width, the geometry of
+  Android's `HorizontalDivider`. (MOB-568)
+- **iOS Box with a `width` honours `fill_height`.** The fixed-width branch
+  never read `fill_height`, so a `width` + `fill_height` box (a vertical rule)
+  was 0 pt tall. A `height` still wins over `fill_height`. (MOB-568)
 
 ## [0.9.33] - 2026-11-27
 

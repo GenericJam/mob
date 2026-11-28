@@ -530,11 +530,12 @@ struct MobNodeView: View {
                     .padding(node.paddingEdgeInsets)
 
             case .divider:
-                Divider()
+                // Horizontal in any stack, like Compose's HorizontalDivider. SwiftUI's
+                // Divider() follows its stack's axis: a 1x1 tick in a Row (MOB-568).
+                Rectangle()
+                    .fill(node.color.map { Color($0) } ?? Color(UIColor.separator))
                     .frame(height: node.thickness)
-                    .overlay(
-                        node.color.map { Color($0) } ?? Color(UIColor.separator)
-                    )
+                    .frame(maxWidth: .infinity)
                     .padding(node.paddingEdgeInsets)
 
             case .spacer:
@@ -1137,11 +1138,17 @@ private struct MobBox: View {
 
         return Group {
             if node.fixedWidth > 0 {
-                stack.frame(
-                    width: CGFloat(node.fixedWidth),
-                    height: node.fixedHeight > 0 ? CGFloat(node.fixedHeight) : nil,
-                    alignment: alignment
-                )
+                // `width` + `fill_height` is a vertical rule (MOB-568); height beats fill.
+                stack
+                    .frame(
+                        width: CGFloat(node.fixedWidth),
+                        height: node.fixedHeight > 0 ? CGFloat(node.fixedHeight) : nil,
+                        alignment: alignment
+                    )
+                    .frame(
+                        maxHeight: (node.fillHeight && node.fixedHeight <= 0) ? .infinity : nil,
+                        alignment: alignment
+                    )
             } else if node.fixedHeight > 0 {
                 if node.fillWidthSet && !node.fillWidth {
                     stack.frame(height: CGFloat(node.fixedHeight), alignment: alignment)
