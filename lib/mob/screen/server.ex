@@ -476,6 +476,15 @@ defmodule Mob.Screen.Server do
     {:noreply, %{state | socket: do_paint(state, :none, :async, nil, false)}}
   end
 
+  # The theme changed (MOB-575): tokens resolve at paint time, so repaint with
+  # the new palette. Skippable, because the fingerprint includes the theme: a
+  # screen that already painted under it (the one whose mount or handle_info
+  # called `Mob.Theme.set/1`) is not drawn twice. Internal, like
+  # `{:mob_window, :connected}`: the user's handle_info never sees it.
+  defp do_handle_info({:mob_theme, :changed}, state) do
+    {:noreply, %{state | socket: repaint_if_changed(state)}}
+  end
+
   # The router adopted another window scene (MOB-245): the last one went away
   # and iPadOS connected a new session instead of the old one. Everything read
   # from the old window is stale: reads go to the new one from here on, the
@@ -694,7 +703,8 @@ defmodule Mob.Screen.Server do
     do: do_paint(state, transition, mode, activation_token, false)
 
   # The ONLY path that may skip, taken by a screen's own messages (forwarded
-  # handle_info, handle_async, size class) and by `{:component_changed, ...}`.
+  # handle_info, handle_async, size class), by `{:component_changed, ...}` and
+  # by `{:mob_theme, :changed}`.
   # Everything else — mount, activation, every navigation, hot reload, a :sync
   # caller — paints unconditionally.
   #
