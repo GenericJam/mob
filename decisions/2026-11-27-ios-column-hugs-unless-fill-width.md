@@ -63,19 +63,38 @@ any other prop. That gap predates this change and is left alone.
 
 ## Consequences
 
-- Breaking for iOS-only screens that relied on a Column filling. A Column
-  that paints a `background` or carries an `on_tap`, and holds only hugging
-  children (plain Text, Rows without `fill_width`, fixed-size items), now
-  covers only its content: the background and the tap area shrink with it.
-  (iOS draws `border` and `corner_radius` on a Column only when it is
-  weighted, and a weighted Column fills its share.) Migration: add
-  `fill_width={true}` to that Column. Android already needed it, so the
-  change brings the two renderers into line.
+- Breaking for iOS-only screens that relied on a Column filling. It ships in
+  a 0.9.x patch release, so every app on `~> 0.9.x` picks it up at its next
+  `mix deps.update mob`; the CHANGELOG entry is tagged BREAKING for that
+  reason. No flag: Android has always laid Columns out this way, and a flag
+  would keep the wrong iOS layout alive as a second convention. What moves,
+  each with the fix Android already needed:
+  - A Column that paints a `background` or carries an `on_tap`, and holds
+    only hugging children (plain Text, Rows without `fill_width`,
+    fixed-size items), now covers only its content: the background and the
+    tap area shrink with it. (iOS draws `border` and `corner_radius` on a
+    Column only when it is weighted, and a weighted Column fills its share.)
+    Add `fill_width={true}` to the Column.
+  - A Row without `fill_width` takes its width from its children
+    (`MobRootView.swift`, Row case), so a Row whose width came from a Column
+    child shrinks too, background and tap area included. Add `fill_width`
+    to the Row.
+  - In a Row, siblings after a Column now sit next to its content instead of
+    at the far edge. Give the Column `weight`, or put a flexible Spacer
+    before the siblings that belong at the end.
+  - Only the node a screen slot hosts is a screen root. A Column that is the
+    content of a sheet, a lazy-list row or a tab hugs like any other. (A
+    tab's background is repainted across the whole tab by `MobTabView`, so
+    there only the tap area changes.)
+  - Existing mob_new-generated apps: the dice screen's stat cards shrink to
+    their text. They need `weight: 1` in `stat/2` and `fill_width: true` on
+    the stats Row, which mob_new #132 gives new apps. The CHANGELOG entry
+    says so, because existing apps do not read mob_new's changelog.
 - Columns side by side in a Row no longer split the row evenly on iOS. Use
-  `weight` (which iOS still turns into an even split, `MobLayoutWeight`).
-  `fill_width` on several Row children is not portable: on Android the first
-  one takes the whole row. The mob_new dice screen's two stat cards were the
-  one case in the generated app; mob_new gives them `weight: 1`.
+  `weight`. Until MOB-569 (#257) lands, iOS `MobLayoutWeight` makes every
+  weighted child equally flexible, so weights split evenly; MOB-569 divides
+  by ratio, as Compose's `weight()` does. `fill_width` on several Row
+  children is not portable: on Android the first one takes the whole row.
 - `align` on a Column is still not read on iOS; the VStack keeps `.leading`.
   This change did not touch it.
 - Source-contract test: `test/mob/native_column_row_layout_test.exs`
@@ -100,3 +119,10 @@ width cap, so the panel measured window-wide). The demo's other screens
 (home, gallery, list, audio, storage, text, webview) are identical; the
 dice screen's stat cards shrank to their text until the mob_new change
 above.
+
+Re-verified after rebasing onto master 60f8cdb (MOB-566, MOB-567, MOB-568,
+MOB-572), same simulator, demo dice screen updated as mob_new #132 does:
+the six pages above, toured against a build of 60f8cdb alone, differ in the
+same viewports as before and are pixel-identical to the e6dc1d9-based tour
+of this change. The dice cards are two equal halves on both builds, and the
+other demo screens are identical apart from the RPS history's "N min ago".
