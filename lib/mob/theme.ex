@@ -261,9 +261,9 @@ defmodule Mob.Theme do
   overrides. A struct or keyword list is a fixed theme and is never
   re-resolved, even if it equals what the adaptive module returns.
 
-  Every live screen in every window repaints with the new theme, the ones
-  under the top of a stack and in parked tabs too, without the screen doing
-  anything. Its `handle_info/2` is not called.
+  The screen on show in every window repaints with the new theme without the
+  screen doing anything; its `handle_info/2` is not called. A screen under the
+  top of a stack or in a parked tab repaints when it comes back on show.
   """
   @spec set(t() | module() | {module(), keyword()} | keyword()) :: :ok
   def set(%__MODULE__{} = theme), do: put_theme(theme, nil)

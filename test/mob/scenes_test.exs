@@ -408,6 +408,21 @@ defmodule Mob.ScenesTest do
       assert_receive {:frame, "B", "B", %{"props" => %{"text" => "home 0"}}}
     end
 
+    test "a theme change repaints every window, not just the one :mob_screen names" do
+      # Registered first, so it runs after the routers are stopped.
+      on_exit(fn -> Mob.Theme.set(%Mob.Theme{}) end)
+      Mob.Theme.set(%Mob.Theme{})
+      boot(["A"])
+      connect("B")
+      flush_frames()
+
+      Mob.Theme.set(on_surface: :red_500)
+
+      red = Mob.Renderer.colors().red_500
+      assert_receive {:frame, :default, nil, %{"props" => %{"text_color" => ^red}}}
+      assert_receive {:frame, "B", "B", %{"props" => %{"text_color" => ^red}}}
+    end
+
     test "the back gesture steps the WebView history of its own window only" do
       boot(["A"])
       connect("W")

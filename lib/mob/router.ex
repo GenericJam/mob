@@ -220,8 +220,8 @@ defmodule Mob.Router do
   # resolved when a screen paints, so a screen keeps its last paint's palette
   # until something repaints it: an adaptive theme's light/dark flip repainted
   # the root background natively and left every screen's text in the old
-  # palette (MOB-575). Every window's router hears it, and tells all its live
-  # screens, as for a size class change.
+  # palette (MOB-575). Every window's router hears it and tells the screen it
+  # is showing.
   #
   # From a separate process, so `set/1` never waits on Mob.Scenes: it is
   # called from screens, inside the router's own synchronous mount.
@@ -571,11 +571,12 @@ defmodule Mob.Router do
     {:noreply, state}
   end
 
-  # The theme changed (`theme_changed/0`). Every live screen repaints, not only
-  # the current one: a screen popped back to, or a parked tab switched to,
-  # must not show the old palette either.
+  # The theme changed (`theme_changed/0`). Only the screen on show repaints.
+  # Any other screen's frame would be dropped by Mob.Sender, and a screen
+  # popped back to or a parked tab switched to repaints unconditionally when
+  # it becomes current, in whatever theme is set then.
   def handle_info({:mob_theme, :changed} = message, state) do
-    Enum.each(all_entries(state), &send(&1.pid, message))
+    send(state.current.pid, message)
     {:noreply, state}
   end
 

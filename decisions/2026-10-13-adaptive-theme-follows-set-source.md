@@ -48,5 +48,5 @@ struct is an explicit fixed choice.
 - The watcher does not re-render mounted screens; they pick the new theme up
   on their next render. **Superseded 2026-11-27 (MOB-575):** that left an
   adaptive flip half-applied once the iOS root painted the theme background
-  (MOB-567), so `Mob.Theme.set/1` now repaints every live screen itself. See
+  (MOB-567), so `Mob.Theme.set/1` now repaints the screen on show itself. See
   `2026-11-27-theme-set-repaints-every-live-screen.md`.

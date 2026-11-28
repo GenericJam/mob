@@ -6,7 +6,7 @@ defmodule Mob.ThemeChangeRerenderTest do
   # `Mob.Theme.set/1` repainted nothing: an adaptive theme's light/dark flip
   # (Mob.Theme.AdaptiveWatcher) repainted the iOS root background live and left
   # every screen's `:on_surface` text in the old palette until the user next
-  # touched it. Every live screen now repaints on any theme change.
+  # touched it. The screen on show now repaints on any theme change.
 
   defmodule Screen do
     @moduledoc false
@@ -19,6 +19,8 @@ defmodule Mob.ThemeChangeRerenderTest do
       params = %{label: label, test: socket.assigns.test}
       {:noreply, Mob.Socket.push_screen(socket, __MODULE__, params)}
     end
+
+    def handle_info(:pop, socket), do: {:noreply, Mob.Socket.pop_screen(socket)}
 
     def handle_info(other, socket) do
       send(socket.assigns.test, {:handled, socket.assigns.label, other})
@@ -72,7 +74,7 @@ defmodule Mob.ThemeChangeRerenderTest do
     end
   end
 
-  test "a theme change repaints every live screen, the ones under the top too" do
+  test "a theme change repaints the screen on show, in the new palette" do
     pid = start_root()
     send(pid, {:push, "second"})
     assert_receive {:rendered, "second", :gray_100}
@@ -80,12 +82,27 @@ defmodule Mob.ThemeChangeRerenderTest do
 
     Mob.Theme.set(on_surface: :red_500)
 
-    assert_receive {:rendered, "second", :red_500}
-    assert_receive {:rendered, "root", :red_500}
-
-    # And the screen on top reaches native in the new palette.
     red = Mob.Renderer.colors().red_500
+    assert_receive {:rendered, "second", :red_500}
     assert_receive {:set_root, %{"props" => %{"text" => "second", "text_color" => ^red}}}
+
+    # A screen under the top would only build a frame the Sender drops.
+    refute_receive {:rendered, "root", _color}, 200
+  end
+
+  test "a screen under the top shows the new palette when popped back to" do
+    pid = start_root()
+    send(pid, {:push, "second"})
+    assert_receive {:rendered, "second", :gray_100}
+    Mob.Theme.set(on_surface: :red_500)
+    assert_receive {:rendered, "second", :red_500}
+    flush()
+
+    send(Mob.Router.get_screen_pid(pid), :pop)
+
+    red = Mob.Renderer.colors().red_500
+    assert_receive {:rendered, "root", :red_500}
+    assert_receive {:set_root, %{"props" => %{"text" => "root", "text_color" => ^red}}}
   end
 
   test "the repaint is internal: the screen's handle_info never sees it" do
