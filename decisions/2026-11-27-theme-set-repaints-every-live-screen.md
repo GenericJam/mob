@@ -1,4 +1,4 @@
-# `Mob.Theme.set/1` repaints every live screen
+# `Mob.Theme.set/1` repaints the screen on show in every window
 
 - Date: 2026-11-27
 - Status: accepted
@@ -17,10 +17,21 @@ light text on a light root until the user touched the screen.
 
 Every `set/1`, adaptive or not, calls `Mob.Router.theme_changed/0`. That
 sends `{:mob_theme, :changed}` to `:mob_screen` and to every router in
-`Mob.Scenes.list/0`. Each router forwards it to all of its live screens:
-the current one, its history and the parked tabs, as for a size class change.
-`Mob.Screen.Server` handles the message internally, so the user's
-`handle_info/2` never sees it, and repaints.
+`Mob.Scenes.list/0`. Each router forwards it to the screen it is showing,
+`state.current`. `Mob.Screen.Server` handles the message internally, so the
+user's `handle_info/2` never sees it, and repaints.
+
+**Corrected 2026-11-27.** As merged in #258, each router forwarded the message
+to all of its live screens (its history and parked tabs too), "as for a size
+class change". The reason given was that a screen popped back to would
+otherwise show the old palette. That was wrong. Mob.Sender drops the frames of
+any screen that is not current, so those repaints never reached native. And a
+screen that becomes current repaints unconditionally (an unskippable router
+paint on every push, pop, reset and tab switch), in whatever theme is set then. A
+size-class change has to reach every screen because it updates an assign the
+screen holds; a theme change updates nothing the screen holds. So only the
+current screen is told, which costs one render per window instead of one per
+live screen.
 
 - **The repaint is skippable** (`repaint_if_changed`). The frame fingerprint
   includes `Mob.Theme.current()`, so a screen that already painted under the
@@ -38,9 +49,9 @@ the current one, its history and the parked tabs, as for a size class change.
 
 ## Consequences
 
-- Screens under the top of a stack and in parked tabs render once per theme
-  change. That is the same cost as a size-class change, and it means a screen
-  popped back to is already in the new palette.
+- One render per window per theme change: the screen on show. A screen under
+  the top of a stack or in a parked tab is repainted, in the new palette, when
+  it becomes current.
 - A screen no longer needs to repaint itself after calling `set/1`. Code that
   did so (an assign change after `set/1`) still works, and the second paint is
   skipped by the fingerprint.

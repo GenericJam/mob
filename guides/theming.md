@@ -1,6 +1,6 @@
 # Theming
 
-Mob's design token system lets you control color, spacing, and typography across the entire app from one place. Tokens are resolved at render time, and changing the theme repaints every live screen, so every component updates at once.
+Mob's design token system lets you control color, spacing, and typography across the entire app from one place. Tokens are resolved at render time, and changing the theme repaints the screen on show, so every component updates at once.
 
 ## Token types
 
@@ -141,7 +141,7 @@ def handle_info({:tap, :theme_citrus}, socket) do
 end
 ```
 
-`Mob.Theme.set/1` is global: every live screen repaints with it straight away, including screens under the top of a stack and in parked tabs. If your app only ever uses one theme, the `use Mob.App` option is sufficient and you don't need to call `Mob.Theme.set/1`.
+`Mob.Theme.set/1` is global: the screen on show in every window repaints with it straight away, and any other screen picks it up when it comes back on show. If your app only ever uses one theme, the `use Mob.App` option is sufficient and you don't need to call `Mob.Theme.set/1`.
 
 ## Overriding individual tokens
 
@@ -163,7 +163,7 @@ Any tokens not listed inherit from the default neutral base.
 
 ## Switching themes at runtime
 
-Call `Mob.Theme.set/1` at any point. Every live screen repaints in the new theme:
+Call `Mob.Theme.set/1` at any point. The screen on show repaints in the new theme:
 
 ```elixir
 # Switch to a named theme
@@ -193,7 +193,7 @@ token, so screens written in exact sizes grow too:
 Mob.Theme.set({MyApp.Theme.Dark, text_scale: 1.3})
 ```
 
-Keep it when you switch themes (pass it in every `set/1`). Every live screen
+Keep it when you switch themes (pass it in every `set/1`). The screen on show
 repaints with it as soon as it is set.
 
 It multiplies the OS font scale where native follows one, it doesn't replace
@@ -222,7 +222,7 @@ height or `max_lines: 1` need checking at the largest choice.
 
 `Mob.Theme.set(Mob.Theme.Adaptive)` (or `use Mob.App, theme: Mob.Theme.Adaptive`)
 follows the OS: when the user flips light/dark, `Mob.Theme.AdaptiveWatcher`
-sets it again, and every live screen repaints in the matching theme.
+sets it again, and the screen on show repaints in the matching theme.
 `{Mob.Theme.Adaptive, overrides}` follows too and keeps the overrides. Any
 other `set/1` call (a different module, a struct, a keyword list) is a fixed
 choice that the flip leaves alone. For your own adaptive module, call
