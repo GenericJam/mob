@@ -1,4 +1,5 @@
-// mob_dist_port.h — choose the BEAM's distribution listen port on iOS (MOB-139).
+// mob_dist_port.h — choose the BEAM's distribution listen port on iOS
+// (MOB-139), and tell whether another app already holds EPMD's port (MOB-371).
 //
 // Header-only and free of Foundation/UIKit so the native harness
 // (test/native/dist_port_test.c) compiles and runs this exact code on the host.
@@ -6,7 +7,9 @@
 //
 // Resolution:
 //   1. MOB_DIST_PORT set to a valid port: pinned to it. `mix mob.deploy` and
-//      `mix mob.connect` pass one (SIMCTL_CHILD_MOB_DIST_PORT on a simulator).
+//      `mix mob.connect` pass one on a simulator (SIMCTL_CHILD_MOB_DIST_PORT);
+//      on a physical device only `mix mob.deploy --dist-port` does
+//      (DEVICECTL_CHILD_MOB_DIST_PORT).
 //      If something already listens there, `busy` is set and the caller reports
 //      it instead of letting the BEAM halt on eaddrinuse.
 //   2. Simulator, no usable MOB_DIST_PORT: derived from the app and the
@@ -16,8 +19,9 @@
 //      Mac's network stack, so a fixed default (it was 9101) collides as soon
 //      as two mob simulator apps run outside mob_dev. Tools find the node
 //      through the Mac's EPMD, so the exact port only has to be free.
-//   3. Physical device, no usable MOB_DIST_PORT: pinned to 9101. The device
-//      has its own network stack and its own in-process EPMD.
+//   3. Physical device, no usable MOB_DIST_PORT: pinned to 9101. A phone
+//      runs one mob app with distribution at a time, because each needs the
+//      in-process EPMD on 4369 (see mob_epmd_held), so a fixed port is enough.
 #ifndef MOB_DIST_PORT_H
 #define MOB_DIST_PORT_H
 
@@ -34,6 +38,7 @@
 #define MOB_DIST_PORT_BASE 9100
 #define MOB_DIST_PORT_SPAN 800
 #define MOB_DIST_PORT_DEVICE_DEFAULT 9101
+#define MOB_EPMD_PORT 4369
 
 typedef enum {
     MOB_DIST_PORT_FROM_ENV,      // MOB_DIST_PORT
@@ -99,6 +104,16 @@ static inline int mob_dist_port_free(int port, uint32_t addr) {
     int ok = bind(s, (struct sockaddr *)&sa, sizeof(sa)) == 0 && listen(s, 1) == 0;
     close(s);
     return ok;
+}
+
+// Does another listener hold `port` on every interface (host order)? On a
+// physical device that is another mob app's in-process EPMD (it binds
+// INADDR_ANY), and there is nothing to share: iOS suspends a background app,
+// EPMD thread included, so a node registering there waits 10 s for a reply and
+// the BEAM stops. Starting our own EPMD instead is no better, since OTP's EPMD
+// answers EADDRINUSE with exit(0), quitting this whole app without a trace.
+static inline int mob_epmd_held(int port) {
+    return !mob_dist_port_free(port, INADDR_ANY);
 }
 
 // `env_port`: MOB_DIST_PORT (may be NULL). `simulator`: derive when unset.

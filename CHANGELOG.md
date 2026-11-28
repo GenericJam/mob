@@ -50,6 +50,18 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   (MOB-564, `decisions/2026-11-27-ios-column-hugs-unless-fill-width.md`)
 
 ### Fixed
+- **iOS device: a second mob app on the same phone now says why it can't
+  start.** A phone runs one mob development app with distribution at a time:
+  each needs the in-process EPMD on port 4369, and iOS suspends the other
+  app, EPMD included. A launch that finds 4369 held used to stop on
+  "port 9101 (default) is already in use", or, with any other dist port,
+  quit with no crash report when OTP's EPMD `exit(0)`ed on EADDRINUSE. It
+  now stops on the startup error screen naming the other app's EPMD, and
+  writes the same to `Documents/mob_diag_dist_port.txt`. An app that owns
+  distribution (`-name` in its init args) is not stopped and gets no mob
+  EPMD; it keeps running only if it brings its own (`-start_epmd false`,
+  `-epmd_module`), since the other app's EPMD is suspended.
+  (MOB-371, `decisions/2026-11-27-ios-device-one-mob-app-per-phone.md`)
 - **iOS: wrapping Text is no longer cut to one line with "…" inside a
   Column.** A Column placed at its own ideal height shared that height out by
   flexibility, so a Text could lose lines depending on its siblings, leaving

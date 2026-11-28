@@ -239,10 +239,27 @@ void mob_start_beam(const char *app_module) {
     const int app_owns_dist = !mob_init_args_add_mob_dist(&s_init_args, 0);
     if (app_owns_dist)
         NSLog(@"[MobBeam] app init args set -name/-sname: leaving distribution to the app");
-    // Dist port: see mob_dist_port.h. MOB_DIST_PORT (SIMCTL_CHILD_ prefix on a
-    // simulator) pins it; otherwise a simulator derives a free one per app and
-    // simulator, and a physical device uses 9101. A port that is already taken
-    // is reported here: the BEAM would halt on eaddrinuse, writing only to
+#ifdef MOB_BUNDLE_OTP
+    // One mob app per phone runs distribution (MOB-371; see mob_epmd_held).
+    // Checked before the dist port, which that other app holds too, so the
+    // error names the cause instead of port 9101.
+    const int epmd_held = mob_epmd_held(MOB_EPMD_PORT);
+    if (epmd_held && !app_owns_dist) {
+        const char *msg =
+            "Distribution can't start: another mob app on this phone holds EPMD port 4369, "
+            "and only one mob app per phone can run with distribution (iOS suspends the "
+            "other one, EPMD included). Quit it from the app switcher, then relaunch this "
+            "app. mix mob.deploy and mix mob.connect stop the other apps they installed.";
+        mob_write_diag(docs_dir, "mob_diag_dist_port.txt", msg);
+        mob_set_startup_error(msg); // logs "[MobBeam] ERROR: …" and stalls the screen
+        return;
+    }
+#endif
+    // Dist port: see mob_dist_port.h. MOB_DIST_PORT (SIMCTL_CHILD_ or
+    // DEVICECTL_CHILD_ prefix when mob_dev launches the app) pins it;
+    // otherwise a simulator derives a free one per app and simulator, and a
+    // physical device uses 9101. A port that is already taken is reported
+    // here: the BEAM would halt on eaddrinuse, writing only to
     // beam_stdout.log, and the app would vanish without a word.
 #ifdef MOB_BUNDLE_OTP
     const int dist_simulator = 0;
@@ -259,8 +276,8 @@ void mob_start_beam(const char *app_module) {
     if (dist.busy && !app_owns_dist) {
         char msg[640];
         const char *how = dist.source == MOB_DIST_PORT_FROM_ENV
-                              ? "Relaunch with another MOB_DIST_PORT (on a simulator: "
-                                "SIMCTL_CHILD_MOB_DIST_PORT=<free port>), or stop the holder."
+                              ? "Relaunch with another MOB_DIST_PORT (mix mob.deploy "
+                                "--dist-port <free port>), or stop the holder."
                               : "Stop the app holding it, or launch with "
                                 "MOB_DIST_PORT=<free port>.";
         if (dist.source == MOB_DIST_PORT_FROM_APP_UDID) {
@@ -573,10 +590,18 @@ void mob_start_beam(const char *app_module) {
     // On simulator the Mac's EPMD is reachable via the shared network stack;
     // on device there is no host EPMD, so we run our own in-process.
     // App Store builds (MOB_RELEASE) drop EPMD entirely.
-    pthread_t epmd_t;
-    pthread_create(&epmd_t, NULL, epmd_thread, NULL);
-    pthread_detach(epmd_t);
-    usleep(300000); // 300ms — give EPMD time to bind port 4369
+    //
+    // Only reached with 4369 held when the app owns distribution (the check
+    // above stops every other launch): a second EPMD would exit(0) and take
+    // the app with it, so it is not started.
+    if (epmd_held) {
+        NSLog(@"[MobBeam] EPMD port %d held by another app: not starting EPMD", MOB_EPMD_PORT);
+    } else {
+        pthread_t epmd_t;
+        pthread_create(&epmd_t, NULL, epmd_thread, NULL);
+        pthread_detach(epmd_t);
+        usleep(300000); // 300ms — give EPMD time to bind port 4369
+    }
 #endif
 
     void erl_start(int, char **);
