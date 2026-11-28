@@ -10,6 +10,8 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 
 ## [Unreleased]
 
+## [0.9.34] - 2026-11-28
+
 ### Changed (BREAKING)
 - **iOS: a Column is as wide as its widest child unless it sets
   `fill_width={true}`, as on Android.** It used to fill its parent whenever
