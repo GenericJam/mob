@@ -40,8 +40,13 @@ The layout works as follows:
   frame lets a child accept the share, and it repaints the child's background
   and border on that frame. A weighted child that cannot shrink to its share
   (a share of 0 included) keeps its own size, and the next sibling is placed
-  after it. Compose clips such a child to its share instead; overlapping the
-  neighbour, visually and for taps, would be worse than overflowing the row.
+  after it. Compose instead measures a weighted child with its share as the
+  exact constraint, so a `width` larger than the share is coerced down to it
+  and the child lays out at the share. On iOS a frame cannot force that on its
+  content, and overlapping the neighbour, visually and for taps, would be worse
+  than overflowing the row. Placement arranges with the same finite proposal
+  that sizeThatFits answered, not the (then wider) bounds, so every child is
+  placed at the size it was measured at.
 - **Ideal (`nil`) or unbounded proposal.** There is no leftover to divide, so
   every child is measured with that same proposal, as an HStack / VStack would
   do. Placement keeps the ideal arrangement rather than splitting the ideal
@@ -68,16 +73,19 @@ Compose measures an unweighted child against all the space left. A child that
 fills (`fillMaxWidth`) therefore takes everything, and the weighted children
 get nothing. iOS caps an unweighted child at its ideal size instead.
 
-The reason is that an iOS Column fills its parent's width whether or not
-`fill_width` is set. That is MOB-561 RC1, which is open separately. Measured
-Compose's way, every Column sitting beside a weighted sibling (MishkaCalendar's
-agenda rows, for example) would starve that sibling to zero width. With the
-cap, the weighted sibling keeps a share as long as the Column's ideal width
-(its longest line, unwrapped) fits in the row. A Column whose ideal width is
-wider than the row (long wrapping text) still takes the whole row and leaves
-the weighted sibling 0, as in Compose; the old HStack split that case evenly.
-The cost of the cap is that an unweighted `fill_width` child in a weighted Row
-is narrower on iOS than on Android.
+The reason is that on iOS a view that merely accepts any width (a
+`.frame(maxWidth: .infinity)`: a Box without `fill_width={false}`, a
+`fill_width` Button, a centred or right-aligned Text) looks to the layout
+exactly like one that wants to fill, and many renderer views are flexible
+that way by default. Measured Compose's way, any of them sitting beside a
+weighted sibling would take the whole leftover and starve the sibling to zero
+width. With the cap, the weighted sibling keeps a share as long as the
+unweighted child's ideal width (for text, its longest line unwrapped) fits in
+the row. One whose ideal width is wider than the row (long wrapping text)
+still takes the whole row and leaves the weighted sibling 0, as in Compose;
+the old HStack split that case evenly. The cost of the cap is that an
+unweighted filling child in a weighted Row (a Box, a `fill_width` Button) is
+narrower on iOS than on Android, where it takes the leftover.
 
 ## Alternatives rejected
 

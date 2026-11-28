@@ -217,11 +217,14 @@ cancel_tap = {self(), :cancel}
 ```
 
 A weighted child expands into the parent's remaining main-axis space. The children
-without a weight are measured first, at their natural size; what is left is divided
-between the weighted children by ratio, so `weight={1}` and `weight={2}` take a third
-and two thirds. Both platforms do this. A flexible `<Spacer />` in a row or column that
-has a weighted child counts as `weight={1}`. Weight values must be positive; a fixed
-`width` (in a row) or `height` (in a column) wins over `weight`.
+without a weight are measured first; what is left is divided between the weighted
+children by ratio, so `weight={1}` and `weight={2}` take a third and two thirds. Both
+platforms do this. They differ on an unweighted child that fills (a Box, a
+`fill_width` Button): Android lets it take the leftover, leaving the weighted children
+nothing, while iOS caps every unweighted child at its natural (ideal) size. To share a
+row predictably, weight every child that should grow. A flexible `<Spacer />` in a row
+or column that has a weighted child counts as `weight={1}`. Weight values must be
+positive; a fixed `width` (in a row) or `height` (in a column) wins over `weight`.
 
 ### `:wrap`
 

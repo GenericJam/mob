@@ -43,8 +43,8 @@ func mobHasStackWeights(_ children: [MobNode], axis: MobLayoutWeightAxis) -> Boo
 /// first, then what is left after them and the gaps is divided between the
 /// weighted children by ratio, each taking exactly its share. Unweighted
 /// children are offered their ideal size capped at what is left, not all that
-/// is left, so a child that merely fills (an iOS Column fills its parent's
-/// width) cannot starve its weighted siblings.
+/// is left, so a child that merely accepts any width (a filling Box, a centred
+/// Text) cannot starve its weighted siblings.
 ///
 /// An ideal (nil) or unbounded proposal has no leftover to divide; every child
 /// is measured with that same proposal, as an HStack / VStack would do.
@@ -70,13 +70,16 @@ private struct MobWeightedStack {
     }
 
     func place(in bounds: CGRect, _ proposal: ProposedViewSize, _ subviews: LayoutSubviews) {
-        // Divide the space actually granted along the main axis. An ideal
-        // (nil) proposal is kept as it is: sizeThatFits answered with every
-        // child's ideal size, and re-splitting that total by ratio would hand
-        // a weighted child less than its own ideal and overlap its neighbour.
+        // Arrange with the proposal sizeThatFits answered, so measured and
+        // placed sizes agree. A finite proposal is what the weights divide: when
+        // a weighted child overflows its share the row comes out wider than the
+        // proposal, and re-splitting that wider `bounds` would widen every share.
+        // An ideal (nil) proposal keeps every child at its ideal size. Only an
+        // unbounded proposal, which has nothing to divide, takes the space the
+        // parent actually granted.
         let main = axis == .horizontal ? proposal.width : proposal.height
         let granted: ProposedViewSize
-        if main == nil {
+        if main == nil || main?.isFinite == true {
             granted = proposal
         } else if axis == .horizontal {
             granted = ProposedViewSize(width: bounds.width, height: proposal.height)

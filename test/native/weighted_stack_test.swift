@@ -116,8 +116,8 @@ enum WeightedStackTest {
     expect("row 1:2", frames["row"]?.height, 30, "row height (tallest child)")
     expect("row 1:2", frames["one"]?.minY, 5, "centre alignment")
 
-    // An unweighted child that would fill (an iOS Column fills its parent's
-    // width) gets its ideal width, not all of it.
+    // An unweighted child that would fill (any `.frame(maxWidth: .infinity)`)
+    // gets its ideal width, not all of it.
     layOut(MobWeightedRowLayout(alignment: .top, spacing: 0) {
         Color.green.frame(idealWidth: 60, maxWidth: .infinity).frame(height: 10).probe("fill")
         Color.red.frame(height: 10).probe("weighted").rowWeight(1)
@@ -126,13 +126,16 @@ enum WeightedStackTest {
     expect("row fill sibling", frames["weighted"]?.width, 240, "weighted width")
 
     // A weighted child that cannot shrink to its share keeps its own width, and
-    // its neighbour starts after it instead of on top of it.
+    // its neighbour starts after it instead of on top of it. The neighbour is
+    // placed at the share it was measured at (300 / 2), not at a share of the
+    // wider row the overflow produced.
     layOut(MobWeightedRowLayout(alignment: .top, spacing: 0) {
         Color.green.frame(width: 200, height: 10).probe("wide").rowWeight(1)
         Color.red.frame(height: 10).probe("next").rowWeight(1)
     })
     expect("row overflow", frames["wide"]?.width, 200, "unshrinkable child width")
     expect("row overflow", frames["next"]?.minX, 200, "neighbour x")
+    expect("row overflow", frames["next"]?.width, 150, "neighbour width")
 
     // Column: same split on the vertical axis.
     layOut(MobWeightedColumnLayout(alignment: .leading, spacing: 0) {
