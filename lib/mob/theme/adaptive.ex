@@ -20,9 +20,8 @@ defmodule Mob.Theme.Adaptive do
   fixed theme afterwards (another module, a struct, a keyword list) stops
   that until `Mob.Theme.Adaptive` is set again.
 
-  The renderer reads the active theme on each render, so a screen that is
-  already showing repaints in the new theme on its next render; the
-  watcher does not re-render screens itself.
+  `Mob.Theme.set/1` repaints every live screen, so a screen that is
+  already showing switches to the new theme as soon as the OS flips.
   """
 
   @doc "Returns the Light or Dark theme struct based on the current OS appearance."

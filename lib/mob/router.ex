@@ -215,6 +215,35 @@ defmodule Mob.Router do
     System.halt(1)
   end
 
+  @doc false
+  # Called by `Mob.Theme.set/1`. Colour, spacing, radius and font tokens are
+  # resolved when a screen paints, so a screen keeps its last paint's palette
+  # until something repaints it: an adaptive theme's light/dark flip repainted
+  # the root background natively and left every screen's text in the old
+  # palette (MOB-575). Every window's router hears it, and tells all its live
+  # screens, as for a size class change.
+  #
+  # From a separate process, so `set/1` never waits on Mob.Scenes: it is
+  # called from screens, inside the router's own synchronous mount.
+  @spec theme_changed() :: :ok
+  def theme_changed do
+    primary = Process.whereis(:mob_screen)
+
+    if primary || Process.whereis(Mob.Scenes) do
+      spawn(fn ->
+        # The primary first, so it is told even if Mob.Scenes goes away
+        # under the list call.
+        if primary, do: send(primary, {:mob_theme, :changed})
+
+        for {_scene, router} <- Mob.Scenes.list(),
+            router != primary,
+            do: send(router, {:mob_theme, :changed})
+      end)
+    end
+
+    :ok
+  end
+
   @doc """
   Dispatch a UI event to the screen process. Returns `:ok` synchronously once
   the event has been processed and the state updated.
@@ -538,6 +567,14 @@ defmodule Mob.Router do
   # own socket and the screen the user returns to must already have the class
   # of the window it reappears in. A screen holding the value already drops it.
   def handle_info({:mob_size_class, _h, _v} = message, state) do
+    Enum.each(all_entries(state), &send(&1.pid, message))
+    {:noreply, state}
+  end
+
+  # The theme changed (`theme_changed/0`). Every live screen repaints, not only
+  # the current one: a screen popped back to, or a parked tab switched to,
+  # must not show the old palette either.
+  def handle_info({:mob_theme, :changed} = message, state) do
     Enum.each(all_entries(state), &send(&1.pid, message))
     {:noreply, state}
   end

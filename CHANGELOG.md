@@ -94,6 +94,15 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
 - **iOS Box with a `width` honours `fill_height`.** The fixed-width branch
   never read `fill_height`, so a `width` + `fill_height` box (a vertical rule)
   was 0 pt tall. A `height` still wins over `fill_height`. (MOB-568)
+- **`Mob.Theme.set/1` repaints every live screen** (MOB-575): the screen on
+  top, the ones under it and those in parked tabs, in every window. Tokens
+  are resolved when a screen paints, and nothing repainted on a theme change,
+  so screens kept the old palette until their next render. After an adaptive
+  theme's light/dark flip the iOS root (above) already showed the new
+  `background` while the screen's `:on_surface` text was still the old
+  colour: light text on a light page until the user touched the screen. The
+  repaint is internal, so `handle_info/2` is not called, and a screen that
+  already painted under the new theme sends native nothing.
 
 ## [0.9.33] - 2026-11-27
 

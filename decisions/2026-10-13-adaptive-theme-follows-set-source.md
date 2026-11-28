@@ -46,4 +46,7 @@ struct is an explicit fixed choice.
   at once could pair one call's theme with the other's source; concurrent
   `set/1` was already unordered (the native palette push races the same way).
 - The watcher does not re-render mounted screens; they pick the new theme up
-  on their next render.
+  on their next render. **Superseded 2026-11-27 (MOB-575):** that left an
+  adaptive flip half-applied once the iOS root painted the theme background
+  (MOB-567), so `Mob.Theme.set/1` now repaints every live screen itself. See
+  `2026-11-27-theme-set-repaints-every-live-screen.md`.

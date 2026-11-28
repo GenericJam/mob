@@ -260,6 +260,10 @@ defmodule Mob.Theme do
   follow-OS theme, an OS light/dark flip resolves it again, keeping the
   overrides. A struct or keyword list is a fixed theme and is never
   re-resolved, even if it equals what the adaptive module returns.
+
+  Every live screen in every window repaints with the new theme, the ones
+  under the top of a stack and in parked tabs too, without the screen doing
+  anything. Its `handle_info/2` is not called.
   """
   @spec set(t() | module() | {module(), keyword()} | keyword()) :: :ok
   def set(%__MODULE__{} = theme), do: put_theme(theme, nil)
@@ -276,6 +280,7 @@ defmodule Mob.Theme do
     Application.put_env(:mob, :theme, theme)
     Application.put_env(:mob, :theme_source, source)
     notify_native(theme)
+    Mob.Router.theme_changed()
     :ok
   end
 
