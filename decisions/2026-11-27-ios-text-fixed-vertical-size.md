@@ -89,6 +89,13 @@ narrows could overflow a constrained Row. That concern is about width.
   wrapper's 2dp bottom gap under the label) is pushed below the strip and
   clipped away entirely. Fixing the Column fill removes the wrap, and both
   come back.
+
+  Correction, 2026-11-27 (MOB-564): this regression is fixed before any
+  release carries it. MOB-564
+  (`2026-11-27-ios-column-hugs-unless-fill-width.md`) makes a Column hug
+  unless `fill_width` is set and is in the same unreleased batch, so each trigger
+  gets its label's width and the labels and underline show. Verified on the
+  iPhone 18 Pro simulator with both changes (tabs page, all four examples).
 - Buttons are a separate case (`.lineLimit(1)` in their label) and do not
   change.
 

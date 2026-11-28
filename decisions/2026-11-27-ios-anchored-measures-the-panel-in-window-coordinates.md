@@ -100,6 +100,13 @@ panel at (8, 132), and off-screen panels at x=-152 to -390.
   The mob_mishka beak wrapper (a `fill_width` Box in `mishka_popover.ex`
   `aligned/2`) would make arrowed popovers cap-wide on Android too. That one
   has been handed to the mob_mishka composite fixes (MOB-571).
+
+  Update, 2026-11-27 (MOB-564): the iOS Column now hugs unless `fill_width`
+  is set (`2026-11-27-ios-column-hugs-unless-fill-width.md`), in the same
+  unreleased batch. On the simulator the gallery's open tooltip bubbles now
+  sit against their triggers as `side`/`align` ask. The gallery tour shows
+  popovers and preview cards closed, so
+  those two are expected to clear the same way but were not seen open.
 - **An off-screen trigger can still clip a wide panel at x=0.** `anchorOnScreen`
   gates the clamp on both axes. A centred panel wider than twice its trigger's
   midX goes negative once the trigger leaves the screen. On device, tooltip

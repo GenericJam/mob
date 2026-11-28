@@ -171,13 +171,22 @@ Stacks children vertically.
 | `background` | color | Background color |
 | `width` | positive number | Fixed width in dp/pt. Overrides `fill_width`. |
 | `height` | positive number | Fixed height in dp/pt. Overrides `fill_height`. |
-| `fill_width` | boolean | Stretch to fill available width (default `true`) |
+| `fill_width` | boolean | Stretch to fill available width (default `false`: the column is as wide as its widest child) |
 | `fill_height` | boolean | Stretch to fill available height |
 | `align` | `:start` / `:center` / `:end` | Cross-axis alignment of children |
 
 Positive `width` and `height` win over `fill_*` on both platforms. Setting `width`
 also pins a `weight`-flexed child on the parent's flex axis, so
 `<Column width={90} weight={1}>` inside a Row stays 90 wide.
+
+A column without `fill_width` hugs its content on both platforms, so its
+`background` and its `on_tap` area cover only its widest child. It still spans
+the parent when any child fills (a `Box`, a `Button`, a `Divider`, a `fill_width`
+Row or Text), and a screen's root column always spans the screen's width. Set
+`fill_width={true}` on a card or panel column that should span the width
+whatever it holds. (On iOS the column directly under a `lazy: true` scroll is a
+lazy stack and fills regardless.) Earlier mob releases filled every iOS column;
+see the CHANGELOG entry for MOB-564 for that migration.
 
 ### `:row`
 
@@ -1011,7 +1020,7 @@ defmodule MyApp.UI.Card do
     title = Map.get(props, :title, "")
 
     ~MOB"""
-    <Column background={:surface_raised} corner_radius={:radius_md} padding={:space_md}>
+    <Column fill_width={true} background={:surface_raised} corner_radius={:radius_md} padding={:space_md}>
       <Text text={title} text_size={:lg} text_color={:on_surface} />
       <Spacer size={8} />
       {children}

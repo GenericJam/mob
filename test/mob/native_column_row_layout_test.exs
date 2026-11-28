@@ -35,10 +35,27 @@ defmodule Mob.NativeColumnRowLayoutTest do
                "                    alignment: .topLeading\n" <>
                "                )\n" <>
                "                .frame(\n" <>
-               "                    maxWidth: node.fixedWidth > 0 ? nil : .infinity,\n" <>
+               "                    maxWidth: ((node.fillWidth || screenRoot) && node.fixedWidth <= 0) ? .infinity : nil,\n" <>
                "                    maxHeight: (node.fillHeight && node.fixedHeight <= 0) ? .infinity : nil,\n" <>
                "                    alignment: .topLeading\n" <>
                "                )"
+  end
+
+  # MOB-564. A Column took maxWidth: .infinity whenever it had no `width`, so
+  # it filled its parent even with `fill_width: false`, while Compose's Column
+  # wraps its content. It now fills only for `fill_width: true` or when it is
+  # the node a screen slot hosts, which Android composes with fillMaxSize.
+  test "iOS column hugs its content unless fill_width or screen root" do
+    source = File.read!(Path.join(@root, "ios/MobRootView.swift")) |> NativeSource.code_only()
+
+    refute source =~ "maxWidth: node.fixedWidth > 0 ? nil : .infinity,"
+
+    assert source =~
+             "maxWidth: ((node.fillWidth || screenRoot) && node.fixedWidth <= 0) ? .infinity : nil,"
+
+    assert source =~ "MobNodeView(node: root, screenRoot: true)"
+    assert source =~ "&& lhs.screenRoot == rhs.screenRoot"
+    assert [_, _] = String.split(source, "screenRoot: true")
   end
 
   # MOB-181. Row previously only honoured `fill_width` and ignored `fixed_width`
