@@ -1,4 +1,4 @@
-// iOS dist port resolution (MOB-139).
+// iOS dist port resolution (MOB-139) and the EPMD-port check (MOB-371).
 //
 //     make -C test/native run
 //
@@ -23,9 +23,9 @@ static int failures = 0;
 
 #define LOOPBACK INADDR_LOOPBACK
 
-// Listen on 127.0.0.1:port the way another app's BEAM would. Returns the fd,
-// or -1 if the port was already taken by someone else (still held, then).
-static int hold(int port) {
+// Listen on addr:port the way another app's BEAM or EPMD would. Returns the
+// fd, or -1 if the port was already taken by someone else (still held, then).
+static int hold_on(uint32_t addr, int port) {
     int s = socket(AF_INET, SOCK_STREAM, 0);
     int one = 1;
     setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
@@ -33,12 +33,16 @@ static int hold(int port) {
     memset(&sa, 0, sizeof(sa));
     sa.sin_family = AF_INET;
     sa.sin_port = htons((uint16_t)port);
-    sa.sin_addr.s_addr = htonl(LOOPBACK);
+    sa.sin_addr.s_addr = htonl(addr);
     if (bind(s, (struct sockaddr *)&sa, sizeof(sa)) != 0 || listen(s, 8) != 0) {
         close(s);
         return -1;
     }
     return s;
+}
+
+static int hold(int port) {
+    return hold_on(LOOPBACK, port);
 }
 
 // An ephemeral loopback port we hold until `*fd` is closed.
@@ -143,6 +147,21 @@ static void test_physical_device_default(void) {
           "device pinned to 9101, got %d", c.port);
 }
 
+// A phone's in-process EPMD listens on every interface, the way epmd does
+// without -address. Held, the launch must be stopped (MOB-371); released,
+// the next app starts its own.
+static void test_epmd_held(void) {
+    int fd = hold_on(INADDR_ANY, 0);
+    struct sockaddr_in sa;
+    socklen_t len = sizeof(sa);
+    getsockname(fd, (struct sockaddr *)&sa, &len);
+    int port = ntohs(sa.sin_port);
+
+    CHECK(mob_epmd_held(port), "port %d held on INADDR_ANY must read as held", port);
+    close(fd);
+    CHECK(!mob_epmd_held(port), "port %d released must read as free", port);
+}
+
 int main(void) {
     test_crc32_matches_erlang();
     test_base_port_matches_mob_dev();
@@ -151,6 +170,7 @@ int main(void) {
     test_simulator_walk_wraps();
     test_pinned_port_reports_busy();
     test_physical_device_default();
+    test_epmd_held();
     if (failures) {
         fprintf(stderr, "%d failure(s)\n", failures);
         return 1;

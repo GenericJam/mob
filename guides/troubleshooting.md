@@ -225,6 +225,28 @@ of those shows.
 
 ---
 
+## iPhone: a second mob app stops with "another mob app on this phone holds EPMD port 4369"
+
+**Symptom:** a mob app on a physical iPhone stays on the startup error screen
+with "Distribution can't start: another mob app on this phone holds EPMD port
+4369", and `Documents/mob_diag_dist_port.txt` says the same. Earlier mob
+showed "port 9101 (default) is already in use" in the same situation, or the
+app quit with no crash report.
+
+**Cause:** a phone runs one mob development app with distribution at a time.
+Each one starts an in-process EPMD on port 4369, and iOS suspends whichever
+app is in the background, its EPMD thread with it. A suspended EPMD still
+holds the port but never answers, so a second app can't register with it,
+and it can't start its own either: OTP's EPMD answers "address in use" with
+`exit(0)`.
+
+**Fix:** quit the other mob app from the app switcher and relaunch, or launch
+with `mix mob.deploy` / `mix mob.connect`, which stop the other mob apps they
+installed on that phone and name them. When several agents share one iPhone,
+each launch stops the previous agent's app, so take turns.
+
+---
+
 ## A screen feels slow: measuring the render pipeline
 
 Before changing anything, measure. `Mob.RenderStats` records where a frame's

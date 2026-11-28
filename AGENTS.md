@@ -168,11 +168,19 @@ device's forward already holds.
 The device-side BEAM listens on that same port, so the forward is 1:1 and the port
 EPMD advertises matches it.
 
-iOS dist port is passed via `SIMCTL_CHILD_MOB_DIST_PORT` env var; `mob_beam.m` reads
-`MOB_DIST_PORT` at startup. A simulator launch without it (icon tap, `xcrun simctl
+iOS dist port is passed via `SIMCTL_CHILD_MOB_DIST_PORT` env var on a simulator and
+`DEVICECTL_CHILD_MOB_DIST_PORT` on a physical device (only for an explicit
+`mix mob.deploy --dist-port`); `mob_beam.m` reads `MOB_DIST_PORT` at startup. A
+simulator launch without it (icon tap, `xcrun simctl
 launch`) derives the port the way `Tunnel.base_port/2` does from the app and
 `SIMULATOR_UDID`, then takes the first free one in the window (`ios/mob_dist_port.h`);
-a physical device uses 9101. A port that won't bind is shown on the startup error
+a physical device uses 9101. A phone runs **one mob app with distribution at a
+time**: each needs the in-process EPMD on 4369, and iOS suspends a background app,
+EPMD included, so a second app can neither share it nor start its own (OTP's EPMD
+`exit(0)`s on EADDRINUSE). A launch that finds 4369 held stops on the startup error
+screen, and `mix mob.deploy`/`mix mob.connect` stop the other mob apps they installed
+on that phone first, naming them (MOB-371). Agents sharing a phone take turns. A
+port that won't bind is shown on the startup error
 screen and logged as `[MobBeam] ERROR: Distribution can't start: …`, not handed to
 the BEAM. Android dist port is passed as the `mob_dist_port` intent
 extra (set by `MobDev.Discovery.Android.restart_app/4`); the generated app's
