@@ -138,6 +138,15 @@ Full module documentation: [hexdocs.pm/mob](https://hexdocs.pm/mob).
   colour: light text on a light page until the user touched the screen. The
   repaint is internal, so `handle_info/2` is not called, and a screen that
   already painted under the new theme sends native nothing.
+- **iOS `weight` divides by ratio.** Weighted siblings in a Row or Column
+  always split the leftover space evenly on iOS, so `weight={0.35}` beside
+  `weight={0.65}` drew two equal halves (MishkaSkeleton's short last line
+  came out half width). A Row or Column with a weighted child now lays out
+  like Compose's: unweighted children first at their natural size, then the
+  rest divided by weight. Stacks without a weight are unchanged. (MOB-569)
+- **iOS `<Toggle>` without a label is just the switch.** It kept the stock
+  label-and-spacer layout and filled its row, so beside a Text it took half
+  the row and drew the switch mid-row. It now hugs the switch. (MOB-569)
 
 ## [0.9.33] - 2026-11-27
 
